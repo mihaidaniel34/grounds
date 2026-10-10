@@ -1,0 +1,16 @@
+[package]
+name = "grounds-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "grounds"
+path = "src/main.rs"
+
+[dependencies]
+grounds-engine.workspace = true
+grounds-rules.workspace = true
+grounds-index.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true

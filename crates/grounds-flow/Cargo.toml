@@ -1,0 +1,8 @@
+[package]
+name = "grounds-flow"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+grounds-syntax.workspace = true
+grounds-index.workspace = true

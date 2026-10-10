@@ -1,0 +1,45 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+tree-sitter = "0.25"
+tree-sitter-java = "0.23.5"
+memmap2 = "0.9"
+miniz_oxide = "0.8"
+rayon = "1.10"
+dashmap = "6"
+parking_lot = "0.12"
+rustc-hash = "2"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+bincode = "1.3"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+ignore = "0.4"
+notify = "6"
+smallvec = "1"
+once_cell = "1"
+xxhash-rust = { version = "0.8", features = ["xxh3"] }
+toml = "0.8"
+glob = "0.3"
+grounds-syntax = { path = "crates/grounds-syntax" }
+grounds-classfile = { path = "crates/grounds-classfile" }
+grounds-index = { path = "crates/grounds-index" }
+grounds-semantic = { path = "crates/grounds-semantic" }
+grounds-flow = { path = "crates/grounds-flow" }
+grounds-di = { path = "crates/grounds-di" }
+grounds-rules = { path = "crates/grounds-rules" }
+grounds-engine = { path = "crates/grounds-engine" }
+
+[profile.release]
+debug = 1
+lto = "thin"
+
+[profile.dev.package."*"]
+opt-level = 2

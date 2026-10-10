@@ -1,0 +1,8 @@
+[package]
+name = "grounds-syntax"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+tree-sitter.workspace = true
+tree-sitter-java.workspace = true

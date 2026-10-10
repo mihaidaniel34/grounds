@@ -1,0 +1,25 @@
+[package]
+name = "grounds-engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+grounds-syntax.workspace = true
+grounds-classfile.workspace = true
+grounds-index.workspace = true
+grounds-semantic.workspace = true
+grounds-flow.workspace = true
+grounds-di.workspace = true
+grounds-rules.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+bincode.workspace = true
+anyhow.workspace = true
+rayon.workspace = true
+ignore.workspace = true
+rustc-hash.workspace = true
+xxhash-rust.workspace = true
+toml.workspace = true
+parking_lot.workspace = true
+notify.workspace = true
+glob.workspace = true

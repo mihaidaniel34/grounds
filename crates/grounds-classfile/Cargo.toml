@@ -1,0 +1,10 @@
+[package]
+name = "grounds-classfile"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+memmap2.workspace = true
+miniz_oxide.workspace = true
+rustc-hash.workspace = true
+anyhow.workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "grounds-index"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+grounds-syntax.workspace = true
+grounds-classfile.workspace = true
+serde.workspace = true
+dashmap.workspace = true
+parking_lot.workspace = true
+rustc-hash.workspace = true
+rayon.workspace = true
+anyhow.workspace = true
+smallvec.workspace = true
