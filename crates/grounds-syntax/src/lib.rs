@@ -138,7 +138,8 @@ pub fn fixup_for_grammar(text: &str) -> Option<Vec<u8>> {
 }
 
 fn fixup_record_patterns(text: &str, mut out: Option<Vec<u8>>) -> Option<Vec<u8>> {
-    if !(text.contains("case") || text.contains("instanceof")) {
+    let has_underscore = text.as_bytes().windows(3).any(|w| w[1] == b'_' && !(w[0].is_ascii_alphanumeric() || w[0] == b'_' || w[0] == b'$') && !(w[2].is_ascii_alphanumeric() || w[2] == b'_' || w[2] == b'$'));
+    if !(text.contains("case") || text.contains("instanceof") || has_underscore) {
         return out;
     }
     let b = text.as_bytes();
@@ -259,7 +260,40 @@ fn fixup_record_patterns(text: &str, mut out: Option<Vec<u8>>) -> Option<Vec<u8>
                     j += 1;
                 }
                 patch(start, j, &mut out);
+                // Java 22 unnamed patterns, possibly several per label
+                // (`case Boolean _, Byte _ ->`): the grammar supports neither.
+                // They bind nothing, so keep the first and blank the others.
+                let unnamed = (start..j).any(|k| b[k] == b'_' && !ident(b[k - 1]) && (k + 1 >= n || !ident(b[k + 1])));
+                if unnamed {
+                    let mut depth = 0i32;
+                    let mut comma = None;
+                    for k in start..j {
+                        match b[k] {
+                            b'(' | b'<' => depth += 1,
+                            b')' | b'>' => depth -= 1,
+                            b',' if depth == 0 => {
+                                comma = Some(k);
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let Some(c) = comma {
+                        let o = out.get_or_insert_with(|| b.to_vec());
+                        for x in &mut o[c..j] {
+                            if *x != b'\n' {
+                                *x = b' ';
+                            }
+                        }
+                    }
+                }
                 i = j;
+            }
+            // unnamed variables `_` (patterns, lambdas, catch, locals) become `$`
+            b'_' if (i == 0 || !ident(b[i - 1])) && (i + 1 >= n || !ident(b[i + 1])) => {
+                let o = out.get_or_insert_with(|| b.to_vec());
+                o[i] = b'$';
+                i += 1;
             }
             _ if word_at(i, b"instanceof") => {
                 // `instanceof [final] A.B(...)`: the record pattern and its body
@@ -692,5 +726,17 @@ mod fixup_tests {
         let t = pf.root().to_sexp();
         assert!(!t.contains("ERROR") && !t.contains("record_pattern"), "{t}");
         assert!(fixup_for_grammar(src).is_none_or(|b| !String::from_utf8_lossy(&b).contains("s$append")));
+    }
+}
+
+#[cfg(test)]
+mod unnamed_tests {
+    use super::*;
+
+    #[test]
+    fn unnamed_patterns_and_variables_parse() {
+        let src = "class T { Object m(Object v) { try { return switch (v) { case Boolean _, Byte _ -> 1; case java.util.Collection<?> _, java.util.Map<?, ?> _ when v != null -> 2; case 1, 2 -> 3; default -> 4; }; } catch (RuntimeException _) { java.util.function.BiFunction<Object, Object, Object> f = (_, b) -> b; return f; } } }";
+        let t = ParsedFile::parse(src).root().to_sexp();
+        assert!(!t.contains("ERROR"), "{t}");
     }
 }

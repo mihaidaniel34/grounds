@@ -150,6 +150,13 @@ fn main() -> anyhow::Result<()> {
             println!("files: {} (parsed {}, cached {})", s.files, s.parsed, s.cached);
             println!("classpath: {} entries, {} classes", s.classpath_entries, s.classpath_classes);
             println!("source classes: {}", p.index.source_class_names().count());
+            // tree-sitter recovers from syntax it cannot parse; analysis of those
+            // regions is degraded, so make the count visible
+            let broken: Vec<String> = p.index.files().filter(|(_, s)| s.has_syntax_errors).map(|(k, _)| k.strip_prefix(&*p.workspace.root.to_string_lossy()).unwrap_or(k).trim_start_matches('/').to_string()).collect();
+            println!("files with parse errors: {}", broken.len());
+            for f in broken.iter().take(5) {
+                println!("  {f}");
+            }
             println!(
                 "timing: discover {:?}, classpath {:?}, stubs {:?}, index {:?}, total {:?}",
                 s.t_discover, s.t_classpath, s.t_stubs, s.t_index, t.elapsed()
