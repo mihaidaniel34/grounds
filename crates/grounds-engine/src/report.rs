@@ -4,11 +4,63 @@ use crate::analyze::Finding;
 use grounds_rules::Severity;
 use std::collections::BTreeMap;
 
-pub fn text(findings: &[Finding], max: Option<usize>) -> String {
+/// Terminal styling. Off for agents, pipes and machine formats; only the
+/// severity is colored and the rule id dimmed, so output stays readable and
+/// greppable.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Style {
+    pub color: bool,
+}
+
+impl Style {
+    /// `--color auto|always|never`, honoring NO_COLOR and CLICOLOR_FORCE.
+    pub fn detect(choice: &str) -> Style {
+        use std::io::IsTerminal;
+        let env = |k: &str| std::env::var(k).is_ok_and(|v| !v.is_empty() && v != "0");
+        let color = match choice {
+            "always" => true,
+            "never" => false,
+            _ => !env("NO_COLOR") && (env("CLICOLOR_FORCE") || std::io::stdout().is_terminal()),
+        };
+        Style { color }
+    }
+
+    fn paint(&self, code: &str, s: &str) -> String {
+        if self.color {
+            format!("\x1b[{code}m{s}\x1b[0m")
+        } else {
+            s.to_string()
+        }
+    }
+
+    pub fn severity(&self, s: Severity) -> String {
+        let code = match s {
+            Severity::Error => "31",
+            Severity::Warning => "33",
+            Severity::Info => "36",
+        };
+        self.paint(code, s.as_str())
+    }
+
+    pub fn dim(&self, s: &str) -> String {
+        self.paint("2", s)
+    }
+
+    pub fn bold(&self, s: &str) -> String {
+        self.paint("1", s)
+    }
+
+    /// `path:line:col: severity [rule] message`
+    pub fn finding(&self, f: &Finding) -> String {
+        format!("{}:{}:{}: {} {} {}\n", f.path, f.line, f.col, self.severity(f.severity), self.dim(&format!("[{}]", f.rule)), f.message)
+    }
+}
+
+pub fn text(findings: &[Finding], max: Option<usize>, style: Style) -> String {
     let mut out = String::new();
     let shown = max.unwrap_or(usize::MAX).min(findings.len());
     for f in &findings[..shown] {
-        out.push_str(&format!("{}:{}:{}: {} [{}] {}\n", f.path, f.line, f.col, f.severity.as_str(), f.rule, f.message));
+        out.push_str(&style.finding(f));
     }
     if shown < findings.len() {
         let rest = &findings[shown..];
@@ -17,7 +69,8 @@ pub fn text(findings: &[Finding], max: Option<usize>) -> String {
             *by_rule.entry(f.rule).or_default() += 1;
         }
         let summary: Vec<String> = by_rule.iter().map(|(r, n)| format!("{r} x{n}")).collect();
-        out.push_str(&format!("... and {} more ({})\n", rest.len(), summary.join(", ")));
+        out.push_str(&style.dim(&format!("... and {} more ({})", rest.len(), summary.join(", "))));
+        out.push('\n');
     }
     out
 }

@@ -15,7 +15,18 @@ use std::time::{Duration, Instant};
 #[serde(tag = "cmd", rename_all = "kebab-case")]
 pub enum Request {
     Ping,
-    Check { mode: Mode, files: Vec<PathBuf>, all_lines: bool, baseline: bool, max: usize, min_severity: String, json: bool },
+    Check {
+        mode: Mode,
+        files: Vec<PathBuf>,
+        all_lines: bool,
+        baseline: bool,
+        max: usize,
+        min_severity: String,
+        json: bool,
+        /// ANSI colors (humans at a terminal only, never hooks)
+        #[serde(default)]
+        color: bool,
+    },
     Baseline { files: Vec<PathBuf>, merge: bool },
     ImpactedTests { files: Vec<PathBuf> },
     Shutdown,
@@ -48,12 +59,12 @@ pub fn execute(session: &mut Session, req: &Request) -> Response {
     match req {
         Request::Ping => Response { code: 0, stdout: format!("ok {}\n", session.root().display()), stderr: build_id() },
         Request::Shutdown => Response { code: 0, stdout: "bye\n".into(), stderr: String::new() },
-        Request::Check { mode, files, all_lines, baseline, max, min_severity, json } => {
+        Request::Check { mode, files, all_lines, baseline, max, min_severity, json, color } => {
             let min = Severity::parse(min_severity).unwrap_or(Severity::Warning);
             let opts = CheckOptions { mode: *mode, files: files.clone(), all_lines: *all_lines, use_baseline: *baseline, min_severity: min };
             let report = session.check(&opts);
             let problems = !report.findings.is_empty() || !report.pending.is_empty();
-            let text = if *json { serde_json::to_string_pretty(&report).unwrap_or_default() } else { render(&report, *max) };
+            let text = if *json { serde_json::to_string_pretty(&report).unwrap_or_default() } else { render(&report, *max, crate::report::Style { color: *color }) };
             Response { code: if problems { 2 } else { 0 }, stdout: text, stderr: String::new() }
         }
         Request::Baseline { files, merge } => match session.write_baseline(files, *merge) {

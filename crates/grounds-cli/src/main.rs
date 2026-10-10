@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use grounds_engine::report;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -6,6 +7,9 @@ use std::path::PathBuf;
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
+    /// Colored output: auto (terminal only, honors NO_COLOR), always, never.
+    #[arg(long, global = true, default_value = "auto", value_parser = ["auto", "always", "never"])]
+    color: String,
 }
 
 #[derive(Subcommand)]
@@ -136,6 +140,7 @@ enum Cmd {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let style = grounds_engine::report::Style::detect(&cli.color);
     match cli.cmd {
         Cmd::Index { root } => {
             let t = std::time::Instant::now();
@@ -170,7 +175,7 @@ fn main() -> anyhow::Result<()> {
         }
         Cmd::TypeStats { root, show_unresolved } => type_stats(&root, show_unresolved)?,
         Cmd::Check { paths, root, format, rules, min_severity, max, stats } => {
-            let code = check(&root, &paths, &format, rules, min_severity, max, stats)?;
+            let code = check(&root, &paths, &format, rules, min_severity, max, stats, style)?;
             std::process::exit(code);
         }
         Cmd::Changed { files, root, edit, all_lines, no_baseline, max, min_severity, json, no_daemon } => {
@@ -183,6 +188,7 @@ fn main() -> anyhow::Result<()> {
                 max,
                 min_severity,
                 json,
+                color: style.color && !json,
             };
             let resp = if no_daemon { grounds_engine::daemon::execute(&mut grounds_engine::session::Session::open(&root)?, &req) } else { grounds_engine::daemon::run(&root, &req, true)? };
             print!("{}", resp.stdout);
@@ -358,7 +364,7 @@ fn hook(event: &str) -> anyhow::Result<i32> {
             if !file.ends_with(".java") {
                 return Ok(0);
             }
-            let req = Request::Check { mode: Mode::Edit, files: vec![PathBuf::from(file)], all_lines: false, baseline: true, max: 10, min_severity: "warning".into(), json: false };
+            let req = Request::Check { mode: Mode::Edit, files: vec![PathBuf::from(file)], all_lines: false, baseline: true, max: 10, min_severity: "warning".into(), json: false, color: false };
             let resp = run(&root, &req, true)?;
             if resp.code == 2 {
                 eprint!("{}", resp.stdout);
@@ -371,7 +377,7 @@ fn hook(event: &str) -> anyhow::Result<i32> {
             if v.get("stop_hook_active").and_then(|b| b.as_bool()) == Some(true) {
                 return Ok(0);
             }
-            let req = Request::Check { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, baseline: true, max: 15, min_severity: "warning".into(), json: false };
+            let req = Request::Check { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, baseline: true, max: 15, min_severity: "warning".into(), json: false, color: false };
             let resp = run(&root, &req, true)?;
             if resp.code == 2 {
                 eprint!("{}", resp.stdout);
@@ -392,8 +398,9 @@ fn hook(event: &str) -> anyhow::Result<i32> {
     }
 }
 
-fn check(root: &std::path::Path, paths: &[PathBuf], format: &str, rules: Option<String>, min_sev: Option<String>, max: Option<usize>, stats: bool) -> anyhow::Result<i32> {
-    use grounds_engine::{analyze, report};
+#[allow(clippy::too_many_arguments)]
+fn check(root: &std::path::Path, paths: &[PathBuf], format: &str, rules: Option<String>, min_sev: Option<String>, max: Option<usize>, stats: bool, style: report::Style) -> anyhow::Result<i32> {
+    use grounds_engine::analyze;
     let t = std::time::Instant::now();
     let mut project = grounds_engine::Project::load(root)?;
     if let Some(r) = rules {
@@ -420,7 +427,7 @@ fn check(root: &std::path::Path, paths: &[PathBuf], format: &str, rules: Option<
         match format {
             "json" => println!("{}", report::json(&findings)),
             "sarif" => println!("{}", report::sarif(&findings)),
-            _ => print!("{}", report::text(&findings, max)),
+            _ => print!("{}", report::text(&findings, max, style)),
         }
     }
     if std::env::var("GROUNDS_PROFILE").is_ok() {

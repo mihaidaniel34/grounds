@@ -381,15 +381,16 @@ pub struct ImpactedTest {
 
 /// Render a report for an agent: new problems first, then broken callers,
 /// capped so a large refactor does not flood the context.
-pub fn render(report: &Report, max: usize) -> String {
+pub fn render(report: &Report, max: usize, style: crate::report::Style) -> String {
     let mut out = String::new();
     let e = report.findings.iter().filter(|f| f.severity == Severity::Error).count();
     let w = report.findings.iter().filter(|f| f.severity == Severity::Warning).count();
     let i = report.findings.len() - e - w;
     if !report.findings.is_empty() {
-        out.push_str(&format!("grounds: {} new problem(s) in changed code ({e} errors, {w} warnings, {i} info)\n", report.findings.len()));
+        out.push_str(&style.bold(&format!("grounds: {} new problem(s) in changed code ({e} errors, {w} warnings, {i} info)", report.findings.len())));
+        out.push('\n');
         for f in report.findings.iter().take(max) {
-            out.push_str(&format!("{}:{}:{}: {} [{}] {}\n", f.path, f.line, f.col, f.severity.as_str(), f.rule, f.message));
+            out.push_str(&style.finding(f));
         }
         if report.findings.len() > max {
             let mut by: std::collections::BTreeMap<&str, usize> = Default::default();
@@ -402,12 +403,13 @@ pub fn render(report: &Report, max: usize) -> String {
     }
     if !report.pending.is_empty() {
         let files: FxHashSet<&str> = report.pending.iter().map(|f| f.path.as_str()).collect();
-        out.push_str(&format!(
-            "grounds: API changes in {} broke {} call site(s) in {} other file(s) not yet updated:\n",
+        out.push_str(&style.bold(&format!(
+            "grounds: API changes in {} broke {} call site(s) in {} other file(s) not yet updated:",
             report.changed_apis.join(", "),
             report.pending.len(),
             files.len()
-        ));
+        )));
+        out.push('\n');
         for f in report.pending.iter().take(max) {
             out.push_str(&format!("{}:{}:{}: {}\n", f.path, f.line, f.col, f.message));
         }
