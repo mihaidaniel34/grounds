@@ -155,6 +155,7 @@ fn apply_one(c: &mut RawClass, imported: bool) -> Option<RawClass> {
                 flags: Flags(Flags::PRIVATE | Flags::STATIC | Flags::FINAL | Flags::GENERATED),
                 annotations: Vec::new(),
                 constant: None,
+                init: None,
                 has_initializer: true,
                 range: (0, 0),
             });

@@ -5,6 +5,7 @@ use crate::binary;
 use crate::hierarchy::ClassLookup;
 use crate::model::*;
 use crate::stubs::*;
+use crate::stubs::fold_binary;
 use dashmap::DashMap;
 use grounds_classfile::ClassContainer;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -313,18 +314,23 @@ impl Index {
         let interfaces = raw.interfaces.iter().map(|s| self.resolve_type(s, &header_scope)).collect();
         let permits = raw.permits.iter().map(|s| self.resolve_type(s, &header_scope)).collect();
         let annotations = raw.annotations.iter().map(|a| self.resolve_annotation(a, scope)).collect();
-        let fields = raw
-            .fields
-            .iter()
-            .map(|f| FieldInfo {
+        let mut fields: Vec<FieldInfo> = Vec::with_capacity(raw.fields.len());
+        for f in &raw.fields {
+            let ty = self.resolve_type(&f.ty, scope);
+            let constant = f.constant.clone().or_else(|| {
+                let e = f.init.as_ref()?;
+                let v = self.eval_const_expr(e, scope, &fields, raw, 0)?;
+                coerce_constant(v, &ty)
+            });
+            fields.push(FieldInfo {
                 name: f.name.clone(),
-                ty: self.resolve_type(&f.ty, scope),
+                ty,
                 flags: f.flags,
                 annotations: f.annotations.iter().map(|a| self.resolve_annotation(a, scope)).collect(),
-                constant: f.constant.clone(),
+                constant,
                 range: Some(f.range),
-            })
-            .collect();
+            });
+        }
         let methods = raw
             .methods
             .iter()
@@ -371,6 +377,61 @@ impl Index {
             permits,
             origin,
             range: Some(raw.range),
+        }
+    }
+
+    fn eval_const_expr(&self, e: &ConstExpr, scope: &Scope, done: &[FieldInfo], raw: &RawClass, depth: u32) -> Option<Constant> {
+        if depth > 32 {
+            return None;
+        }
+        match e {
+            ConstExpr::Lit(c) => Some(c.clone()),
+            ConstExpr::Name(n) => {
+                if !n.contains('.') {
+                    // earlier field of the same class
+                    if let Some(f) = done.iter().find(|f| &*f.name == &**n) {
+                        return f.constant.clone();
+                    }
+                    if let Some(f) = raw.fields.iter().find(|f| &*f.name == &**n) {
+                        if let Some(c) = &f.constant {
+                            return Some(c.clone());
+                        }
+                        if let Some(ie) = &f.init {
+                            return self.eval_const_expr(ie, scope, done, raw, depth + 1);
+                        }
+                        return None;
+                    }
+                }
+                match self.resolve_constant_name(n, scope)? {
+                    AnnotationValue::Const(c) => Some(c),
+                    _ => None,
+                }
+            }
+            ConstExpr::Unary(op, v) => {
+                let v = self.eval_const_expr(v, scope, done, raw, depth + 1)?;
+                match (&**op, v) {
+                    ("-", Constant::Int(i)) => Some(Constant::Int(i.wrapping_neg())),
+                    ("-", Constant::Float(f)) => Some(Constant::Float(-f)),
+                    ("+", v) => Some(v),
+                    ("!", Constant::Bool(b)) => Some(Constant::Bool(!b)),
+                    ("~", Constant::Int(i)) => Some(Constant::Int(!i)),
+                    _ => None,
+                }
+            }
+            ConstExpr::Binary(op, l, r) => {
+                let l = self.eval_const_expr(l, scope, done, raw, depth + 1)?;
+                let r = self.eval_const_expr(r, scope, done, raw, depth + 1)?;
+                fold_binary(op, &l, &r)
+            }
+            ConstExpr::Cast(p, v) => {
+                let v = self.eval_const_expr(v, scope, done, raw, depth + 1)?;
+                coerce_constant(v, &Ty::Prim(*p))
+            }
+            ConstExpr::CastString(v) => self.eval_const_expr(v, scope, done, raw, depth + 1),
+            ConstExpr::Ternary(c, a, b) => {
+                let c = self.eval_const_expr(c, scope, done, raw, depth + 1)?.as_bool()?;
+                self.eval_const_expr(if c { a } else { b }, scope, done, raw, depth + 1)
+            }
         }
     }
 
@@ -637,4 +698,24 @@ impl ClassLookup for Index {
     fn class(&self, name: &str) -> Option<Arc<ClassInfo>> {
         Index::class(self, name)
     }
+}
+
+/// Convert a folded constant to the representation of the declared type.
+pub fn coerce_constant(v: Constant, ty: &Ty) -> Option<Constant> {
+    Some(match ty {
+        Ty::Prim(Prim::Int) => Constant::Int(match v {
+            Constant::Float(f) => f as i32 as i64,
+            c => c.as_i64()? as i32 as i64,
+        }),
+        Ty::Prim(Prim::Long) => Constant::Int(match v {
+            Constant::Float(f) => f as i64,
+            c => c.as_i64()?,
+        }),
+        Ty::Prim(Prim::Short) => Constant::Int(v.as_i64()? as i16 as i64),
+        Ty::Prim(Prim::Byte) => Constant::Int(v.as_i64()? as i8 as i64),
+        Ty::Prim(Prim::Char) => Constant::Char(char::from_u32(v.as_i64()? as u32)?),
+        Ty::Prim(Prim::Float) | Ty::Prim(Prim::Double) => Constant::Float(v.as_f64()?),
+        Ty::Prim(Prim::Boolean) => Constant::Bool(v.as_bool()?),
+        _ => v,
+    })
 }

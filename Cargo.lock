@@ -289,6 +289,9 @@ dependencies = [
  "grounds-engine",
  "grounds-index",
  "grounds-rules",
+ "grounds-semantic",
+ "grounds-syntax",
+ "rayon",
  "serde_json",
 ]
 
@@ -360,8 +363,10 @@ dependencies = [
 name = "grounds-semantic"
 version = "0.1.0"
 dependencies = [
+ "grounds-classfile",
  "grounds-index",
  "grounds-syntax",
+ "rustc-hash",
 ]
 
 [[package]]

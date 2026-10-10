@@ -194,6 +194,12 @@ pub trait ClassLookup {
         if sub == sup || sup == "java.lang.Object" {
             return Tri::Yes;
         }
+        // nothing but itself can be a subtype of a final class
+        if let Some(sc) = self.class(sup) {
+            if sc.flags.is_final() && !sc.is_interface() {
+                return Tri::No;
+            }
+        }
         let mut seen = FxHashSet::default();
         let mut q = VecDeque::new();
         q.push_back(Arc::<str>::from(sub));
@@ -286,7 +292,7 @@ pub trait ClassLookup {
                 let sm = subst_method(m, &map);
                 let erased: Vec<Ty> = sm.params.iter().map(|p| p.ty.erasure()).collect();
                 let overridden = out.iter().any(|o| {
-                    o.method.params.len() == erased.len() && o.method.params.iter().zip(&erased).all(|(p, e)| p.ty.erasure() == *e || e.is_class("java.lang.Object"))
+                    o.method.params.len() == erased.len() && o.method.params.iter().zip(&erased).all(|(p, e)| p.ty.erasure() == *e)
                 });
                 if overridden {
                     continue;

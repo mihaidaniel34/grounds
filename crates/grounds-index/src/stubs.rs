@@ -91,6 +91,51 @@ pub struct RawParam {
     pub flags: Flags,
 }
 
+/// Constant expression of a final field initializer that refers to other
+/// constants; evaluated during index resolution.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum ConstExpr {
+    Lit(Constant),
+    Name(Arc<str>),
+    Unary(Arc<str>, Box<ConstExpr>),
+    Binary(Arc<str>, Box<ConstExpr>, Box<ConstExpr>),
+    Cast(Prim, Box<ConstExpr>),
+    CastString(Box<ConstExpr>),
+    Ternary(Box<ConstExpr>, Box<ConstExpr>, Box<ConstExpr>),
+}
+
+pub fn const_expr(n: Node, src: &str) -> Option<ConstExpr> {
+    let n = n.unparen();
+    if let Some(c) = literal_constant(n, src) {
+        return Some(ConstExpr::Lit(c));
+    }
+    match n.kind() {
+        "identifier" => Some(ConstExpr::Name(Arc::from(n.text(src)))),
+        "field_access" if is_name_chain(n) => Some(ConstExpr::Name(Arc::from(strip_ws(n.text(src)).as_str()))),
+        "unary_expression" => Some(ConstExpr::Unary(Arc::from(n.field("operator")?.kind()), Box::new(const_expr(n.field("operand")?, src)?))),
+        "binary_expression" => Some(ConstExpr::Binary(
+            Arc::from(n.field("operator")?.kind()),
+            Box::new(const_expr(n.field("left")?, src)?),
+            Box::new(const_expr(n.field("right")?, src)?),
+        )),
+        "cast_expression" => {
+            let t = n.fields("type");
+            let v = Box::new(const_expr(n.field("value")?, src)?);
+            match t.first().map(|t| type_syntax(*t, src)) {
+                Some(TypeSyntax::Prim(p)) => Some(ConstExpr::Cast(p, v)),
+                Some(ts) if ts.last_name() == Some("String") => Some(ConstExpr::CastString(v)),
+                _ => None,
+            }
+        }
+        "ternary_expression" => Some(ConstExpr::Ternary(
+            Box::new(const_expr(n.field("condition")?, src)?),
+            Box::new(const_expr(n.field("consequence")?, src)?),
+            Box::new(const_expr(n.field("alternative")?, src)?),
+        )),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RawField {
     pub name: Name,
@@ -98,6 +143,7 @@ pub struct RawField {
     pub flags: Flags,
     pub annotations: Vec<RawAnnotation>,
     pub constant: Option<Constant>,
+    pub init: Option<ConstExpr>,
     pub has_initializer: bool,
     pub range: (u32, u32),
 }
@@ -662,9 +708,20 @@ fn throws_of(n: Node, src: &str) -> Vec<TypeSyntax> {
 impl<'s> Extractor<'s> {
     /// Extract a type declaration and its nested types. Returns the binary name.
     pub fn class(&mut self, node: Node, pkg: &str, outer: Option<(&Name, ClassKind)>, _local: bool) -> Option<Name> {
+        self.class_named(node, pkg, outer, None)
+    }
+
+    /// `node` is a type declaration, or a `class_body` of an anonymous class
+    /// when `name_override` is given.
+    pub fn class_named(&mut self, node: Node, pkg: &str, outer: Option<(&Name, ClassKind)>, name_override: Option<&str>) -> Option<Name> {
         let src = self.src;
-        let simple = node.field("name")?.text(src);
+        let anon = node.kind() == "class_body";
+        let simple = match name_override {
+            Some(n) => n,
+            None => node.field("name")?.text(src),
+        };
         let name: Name = match outer {
+            Some((o, _)) if anon => Arc::from(format!("{o}${simple}").as_str()),
             Some((o, _)) => Arc::from(format!("{o}${simple}").as_str()),
             None if pkg.is_empty() => Arc::from(simple),
             None => Arc::from(format!("{pkg}.{simple}").as_str()),
@@ -735,7 +792,7 @@ impl<'s> Extractor<'s> {
             annotations,
             outer: outer.map(|o| o.0.clone()),
             inners: Vec::new(),
-            range: range(node.field("name")?),
+            range: if anon { range(node) } else { range(node.field("name")?) },
             decl_range: range(node),
         });
 
@@ -758,6 +815,7 @@ impl<'s> Extractor<'s> {
                     flags: ff,
                     annotations: c.annotations.clone(),
                     constant: None,
+                    init: None,
                     has_initializer: false,
                     range: (0, 0),
                 });
@@ -771,7 +829,7 @@ impl<'s> Extractor<'s> {
             }
         }
 
-        let body = node.field("body");
+        let body = if anon { Some(node) } else { node.field("body") };
         let mut members: Vec<Node> = Vec::new();
         if let Some(b) = body {
             for m in b.kids() {
@@ -797,6 +855,7 @@ impl<'s> Extractor<'s> {
                         flags: ff,
                         annotations: anns,
                         constant: None,
+                        init: None,
                         has_initializer: true,
                         range: range(n),
                     });
@@ -819,12 +878,14 @@ impl<'s> Extractor<'s> {
                         }
                         let value = d.field("value");
                         let constant = if ff.is_final() { value.and_then(|v| literal_constant(v, src)) } else { None };
+                        let init = if ff.is_final() && constant.is_none() { value.and_then(|v| const_expr(v, src)) } else { None };
                         fields.push(RawField {
                             name: Arc::from(n.text(src)),
                             ty,
                             flags: ff,
                             annotations: anns.clone(),
                             constant,
+                            init,
                             has_initializer: value.is_some(),
                             range: range(n),
                         });
@@ -980,5 +1041,12 @@ pub fn extract_class_node(node: Node, src: &str, pkg: &str, outer: Option<&Name>
     let o = outer.map(|o| (o, ClassKind::Class));
     ex.class(node, pkg, o, true);
     crate::lombok::apply_all(&mut ex.classes, &[]);
+    ex.classes
+}
+
+/// Extract an anonymous class body as a class named `name` nested in `outer`.
+pub fn extract_anonymous(body: Node, src: &str, pkg: &str, outer: &Name, simple: &str) -> Vec<RawClass> {
+    let mut ex = Extractor { src, classes: Vec::new() };
+    ex.class_named(body, pkg, Some((outer, ClassKind::Class)), Some(simple));
     ex.classes
 }

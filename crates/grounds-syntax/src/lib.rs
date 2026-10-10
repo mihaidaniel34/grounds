@@ -72,7 +72,9 @@ pub struct SyntaxError {
 impl ParsedFile {
     pub fn parse(text: impl Into<Arc<str>>) -> ParsedFile {
         let text: Arc<str> = text.into();
-        let tree = PARSER.with(|p| p.borrow_mut().parse(text.as_bytes(), None)).expect("parse never fails without timeout");
+        let fixed = fixup_for_grammar(&text);
+        let bytes = fixed.as_deref().unwrap_or(text.as_bytes());
+        let tree = PARSER.with(|p| p.borrow_mut().parse(bytes, None)).expect("parse never fails without timeout");
         let lines = LineIndex::new(&text);
         ParsedFile { text, tree, lines }
     }
@@ -120,6 +122,79 @@ impl ParsedFile {
         out.sort_by_key(|e| e.range.start);
         out
     }
+}
+
+/// Work around constructs tree-sitter-java cannot parse, preserving byte
+/// offsets by blanking text with spaces:
+/// - type annotations before varargs ellipsis: `String @Nullable ... args`
+pub fn fixup_for_grammar(text: &str) -> Option<Vec<u8>> {
+    if !text.contains("...") || !text.contains('@') {
+        return None;
+    }
+    let b = text.as_bytes();
+    let mut out: Option<Vec<u8>> = None;
+    let mut search = 0;
+    while let Some(pos) = text[search..].find("...") {
+        let dots = search + pos;
+        search = dots + 3;
+        let mut i = dots;
+        let mut spans: Vec<(usize, usize)> = Vec::new();
+        loop {
+            // skip whitespace
+            while i > 0 && b[i - 1].is_ascii_whitespace() {
+                i -= 1;
+            }
+            let end = i;
+            let mut j = i;
+            if j > 0 && b[j - 1] == b')' {
+                // annotation arguments
+                let mut depth = 0i32;
+                while j > 0 {
+                    j -= 1;
+                    match b[j] {
+                        b')' => depth += 1,
+                        b'(' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            let name_end = j;
+            while j > 0 && (b[j - 1].is_ascii_alphanumeric() || b[j - 1] == b'_' || b[j - 1] == b'.' || b[j - 1] == b'$') {
+                j -= 1;
+            }
+            if j < name_end && j > 0 && b[j - 1] == b'@' {
+                spans.push((j - 1, end));
+                i = j - 1;
+                continue;
+            }
+            break;
+        }
+        if spans.is_empty() {
+            continue;
+        }
+        // must be preceded by a type token
+        let mut k = i;
+        while k > 0 && b[k - 1].is_ascii_whitespace() {
+            k -= 1;
+        }
+        if k == 0 || !(b[k - 1].is_ascii_alphanumeric() || b[k - 1] == b'>' || b[k - 1] == b']' || b[k - 1] == b'_') {
+            continue;
+        }
+        let o = out.get_or_insert_with(|| b.to_vec());
+        for (s0, e0) in spans {
+            for x in &mut o[s0..e0] {
+                if *x != b'\n' {
+                    *x = b' ';
+                }
+            }
+        }
+    }
+    out
 }
 
 pub fn is_comment(kind: &str) -> bool {
@@ -397,6 +472,14 @@ mod tests {
             WalkControl::Continue
         });
         assert_eq!(n, kinds.len());
+    }
+
+    #[test]
+    fn annotated_varargs() {
+        let f = ParsedFile::parse("interface B { B env(String @Nullable ... envs); }");
+        assert!(!f.has_errors());
+        let sp = f.root().descendants().find(|n| n.kind() == "spread_parameter");
+        assert!(sp.is_some());
     }
 
     #[test]

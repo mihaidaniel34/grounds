@@ -14,3 +14,6 @@ grounds-index.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 serde_json.workspace = true
+grounds-semantic.workspace = true
+grounds-syntax.workspace = true
+rayon.workspace = true

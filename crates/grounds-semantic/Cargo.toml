@@ -6,3 +6,7 @@ edition.workspace = true
 [dependencies]
 grounds-syntax.workspace = true
 grounds-index.workspace = true
+rustc-hash.workspace = true
+
+[dev-dependencies]
+grounds-classfile.workspace = true
