@@ -169,6 +169,9 @@ fn read_request(stream: &UnixStream, within: Duration) -> Option<String> {
         }
         buf.extend_from_slice(&chunk[..n]);
         if let Some(end) = buf.iter().position(|b| *b == b'\n') {
+            if end as u64 > MAX_REQUEST {
+                return None;
+            }
             return Some(String::from_utf8_lossy(&buf[..end]).into_owned());
         }
         if buf.len() as u64 > MAX_REQUEST {
@@ -249,4 +252,48 @@ pub fn run(root: &Path, req: &Request, start_daemon: bool) -> anyhow::Result<Res
     }
     let mut s = Session::open(root)?;
     Ok(execute(&mut s, req))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{read_request, MAX_REQUEST};
+    use std::io::Write;
+    use std::os::unix::net::UnixStream;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn request_reading_is_bounded() {
+        // a normal request
+        let (mut a, b) = UnixStream::pair().unwrap();
+        a.write_all(b"{\"cmd\":\"ping\"}\n").unwrap();
+        assert_eq!(read_request(&b, Duration::from_secs(1)).as_deref(), Some("{\"cmd\":\"ping\"}"));
+
+        // a line longer than the limit, even if its newline arrives in the
+        // chunk that crosses it
+        let (mut a, b) = UnixStream::pair().unwrap();
+        let writer = std::thread::spawn(move || {
+            let mut big = vec![b' '; MAX_REQUEST as usize];
+            big.extend_from_slice(b"    \n");
+            let _ = a.write_all(&big);
+        });
+        assert_eq!(read_request(&b, Duration::from_secs(5)), None);
+        drop(b);
+        let _ = writer.join();
+
+        // a client trickling bytes is cut off at the total deadline
+        let (mut a, b) = UnixStream::pair().unwrap();
+        let writer = std::thread::spawn(move || {
+            for _ in 0..20 {
+                if a.write_all(b" ").is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+        let t = Instant::now();
+        assert_eq!(read_request(&b, Duration::from_millis(500)), None);
+        assert!(t.elapsed() < Duration::from_millis(900), "{:?}", t.elapsed());
+        drop(b);
+        let _ = writer.join();
+    }
 }

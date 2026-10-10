@@ -58,8 +58,8 @@ checked out, with no grounds configuration:
 | spring-petclinic | 50 | 4,297 | 1 | 0.22 s | 96.6% | 0 / 16 / 7 |
 | spring-petclinic-rest | 109 | 8,675 | 1 | 0.24 s | 91.6% | 0 / 29 / 22 |
 | piggymetrics | 97 | 4,472 | 10 | 0.21 s | 87.4% | 0 / 17 / 61 |
-| jhipster-sample-app | 136 | 11,980 | 1 | 0.27 s | 83.6% | 0 / 5 / 19 |
-| micronaut-core | 6,373 | 697,624 | 85 | 2.9 s | 95.0% | 17 / 839 / 2,988 |
+| jhipster-sample-app | 136 | 11,980 | 1 | 0.27 s | 83.6% | 0 / 4 / 19 |
+| micronaut-core | 6,373 | 697,624 | 85 | 2.9 s | 95.0% | 17 / 829 / 2,988 |
 
 "Calls resolved" is the share of method calls for which grounds found the
 exact target method. For the rest, any rule that needs the target says
@@ -81,12 +81,13 @@ on-disk cache.
 
 ## How it was tested
 
-- **One fixture per rule:** 315 small Java files with `// expect` markers on
+- **Fixtures:** 325 small Java files, at least one per rule, with `// expect` markers on
   the lines that must be reported. The tests fail when a rule reports
   anything else, or when a rule has no fixture. Fixtures also cover
   suppressions and options.
-- **End-to-end session test:** a temporary git repo goes through edits, the
-  baseline, broken-caller detection and impacted tests.
+- **Engine tests:** temporary git repositories go through edits, the
+  baseline, broken-caller detection and impacted tests; multi-package
+  projects exercise Spring bean registration (`@Import`, scan boundaries).
 - **Five unmodified open-source projects** (the table above), taken as
   published. Since they compile and their applications start, any
   compile-break or DI finding on them would be a false positive. There are
@@ -101,11 +102,19 @@ on-disk cache.
   Renaming a method in petclinic listed all 15 broken callers. Changing
   `getPet(String)` to take two parameters flagged every call with the old
   arguments.
+- **External review:** three rounds of review by OpenAI Codex (gpt-6.1-sol),
+  which wrote Java test cases, compiled them with javac and ran Spring
+  contexts to confirm each report. The first round found 16 defects (among
+  them exception paths that saw assignments made after the throwing call,
+  `break` skipping `finally`, `int` overflow in constant folding, `@Import`ed
+  configurations ignored, a daemon that one stalled client could block, and
+  a crash on malformed jars); the second found 9 more in the fixes, and the
+  third 4 smaller edge cases in Spring bean naming and registration. All are
+  fixed, each with a regression test.
 - **Precision fixes:** every false positive found during testing became a
-  fixture case. Recent ones: `@Value` placeholders built by string
-  concatenation; Micronaut introduction interfaces; MockMvc `andExpect` as
-  an assertion; Spring's empty `contextLoads()` test; a trailing
-  `// grounds-ignore` also silencing the next line.
+  fixture case, for example `@Value` placeholders built by string
+  concatenation, Micronaut introduction interfaces, MockMvc `andExpect` as
+  an assertion, and Spring's empty `contextLoads()` test.
 
 Not tested: Windows (the daemon uses Unix sockets), Kotlin or mixed
 Kotlin/Java projects (Kotlin sources are ignored, so types defined in them

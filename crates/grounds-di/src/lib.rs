@@ -133,6 +133,9 @@ pub struct DiModel {
     /// `spring.main.allow-bean-definition-overriding=true` in some
     /// application config: a later @Bean definition replaces an earlier one.
     pub bean_overriding_allowed: bool,
+    /// An imported ImportSelector/ImportBeanDefinitionRegistrar may register
+    /// beans we cannot see: "no bean" is never certain.
+    pub opaque_imports: bool,
     /// Classes that are components (by binary name), for quick lookup.
     pub component_classes: FxHashMap<Name, usize>,
     /// Constructor-injection edges (owner, dependency class, point index),
@@ -401,6 +404,17 @@ impl<'a> Builder<'a> {
                 }
             }
         }
+        // ImportSelectors and ImportBeanDefinitionRegistrars are not beans; the
+        // beans they register are invisible to us
+        let registers_dynamically = |idx: &Index, n: &str| {
+            ["org.springframework.context.annotation.ImportSelector", "org.springframework.context.annotation.ImportBeanDefinitionRegistrar"].iter().any(|i| idx.is_subclass(n, i).is_yes())
+                || idx.raw_class(n).is_some_and(|(_, r)| r.interfaces.iter().any(|t| t.last_name().is_some_and(|l| matches!(l, "ImportSelector" | "DeferredImportSelector" | "ImportBeanDefinitionRegistrar"))))
+        };
+        let dynamic: Vec<Name> = imported.iter().filter(|n| registers_dynamically(self.index, n)).cloned().collect();
+        self.model.opaque_imports = !dynamic.is_empty();
+        for n in dynamic {
+            imported.remove(&n);
+        }
         // anything else outside the scanned packages may still be registered
         // (AutoConfiguration.imports, ImportSelectors, manual registration):
         // modeled as conditional, i.e. it satisfies injections but never makes
@@ -506,10 +520,11 @@ impl<'a> Builder<'a> {
             // a Spring @ConfigurationProperties class without another stereotype
             // is registered by @EnableConfigurationProperties or
             // @ConfigurationPropertiesScan (named `<prefix>-<class name>`)
-            let properties = anns.iter().any(is_spring_props)
-                && !anns.iter().any(|a| !is_spring_props(a) && SPRING_STEREOTYPES.iter().any(|s| a.is(s)));
+            // (composed stereotypes such as an annotation carrying @Component count)
+            let properties = anns.iter().any(is_spring_props) && !anns.iter().any(|a| !is_spring_props(a) && self.stereotype(a, 0) == Some(Framework::Spring));
             // plain classes listed in @Import are beans too
-            let fw = anns.iter().find_map(|a| self.stereotype(a, 0)).or_else(|| imported.contains(&c.name).then_some(Framework::Spring));
+            let stereotyped = anns.iter().find_map(|a| self.stereotype(a, 0));
+            let fw = stereotyped.or_else(|| imported.contains(&c.name).then_some(Framework::Spring));
             let Some(fw) = fw else { continue };
             // may or may not be registered at runtime: satisfies injections but
             // its own dependencies are not judged
@@ -530,8 +545,8 @@ impl<'a> Builder<'a> {
                 if properties {
                     let prefix = anns.iter().find(|a| is_spring_props(a)).and_then(|a| first_string(a, &["prefix", "value"])).unwrap_or_default();
                     if prefix.is_empty() { c.name.to_string() } else { format!("{prefix}-{}", c.name) }
-                } else if fw == Framework::Spring && imported.contains(&c.name) && !in_scan(c.package()) {
-                    // imported (not scanned) classes are named by their class name
+                } else if fw == Framework::Spring && imported.contains(&c.name) && (!in_scan(c.package()) || stereotyped.is_none()) {
+                    // classes registered by @Import (not by scanning) are named by their class name
                     c.name.to_string()
                 } else {
                     decapitalize(c.simple_name())
@@ -848,7 +863,7 @@ impl DiModel {
             }
             if cands.is_empty() {
                 if before.is_empty() {
-                    return if maybe > 0 || !self.provable_type(lk, &p.ty) { Resolution::Unknown } else if p.optional { Resolution::Absent } else { Resolution::NotFound };
+                    return if maybe > 0 || self.opaque_imports || !self.provable_type(lk, &p.ty) { Resolution::Unknown } else if p.optional { Resolution::Absent } else { Resolution::NotFound };
                 }
                 if maybe > 0 {
                     return Resolution::Unknown;
@@ -868,7 +883,7 @@ impl DiModel {
             0 => {
                 if p.optional {
                     Resolution::Absent
-                } else if maybe > 0 || !self.provable_type(lk, &p.ty) || jit_possible() {
+                } else if maybe > 0 || self.opaque_imports || !self.provable_type(lk, &p.ty) || jit_possible() {
                     Resolution::Unknown
                 } else {
                     Resolution::NotFound
