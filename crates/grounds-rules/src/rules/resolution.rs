@@ -12,7 +12,7 @@ use grounds_semantic::Symbol;
 use grounds_syntax::{Node, NodeExt};
 
 pub fn rules() -> Vec<Box<dyn Rule>> {
-    vec![Box::new(UnresolvedMethod), Box::new(UnresolvedConstructor), Box::new(UnresolvedField)]
+    vec![Box::new(UnresolvedMethod), Box::new(UnresolvedConstructor), Box::new(UnresolvedField), Box::new(OverrideWithoutSuper), Box::new(UnimplementedAbstractMethod)]
 }
 
 /// A project class whose full hierarchy is known and that no processor other
@@ -289,4 +289,136 @@ impl Rule for UnresolvedField {
         let Some(cls) = cls else { return };
         cx.report(f, format!("`{}` has no field `{fname}`", cls.simple_name()));
     }
+}
+
+declare_rule!(OverrideWithoutSuper {
+    id: "override-matches-nothing",
+    name: "@Override method does not override anything",
+    category: Bug,
+    severity: Error,
+    tier: Edit,
+    sources: ["javac:method.does.not.override.superclass", "intellij:MethodDoesntOverride"],
+    kinds: ["method_declaration"],
+    description: "The method is annotated @Override but no supertype declares a method with this name and parameter types, so the code does not compile. Usually the supertype method was renamed or its parameters changed.",
+});
+
+impl Rule for OverrideWithoutSuper {
+    rule_meta!();
+    fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
+        if !crate::util::has_annotation_named(n, cx.src, "Override") {
+            return;
+        }
+        let Some(m) = cx.fm.method_of_decl(n) else { return };
+        let Some(cls) = cx.fm.enclosing_class(n) else { return };
+        if closed_class(cx, &cls.name).is_none() || m.params.iter().any(|p| p.ty.has_unknown()) {
+            return;
+        }
+        // explicit record accessors may carry @Override
+        if cls.is_record() && m.params.is_empty() && cls.fields.iter().any(|f| f.flags.has(Flags::RECORD_COMPONENT) && f.name == m.name) {
+            return;
+        }
+        // Object methods are always overridable
+        let mut found = matches!((&*m.name, m.params.len()), ("equals", 1) | ("hashCode", 0) | ("toString", 0) | ("clone", 0) | ("finalize", 0));
+        for st in cx.fm.all_supertypes(&cls.this_type()).into_iter().skip(1) {
+            if found {
+                break;
+            }
+            let Some(sn) = st.class_name() else { return };
+            let Some(sc) = cx.fm.class(sn) else { return };
+            let map = grounds_index::hierarchy::substitution(&sc, st.args());
+            found = sc.methods.iter().any(|x| {
+                x.name == m.name
+                    && !x.flags.is_static()
+                    && !x.flags.is_private()
+                    && x.params.len() == m.params.len()
+                    && x.params.iter().zip(&m.params).all(|(a, b)| {
+                        // generic parameters of raw/diamond supertypes match anything
+                        if a.ty.mentions_type_var() || b.ty.mentions_type_var() {
+                            return true;
+                        }
+                        let at = grounds_index::hierarchy::apply_subst(&a.ty, &map);
+                        at.erasure() == b.ty.erasure()
+                    })
+            });
+        }
+        if !found && cls.is_interface() {
+            found = false;
+        }
+        if !found {
+            if let Some(nm) = n.field("name") {
+                cx.report(nm, format!("`{}` is marked @Override but overrides no supertype method", m.signature_string()));
+            }
+        }
+    }
+}
+
+declare_rule!(UnimplementedAbstractMethod {
+    id: "unimplemented-abstract-method",
+    name: "Concrete class does not implement an abstract method",
+    category: Bug,
+    severity: Error,
+    tier: Edit,
+    sources: ["javac:does.not.override.abstract", "intellij:ClassNotImplementingAbstractMethods"],
+    kinds: ["class_declaration", "enum_declaration", "record_declaration"],
+    description: "A non-abstract class must implement every abstract method it inherits; otherwise it does not compile. Typically an interface method was added or changed while an implementation was not updated.",
+});
+
+impl Rule for UnimplementedAbstractMethod {
+    rule_meta!();
+    fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
+        if n.has_modifier("abstract") {
+            return;
+        }
+        let Some(cls) = cx.fm.class_of_decl(n) else { return };
+        if cls.is_abstract() || closed_class(cx, &cls.name).is_none() {
+            return;
+        }
+        // enum constants with bodies implement abstract methods themselves
+        if cls.is_enum() && cx.text(n).contains("abstract ") {
+            return;
+        }
+        let mut missing: Vec<String> = Vec::new();
+        for m in cx.fm.all_methods(&cls.this_type()) {
+            if !m.method.flags.is_abstract() || m.method.flags.is_static() {
+                continue;
+            }
+            // Object's methods (re-declared abstract by Record, Comparator...) are always implemented
+            if matches!((&*m.method.name, m.method.params.len()), ("equals", 1) | ("hashCode", 0) | ("toString", 0)) {
+                continue;
+            }
+            if m.method.params.iter().any(|p| p.ty.has_unknown()) {
+                return;
+            }
+            // implemented by this class, a superclass, or an interface default method?
+            let implemented = implements(cx, &cls, &m.method.name, m.method.params.len());
+            if !implemented {
+                missing.push(format!("{}.{}", simple_name_of(&m.owner), m.method.signature_string()));
+            }
+        }
+        if !missing.is_empty() {
+            if let Some(nm) = n.field("name") {
+                let more = if missing.len() > 3 { format!(" and {} more", missing.len() - 3) } else { String::new() };
+                cx.report(nm, format!("`{}` does not implement {}{more}", cls.simple_name(), missing.iter().take(3).cloned().collect::<Vec<_>>().join(", ")));
+            }
+        }
+    }
+}
+
+fn implements<'t>(cx: &Ctx<'_, 't>, cls: &ClassInfo, name: &str, arity: usize) -> bool {
+    let concrete = |c: &ClassInfo| c.methods.iter().any(|x| &*x.name == name && x.params.len() == arity && !x.flags.is_abstract() && !x.flags.is_static());
+    // superclass chain
+    let mut cur = Some(std::sync::Arc::new(cls.clone()));
+    let mut depth = 0;
+    while let Some(c) = cur {
+        if concrete(&c) {
+            return true;
+        }
+        depth += 1;
+        if depth > 30 {
+            return true;
+        }
+        cur = c.superclass.as_ref().and_then(|s| s.class_name()).and_then(|s| cx.fm.class(s));
+    }
+    // default methods anywhere in the interface closure
+    cx.fm.all_supertypes(&cls.this_type()).iter().filter_map(|t| t.class_name()).filter_map(|n| cx.fm.class(n)).any(|c| c.is_interface() && concrete(&c))
 }

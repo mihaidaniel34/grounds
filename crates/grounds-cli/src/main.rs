@@ -37,10 +37,72 @@ enum Cmd {
         #[arg(long)]
         stats: bool,
     },
+    /// Check changed code (git) the way an agent needs it: only changed lines,
+    /// baseline applied, capped output, plus callers broken by API changes.
+    Changed {
+        /// Files to check (default: files changed vs HEAD).
+        files: Vec<PathBuf>,
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Only the fast, high-confidence per-edit rules.
+        #[arg(long)]
+        edit: bool,
+        /// Report on all lines of the files, not only changed lines.
+        #[arg(long)]
+        all_lines: bool,
+        #[arg(long)]
+        no_baseline: bool,
+        #[arg(long, default_value_t = 15)]
+        max: usize,
+        #[arg(long, default_value = "warning")]
+        min_severity: String,
+        #[arg(long)]
+        json: bool,
+        /// Do not use or start the background daemon.
+        #[arg(long)]
+        no_daemon: bool,
+    },
+    /// Accept the current findings of the given (default: changed) files.
+    Baseline {
+        files: Vec<PathBuf>,
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Add to the existing baseline instead of replacing it.
+        #[arg(long)]
+        merge: bool,
+    },
+    /// Test classes affected by the given (default: changed) files.
+    ImpactedTests {
+        files: Vec<PathBuf>,
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Print one gradle command per module.
+        #[arg(long)]
+        gradle: bool,
+    },
+    /// Run the background analysis server for a workspace.
+    Daemon {
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long, default_value_t = 30)]
+        idle_minutes: u64,
+        #[arg(long)]
+        stop: bool,
+        #[arg(long)]
+        status: bool,
+    },
+    /// Claude Code hook entry points (reads the hook JSON on stdin):
+    /// post-edit | stop | session-start
+    Hook { event: String },
+    /// Print the Claude Code hook configuration for .claude/settings.json.
+    Hooks,
     /// List all rules.
     Rules {
         #[arg(long)]
         json: bool,
+        /// Markdown catalog grouped by category.
+        #[arg(long)]
+        markdown: bool,
     },
     /// Explain a rule.
     Explain { rule: String },
@@ -92,9 +154,88 @@ fn main() -> anyhow::Result<()> {
             let code = check(&root, &paths, &format, rules, min_severity, max, stats)?;
             std::process::exit(code);
         }
-        Cmd::Rules { json } => {
+        Cmd::Changed { files, root, edit, all_lines, no_baseline, max, min_severity, json, no_daemon } => {
+            let root = find_root(root);
+            let req = grounds_engine::daemon::Request::Check {
+                mode: if edit { grounds_engine::session::Mode::Edit } else { grounds_engine::session::Mode::Checkpoint },
+                files: abs(&files),
+                all_lines,
+                baseline: !no_baseline,
+                max,
+                min_severity,
+                json,
+            };
+            let resp = if no_daemon { grounds_engine::daemon::execute(&mut grounds_engine::session::Session::open(&root)?, &req) } else { grounds_engine::daemon::run(&root, &req, true)? };
+            print!("{}", resp.stdout);
+            eprint!("{}", resp.stderr);
+            if resp.stdout.is_empty() && resp.code == 0 && !json {
+                eprintln!("grounds: no new problems in changed code");
+            }
+            std::process::exit(resp.code);
+        }
+        Cmd::Baseline { files, root, merge } => {
+            let root = find_root(root);
+            let resp = grounds_engine::daemon::run(&root, &grounds_engine::daemon::Request::Baseline { files: abs(&files), merge }, false)?;
+            print!("{}", resp.stdout);
+            eprint!("{}", resp.stderr);
+            std::process::exit(resp.code);
+        }
+        Cmd::ImpactedTests { files, root, gradle } => {
+            let root = find_root(root);
+            let resp = grounds_engine::daemon::run(&root, &grounds_engine::daemon::Request::ImpactedTests { files: abs(&files) }, false)?;
+            if gradle {
+                let mut by: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+                for l in resp.stdout.lines() {
+                    if let Some((m, t)) = l.split_once('\t') {
+                        by.entry(m.to_string()).or_default().push(t.to_string());
+                    }
+                }
+                for (m, ts) in by {
+                    let task = if m == ":" || m.is_empty() { "test".to_string() } else { format!(":{}:test", m.replace('/', ":")) };
+                    let filters: Vec<String> = ts.iter().map(|t| format!("--tests '{}'", t.replace('$', "."))).collect();
+                    println!("./gradlew {task} {}", filters.join(" "));
+                }
+            } else {
+                print!("{}", resp.stdout);
+            }
+        }
+        Cmd::Daemon { root, idle_minutes, stop, status } => {
+            let root = find_root(root);
+            if stop {
+                let r = grounds_engine::daemon::request(&root, &grounds_engine::daemon::Request::Shutdown);
+                println!("{}", if r.is_some() { "stopped" } else { "not running" });
+                return Ok(());
+            }
+            if status {
+                match grounds_engine::daemon::request(&root, &grounds_engine::daemon::Request::Ping) {
+                    Some(r) => print!("running: {}", r.stdout),
+                    None => println!("not running"),
+                }
+                return Ok(());
+            }
+            grounds_engine::daemon::serve(&root, std::time::Duration::from_secs(idle_minutes * 60))?;
+        }
+        Cmd::Hook { event } => std::process::exit(hook(&event)?),
+        Cmd::Hooks => println!("{}", HOOKS_JSON),
+        Cmd::Rules { json, markdown } => {
             let cat = grounds_rules::catalog();
-            if json {
+            if markdown {
+                let mut by: std::collections::BTreeMap<&str, Vec<&grounds_rules::RuleMeta>> = Default::default();
+                for m in cat {
+                    by.entry(m.category.as_str()).or_default().push(m);
+                }
+                println!("# Rule catalog\n\n{} rules. `grounds explain <id>` prints the full description.\n", cat.len());
+                println!("Tier `edit` rules run after every edit; all rules run at checkpoints. Rules marked *off* are disabled by default (enable in `grounds.toml`).\n");
+                for (c, ms) in by {
+                    println!("## {c} ({})\n\n| id | severity | tier | origin |\n|---|---|---|---|", ms.len());
+                    for m in ms {
+                        let tier = match m.tier { grounds_rules::Tier::Edit => "edit", _ => "checkpoint" };
+                        let off = if m.default_enabled { "" } else { " *off*" };
+                        println!("| `{}`{off} | {} | {tier} | {} |", m.id, m.severity.as_str(), m.sources.join(", "));
+                    }
+                    println!();
+                }
+            } else if json {
                 println!("{}", serde_json::to_string_pretty(&cat).unwrap());
             } else {
                 for m in cat {
@@ -114,6 +255,89 @@ fn main() -> anyhow::Result<()> {
         },
     }
     Ok(())
+}
+
+fn find_root(root: Option<PathBuf>) -> PathBuf {
+    if let Some(r) = root {
+        return r.canonicalize().unwrap_or(r);
+    }
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    grounds_engine::git::toplevel(&cwd).unwrap_or(cwd)
+}
+
+fn abs(files: &[PathBuf]) -> Vec<PathBuf> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    files.iter().map(|f| if f.is_absolute() { f.clone() } else { cwd.join(f) }).collect()
+}
+
+const HOOKS_JSON: &str = r#"{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [ { "type": "command", "command": "grounds hook session-start", "timeout": 60 } ] }
+    ],
+    "PostToolUse": [
+      { "matcher": "Edit|Write|MultiEdit",
+        "hooks": [ { "type": "command", "command": "grounds hook post-edit", "timeout": 30 } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "grounds hook stop", "timeout": 120 } ] }
+    ]
+  }
+}"#;
+
+/// Claude Code hooks. Exit code 2 feeds stderr back to the model.
+fn hook(event: &str) -> anyhow::Result<i32> {
+    use grounds_engine::daemon::{run, Request};
+    use grounds_engine::session::Mode;
+    use std::io::Read;
+    let mut input = String::new();
+    let _ = std::io::stdin().read_to_string(&mut input);
+    let v: serde_json::Value = serde_json::from_str(&input).unwrap_or(serde_json::Value::Null);
+    let cwd = v.get("cwd").and_then(|c| c.as_str()).map(PathBuf::from).unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+    let root = grounds_engine::git::toplevel(&cwd).unwrap_or(cwd);
+    // only act inside Java workspaces
+    let java_project = ["build.gradle", "build.gradle.kts", "pom.xml", "settings.gradle", "settings.gradle.kts"].iter().any(|f| root.join(f).exists());
+    if !java_project {
+        return Ok(0);
+    }
+    match event {
+        "post-edit" => {
+            let Some(file) = v.pointer("/tool_input/file_path").and_then(|f| f.as_str()) else { return Ok(0) };
+            if !file.ends_with(".java") {
+                return Ok(0);
+            }
+            let req = Request::Check { mode: Mode::Edit, files: vec![PathBuf::from(file)], all_lines: false, baseline: true, max: 10, min_severity: "warning".into(), json: false };
+            let resp = run(&root, &req, true)?;
+            if resp.code == 2 {
+                eprint!("{}", resp.stdout);
+                return Ok(2);
+            }
+            Ok(0)
+        }
+        "stop" => {
+            // avoid loops: when Claude is already continuing because of this hook, let it stop
+            if v.get("stop_hook_active").and_then(|b| b.as_bool()) == Some(true) {
+                return Ok(0);
+            }
+            let req = Request::Check { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, baseline: true, max: 15, min_severity: "warning".into(), json: false };
+            let resp = run(&root, &req, true)?;
+            if resp.code == 2 {
+                eprint!("{}", resp.stdout);
+                eprintln!("(fix these or explain why they are fine; accept intentional ones with `grounds baseline <file>`)");
+                return Ok(2);
+            }
+            Ok(0)
+        }
+        "session-start" => {
+            // accept whatever is already wrong in uncommitted work, so the session only sees new problems
+            let _ = run(&root, &Request::Baseline { files: Vec::new(), merge: true }, true)?;
+            Ok(0)
+        }
+        _ => {
+            eprintln!("unknown hook event {event}");
+            Ok(1)
+        }
+    }
 }
 
 fn check(root: &std::path::Path, paths: &[PathBuf], format: &str, rules: Option<String>, min_sev: Option<String>, max: Option<usize>, stats: bool) -> anyhow::Result<i32> {

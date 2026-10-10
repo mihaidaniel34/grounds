@@ -638,14 +638,28 @@ impl Index {
         if self.class_exists(&direct) {
             return Some(Arc::from(direct.as_str()));
         }
-        let c = self.class(owner)?;
         let mut sups: Vec<Name> = Vec::new();
-        if let Some(Ty::Class { name, .. }) = &c.superclass {
-            sups.push(name.clone());
-        }
-        for i in &c.interfaces {
-            if let Ty::Class { name, .. } = i {
-                sups.push(name.clone());
+        match self.class(owner) {
+            Some(c) => {
+                if let Some(Ty::Class { name, .. }) = &c.superclass {
+                    sups.push(name.clone());
+                }
+                for i in &c.interfaces {
+                    if let Ty::Class { name, .. } = i {
+                        sups.push(name.clone());
+                    }
+                }
+            }
+            None => {
+                // the class is being lowered right now: resolve its header from the stub
+                let (stub, raw) = self.raw_class(owner)?;
+                let mut scope = self.scope_for_raw(stub, raw);
+                scope.enclosing.remove(0);
+                for ts in raw.superclass.iter().chain(raw.interfaces.iter()) {
+                    if let Ty::Class { name, .. } = self.resolve_type(ts, &scope) {
+                        sups.push(name);
+                    }
+                }
             }
         }
         for s in sups {

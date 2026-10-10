@@ -5,8 +5,11 @@ pub mod analyze;
 pub mod cache;
 pub mod classpath;
 pub mod config;
+pub mod daemon;
+pub mod git;
 pub mod project;
 pub mod report;
+pub mod session;
 pub mod workspace;
 
 pub use config::Config;

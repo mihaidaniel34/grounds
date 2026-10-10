@@ -23,3 +23,6 @@ toml.workspace = true
 parking_lot.workspace = true
 notify.workspace = true
 glob.workspace = true
+
+[dev-dependencies]
+grounds-rules.workspace = true
