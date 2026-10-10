@@ -142,8 +142,8 @@ impl RuleSet {
 }
 
 struct Suppressions {
-    /// (0-based line, lowercase comment text)
-    comments: Vec<(usize, String)>,
+    /// (0-based line, lowercase comment text, comment alone on its line)
+    comments: Vec<(usize, String, bool)>,
 }
 
 impl Suppressions {
@@ -156,7 +156,9 @@ impl Suppressions {
                 if k.kind() == "line_comment" || k.kind() == "block_comment" {
                     let t = fm.text(k).to_ascii_lowercase();
                     if t.contains("nosonar") || t.contains("grounds-ignore") || t.contains("nopmd") || t.contains("noinspection") {
-                        comments.push((k.start_position().row, t));
+                        let line_start = fm.src[..k.start_byte()].rfind('\n').map_or(0, |i| i + 1);
+                        let alone = fm.src[line_start..k.start_byte()].trim().is_empty();
+                        comments.push((k.start_position().row, t, alone));
                     }
                 } else if k.child_count() > 0 {
                     stack.push(k);
@@ -167,9 +169,11 @@ impl Suppressions {
     }
 
     fn comment_suppresses(&self, line: usize, meta: Option<&RuleMeta>, rule: &str) -> bool {
-        for (l, t) in &self.comments {
+        for (l, t, alone) in &self.comments {
             let same_line = *l == line;
-            let prev_line = *l + 1 == line;
+            // a comment on the line before counts only when it stands alone:
+            // `code; // grounds-ignore` covers its own line, not the next
+            let prev_line = *alone && *l + 1 == line;
             if !(same_line || prev_line) {
                 continue;
             }

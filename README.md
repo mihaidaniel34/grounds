@@ -1,70 +1,157 @@
 # grounds
 
-Fast, incremental static analysis for Java, built for coding agents.
+A static analyzer for Java, written in Rust, meant to run after every edit a
+coding agent makes. It reports bugs, compile breaks and Spring/Micronaut
+wiring mistakes in changed code in about 0.1–0.3 seconds, without Gradle,
+Maven or a JVM.
 
-Running `./gradlew build` after every agent edit costs minutes and almost never
-says anything new. `grounds` gives the useful part of that signal (does the
-change break callers, did it introduce a bug) in milliseconds, without
-Gradle, Maven or a JVM:
+**Status: experimental.** It has been tested on five open-source codebases
+(listed below) and nothing else. Expect false positives on code that looks different from
+those, and unsupported setups. Bug reports with a code snippet are the most
+useful thing you can send.
 
-- **312 rules** ported from SonarQube, SpotBugs, PMD, Error Prone and IntelliJ
-  inspections: equality and numeric bugs, format strings and regexes, null
-  dereferences, resource leaks, concurrency, exceptions, API misuse, security,
-  date/time, tests (JUnit/AssertJ/Mockito), design and style
-  ([catalog](docs/RULES.md)).
-- **Dependency-injection model** for Spring, Micronaut and JSR-330: missing
-  beans, ambiguous beans, qualifiers that match nothing, Lombok constructors
-  dropping `@Qualifier`, circular constructor dependencies, bean name
-  clashes, `@Transactional` self-invocation, path-variable mismatches.
-- **Compile-break detection** for project code: calls, constructors and
-  fields that no longer exist, `@Override` methods that override nothing,
-  unimplemented abstract methods.
-- **Agent loop**: per-edit and end-of-turn checks restricted to changed lines,
-  a baseline for pre-existing problems, a list of callers broken by API
-  changes elsewhere, and the tests affected by a change.
+## Why
 
-On micronaut-core (6,000 files, 85 modules): cold project load ~0.9 s,
-warm ~0.4 s, all rules on the whole project ~1.8 s, a per-edit check of a
-5,000-line file through the daemon ~0.3 s.
+Agents tend to run `./gradlew build` to check their work. On the projects
+that motivated this it takes 2–5 minutes and rarely reports anything new.
+Skipping it is no better: problems then pile up until the test run at the
+end. grounds sits between the two. After each edit it reports what the
+compiler or a Sonar scan would have flagged in the lines that changed, and
+leaves tests for the end of the task.
+
+## What it checks
+
+- **312 rules**, reimplementations of checks from SonarQube, SpotBugs, PMD,
+  Error Prone and IntelliJ inspections. Each rule lists the equivalent IDs
+  in those tools. By category: 109 bug, 58 style, 38 bad practice,
+  23 performance, 23 concurrency, 22 security, 20 framework, 14 testing,
+  5 complexity. Full list: [docs/RULES.md](docs/RULES.md).
+- **Dataflow:** null dereferences (with `@Nullable` and null checks), unclosed
+  resources, unchecked `Optional.get()`, dead stores. The control flow graph
+  works at expression level and models `finally` and exceptions.
+- **Compile breaks in project code:** calls to methods, constructors and
+  fields that no longer exist, or whose argument types no longer match;
+  `@Override` methods that override nothing; abstract methods left
+  unimplemented. After an API change, every caller in other files that it
+  broke is listed.
+- **Dependency injection (Spring, Micronaut, JSR-330):** missing beans,
+  ambiguous beans, qualifiers that match no bean, Lombok constructors
+  dropping `@Qualifier`, constructor cycles, bean name clashes. It knows
+  `@Primary`, profiles and conditions (treated as unknown), generics,
+  factory methods, Spring Data repositories, Feign clients, MapStruct mappers
+  and Micronaut's `@EachBean`, `@Replaces` and bean naming.
+- **Lombok:** generated constructors, getters, setters, `@With` and builders
+  are modeled, so code using them type-checks.
+
+"Bean not found" is only reported for injection points whose type is
+declared in the project. Beans created by library auto-configuration (a
+`DataSource`, an `ObjectMapper`) are not modeled, so for those types
+grounds stays silent instead of guessing.
+
+## Numbers
+
+Release build, Apple M4 Pro (14 cores), machine not idle. Each project as
+checked out, with no grounds configuration:
+
+| project | Java files | lines | modules | full check | calls resolved | errors / warnings / info |
+|---|---:|---:|---:|---:|---:|---|
+| spring-petclinic | 50 | 4,297 | 1 | 0.22 s | 96.6% | 0 / 16 / 7 |
+| spring-petclinic-rest | 109 | 8,675 | 1 | 0.24 s | 91.6% | 0 / 29 / 22 |
+| piggymetrics | 97 | 4,472 | 10 | 0.21 s | 87.4% | 0 / 17 / 61 |
+| jhipster-sample-app | 136 | 11,980 | 1 | 0.27 s | 83.6% | 0 / 5 / 19 |
+| micronaut-core | 6,373 | 697,624 | 85 | 2.9 s | 95.0% | 17 / 839 / 2,988 |
+
+"Calls resolved" is the share of method calls for which grounds found the
+exact target method. For the rest, any rule that needs the target says
+nothing. The rate depends mostly on how many dependency jars it can find
+(see Classpath).
+
+Per-edit check through the daemon (the `post-edit` hook, including process
+start):
+
+| file | lines | time |
+|---|---:|---:|
+| petclinic `Owner.java` | 188 | 0.08–0.10 s |
+| micronaut `HttpStatus.java` | 307 | 0.12 s |
+| micronaut `PythonStubGenerator.java` | 6,869 | 0.32 s |
+
+Loading micronaut-core (discovering files, reading jar indexes, extracting
+declarations from all 6,373 files) takes about 0.9 s, with or without the
+on-disk cache.
+
+## How it was tested
+
+- **One fixture per rule:** 315 small Java files with `// expect` markers on
+  the lines that must be reported. The tests fail when a rule reports
+  anything else, or when a rule has no fixture. Fixtures also cover
+  suppressions and options.
+- **End-to-end session test:** a temporary git repo goes through edits, the
+  baseline, broken-caller detection and impacted tests.
+- **Five unmodified open-source projects** (the table above), taken as
+  published. Since they compile and their applications start, any
+  compile-break or DI finding on them would be a false positive. There are
+  none. Error-level findings were reviewed by hand. The remaining 17 on
+  micronaut-core are real by each rule's definition: `TrustManager`s that
+  trust every certificate (in test and TCK code), `split(File.separator)`,
+  `compareTo(...) != -1` and `assertSame(x, x)`. Warnings were sampled, not
+  reviewed one by one.
+- **Planted bugs:** in a copy of spring-petclinic-rest, all of these were
+  reported: an ambiguous bean (9 injection sites), a misspelled qualifier, a
+  missing bean, a constructor cycle, and Lombok dropping `@Qualifier`.
+  Renaming a method in petclinic listed all 15 broken callers. Changing
+  `getPet(String)` to take two parameters flagged every call with the old
+  arguments.
+- **Precision fixes:** every false positive found during testing became a
+  fixture case. Recent ones: `@Value` placeholders built by string
+  concatenation; Micronaut introduction interfaces; MockMvc `andExpect` as
+  an assertion; Spring's empty `contextLoads()` test; a trailing
+  `// grounds-ignore` also silencing the next line.
+
+Not tested: Windows (the daemon uses Unix sockets), Kotlin or mixed
+Kotlin/Java projects (Kotlin sources are ignored, so types defined in them
+are unknown), Android, Java modules (JPMS) beyond what the JDK uses.
 
 ## Install
 
 ```bash
-cargo install --locked --path crates/grounds-cli   # Rust toolchain
-nix profile install .                               # or with Nix (flake)
-nix run . -- check --root path/to/project           # without installing
+cargo install --locked --path crates/grounds-cli
 ```
 
-`nix develop` gives a shell with the Rust toolchain, clippy, rust-analyzer
-and a JDK for the tests. grounds itself needs no JVM to run, but reads JDK
-type information from the JDK it finds through `JAVA_HOME` or `java` on PATH.
+With Nix: `nix profile install .`, or `nix run . -- check` without installing.
+`nix develop` provides Rust, clippy, rust-analyzer and a JDK for the tests.
 
-## Quick start
+grounds does not run Java, but it reads the JDK's API signatures (`ct.sym`).
+It finds a JDK through `JAVA_HOME`, `/usr/libexec/java_home` or `java` on
+PATH. Without one, most rules have little to work with.
+
+## Usage
 
 ```bash
-grounds check --root path/to/project      # whole project
-grounds changed                           # only what you changed (git)
+grounds check                 # whole project, from the project root
+grounds changed               # changed lines since HEAD (git), baseline applied
 grounds explain null-dereference
+grounds beans --type MailSender   # which beans can be injected for a type, and why not
+grounds impacted-tests --gradle   # ./gradlew :module:test --tests ... for affected tests
 ```
 
-Terminal output is colored when stdout is a terminal (`--color
-auto|always|never`, `NO_COLOR` is honored); hooks and machine formats are
-always plain.
+Output is one finding per line, `path:line:col: severity [rule-id] message`.
+It is colored when stdout is a terminal (`--color auto|always|never`,
+`NO_COLOR`). `--format json|sarif` is available for tools.
 
 ### Claude Code hooks
 
-```bash
-grounds hooks   # prints the JSON to merge into .claude/settings.json
-```
+`grounds hooks` prints the configuration to merge into
+`.claude/settings.json` (per project, or `~/.claude/settings.json` for all
+projects; outside Java projects the hooks do nothing).
 
-| hook | command | what it does |
+| hook | runs | does |
 |---|---|---|
-| SessionStart | `grounds hook session-start` | baselines problems already present in uncommitted work, starts the daemon |
+| SessionStart | `grounds hook session-start` | records problems already in uncommitted work as a baseline and starts the daemon |
 | PostToolUse (Edit/Write) | `grounds hook post-edit` | high-confidence rules on the edited file's changed lines, plus callers in other files broken by API changes in it |
-| Stop | `grounds hook stop` | all rules on changed lines of all changed files, capped at 15 findings; blocks the turn once if anything new was found |
+| Stop | `grounds hook stop` | all rules on changed lines of all changed files, at most 15 findings; blocks the end of the turn once if anything new was found |
 
-Hooks exit with code 2 to feed findings back to the model, and do nothing
-outside Java projects. Example post-edit feedback after renaming a method:
+Findings reach the agent through exit code 2. Example after an edit that
+renamed a method and added a bug:
 
 ```
 grounds: 1 new problem(s) in changed code (1 errors, 0 warnings, 0 info)
@@ -74,81 +161,81 @@ src/main/java/.../PetController.java:103:9: `Owner` has no method `addPet`
 ...
 ```
 
-## Commands
+The daemon keeps one warm index per project over a Unix socket, re-reads
+files whose modification time changed before every request, and exits
+after 30 minutes idle. It is started on demand and replaced automatically
+when the `grounds` binary changes.
 
-| command | purpose |
-|---|---|
-| `grounds check [paths] [--format text\|json\|sarif] [--rules ids] [--stats]` | batch analysis |
-| `grounds changed [files] [--edit] [--all-lines] [--no-baseline] [--json]` | agent-style check of changed code |
-| `grounds baseline [files] [--merge]` | accept current findings (default: changed files) |
-| `grounds impacted-tests [files] [--gradle]` | tests reaching the changed classes; `--gradle` prints `./gradlew :module:test --tests ...` |
-| `grounds classpath [--gradle\|--maven]` | one-off dump of the exact compile/test classpath into `.grounds/classpath.txt` (re-run when dependencies change) |
-| `grounds beans [--type T]` | the bean model: beans, injection points and how each resolves |
-| `grounds daemon [--stop\|--status] [--idle-minutes N]` | warm analysis server (started automatically by hooks) |
-| `grounds rules [--json\|--markdown]`, `grounds explain <id>` | rule catalog |
+### Suppressing findings
 
-Suppress a finding with `@SuppressWarnings("rule-id")` (Sonar `java:S1234`,
-`PMD.Rule` and SpotBugs pattern names work too), `// NOSONAR`,
-`//noinspection IntelliJName` or `// grounds-ignore[: rule-id]`.
-
-## Configuration (`grounds.toml`)
+- On a line: `// grounds-ignore` or `// grounds-ignore: rule-id`.
+- Existing markers are honored: `@SuppressWarnings` with grounds, Sonar
+  (`java:S2259`), PMD (`PMD.RuleName`) or SpotBugs IDs; `// NOSONAR`;
+  `// NOPMD`; `//noinspection IntelliJName`.
+- `grounds baseline` accepts the current findings in changed files.
+- Project-wide, in `grounds.toml`:
 
 ```toml
-java_release = 21
+java_release = 21                     # which JDK API version to check against
 exclude = ["**/generated/**"]
-test_source_sets = ["scenarios"]   # beyond test/integration/e2e/functional/... and what `grounds classpath` reports
+test_source_sets = ["scenarios"]      # besides test/integration/e2e/functional/...
+
+[rules]
+disable = ["field-injection", "style"]   # rule ids or categories
+severity = { "todo-comment" = "warning" }
+
+[rules.options.cognitive-complexity]
+max = 20
 
 [classpath]
 entries = ["libs/vendor.jar"]
-files = [".grounds/classpath.txt"]   # one path per line or ':'-separated
-scan_caches = true                   # newest jar per artifact from ~/.gradle and ~/.m2
-build_outputs = true                 # module build/classes dirs
-
-[rules]
-disable = ["field-injection", "style"]   # ids or categories
-severity = { "todo-comment" = "warning" }
-[rules.options.cognitive-complexity]
-max = 20
+files = [".grounds/classpath.txt"]
+scan_caches = true      # use the newest version of each artifact in ~/.gradle and ~/.m2
+build_outputs = true    # module build/classes directories
 ```
 
-The classpath is best-effort by design: a type that cannot be resolved makes
-the analysis silent rather than wrong. For exact results, run
-`grounds classpath` once (it runs Gradle or Maven a single time, ~20-40 s)
-and set `scan_caches = false`; nothing invokes the build tool afterwards.
-With Gradle it also records every source set and the `Test` tasks running
-it, so custom source sets get the right classpath, test-code rules and
-`impacted-tests --gradle` task (e.g. `./gradlew verifyScenarios --tests ...`).
+### Classpath
 
-## Architecture
+By default grounds guesses dependency jars from the local Gradle and Maven
+caches, which works when the project has been built on the machine before.
+For an exact classpath, run once (and again when dependencies change):
+
+```bash
+grounds classpath
+```
+
+This runs Gradle (through an init script, without touching build files) or
+Maven a single time, about 20–40 s. It writes `.grounds/classpath.txt` and,
+for Gradle, which test task runs each source set. Set `scan_caches = false`
+to use only that file. grounds never runs the build tool on its own.
+
+## Design
+
+- **Unknown means silent.** Anything that depends on a type grounds could
+  not resolve is not reported. Missing jars lower recall, not precision.
+- **Declarations eagerly, bodies lazily.** Every file is reduced to a
+  declaration stub (signatures, annotations, constants), cached by content
+  hash. Method bodies are analyzed only for the files being checked.
+- **No build tool in the loop.** Modules, source sets and the classpath come
+  from the directory layout and the local caches, or from the one-off dump.
 
 ```
-grounds-syntax     tree-sitter Java, byte-preserving grammar fixups, node helpers
-grounds-classfile  own jar/zip reader, class file + generic signature parser, JDK ct.sym
-grounds-index      declaration stubs (cached by content hash), Lombok model, implicit members,
-                   lazily resolved whole-program index, hierarchy & member lookup
-grounds-semantic   per-file model: local binder, symbols, expression types, overload
-                   resolution with inference, target typing, constant folding, matchers
-grounds-flow       expression-level CFG (finally duplicated per completion kind),
-                   generic dataflow solver, nullness / liveness / resources / Optional
-grounds-di         framework-neutral bean model with Spring, Micronaut, JSR-330 discovery
-grounds-rules      rule API (metadata, node-kind dispatch, shared flow cache, fixes,
-                   suppressions) and the rule catalog with fixture tests
-grounds-engine     workspace discovery, classpath providers, analysis runs, fingerprints,
-                   git integration, sessions, baseline, daemon, reports (text/JSON/SARIF)
+grounds-syntax     tree-sitter Java parser, node helpers
+grounds-classfile  jar/zip reader, class file and generic signature parser, JDK ct.sym
+grounds-index      declaration stubs, Lombok model, project-wide index, hierarchy lookup
+grounds-semantic   per-file model: name binding, expression types, overload resolution
+                   with type inference, constant folding
+grounds-flow       control flow graph, dataflow solver, nullness/resource/Optional analyses
+grounds-di         bean model for Spring, Micronaut and JSR-330
+grounds-rules      rule API (metadata, dispatch, suppressions, fixes) and the rules
+grounds-engine     workspace discovery, classpath, git, sessions, baseline, daemon, output
 grounds-cli        the `grounds` binary
 ```
 
-Design principles:
+About 27,000 lines of Rust. Most of it was written by Claude (Anthropic's
+model) through Claude Code, over roughly a day of agent time.
 
-- **Precision over recall.** Anything depending on an unknown type is never
-  reported; framework rules only judge what they can see completely (e.g.
-  "bean not found" only for project types).
-- **Declarations are cheap, bodies are lazy.** All files are reduced to stubs
-  (signatures only); method bodies are analyzed only for files being checked.
-- **Read your writes.** Every daemon request re-syncs files whose modification
-  time changed before analyzing.
-
-## Writing a rule
+### Adding a rule
 
 ```rust
 declare_rule!(StringReferenceEquality {
@@ -156,7 +243,7 @@ declare_rule!(StringReferenceEquality {
     name: "Strings compared with == or !=",
     category: Bug,
     severity: Warning,
-    tier: Edit,
+    tier: Edit,   // also run on every edit, not only at the end of a turn
     sources: ["sonar:S4973", "spotbugs:ES_COMPARING_STRINGS_WITH_EQ"],
     kinds: ["binary_expression"],
     description: "...",
@@ -173,6 +260,16 @@ impl Rule for StringReferenceEquality {
 }
 ```
 
-Add `crates/grounds-rules/tests/fixtures/<rule-id>.java` with `// expect`
-markers on the lines that must be reported; `cargo test -p grounds-rules`
-checks every fixture and that every rule has one.
+Add it to the `rules()` list of its module (here
+`crates/grounds-rules/src/rules/equality.rs`) and add
+`crates/grounds-rules/tests/fixtures/<rule-id>.java`, marking the lines that
+must be reported with `// expect`. Then run `cargo test -p grounds-rules`.
+
+## License
+
+Apache-2.0, see [LICENSE](LICENSE).
+
+SonarQube, SpotBugs, PMD, Error Prone and IntelliJ IDEA belong to their
+respective owners. grounds is not affiliated with any of them. Rule IDs from
+those tools appear only as cross-references; no code or rule descriptions
+were copied.
