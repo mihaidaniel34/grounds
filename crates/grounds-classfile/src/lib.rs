@@ -45,24 +45,28 @@ impl ClassContainer {
         ClassContainer::Dir(path.to_path_buf())
     }
 
-    /// Open `ct.sym` for a release. Falls back to the newest release present
-    /// if the requested one is not available.
+    /// Open `ct.sym` for a release. ct.sym only carries signatures for
+    /// releases older than the JDK itself (the JDK's own release is a bare
+    /// `system-modules` marker pointing at `lib/modules`), so fall back to the
+    /// newest release with signatures at or below the requested one, else the
+    /// newest available.
     pub fn open_ct_sym(path: &Path, release: u32) -> Result<ClassContainer> {
         let archive = zip::ZipArchive::open(path)?;
-        let mut want = ct_sym_release_char(release);
-        // find the newest available release char if missing
-        let available: std::collections::BTreeSet<char> = archive
+        let requested = ct_sym_release_char(release);
+        // release chars ('8', '9', 'A'=10, ...) sort in release order
+        let with_sigs: std::collections::BTreeSet<char> = archive
             .entries()
             .iter()
+            .filter(|e| e.name.ends_with(".sig"))
             .filter_map(|e| e.name.split('/').next())
             .flat_map(|d| d.chars().collect::<Vec<_>>())
-            .filter(|c| c.is_ascii_alphanumeric())
+            .filter(|c| c.is_ascii_digit() || c.is_ascii_uppercase())
             .collect();
-        if !available.contains(&want) {
-            if let Some(&max) = available.iter().filter(|c| c.is_ascii_uppercase() || c.is_ascii_digit()).max() {
-                want = max;
-            }
-        }
+        let want = if with_sigs.contains(&requested) {
+            requested
+        } else {
+            with_sigs.range(..requested).next_back().or_else(|| with_sigs.iter().next_back()).copied().unwrap_or(requested)
+        };
         let mut entries = rustc_hash::FxHashMap::default();
         for (i, e) in archive.entries().iter().enumerate() {
             let Some(rest) = e.name.strip_suffix(".sig") else { continue };
@@ -196,6 +200,7 @@ mod tests {
         if !ct.exists() {
             return;
         }
+        // 21 may be the JDK's own release (marker only): falls back to 20
         let c = ClassContainer::open_ct_sym(&ct, 21).unwrap();
         let s = c.read_class("java/lang/String").expect("String in ct.sym");
         assert_eq!(s.this_class, "java/lang/String");
