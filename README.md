@@ -27,14 +27,29 @@ On micronaut-core (6,000 files, 85 modules): cold project load ~0.9 s,
 warm ~0.4 s, all rules on the whole project ~1.8 s, a per-edit check of a
 5,000-line file through the daemon ~0.3 s.
 
+## Install
+
+```bash
+cargo install --locked --path crates/grounds-cli   # Rust toolchain
+nix profile install .                               # or with Nix (flake)
+nix run . -- check --root path/to/project           # without installing
+```
+
+`nix develop` gives a shell with the Rust toolchain, clippy, rust-analyzer
+and a JDK for the tests. grounds itself needs no JVM to run, but reads JDK
+type information from the JDK it finds through `JAVA_HOME` or `java` on PATH.
+
 ## Quick start
 
 ```bash
-cargo build --release
-./target/release/grounds check --root path/to/project            # whole project
-./target/release/grounds changed                                   # only what you changed (git)
-./target/release/grounds explain null-dereference
+grounds check --root path/to/project      # whole project
+grounds changed                           # only what you changed (git)
+grounds explain null-dereference
 ```
+
+Terminal output is colored when stdout is a terminal (`--color
+auto|always|never`, `NO_COLOR` is honored); hooks and machine formats are
+always plain.
 
 ### Claude Code hooks
 
