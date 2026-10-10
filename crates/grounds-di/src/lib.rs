@@ -354,8 +354,22 @@ impl<'a> Builder<'a> {
             // repositories and clients are interfaces
             if c.is_interface() && c.kind != ClassKind::Annotation {
                 let mut source = None;
-                if self.index.is_subclass(&c.name, "org.springframework.data.repository.Repository").is_yes() && !c.annotations.iter().any(|a| a.simple_name() == "NoRepositoryBean") && !c.name.starts_with("org.springframework") {
-                    source = Some((BeanSource::Repository, Framework::Spring));
+                let no_repo = c.annotations.iter().any(|a| a.simple_name() == "NoRepositoryBean");
+                if !no_repo && !c.name.starts_with("org.springframework") {
+                    if self.index.is_subclass(&c.name, "org.springframework.data.repository.Repository").is_yes() {
+                        source = Some((BeanSource::Repository, Framework::Spring));
+                    } else if let Some((stub, raw)) = self.index.raw_class(&c.name) {
+                        // without the spring-data jars: recognize the well-known base interfaces
+                        const DATA_BASES: &[&str] = &[
+                            "Repository", "CrudRepository", "ListCrudRepository", "JpaRepository", "PagingAndSortingRepository", "ListPagingAndSortingRepository",
+                            "MongoRepository", "ReactiveCrudRepository", "ReactiveMongoRepository", "R2dbcRepository", "ElasticsearchRepository", "Neo4jRepository",
+                            "CassandraRepository", "KeyValueRepository", "RevisionRepository", "ReactiveSortingRepository", "CoroutineCrudRepository",
+                        ];
+                        let uses_data = stub.imports.iter().any(|i| i.path.starts_with("org.springframework.data"));
+                        if uses_data && raw.interfaces.iter().any(|t| t.last_name().is_some_and(|n| DATA_BASES.contains(&n))) {
+                            source = Some((BeanSource::Repository, Framework::Spring));
+                        }
+                    }
                 }
                 for a in &c.annotations {
                     match a.simple_name() {
@@ -381,7 +395,9 @@ impl<'a> Builder<'a> {
                         declaring_class: c.name.clone(),
                         source: src,
                         qualifiers,
-                        primary: c.annotations.iter().any(|a| a.simple_name() == "Primary"),
+                        // @FeignClient beans are primary by default (so fallbacks do not clash)
+                        primary: c.annotations.iter().any(|a| a.simple_name() == "Primary")
+                            || c.annotations.iter().any(|a| a.simple_name() == "FeignClient" && a.arg("primary").and_then(|v| v.as_bool()) != Some(false)),
                         conditional: Self::conditional(&c.annotations),
                         file: file.clone(),
                         is_test,
@@ -648,7 +664,12 @@ impl DiModel {
         if p.ty.is_unknown() || p.ty.mentions_type_var() {
             return Resolution::Unknown;
         }
-        let (mut cands, maybe) = self.candidates(lk, &p.ty, include_test);
+        let (mut cands, mut maybe) = self.candidates(lk, &p.ty, include_test);
+        // library supertypes can never lead to a project type, so beans with an
+        // incomplete (library) hierarchy cannot provide one
+        if self.provable_type(lk, &p.ty) {
+            maybe = 0;
+        }
         if let Some(q) = &p.qualifier {
             if q.is_empty() {
                 return Resolution::Unknown;
@@ -747,16 +768,18 @@ impl DiModel {
 
     /// Beans sharing a name (Spring refuses to start without overriding enabled).
     pub fn name_conflicts(&self) -> Vec<(usize, usize)> {
-        let mut seen: FxHashMap<&str, usize> = FxHashMap::default();
+        // names only clash inside one application (module)
+        let mut seen: FxHashMap<(&str, &str), usize> = FxHashMap::default();
         let mut out = Vec::new();
         for (i, b) in self.beans.iter().enumerate() {
             if b.framework != Framework::Spring || b.conditional || b.is_test {
                 continue;
             }
-            match seen.get(b.name.as_str()) {
+            let key = (b.file.as_deref().map(module_of).unwrap_or(""), b.name.as_str());
+            match seen.get(&key) {
                 Some(&j) => out.push((j, i)),
                 None => {
-                    seen.insert(&b.name, i);
+                    seen.insert(key, i);
                 }
             }
         }
