@@ -154,6 +154,21 @@ pub fn find_java_home() -> Option<PathBuf> {
             }
         }
     }
+    // `java` on PATH (Nix, SDKMAN, asdf, distro alternatives): follow the
+    // symlinks to the real binary; the home is its parent dir's parent, or
+    // `lib/openjdk` under the package (nixpkgs layout)
+    let is_home = |p: &Path| p.join("lib/ct.sym").exists() || p.join("lib/modules").exists();
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let Ok(java) = dir.join("java").canonicalize() else { continue };
+            let Some(home) = java.parent().and_then(Path::parent) else { continue };
+            for cand in [home.to_path_buf(), home.join("lib/openjdk")] {
+                if is_home(&cand) {
+                    return Some(cand);
+                }
+            }
+        }
+    }
     for dir in ["/usr/lib/jvm/default-java", "/usr/lib/jvm/default"] {
         let p = PathBuf::from(dir);
         if p.join("lib/ct.sym").exists() {
