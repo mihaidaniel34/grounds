@@ -2,13 +2,17 @@
 
 pub mod api;
 pub mod classes;
+pub mod complexity;
 pub mod concurrency;
 pub mod control;
+pub mod datetime;
 pub mod equality;
 pub mod exceptions;
 pub mod flow;
 pub mod numbers;
+pub mod security;
 pub mod strings;
+pub mod testing;
 pub mod unused;
 
 use crate::framework::Rule;
@@ -25,5 +29,9 @@ pub fn all() -> Vec<Box<dyn Rule>> {
     v.extend(classes::rules());
     v.extend(unused::rules());
     v.extend(flow::rules());
+    v.extend(security::rules());
+    v.extend(datetime::rules());
+    v.extend(testing::rules());
+    v.extend(complexity::rules());
     v
 }
