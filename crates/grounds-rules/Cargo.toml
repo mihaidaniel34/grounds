@@ -16,3 +16,4 @@ parking_lot.workspace = true
 
 [dev-dependencies]
 grounds-classfile.workspace = true
+grounds-di.workspace = true

@@ -72,7 +72,7 @@ pub fn analyze_text(project: &Project, rules: &RuleSet, options: &RuleOptions, p
     let fm = FileModel::new(&pf, &project.index, key.clone());
     let kind = classify(path);
     let info = FileInfo { path: key.to_string(), is_test: kind == SourceKind::Test, is_generated: kind == SourceKind::Generated };
-    let diags = rules.check(&fm, &info, None, options);
+    let diags = rules.check(&fm, &info, Some(&project.di), options);
     let rel = path.strip_prefix(&project.workspace.root).unwrap_or(path).to_string_lossy().to_string();
     let mut out: Vec<Finding> = Vec::with_capacity(diags.len());
     let mut seen_fp: rustc_hash::FxHashMap<String, u32> = Default::default();

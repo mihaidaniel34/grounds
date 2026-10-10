@@ -458,6 +458,34 @@ impl Index {
     /// Resolve `CONST`, `Type.CONST` or a static import to an annotation value.
     pub fn resolve_constant_name(&self, n: &str, scope: &Scope) -> Option<AnnotationValue> {
         let segs: Vec<&str> = n.split('.').collect();
+        // constants of source classes are read from raw stubs, which also works
+        // while the class itself is being lowered
+        let raw_constant = |owner: &str, field: &str| -> Option<AnnotationValue> {
+            let (_, raw) = self.raw_class(owner)?;
+            let f = raw.fields.iter().find(|f| &*f.name == field)?;
+            if f.flags.has(Flags::ENUM_CONSTANT) {
+                return Some(AnnotationValue::Enum { ty: Arc::from(owner), constant: Arc::from(field) });
+            }
+            if let Some(c) = &f.constant {
+                return Some(AnnotationValue::Const(c.clone()));
+            }
+            let init = f.init.as_ref()?;
+            let owner_scope = self.scope_for_class(owner)?;
+            self.eval_const_expr(init, &owner_scope, &[], raw, 0).map(AnnotationValue::Const)
+        };
+        if segs.len() == 1 {
+            for e in &scope.enclosing {
+                if let Some(v) = raw_constant(e, segs[0]) {
+                    return Some(v);
+                }
+            }
+        } else if let Some((last, rest)) = segs.split_last() {
+            if let Some(owner) = self.resolve_type_name(rest, scope) {
+                if let Some(v) = raw_constant(&owner, last) {
+                    return Some(v);
+                }
+            }
+        }
         let (owner, field) = if segs.len() == 1 {
             let f = segs[0];
             // enclosing classes, then static imports

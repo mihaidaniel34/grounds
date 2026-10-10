@@ -6,6 +6,7 @@ pub mod complexity;
 pub mod concurrency;
 pub mod control;
 pub mod datetime;
+pub mod di;
 pub mod equality;
 pub mod exceptions;
 pub mod flow;
@@ -33,5 +34,6 @@ pub fn all() -> Vec<Box<dyn Rule>> {
     v.extend(datetime::rules());
     v.extend(testing::rules());
     v.extend(complexity::rules());
+    v.extend(di::rules());
     v
 }

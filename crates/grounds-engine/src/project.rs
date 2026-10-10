@@ -28,6 +28,8 @@ pub struct Project {
     pub workspace: Workspace,
     pub index: Index,
     pub stats: LoadStats,
+    /// Dependency-injection model (rebuilt when declarations change).
+    pub di: grounds_di::DiModel,
 }
 
 pub fn path_key(p: &Path) -> Arc<str> {
@@ -90,7 +92,9 @@ impl Project {
         if stats.parsed > 0 {
             let _ = new_cache.save(&workspace.root);
         }
-        Ok(Project { config, workspace, index, stats })
+        let mut di = grounds_di::DiModel::build(&index);
+        di.lombok_copies_qualifiers = lombok_copies_qualifiers(&workspace.root);
+        Ok(Project { config, workspace, index, stats, di })
     }
 
     pub fn source_kind(&self, path: &Path) -> SourceKind {
@@ -109,13 +113,49 @@ impl Project {
                 let changed = old != Some(stub.signature_hash);
                 if changed {
                     self.index.set_file(key, stub);
+                    self.rebuild_di();
                 }
                 changed
             }
             Err(_) => {
                 self.index.remove_file(&key);
+                self.rebuild_di();
                 old.is_some()
             }
         }
     }
+
+    pub fn rebuild_di(&mut self) {
+        let copies = self.di.lombok_copies_qualifiers;
+        self.di = grounds_di::DiModel::build(&self.index);
+        self.di.lombok_copies_qualifiers = copies;
+    }
+}
+
+/// Does a lombok.config in the workspace make Lombok copy @Qualifier/@Value?
+fn lombok_copies_qualifiers(root: &Path) -> bool {
+    let mut stack = vec![root.to_path_buf()];
+    let mut depth = 0;
+    while let Some(d) = stack.pop() {
+        let cfg = d.join("lombok.config");
+        if let Ok(t) = std::fs::read_to_string(&cfg) {
+            if t.lines().any(|l| l.contains("copyableAnnotations") && (l.contains("Qualifier") || l.contains("Value"))) {
+                return true;
+            }
+        }
+        depth += 1;
+        if depth > 200 {
+            break;
+        }
+        if let Ok(rd) = std::fs::read_dir(&d) {
+            for e in rd.flatten() {
+                let p = e.path();
+                let name = e.file_name().to_string_lossy().to_string();
+                if p.is_dir() && !name.starts_with('.') && !matches!(name.as_str(), "build" | "target" | "node_modules" | "out" | "src") {
+                    stack.push(p);
+                }
+            }
+        }
+    }
+    false
 }

@@ -11,3 +11,4 @@ serde.workspace = true
 
 [dev-dependencies]
 grounds-classfile.workspace = true
+grounds-syntax.workspace = true

@@ -105,7 +105,8 @@ fn rule_fixtures() {
             }
         }
         let info = FileInfo { path: key.to_string(), is_test, is_generated: false };
-        let diags = set.check(&fm, &info, None, &options);
+        let di = grounds_di::DiModel::build(&idx);
+        let diags = set.check(&fm, &info, Some(&di), &options);
         let actual: BTreeSet<usize> = diags.iter().map(|d| pf.lines.line_of(d.range.start) + 1).collect();
         let expected = expected_lines(&text, &rule_id);
         checked += 1;

@@ -1,4 +1,816 @@
-//! Dependency-injection model (filled in by the DI milestone).
+//! Dependency-injection model: which beans exist, what they provide, and how
+//! each injection point resolves - without running the application.
+//!
+//! The model is framework-neutral (beans, qualifiers, primaries, conditions,
+//! injection points) with framework-specific discovery for Spring, Micronaut
+//! and Jakarta/JSR-330. It is built from the declaration index only, so it
+//! sees exactly what the compiler sees, including Lombok-generated
+//! constructors.
+
+use grounds_index::*;
+use rustc_hash::FxHashMap;
+use std::sync::Arc;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Framework {
+    Spring,
+    Micronaut,
+    Jakarta,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BeanSource {
+    /// A component class found by scanning.
+    Component,
+    /// A `@Bean` (or factory) method; holds the method name.
+    FactoryMethod(Name),
+    /// A Spring Data / Micronaut Data repository interface.
+    Repository,
+    /// A declarative client interface (@FeignClient, Micronaut @Client).
+    Client,
+    /// MapStruct mapper with a DI component model.
+    Mapper,
+}
+
+#[derive(Clone, Debug)]
+pub struct Bean {
+    pub name: String,
+    pub aliases: Vec<String>,
+    /// Provided type.
+    pub ty: Ty,
+    /// Class declaring the bean (component class or factory/configuration).
+    pub declaring_class: Name,
+    pub source: BeanSource,
+    /// Qualifier values (`@Qualifier("x")`, `@Named("x")`) and custom
+    /// qualifier annotation names.
+    pub qualifiers: Vec<String>,
+    pub primary: bool,
+    /// Has @Profile/@Conditional*/@Requires: may be absent at runtime.
+    pub conditional: bool,
+    pub file: Option<Arc<str>>,
+    pub is_test: bool,
+    pub autowire_candidate: bool,
+    pub framework: Framework,
+    /// Names come from configuration (@EachBean/@EachProperty factories):
+    /// any qualifier may match at runtime.
+    pub dynamic_names: bool,
+}
+
+/// Module directory of a source path (the part before `/src/`).
+pub fn module_of(path: &str) -> &str {
+    match path.find("/src/") {
+        Some(i) => &path[..i],
+        None => "",
+    }
+}
+
+impl Bean {
+    pub fn display(&self) -> String {
+        match &self.source {
+            BeanSource::FactoryMethod(m) => format!("'{}' ({}.{}())", self.name, simple_name_of(&self.declaring_class), m),
+            _ => format!("'{}' ({})", self.name, simple_name_of(&self.declaring_class)),
+        }
+    }
+    pub fn matches_qualifier(&self, q: &str) -> bool {
+        self.name == q || self.aliases.iter().any(|a| a == q) || self.qualifiers.iter().any(|x| x == q)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PointKind {
+    ConstructorParam(usize),
+    Field,
+    MethodParam(Name, usize),
+    FactoryParam(Name, usize),
+}
+
+#[derive(Clone, Debug)]
+pub struct InjectionPoint {
+    /// Class that receives the injection.
+    pub owner: Name,
+    pub kind: PointKind,
+    /// The element type requested (unwrapped from Optional/Provider/List...).
+    pub ty: Ty,
+    pub declared_ty: Ty,
+    pub qualifier: Option<String>,
+    /// Parameter or field name (Spring falls back to matching bean names).
+    pub name: String,
+    pub optional: bool,
+    pub multiple: bool,
+    pub lazy: bool,
+    /// Name range of the field / factory or constructor method.
+    pub range: Option<(u32, u32)>,
+    pub framework: Framework,
+    pub file: Option<Arc<str>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Resolution {
+    Unique(usize),
+    /// Collection injection: all matching beans.
+    Multiple(Vec<usize>),
+    /// Optional dependency without a candidate.
+    Absent,
+    /// Nothing provides this type.
+    NotFound,
+    Ambiguous(Vec<usize>),
+    QualifierNotFound { qualifier: String, candidates: Vec<usize> },
+    /// The model cannot decide (unknown types, external providers, ...).
+    Unknown,
+}
 
 #[derive(Debug, Default)]
-pub struct DiModel {}
+pub struct DiModel {
+    pub beans: Vec<Bean>,
+    pub points: Vec<InjectionPoint>,
+    by_class: FxHashMap<Name, Vec<usize>>,
+    pub frameworks: Vec<Framework>,
+    pub scan_roots: Vec<String>,
+    /// lombok.config copies @Qualifier/@Value onto generated constructors.
+    pub lombok_copies_qualifiers: bool,
+    /// Classes that are components (by binary name), for quick lookup.
+    pub component_classes: FxHashMap<Name, usize>,
+    /// Constructor-injection edges (owner, dependency class, point index),
+    /// computed once at build time.
+    pub ctor_edges: Vec<(Name, Name, usize)>,
+    /// type name -> beans assignable to it (via the full supertype closure)
+    providers: FxHashMap<Name, Vec<usize>>,
+    /// beans whose supertype closure is incomplete (unknown library types)
+    incomplete: Vec<usize>,
+}
+
+const SPRING_STEREOTYPES: &[&str] = &[
+    "org.springframework.stereotype.Component",
+    "org.springframework.stereotype.Service",
+    "org.springframework.stereotype.Repository",
+    "org.springframework.stereotype.Controller",
+    "org.springframework.web.bind.annotation.RestController",
+    "org.springframework.web.bind.annotation.ControllerAdvice",
+    "org.springframework.web.bind.annotation.RestControllerAdvice",
+    "org.springframework.context.annotation.Configuration",
+    "org.springframework.boot.test.context.TestConfiguration",
+    "org.springframework.boot.autoconfigure.SpringBootApplication",
+    "org.springframework.boot.SpringBootConfiguration",
+    "org.springframework.boot.context.properties.ConfigurationProperties",
+];
+
+const MICRONAUT_BEAN_ANNOTATIONS: &[&str] = &[
+    "jakarta.inject.Singleton",
+    "javax.inject.Singleton",
+    "io.micronaut.context.annotation.Bean",
+    "io.micronaut.context.annotation.Prototype",
+    "io.micronaut.context.annotation.Context",
+    "io.micronaut.context.annotation.Infrastructure",
+    "io.micronaut.context.annotation.Factory",
+    "io.micronaut.http.annotation.Controller",
+    "io.micronaut.runtime.context.scope.ThreadLocal",
+    "io.micronaut.runtime.context.scope.Refreshable",
+    "io.micronaut.context.annotation.ConfigurationProperties",
+    "io.micronaut.context.annotation.EachProperty",
+];
+
+const JAKARTA_SCOPES: &[&str] = &[
+    "jakarta.enterprise.context.ApplicationScoped",
+    "jakarta.enterprise.context.RequestScoped",
+    "jakarta.enterprise.context.SessionScoped",
+    "jakarta.enterprise.context.Dependent",
+    "javax.enterprise.context.ApplicationScoped",
+    "javax.enterprise.context.RequestScoped",
+    "javax.enterprise.context.Dependent",
+];
+
+pub const QUALIFIER_ANNOTATIONS: &[&str] = &["org.springframework.beans.factory.annotation.Qualifier", "jakarta.inject.Named", "javax.inject.Named"];
+pub const INJECT_ANNOTATIONS: &[&str] = &["org.springframework.beans.factory.annotation.Autowired", "jakarta.inject.Inject", "javax.inject.Inject", "jakarta.annotation.Resource", "javax.annotation.Resource"];
+const BEAN_METHOD_ANNOTATIONS: &[&str] = &["org.springframework.context.annotation.Bean", "io.micronaut.context.annotation.Bean", "jakarta.inject.Singleton", "javax.inject.Singleton", "io.micronaut.context.annotation.Prototype", "io.micronaut.context.annotation.Context", "jakarta.enterprise.inject.Produces", "javax.enterprise.inject.Produces"];
+const CONDITIONAL_PREFIXES: &[&str] = &["Profile", "Conditional", "Requires", "Requirements", "IfBuildProperty", "LookupIfProperty"];
+
+/// Introspector.decapitalize semantics used by Spring for bean names.
+pub fn decapitalize(s: &str) -> String {
+    let mut c = s.chars();
+    let (Some(a), b) = (c.next(), c.next()) else { return s.to_string() };
+    if a.is_uppercase() && b.is_some_and(|b| b.is_uppercase()) {
+        return s.to_string();
+    }
+    a.to_lowercase().collect::<String>() + &s[a.len_utf8()..]
+}
+
+fn is_test_path(p: &str) -> bool {
+    p.contains("/src/test/") || p.contains("/src/it/") || p.contains("/src/integrationTest/") || p.contains("/src/testFixtures/")
+}
+
+fn first_string(a: &AnnotationInfo, keys: &[&str]) -> Option<String> {
+    for k in keys {
+        if let Some(v) = a.arg(k) {
+            if let Some(s) = v.strings().into_iter().find(|s| !s.is_empty()) {
+                return Some(s);
+            }
+        }
+    }
+    None
+}
+
+struct Builder<'a> {
+    index: &'a Index,
+    model: DiModel,
+    /// memo: annotation name -> is stereotype / qualifier
+    stereo: FxHashMap<Name, Option<Framework>>,
+    qualifier_ann: FxHashMap<Name, bool>,
+}
+
+impl<'a> Builder<'a> {
+    /// Is the annotation (or one of its meta-annotations) a bean-defining one?
+    fn stereotype(&mut self, ann: &AnnotationInfo, depth: u32) -> Option<Framework> {
+        if let Some(r) = self.stereo.get(&ann.name) {
+            return *r;
+        }
+        let n = &*ann.name;
+        let direct = if SPRING_STEREOTYPES.iter().any(|s| ann.is(s)) {
+            Some(Framework::Spring)
+        } else if MICRONAUT_BEAN_ANNOTATIONS.iter().any(|s| ann.is(s)) {
+            Some(if n.starts_with("io.micronaut") { Framework::Micronaut } else { Framework::Jakarta })
+        } else if JAKARTA_SCOPES.iter().any(|s| ann.is(s)) {
+            Some(Framework::Jakarta)
+        } else {
+            None
+        };
+        // unresolved annotations only match the table by simple name
+        let r = direct.or_else(|| {
+            if depth > 4 || !ann.resolved || n.starts_with("java.") {
+                return None;
+            }
+            let c = self.index.class(n)?;
+            if !c.is_interface() {
+                return None;
+            }
+            let metas = c.annotations.clone();
+            metas.iter().find_map(|m| if &*m.name == n { None } else { self.stereotype(m, depth + 1) })
+        });
+        self.stereo.insert(ann.name.clone(), r);
+        r
+    }
+
+    fn is_custom_qualifier(&mut self, ann: &AnnotationInfo) -> bool {
+        if let Some(r) = self.qualifier_ann.get(&ann.name) {
+            return *r;
+        }
+        let r = ann.resolved
+            && self.index.class(&ann.name).is_some_and(|c| c.annotations.iter().any(|m| m.is("jakarta.inject.Qualifier") || m.is("javax.inject.Qualifier") || m.is("org.springframework.beans.factory.annotation.Qualifier")));
+        self.qualifier_ann.insert(ann.name.clone(), r);
+        r
+    }
+
+    fn qualifiers_of(&mut self, anns: &[AnnotationInfo]) -> Vec<String> {
+        let mut out = Vec::new();
+        for a in anns {
+            if QUALIFIER_ANNOTATIONS.iter().any(|q| a.is(q)) {
+                if let Some(v) = first_string(a, &["value"]) {
+                    out.push(v);
+                }
+            } else if self.is_custom_qualifier(a) {
+                out.push(format!("@{}", a.name));
+            }
+        }
+        out
+    }
+
+    fn injection_qualifier(&mut self, anns: &[AnnotationInfo]) -> Option<String> {
+        for a in anns {
+            if QUALIFIER_ANNOTATIONS.iter().any(|q| a.is(q)) {
+                return first_string(a, &["value"]).or(Some(String::new()));
+            }
+            if a.is("jakarta.annotation.Resource") || a.is("javax.annotation.Resource") {
+                if let Some(n) = first_string(a, &["name"]) {
+                    return Some(n);
+                }
+            }
+            if self.is_custom_qualifier(a) {
+                return Some(format!("@{}", a.name));
+            }
+        }
+        None
+    }
+
+    fn conditional(anns: &[AnnotationInfo]) -> bool {
+        anns.iter().any(|a| {
+            let s = a.simple_name();
+            CONDITIONAL_PREFIXES.iter().any(|p| s.starts_with(p))
+        })
+    }
+
+    fn add_bean(&mut self, b: Bean) -> usize {
+        let i = self.model.beans.len();
+        self.model.beans.push(b);
+        i
+    }
+
+    fn scan(&mut self) {
+        let names: Vec<Name> = self.index.source_class_names().cloned().collect();
+        // frameworks in use and scan roots
+        let mut roots = Vec::new();
+        let mut spring = false;
+        let mut micronaut = false;
+        for (_, stub) in self.index.files() {
+            for imp in &stub.imports {
+                if imp.path.starts_with("org.springframework") {
+                    spring = true;
+                }
+                if imp.path.starts_with("io.micronaut") {
+                    micronaut = true;
+                }
+            }
+        }
+        for n in &names {
+            let Some(c) = self.index.class(n) else { continue };
+            for a in &c.annotations {
+                if a.is("org.springframework.boot.autoconfigure.SpringBootApplication") || a.is("org.springframework.context.annotation.ComponentScan") {
+                    let explicit: Vec<String> = ["scanBasePackages", "basePackages", "value"].iter().flat_map(|k| a.arg(k).map(|v| v.strings()).unwrap_or_default()).collect();
+                    let classes: Vec<String> = ["scanBasePackageClasses", "basePackageClasses"]
+                        .iter()
+                        .flat_map(|k| a.arg(k).map(|v| v.values().into_iter().filter_map(|x| if let AnnotationValue::Class(t) = x { t.class_name().map(|c| package_of(c).to_string()) } else { None }).collect::<Vec<_>>()).unwrap_or_default())
+                        .collect();
+                    if explicit.is_empty() && classes.is_empty() {
+                        roots.push(c.package().to_string());
+                    } else {
+                        roots.extend(explicit);
+                        roots.extend(classes);
+                    }
+                }
+            }
+        }
+        if spring {
+            self.model.frameworks.push(Framework::Spring);
+        }
+        if micronaut {
+            self.model.frameworks.push(Framework::Micronaut);
+        }
+        self.model.scan_roots = roots.clone();
+
+        let in_scan = |pkg: &str| roots.is_empty() || roots.iter().any(|r| pkg == r || pkg.starts_with(&format!("{r}.")));
+
+        for n in &names {
+            let Some(c) = self.index.class(n) else { continue };
+            let file = c.source_file().map(Arc::from);
+            let is_test = file.as_deref().is_some_and(is_test_path);
+            // repositories and clients are interfaces
+            if c.is_interface() && c.kind != ClassKind::Annotation {
+                let mut source = None;
+                if self.index.is_subclass(&c.name, "org.springframework.data.repository.Repository").is_yes() && !c.annotations.iter().any(|a| a.simple_name() == "NoRepositoryBean") && !c.name.starts_with("org.springframework") {
+                    source = Some((BeanSource::Repository, Framework::Spring));
+                }
+                for a in &c.annotations {
+                    match a.simple_name() {
+                        "FeignClient" | "HttpExchange" => source = Some((BeanSource::Client, Framework::Spring)),
+                        "Client" if a.name.starts_with("io.micronaut") || !a.resolved => source = Some((BeanSource::Client, Framework::Micronaut)),
+                        "Repository" | "JdbcRepository" | "MongoRepository" | "R2dbcRepository" if a.name.starts_with("io.micronaut") => source = Some((BeanSource::Repository, Framework::Micronaut)),
+                        "Mapper" => {
+                            let model = first_string(a, &["componentModel"]).unwrap_or_default();
+                            if matches!(model.as_str(), "spring" | "jsr330" | "cdi" | "jakarta" | "jakarta-cdi") || a.arg("componentModel").is_some_and(|v| matches!(v, AnnotationValue::Expr(e) if e.contains("SPRING") || e.contains("JSR330") || e.contains("JAKARTA"))) {
+                                source = Some((BeanSource::Mapper, Framework::Spring));
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                if let Some((src, fw)) = source {
+                    let qualifiers = self.qualifiers_of(&c.annotations);
+                    let name = decapitalize(c.simple_name());
+                    let i = self.add_bean(Bean {
+                        name,
+                        aliases: Vec::new(),
+                        ty: c.this_type(),
+                        declaring_class: c.name.clone(),
+                        source: src,
+                        qualifiers,
+                        primary: c.annotations.iter().any(|a| a.simple_name() == "Primary"),
+                        conditional: Self::conditional(&c.annotations),
+                        file: file.clone(),
+                        is_test,
+                        autowire_candidate: true,
+                        framework: fw,
+                        dynamic_names: false,
+                    });
+                    self.model.component_classes.insert(c.name.clone(), i);
+                }
+                continue;
+            }
+            if c.is_abstract() || c.flags.has(Flags::ANON) {
+                continue;
+            }
+            let anns = c.annotations.clone();
+            let fw = anns.iter().find_map(|a| self.stereotype(a, 0));
+            let Some(fw) = fw else { continue };
+            if fw == Framework::Spring && !in_scan(c.package()) {
+                continue;
+            }
+            // nested non-static classes cannot be beans
+            if c.is_inner() {
+                continue;
+            }
+            let explicit = anns.iter().find_map(|a| {
+                if SPRING_STEREOTYPES.iter().any(|s| a.is(s)) || a.simple_name() == "Named" {
+                    first_string(a, &["value"])
+                } else {
+                    None
+                }
+            });
+            let name = explicit.unwrap_or_else(|| decapitalize(c.simple_name()));
+            let qualifiers = self.qualifiers_of(&anns);
+            let primary = anns.iter().any(|a| a.simple_name() == "Primary");
+            let conditional = Self::conditional(&anns);
+            let i = self.add_bean(Bean {
+                name,
+                aliases: Vec::new(),
+                ty: c.this_type(),
+                declaring_class: c.name.clone(),
+                source: BeanSource::Component,
+                qualifiers,
+                primary,
+                conditional,
+                file: file.clone(),
+                is_test,
+                autowire_candidate: true,
+                framework: fw,
+                dynamic_names: anns.iter().any(|a| matches!(a.simple_name(), "EachBean" | "EachProperty")),
+            });
+            self.model.component_classes.insert(c.name.clone(), i);
+            let class_dynamic = anns.iter().any(|a| matches!(a.simple_name(), "EachBean" | "EachProperty"));
+
+            // factory / @Bean methods
+            for m in &c.methods {
+                if m.is_constructor() || !m.annotations.iter().any(|a| BEAN_METHOD_ANNOTATIONS.iter().any(|b| a.is(b))) {
+                    continue;
+                }
+                if m.ret == Ty::Void || m.ret.is_unknown() {
+                    continue;
+                }
+                let bean_ann = m.annotations.iter().find(|a| a.simple_name() == "Bean");
+                let names: Vec<String> = bean_ann.map(|a| ["name", "value"].iter().flat_map(|k| a.arg(k).map(|v| v.strings()).unwrap_or_default()).collect()).unwrap_or_default();
+                let (name, aliases) = match names.split_first() {
+                    Some((f, rest)) => (f.clone(), rest.to_vec()),
+                    None => (m.name.to_string(), Vec::new()),
+                };
+                let mut qualifiers = self.qualifiers_of(&m.annotations);
+                if let Some(nm) = m.annotations.iter().find(|a| a.simple_name() == "Named").and_then(|a| first_string(a, &["value"])) {
+                    qualifiers.push(nm);
+                }
+                let autowire_candidate = bean_ann.and_then(|a| a.arg("autowireCandidate")).and_then(|v| v.as_bool()) != Some(false);
+                let mbean = Bean {
+                    name,
+                    aliases,
+                    ty: m.ret.clone(),
+                    declaring_class: c.name.clone(),
+                    source: BeanSource::FactoryMethod(m.name.clone()),
+                    qualifiers,
+                    primary: m.annotations.iter().any(|a| a.simple_name() == "Primary"),
+                    conditional: conditional || Self::conditional(&m.annotations),
+                    file: file.clone(),
+                    is_test,
+                    autowire_candidate,
+                    framework: fw,
+                    dynamic_names: class_dynamic || m.annotations.iter().any(|a| matches!(a.simple_name(), "EachBean" | "EachProperty")),
+                };
+                self.add_bean(mbean);
+                // factory method parameters are injection points
+                for (pi, p) in m.params.iter().enumerate() {
+                    self.add_point(&c.name, PointKind::FactoryParam(m.name.clone(), pi), &p.ty, &p.annotations, &p.name, m.range, fw, false);
+                }
+            }
+
+            // constructor injection
+            let ctors: Vec<&MethodInfo> = c.constructors().filter(|m| !m.flags.is_private() || c.constructors().count() == 1).collect();
+            let annotated: Vec<&MethodInfo> = ctors.iter().copied().filter(|m| m.annotations.iter().any(|a| INJECT_ANNOTATIONS.iter().any(|x| a.is(x)))).collect();
+            let chosen = if annotated.len() == 1 {
+                Some(annotated[0])
+            } else if annotated.is_empty() && ctors.len() == 1 {
+                Some(ctors[0])
+            } else {
+                None
+            };
+            if let Some(ctor) = chosen {
+                // records/ConfigurationProperties bind properties, not beans
+                let binds_properties = anns.iter().any(|a| a.simple_name() == "ConfigurationProperties" || a.simple_name() == "EachProperty");
+                if !binds_properties {
+                    for (pi, p) in ctor.params.iter().enumerate() {
+                        self.add_point(&c.name, PointKind::ConstructorParam(pi), &p.ty, &p.annotations, &p.name, ctor.range, fw, false);
+                    }
+                }
+            }
+            // field injection
+            for f in &c.fields {
+                if f.annotations.iter().any(|a| INJECT_ANNOTATIONS.iter().any(|x| a.is(x))) {
+                    let optional = f.annotations.iter().any(|a| a.simple_name() == "Autowired" && a.arg("required").and_then(|v| v.as_bool()) == Some(false));
+                    self.add_point(&c.name, PointKind::Field, &f.ty, &f.annotations, &f.name, f.range, fw, optional);
+                }
+            }
+            // setter / method injection
+            for m in &c.methods {
+                if m.is_constructor() || !m.annotations.iter().any(|a| INJECT_ANNOTATIONS.iter().any(|x| a.is(x))) {
+                    continue;
+                }
+                let optional = m.annotations.iter().any(|a| a.simple_name() == "Autowired" && a.arg("required").and_then(|v| v.as_bool()) == Some(false));
+                for (pi, p) in m.params.iter().enumerate() {
+                    self.add_point(&c.name, PointKind::MethodParam(m.name.clone(), pi), &p.ty, &p.annotations, &p.name, m.range, fw, optional);
+                }
+            }
+        }
+        let mut by_class: FxHashMap<Name, Vec<usize>> = FxHashMap::default();
+        for (i, b) in self.model.beans.iter().enumerate() {
+            if let Some(n) = b.ty.class_name() {
+                by_class.entry(Arc::from(n)).or_default().push(i);
+            }
+        }
+        self.model.by_class = by_class;
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn add_point(&mut self, owner: &Name, kind: PointKind, ty: &Ty, anns: &[AnnotationInfo], name: &str, range: Option<(u32, u32)>, fw: Framework, optional_flag: bool) {
+        // @Value / property bindings are not bean lookups
+        if anns.iter().any(|a| matches!(a.simple_name(), "Value" | "Property" | "ConfigValue" | "Parameter" | "EachProperty")) {
+            return;
+        }
+        let (elem, optional, multiple, lazy) = unwrap_injected(ty);
+        let nullable = anns.iter().any(|a| matches!(a.simple_name(), "Nullable" | "Lazy"));
+        let qualifier = self.injection_qualifier(anns);
+        self.model.points.push(InjectionPoint {
+            owner: owner.clone(),
+            kind,
+            ty: elem,
+            declared_ty: ty.clone(),
+            qualifier,
+            name: name.to_string(),
+            optional: optional || optional_flag || nullable,
+            multiple,
+            lazy,
+            range,
+            framework: fw,
+            file: self.index.source_file_of(owner).cloned(),
+        });
+    }
+}
+
+/// Unwrap Optional<T>, Provider<T>, List<T>... Returns (element, optional, multiple, lazy).
+pub fn unwrap_injected(ty: &Ty) -> (Ty, bool, bool, bool) {
+    match ty {
+        Ty::Array(e) => ((**e).clone(), true, true, false),
+        Ty::Class { name, args } => {
+            let a0 = || args.first().map(|a| a.upper_bound()).unwrap_or(Ty::Unknown);
+            match &**name {
+                "java.util.Optional" => (a0(), true, false, false),
+                "org.springframework.beans.factory.ObjectProvider" | "io.micronaut.context.BeanProvider" => (a0(), true, false, true),
+                "jakarta.inject.Provider" | "javax.inject.Provider" | "org.springframework.beans.factory.ObjectFactory" | "java.util.function.Supplier" => (a0(), false, false, true),
+                "java.util.List" | "java.util.Collection" | "java.util.Set" | "java.lang.Iterable" | "java.util.SortedSet" | "java.util.stream.Stream" => (a0(), true, true, false),
+                "java.util.Map" if args.first().is_some_and(|k| k.is_string()) => (args.get(1).map(|a| a.upper_bound()).unwrap_or(Ty::Unknown), true, true, false),
+                "jakarta.enterprise.inject.Instance" | "javax.enterprise.inject.Instance" => (a0(), true, true, true),
+                _ => (ty.clone(), false, false, false),
+            }
+        }
+        t => (t.clone(), false, false, false),
+    }
+}
+
+impl DiModel {
+    pub fn build(index: &Index) -> DiModel {
+        let mut b = Builder { index, model: DiModel::default(), stereo: FxHashMap::default(), qualifier_ann: FxHashMap::default() };
+        b.scan();
+        let mut m = b.model;
+        m.index_providers(index);
+        m.ctor_edges = m.constructor_edges(index);
+        m
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.beans.is_empty()
+    }
+
+    pub fn bean_of_class(&self, class: &str) -> Option<&Bean> {
+        self.component_classes.get(class).map(|&i| &self.beans[i])
+    }
+
+    pub fn points_of(&self, class: &str) -> impl Iterator<Item = &InjectionPoint> {
+        let c = class.to_string();
+        self.points.iter().filter(move |p| *p.owner == *c)
+    }
+
+    fn index_providers(&mut self, lk: &dyn ClassLookup) {
+        let mut providers: FxHashMap<Name, Vec<usize>> = FxHashMap::default();
+        let mut incomplete = Vec::new();
+        for (i, b) in self.beans.iter().enumerate() {
+            let Some(bn) = b.ty.class_name() else {
+                incomplete.push(i);
+                continue;
+            };
+            for st in lk.all_supertypes(&Ty::class(bn)) {
+                if let Some(n) = st.class_name() {
+                    providers.entry(Arc::from(n)).or_default().push(i);
+                }
+            }
+            if !lk.hierarchy_complete(bn) {
+                incomplete.push(i);
+            }
+        }
+        self.providers = providers;
+        self.incomplete = incomplete;
+    }
+
+    /// Beans that can be injected where `ty` is requested.
+    /// Returns (definite matches, number of possible matches with an
+    /// incomplete hierarchy).
+    pub fn candidates(&self, lk: &dyn ClassLookup, ty: &Ty, include_test: bool) -> (Vec<usize>, usize) {
+        let Some(want) = ty.class_name() else { return (Vec::new(), 1) };
+        let usable = |b: &Bean| !(b.is_test && !include_test) && b.autowire_candidate;
+        let mut out = Vec::new();
+        for &i in self.providers.get(want).map(|v| v.as_slice()).unwrap_or(&[]) {
+            let b = &self.beans[i];
+            if !usable(b) {
+                continue;
+            }
+            // generic arguments act as qualifiers in Spring
+            if !ty.args().is_empty() {
+                if let Some(sup) = lk.as_super(&b.ty, want) {
+                    let compatible = ty.args().iter().zip(sup.args()).all(|(w, h)| {
+                        let w = w.upper_bound().erasure();
+                        let h = h.upper_bound().erasure();
+                        w.is_unknown() || h.is_unknown() || w == h || w.is_class("java.lang.Object") || matches!(h, Ty::TypeVar(_))
+                    });
+                    if !compatible {
+                        continue;
+                    }
+                }
+            }
+            out.push(i);
+        }
+        // beans with unknown supertypes might also provide the type
+        let maybe = self.incomplete.iter().filter(|&&i| usable(&self.beans[i]) && !out.contains(&i)).count();
+        (out, maybe)
+    }
+
+    pub fn resolve(&self, lk: &dyn ClassLookup, p: &InjectionPoint, include_test: bool) -> Resolution {
+        if p.ty.is_unknown() || p.ty.mentions_type_var() {
+            return Resolution::Unknown;
+        }
+        let (mut cands, maybe) = self.candidates(lk, &p.ty, include_test);
+        if let Some(q) = &p.qualifier {
+            if q.is_empty() {
+                return Resolution::Unknown;
+            }
+            let before = cands.clone();
+            cands.retain(|&i| self.beans[i].matches_qualifier(q));
+            if cands.is_empty() && before.iter().any(|&i| self.beans[i].dynamic_names) {
+                return Resolution::Unknown;
+            }
+            if cands.is_empty() {
+                if before.is_empty() {
+                    return if maybe > 0 || !self.provable_type(lk, &p.ty) { Resolution::Unknown } else if p.optional { Resolution::Absent } else { Resolution::NotFound };
+                }
+                if maybe > 0 {
+                    return Resolution::Unknown;
+                }
+                return Resolution::QualifierNotFound { qualifier: q.clone(), candidates: before };
+            }
+        }
+        if p.multiple {
+            return Resolution::Multiple(cands);
+        }
+        match cands.len() {
+            0 => {
+                if p.optional {
+                    Resolution::Absent
+                } else if maybe > 0 || !self.provable_type(lk, &p.ty) {
+                    Resolution::Unknown
+                } else {
+                    Resolution::NotFound
+                }
+            }
+            1 => Resolution::Unique(cands[0]),
+            _ => {
+                let primaries: Vec<usize> = cands.iter().copied().filter(|&i| self.beans[i].primary).collect();
+                if primaries.len() == 1 {
+                    return Resolution::Unique(primaries[0]);
+                }
+                // Spring falls back to matching the parameter/field name
+                if p.framework == Framework::Spring {
+                    if let Some(&i) = cands.iter().find(|&&i| self.beans[i].matches_qualifier(&p.name)) {
+                        return Resolution::Unique(i);
+                    }
+                }
+                // conditional beans (profiles, @ConditionalOn...) may be mutually exclusive;
+                // beans from other modules may not be on the same runtime classpath
+                let point_module = p.file.as_deref().map(module_of).unwrap_or("");
+                let unconditional: Vec<usize> = cands
+                    .iter()
+                    .copied()
+                    .filter(|&i| !self.beans[i].conditional && !self.beans[i].dynamic_names)
+                    .filter(|&i| self.beans[i].file.as_deref().map(module_of).unwrap_or("") == point_module)
+                    .collect();
+                if unconditional.len() < cands.len() && unconditional.len() < 2 {
+                    return Resolution::Unknown;
+                }
+                if unconditional.len() < 2 || maybe > 0 {
+                    return Resolution::Unknown;
+                }
+                Resolution::Ambiguous(unconditional)
+            }
+        }
+    }
+
+    /// Could we see every provider of this type? Only types declared in the
+    /// project's sources (not library types usually provided by
+    /// auto-configuration) qualify.
+    fn provable_type(&self, lk: &dyn ClassLookup, ty: &Ty) -> bool {
+        let Some(n) = ty.class_name() else { return false };
+        // container infrastructure (contexts, environments, conversion services...)
+        // is registered programmatically by the framework itself
+        const FRAMEWORK_PACKAGES: &[&str] = &["io.micronaut.", "org.springframework.", "jakarta.", "javax.", "com.google.inject.", "io.quarkus."];
+        if FRAMEWORK_PACKAGES.iter().any(|p| n.starts_with(p)) {
+            return false;
+        }
+        let Some(c) = lk.class(n) else { return false };
+        c.is_source() && !matches!(c.kind, ClassKind::Annotation)
+    }
+
+    /// Constructor-injection dependency edges between component classes.
+    pub fn constructor_edges(&self, lk: &dyn ClassLookup) -> Vec<(Name, Name, usize)> {
+        let mut out = Vec::new();
+        for (pi, p) in self.points.iter().enumerate() {
+            if !matches!(p.kind, PointKind::ConstructorParam(_)) || p.lazy || p.optional || p.multiple {
+                continue;
+            }
+            if let Resolution::Unique(b) = self.resolve(lk, p, false) {
+                let bean = &self.beans[b];
+                if bean.source == BeanSource::Component {
+                    out.push((p.owner.clone(), bean.declaring_class.clone(), pi));
+                }
+            }
+        }
+        out
+    }
+
+    /// Beans sharing a name (Spring refuses to start without overriding enabled).
+    pub fn name_conflicts(&self) -> Vec<(usize, usize)> {
+        let mut seen: FxHashMap<&str, usize> = FxHashMap::default();
+        let mut out = Vec::new();
+        for (i, b) in self.beans.iter().enumerate() {
+            if b.framework != Framework::Spring || b.conditional || b.is_test {
+                continue;
+            }
+            match seen.get(b.name.as_str()) {
+                Some(&j) => out.push((j, i)),
+                None => {
+                    seen.insert(&b.name, i);
+                }
+            }
+        }
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use grounds_syntax::ParsedFile;
+
+    fn model(files: &[(&str, &str)]) -> (Index, DiModel) {
+        let cp = Arc::new(Classpath::build(grounds_classfile::find_java_home().as_deref(), 21, &[]));
+        let mut idx = Index::new(cp);
+        let stubs = [
+            ("org/springframework/stereotype/Component.java", "package org.springframework.stereotype; public @interface Component { String value() default \"\"; }"),
+            ("org/springframework/stereotype/Service.java", "package org.springframework.stereotype; @Component public @interface Service { String value() default \"\"; }"),
+            ("org/springframework/beans/factory/annotation/Qualifier.java", "package org.springframework.beans.factory.annotation; public @interface Qualifier { String value() default \"\"; }"),
+            ("org/springframework/context/annotation/Bean.java", "package org.springframework.context.annotation; public @interface Bean { String[] name() default {}; }"),
+            ("org/springframework/context/annotation/Configuration.java", "package org.springframework.context.annotation; @org.springframework.stereotype.Component public @interface Configuration {}"),
+            ("org/springframework/context/annotation/Primary.java", "package org.springframework.context.annotation; public @interface Primary {}"),
+        ];
+        for (p, s) in stubs.iter().chain(files.iter()) {
+            let pf = ParsedFile::parse(*s);
+            idx.set_file(Arc::from(*p), Arc::new(extract(&pf)));
+        }
+        let m = DiModel::build(&idx);
+        (idx, m)
+    }
+
+    #[test]
+    fn resolves_spring_beans() {
+        let (idx, m) = model(&[(
+            "app/A.java",
+            "package app; import org.springframework.stereotype.*; import org.springframework.beans.factory.annotation.Qualifier; import org.springframework.context.annotation.*;
+             interface Store {}
+             @Service class DbStore implements Store {}
+             @Service(\"mem\") class MemStore implements Store {}
+             @Service class Uses { Uses(@Qualifier(\"mem\") Store s, Store dbStore) {} }
+             @Service class Broken { Broken(Store s, @Qualifier(\"nope\") Store t, Missing m) {} }
+             interface Missing {}
+             @Configuration class Cfg { @Bean @Primary Clock clock() { return null; } @Bean Clock other() { return null; } }
+             interface Clock {}
+             @Service class NeedsClock { NeedsClock(Clock c) {} }",
+        )]);
+        assert_eq!(m.beans.len(), 8);
+        let res: Vec<(String, Resolution)> = m.points.iter().map(|p| (format!("{}.{}", simple_name_of(&p.owner), p.name), m.resolve(&idx, p, false))).collect();
+        let get = |k: &str| res.iter().find(|(n, _)| n == k).unwrap().1.clone();
+        assert!(matches!(get("Uses.s"), Resolution::Unique(_)));
+        assert!(matches!(get("Uses.dbStore"), Resolution::Unique(_)));
+        assert!(matches!(get("Broken.s"), Resolution::Ambiguous(_)));
+        assert!(matches!(get("Broken.t"), Resolution::QualifierNotFound { .. }));
+        assert_eq!(get("Broken.m"), Resolution::NotFound);
+        assert!(matches!(get("NeedsClock.c"), Resolution::Unique(_)));
+    }
+}
