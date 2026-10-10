@@ -299,6 +299,7 @@ dependencies = [
  "grounds-semantic",
  "grounds-syntax",
  "ignore",
+ "libc",
  "parking_lot",
  "postcard",
  "rayon",

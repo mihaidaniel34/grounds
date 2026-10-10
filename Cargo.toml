@@ -25,6 +25,7 @@ ignore = "0.4"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 toml = "1"
 glob = "0.3"
+libc = "0.2"
 grounds-syntax = { path = "crates/grounds-syntax" }
 grounds-classfile = { path = "crates/grounds-classfile" }
 grounds-index = { path = "crates/grounds-index" }

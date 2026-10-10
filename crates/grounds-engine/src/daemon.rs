@@ -48,11 +48,42 @@ pub fn build_id() -> String {
     format!("{}:{}:{}", exe.map(|e| e.display().to_string()).unwrap_or_default(), meta.map(|m| m.len()).unwrap_or(0), mtime)
 }
 
-pub fn socket_path(root: &Path) -> PathBuf {
+/// Per-user directory for daemon sockets: `$XDG_RUNTIME_DIR` or
+/// `$TMPDIR/grounds-<uid>`, owned by us and closed to everyone else. `None`
+/// (no daemon, analysis in-process) if that cannot be ensured, e.g. another
+/// user pre-created the directory in a shared /tmp.
+fn socket_dir() -> Option<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    let uid = unsafe { libc::geteuid() };
+    let dir = match std::env::var_os("XDG_RUNTIME_DIR").map(PathBuf::from).filter(|d| d.is_absolute()) {
+        Some(d) => d.join("grounds"),
+        None => std::env::temp_dir().join(format!("grounds-{uid}")),
+    };
+    let _ = std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir);
+    let meta = std::fs::symlink_metadata(&dir).ok()?;
+    if !meta.is_dir() || meta.uid() != uid {
+        return None;
+    }
+    if meta.permissions().mode() & 0o077 != 0 {
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).ok()?;
+    }
+    Some(dir)
+}
+
+pub fn socket_path(root: &Path) -> Option<PathBuf> {
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let h = xxhash_rust::xxh3::xxh3_64(root.to_string_lossy().as_bytes());
-    std::env::temp_dir().join(format!("grounds-{h:016x}.sock"))
+    Some(socket_dir()?.join(format!("{h:016x}.sock")))
 }
+
+/// Only talk to sockets we own.
+fn owned_by_us(sock: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(sock).is_ok_and(|m| m.uid() == unsafe { libc::geteuid() })
+}
+
+/// Largest request accepted (paths of changed files).
+const MAX_REQUEST: u64 = 4 << 20;
 
 /// Execute a request against a session (used by the daemon and in-process).
 pub fn execute(session: &mut Session, req: &Request) -> Response {
@@ -84,7 +115,7 @@ pub fn execute(session: &mut Session, req: &Request) -> Response {
 
 /// Serve requests until idle for `idle` or asked to shut down.
 pub fn serve(root: &Path, idle: Duration) -> anyhow::Result<()> {
-    let sock = socket_path(root);
+    let Some(sock) = socket_path(root) else { anyhow::bail!("no private directory for the daemon socket") };
     if sock.exists() {
         // another daemon alive?
         if UnixStream::connect(&sock).is_ok() {
@@ -120,9 +151,14 @@ pub fn serve(root: &Path, idle: Duration) -> anyhow::Result<()> {
 }
 
 fn handle(session: &mut Session, stream: UnixStream) -> bool {
-    let mut reader = BufReader::new(&stream);
+    use std::io::Read;
+    // requests are handled one at a time: a client that stalls or floods
+    // must not block the hooks waiting behind it
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
+    let mut reader = BufReader::new((&stream).take(MAX_REQUEST));
     let mut line = String::new();
-    if reader.read_line(&mut line).is_err() {
+    if reader.read_line(&mut line).is_err() || !line.ends_with('\n') {
         return false;
     }
     let req: Request = match serde_json::from_str(&line) {
@@ -141,9 +177,17 @@ fn handle(session: &mut Session, stream: UnixStream) -> bool {
 
 /// Send a request to a running daemon; `None` if none is listening.
 pub fn request(root: &Path, req: &Request) -> Option<Response> {
-    let sock = socket_path(root);
+    request_with_timeout(root, req, Duration::from_secs(120))
+}
+
+fn request_with_timeout(root: &Path, req: &Request, timeout: Duration) -> Option<Response> {
+    let sock = socket_path(root)?;
+    if !owned_by_us(&sock) {
+        return None;
+    }
     let stream = UnixStream::connect(&sock).ok()?;
-    stream.set_read_timeout(Some(Duration::from_secs(120))).ok()?;
+    stream.set_read_timeout(Some(timeout)).ok()?;
+    stream.set_write_timeout(Some(Duration::from_secs(10))).ok()?;
     writeln!(&stream, "{}", serde_json::to_string(req).ok()?).ok()?;
     let mut reader = BufReader::new(&stream);
     let mut line = String::new();
@@ -167,7 +211,8 @@ pub fn spawn_background(root: &Path) {
 /// Run a request through the daemon if one is running, otherwise in-process
 /// (and optionally start a daemon for next time).
 pub fn run(root: &Path, req: &Request, start_daemon: bool) -> anyhow::Result<Response> {
-    if let Some(p) = request(root, &Request::Ping) {
+    // a busy or stuck daemon must not hold up a hook: fall back to in-process
+    if let Some(p) = request_with_timeout(root, &Request::Ping, Duration::from_secs(2)) {
         if p.stderr == build_id() {
             if let Some(r) = request(root, req) {
                 return Ok(r);
