@@ -67,6 +67,8 @@ src/main/java/.../PetController.java:103:9: `Owner` has no method `addPet`
 | `grounds changed [files] [--edit] [--all-lines] [--no-baseline] [--json]` | agent-style check of changed code |
 | `grounds baseline [files] [--merge]` | accept current findings (default: changed files) |
 | `grounds impacted-tests [files] [--gradle]` | tests reaching the changed classes; `--gradle` prints `./gradlew :module:test --tests ...` |
+| `grounds classpath [--gradle\|--maven]` | one-off dump of the exact compile/test classpath into `.grounds/classpath.txt` (re-run when dependencies change) |
+| `grounds beans [--type T]` | the bean model: beans, injection points and how each resolves |
 | `grounds daemon [--stop\|--status] [--idle-minutes N]` | warm analysis server (started automatically by hooks) |
 | `grounds rules [--json\|--markdown]`, `grounds explain <id>` | rule catalog |
 
@@ -94,8 +96,9 @@ max = 20
 ```
 
 The classpath is best-effort by design: a type that cannot be resolved makes
-the analysis silent rather than wrong. For exact results, dump the Gradle
-classpath once into `.grounds/classpath.txt`.
+the analysis silent rather than wrong. For exact results, run
+`grounds classpath` once (it runs Gradle or Maven a single time, ~20-40 s)
+and set `scan_caches = false`; nothing invokes the build tool afterwards.
 
 ## Architecture
 

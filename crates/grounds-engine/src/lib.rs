@@ -6,6 +6,7 @@ pub mod cache;
 pub mod classpath;
 pub mod config;
 pub mod daemon;
+pub mod dump;
 pub mod git;
 pub mod project;
 pub mod report;

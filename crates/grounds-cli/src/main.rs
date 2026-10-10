@@ -105,6 +105,16 @@ enum Cmd {
         #[arg(long = "type")]
         ty: Option<String>,
     },
+    /// Dump the exact compile classpath once through Gradle or Maven into
+    /// .grounds/classpath.txt (re-run when dependencies change).
+    Classpath {
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long)]
+        gradle: bool,
+        #[arg(long)]
+        maven: bool,
+    },
     /// List all rules.
     Rules {
         #[arg(long)]
@@ -226,6 +236,13 @@ fn main() -> anyhow::Result<()> {
         }
         Cmd::Hook { event } => std::process::exit(hook(&event)?),
         Cmd::Hooks => println!("{}", HOOKS_JSON),
+        Cmd::Classpath { root, gradle, maven } => {
+            let root = find_root(root);
+            let use_maven = maven || (!gradle && root.join("pom.xml").exists() && !root.join("build.gradle").exists() && !root.join("build.gradle.kts").exists());
+            let n = if use_maven { grounds_engine::dump::maven(&root)? } else { grounds_engine::dump::gradle(&root)? };
+            println!("wrote {} classpath entries to .grounds/classpath.txt", n);
+            println!("tip: set `scan_caches = false` in grounds.toml to use only the exact classpath");
+        }
         Cmd::Beans { root, ty } => {
             let root = find_root(root);
             let p = grounds_engine::Project::load(&root)?;

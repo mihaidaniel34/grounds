@@ -5,7 +5,6 @@
 //! callers elsewhere still use the old shape.
 
 use crate::framework::*;
-use crate::util::*;
 use crate::{declare_rule, rule_meta};
 use grounds_index::*;
 use grounds_semantic::Symbol;
