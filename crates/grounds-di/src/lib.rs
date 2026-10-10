@@ -130,6 +130,9 @@ pub struct DiModel {
     pub scan_roots: Vec<String>,
     /// lombok.config copies @Qualifier/@Value onto generated constructors.
     pub lombok_copies_qualifiers: bool,
+    /// `spring.main.allow-bean-definition-overriding=true` in some
+    /// application config: a later @Bean definition replaces an earlier one.
+    pub bean_overriding_allowed: bool,
     /// Classes that are components (by binary name), for quick lookup.
     pub component_classes: FxHashMap<Name, usize>,
     /// Constructor-injection edges (owner, dependency class, point index),

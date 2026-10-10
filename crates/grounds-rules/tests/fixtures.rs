@@ -3,7 +3,8 @@
 //! Each `tests/fixtures/<rule-id>.java` file is analyzed with only that rule
 //! enabled. Lines ending with `// expect` (or `// expect: <rule-id>`) must
 //! produce a diagnostic; all other lines must not. A first-line comment
-//! `// grounds: test` marks the fixture as test code.
+//! `// grounds: test` marks the fixture as test code; `// grounds:
+//! bean-overriding` enables Spring bean definition overriding.
 //! `tests/support/**.java` provides library stubs (Spring, JUnit, SLF4J...).
 
 use grounds_index::{extract, Classpath, Index};
@@ -105,7 +106,9 @@ fn rule_fixtures() {
             }
         }
         let info = FileInfo { path: key.to_string(), is_test, is_generated: false };
-        let di = grounds_di::DiModel::build(&idx);
+        let mut di = grounds_di::DiModel::build(&idx);
+        // `// grounds: bean-overriding` stands for allow-bean-definition-overriding=true
+        di.bean_overriding_allowed = first.contains("grounds: bean-overriding");
         let diags = set.check(&fm, &info, Some(&di), &options);
         let actual: BTreeSet<usize> = diags.iter().map(|d| pf.lines.line_of(d.range.start) + 1).collect();
         let expected = expected_lines(&text, &rule_id);

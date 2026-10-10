@@ -790,6 +790,10 @@ impl Rule for BeanNameConflict {
             if ba.declaring_class == bb.declaring_class && matches!((&ba.source, &bb.source), (BeanSource::FactoryMethod(_), BeanSource::FactoryMethod(_))) {
                 continue; // overloaded @Bean methods in one class are merged by Spring
             }
+            // with overriding enabled only two scanned components still clash
+            if di.bean_overriding_allowed && !matches!((&ba.source, &bb.source), (BeanSource::Component, BeanSource::Component)) {
+                continue;
+            }
             for (this, other) in [(ba, bb), (bb, ba)] {
                 if this.file.as_deref() != Some(path) {
                     continue;
@@ -801,7 +805,17 @@ impl Rule for BeanNameConflict {
                             _ => decl.field("name"),
                         };
                         if let Some(nd) = node {
-                            cx.report(nd, format!("Bean name '{}' is also used by {}", this.name, other.display()));
+                            // the classes often share a simple name (`a.Exporter`, `b.Exporter`)
+                            let by = match &other.source {
+                                BeanSource::FactoryMethod(m) => format!("@Bean {}.{}()", other.declaring_class, m),
+                                _ => other.declaring_class.to_string(),
+                            };
+                            let fails = if matches!((&this.source, &other.source), (BeanSource::Component, BeanSource::Component)) {
+                                "Spring fails at startup (ConflictingBeanDefinitionException)"
+                            } else {
+                                "Spring Boot fails at startup (BeanDefinitionOverrideException) unless bean overriding is enabled"
+                            };
+                            cx.report(nd, format!("Bean name '{}' is also used by {by}; {fails}. Give one an explicit name", this.name));
                         }
                     }
                 }

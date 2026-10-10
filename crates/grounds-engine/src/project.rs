@@ -97,6 +97,7 @@ impl Project {
         }
         let mut di = grounds_di::DiModel::build(&index);
         di.lombok_copies_qualifiers = lombok_copies_qualifiers(&workspace.root);
+        di.bean_overriding_allowed = bean_overriding_allowed(&workspace);
         Ok(Project { config, workspace, index, stats, di, source_sets })
     }
 
@@ -129,13 +130,36 @@ impl Project {
     }
 
     pub fn rebuild_di(&mut self) {
-        let copies = self.di.lombok_copies_qualifiers;
+        let (copies, overriding) = (self.di.lombok_copies_qualifiers, self.di.bean_overriding_allowed);
         self.di = grounds_di::DiModel::build(&self.index);
         self.di.lombok_copies_qualifiers = copies;
+        self.di.bean_overriding_allowed = overriding;
     }
 }
 
 /// Does a lombok.config in the workspace make Lombok copy @Qualifier/@Value?
+/// Whether any module's application config enables bean definition
+/// overriding (any profile counts: unknown means silent).
+fn bean_overriding_allowed(ws: &Workspace) -> bool {
+    ws.modules.iter().any(|m| {
+        let dir = m.dir.join("src/main/resources");
+        let Ok(rd) = std::fs::read_dir(&dir) else { return false };
+        rd.flatten().any(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            let config = name.starts_with("application") && (name.ends_with(".properties") || name.ends_with(".yml") || name.ends_with(".yaml"));
+            config
+                && std::fs::read_to_string(e.path()).is_ok_and(|t| {
+                    t.lines().any(|l| {
+                        let l = l.trim().to_ascii_lowercase();
+                        // `spring.main.allow-bean-definition-overriding=true` or
+                        // `allow-bean-definition-overriding: true` (YAML, nested)
+                        l.contains("allow-bean-definition-overriding") && l.split(['=', ':']).nth(1).is_some_and(|v| v.trim() == "true")
+                    })
+                })
+        })
+    })
+}
+
 fn lombok_copies_qualifiers(root: &Path) -> bool {
     let mut stack = vec![root.to_path_buf()];
     let mut depth = 0;
