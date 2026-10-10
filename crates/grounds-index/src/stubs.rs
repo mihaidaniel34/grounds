@@ -431,7 +431,10 @@ pub fn literal_constant(n: Node, src: &str) -> Option<Constant> {
         "false" => Some(Constant::Bool(false)),
         "character_literal" => grounds_syntax::char_literal_value(n, src).map(Constant::Char),
         "decimal_integer_literal" | "hex_integer_literal" | "octal_integer_literal" | "binary_integer_literal" => {
-            parse_int_literal(n.text(src)).map(Constant::Int)
+            let text = n.text(src);
+            let v = parse_int_literal(text)?;
+            // `int` literals wrap to 32 bits (`0xFFFFFFFF` is -1)
+            Some(if text.ends_with(['l', 'L']) { Constant::Long(v) } else { Constant::Int(v as i32 as i64) })
         }
         "decimal_floating_point_literal" | "hex_floating_point_literal" => {
             let t = n.text(src).replace('_', "");
@@ -441,14 +444,7 @@ pub fn literal_constant(n: Node, src: &str) -> Option<Constant> {
         "unary_expression" => {
             let op = n.field("operator")?.kind();
             let v = literal_constant(n.field("operand")?, src)?;
-            match (op, v) {
-                ("-", Constant::Int(i)) => Some(Constant::Int(i.wrapping_neg())),
-                ("-", Constant::Float(f)) => Some(Constant::Float(-f)),
-                ("+", v) => Some(v),
-                ("!", Constant::Bool(b)) => Some(Constant::Bool(!b)),
-                ("~", Constant::Int(i)) => Some(Constant::Int(!i)),
-                _ => None,
-            }
+            fold_unary(op, v)
         }
         "binary_expression" => {
             let op = n.field("operator")?.kind();
@@ -460,6 +456,28 @@ pub fn literal_constant(n: Node, src: &str) -> Option<Constant> {
     }
 }
 
+/// Unary operator on a constant, with Java's int/long semantics.
+pub fn fold_unary(op: &str, v: Constant) -> Option<Constant> {
+    use Constant::*;
+    let int = |i: i64| Int(i as i32 as i64);
+    match (op, v) {
+        ("-", Int(i)) => Some(int((i as i32).wrapping_neg() as i64)),
+        ("-", Char(c)) => Some(Int(-(c as i64))),
+        ("-", Long(i)) => Some(Long(i.wrapping_neg())),
+        ("-", Float(f)) => Some(Float(-f)),
+        ("+", Char(c)) => Some(Int(c as i64)),
+        ("+", v) => Some(v),
+        ("!", Bool(b)) => Some(Bool(!b)),
+        ("~", Int(i)) => Some(int(!i)),
+        ("~", Char(c)) => Some(int(!(c as i64))),
+        ("~", Long(i)) => Some(Long(!i)),
+        _ => None,
+    }
+}
+
+/// Binary operator on constants, with Java's semantics: `int` arithmetic
+/// wraps at 32 bits, mixed operands promote to `long`/`double`, and a shift
+/// takes the type of its left operand and masks the distance to 5 or 6 bits.
 pub fn fold_binary(op: &str, l: &Constant, r: &Constant) -> Option<Constant> {
     use Constant::*;
     if op == "+" {
@@ -470,40 +488,63 @@ pub fn fold_binary(op: &str, l: &Constant, r: &Constant) -> Option<Constant> {
             return Some(Str(Arc::from(format!("{}{}", const_to_string(a), b).as_str())));
         }
     }
+    let integral = |c: &Constant| matches!(c, Int(_) | Long(_) | Char(_));
+    if integral(l) && integral(r) {
+        let a = l.as_i64()?;
+        let b = r.as_i64()?;
+        if matches!(op, "<<" | ">>" | ">>>") {
+            return Some(if matches!(l, Long(_)) {
+                let d = (b & 63) as u32;
+                Long(match op {
+                    "<<" => a.wrapping_shl(d),
+                    ">>" => a >> d,
+                    _ => ((a as u64) >> d) as i64,
+                })
+            } else {
+                let (a, d) = (a as i32, (b & 31) as u32);
+                Int(match op {
+                    "<<" => a.wrapping_shl(d),
+                    ">>" => a >> d,
+                    _ => ((a as u32) >> d) as i32,
+                } as i64)
+            });
+        }
+        let long = matches!(l, Long(_)) || matches!(r, Long(_));
+        let wrap = |v: i64| if long { Long(v) } else { Int(v as i32 as i64) };
+        return Some(match op {
+            "+" => wrap(a.wrapping_add(b)),
+            "-" => wrap(a.wrapping_sub(b)),
+            "*" => wrap(a.wrapping_mul(b)),
+            "/" if b != 0 => wrap(a.wrapping_div(b)),
+            "%" if b != 0 => wrap(a.wrapping_rem(b)),
+            "&" => wrap(a & b),
+            "|" => wrap(a | b),
+            "^" => wrap(a ^ b),
+            "==" => Bool(a == b),
+            "!=" => Bool(a != b),
+            "<" => Bool(a < b),
+            "<=" => Bool(a <= b),
+            ">" => Bool(a > b),
+            ">=" => Bool(a >= b),
+            _ => return None,
+        });
+    }
+    let numeric = |c: &Constant| matches!(c, Int(_) | Long(_) | Char(_) | Float(_));
     match (l, r) {
-        (Int(_) | Char(_), Int(_) | Char(_)) => {
-            let a = l.as_i64()?;
-            let b = r.as_i64()?;
+        (a, b) if numeric(a) && numeric(b) => {
+            let a = a.as_f64()?;
+            let b = b.as_f64()?;
             Some(match op {
-                "+" => Int(a.wrapping_add(b)),
-                "-" => Int(a.wrapping_sub(b)),
-                "*" => Int(a.wrapping_mul(b)),
-                "/" if b != 0 => Int(a.wrapping_div(b)),
-                "%" if b != 0 => Int(a.wrapping_rem(b)),
-                "<<" => Int(a.wrapping_shl(b as u32)),
-                ">>" => Int(a.wrapping_shr(b as u32)),
-                "&" => Int(a & b),
-                "|" => Int(a | b),
-                "^" => Int(a ^ b),
+                "+" => Float(a + b),
+                "-" => Float(a - b),
+                "*" => Float(a * b),
+                "/" => Float(a / b),
                 "==" => Bool(a == b),
                 "!=" => Bool(a != b),
                 "<" => Bool(a < b),
                 "<=" => Bool(a <= b),
                 ">" => Bool(a > b),
                 ">=" => Bool(a >= b),
-                _ => return None,
-            })
-        }
-        (Float(_) | Int(_), Float(_) | Int(_)) => {
-            let a = l.as_f64()?;
-            let b = r.as_f64()?;
-            Some(match op {
-                "+" => Float(a + b),
-                "-" => Float(a - b),
-                "*" => Float(a * b),
-                "/" => Float(a / b),
-                "<" => Bool(a < b),
-                ">" => Bool(a > b),
                 _ => return None,
             })
         }
@@ -520,7 +561,7 @@ pub fn fold_binary(op: &str, l: &Constant, r: &Constant) -> Option<Constant> {
 
 pub fn const_to_string(c: &Constant) -> String {
     match c {
-        Constant::Int(i) => i.to_string(),
+        Constant::Int(i) | Constant::Long(i) => i.to_string(),
         Constant::Float(f) => {
             if f.fract() == 0.0 && f.is_finite() {
                 format!("{f:.1}")

@@ -3,7 +3,7 @@
 
 use crate::binder::LocalKind;
 use crate::model::{FileModel, Symbol};
-use grounds_index::stubs::{fold_binary, literal_constant};
+use grounds_index::stubs::{fold_binary, fold_unary, literal_constant};
 use grounds_index::*;
 use grounds_syntax::{Node, NodeExt};
 use std::sync::Arc;
@@ -637,24 +637,12 @@ impl<'t> FileModel<'t> {
                 let op = n.field("operator")?.kind();
                 let l = self.constant_value(n.field("left")?)?;
                 let r = self.constant_value(n.field("right")?)?;
-                let v = fold_binary(op, &l, &r)?;
-                // int arithmetic overflow semantics
-                Some(match (v, self.type_of(n)) {
-                    (Constant::Int(i), Ty::Prim(Prim::Int)) => Constant::Int(i as i32 as i64),
-                    (v, _) => v,
-                })
+                fold_binary(op, &l, &r)
             }
             "unary_expression" => {
                 let op = n.field("operator")?.kind();
                 let v = self.constant_value(n.field("operand")?)?;
-                match (op, v) {
-                    ("-", Constant::Int(i)) => Some(Constant::Int(i.wrapping_neg())),
-                    ("-", Constant::Float(f)) => Some(Constant::Float(-f)),
-                    ("+", v) => Some(v),
-                    ("!", Constant::Bool(b)) => Some(Constant::Bool(!b)),
-                    ("~", Constant::Int(i)) => Some(Constant::Int(!i)),
-                    _ => None,
-                }
+                fold_unary(op, v)
             }
             "ternary_expression" => {
                 let c = self.constant_value(n.field("condition")?)?.as_bool()?;
@@ -667,7 +655,7 @@ impl<'t> FileModel<'t> {
                         Constant::Float(f) => f as i32 as i64,
                         c => c.as_i64()? as i32 as i64,
                     })),
-                    Ty::Prim(Prim::Long) => Some(Constant::Int(match v {
+                    Ty::Prim(Prim::Long) => Some(Constant::Long(match v {
                         Constant::Float(f) => f as i64,
                         c => c.as_i64()?,
                     })),
@@ -693,7 +681,7 @@ impl<'t> FileModel<'t> {
 
     pub fn int_value(&self, n: Node<'t>) -> Option<i64> {
         match self.constant_value(n)? {
-            Constant::Int(i) => Some(i),
+            Constant::Int(i) | Constant::Long(i) => Some(i),
             Constant::Char(c) => Some(c as i64),
             _ => None,
         }

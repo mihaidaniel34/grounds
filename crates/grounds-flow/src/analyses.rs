@@ -149,6 +149,8 @@ pub struct NullnessAnalysis<'a, 't> {
     pub cfg: &'a Cfg<'t>,
 }
 
+const OBJECTS_NULL_CHECKS: &[MethodMatcher] = &[MethodMatcher::statics("java.util.Objects").named(&["isNull", "nonNull"])];
+
 const REQUIRE_NON_NULL: &[MethodMatcher] = &[
     MethodMatcher::statics("java.util.Objects").named(&["requireNonNull", "requireNonNullElse"]),
     MethodMatcher::statics("org.junit.jupiter.api.Assertions").named(&["assertNotNull"]),
@@ -187,6 +189,10 @@ impl<'a, 't> NullnessAnalysis<'a, 't> {
             }
             "method_invocation" => {
                 let c = self.fm.select_method(v)?;
+                // an uncertain overload choice may be the wrong method
+                if c.ambiguous {
+                    return None;
+                }
                 if c.method.annotations.iter().any(is_nullable_annotation) && !c.method.ret.is_array() {
                     return Some(Nullness::Nullable);
                 }
@@ -256,8 +262,12 @@ impl<'a, 't> NullnessAnalysis<'a, 't> {
                     "isNull" | "nonNull" => {
                         if let Some(i) = first_local {
                             let is_null = name == "isNull";
-                            out.push((i, if is_null { Nullness::Null } else { Nullness::NonNull }, true));
-                            out.push((i, if is_null { Nullness::NonNull } else { Nullness::Null }, false));
+                            // non-null on the "not null" outcome is safe for any
+                            // predicate; null on the other only with Objects' contract
+                            out.push((i, Nullness::NonNull, !is_null));
+                            if self.fm.call_matches_any(c, OBJECTS_NULL_CHECKS) {
+                                out.push((i, Nullness::Null, is_null));
+                            }
                         }
                     }
                     "isEmpty" | "isBlank" | "isNullOrEmpty" | "hasText" | "hasLength" | "isNotEmpty" | "isNotBlank" if !args.is_empty() => {
@@ -295,9 +305,16 @@ impl<'a, 't> NullnessAnalysis<'a, 't> {
             }
         };
         match e.kind() {
-            "method_invocation" => push(e.field("object")),
+            // `s.valueOf(1)` with a null `s` is fine: static members only
+            // evaluate the receiver
+            "method_invocation" => {
+                if !self.fm.select_method(e).is_some_and(|c| c.method.flags.has(Flags::STATIC)) {
+                    push(e.field("object"))
+                }
+            }
             "field_access" => {
-                if e.field("field").is_some_and(|f| f.kind() != "this") {
+                let is_static = matches!(self.fm.symbol(e), Some(Symbol::Field(f)) if f.field.flags.has(Flags::STATIC));
+                if e.field("field").is_some_and(|f| f.kind() != "this") && !is_static {
                     push(e.field("object"))
                 }
             }

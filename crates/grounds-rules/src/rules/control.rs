@@ -691,7 +691,9 @@ impl Rule for SwitchFallthrough {
             let s = s.to_ascii_lowercase();
             s.contains("fall") || s.contains("no break") || s.contains("nobreak") || s.contains("continue")
         };
-        if has_marker(gap) || has_marker(&tail[tail.len().saturating_sub(60)..]) {
+        // last 60 characters (not bytes: the text may contain non-ASCII)
+        let tail_start = tail.char_indices().rev().nth(59).map_or(0, |(i, _)| i);
+        if has_marker(gap) || has_marker(&tail[tail_start..]) {
             return;
         }
         if let Some(label) = next.kid_of_kind("switch_label") {

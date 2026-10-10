@@ -17,8 +17,49 @@ const TAG_PARTIAL: u8 = 12;
 #[derive(Clone, Debug)]
 pub enum ArgShape {
     Ty(Ty),
-    Lambda(usize),
+    /// arity, and whether the body fits a void / a value-returning
+    /// functional method (JLS 15.27.2)
+    Lambda(usize, LambdaCompat),
     MethodRef,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LambdaCompat {
+    pub void_ok: bool,
+    pub value_ok: bool,
+}
+
+/// Void/value compatibility of a lambda body. Expression bodies are value
+/// compatible (a void method call cannot be told apart here, so it counts as
+/// both) and void compatible when they are statement expressions; block
+/// bodies are value compatible when they return a value or cannot complete
+/// normally, void compatible when no `return` carries a value.
+fn lambda_compat(body: Node) -> LambdaCompat {
+    if body.kind() != "block" {
+        let statement = matches!(body.unparen().kind(), "method_invocation" | "object_creation_expression" | "assignment_expression" | "update_expression");
+        return LambdaCompat { void_ok: statement, value_ok: true };
+    }
+    let mut value_return = false;
+    let mut void_return = false;
+    let mut stack = vec![body];
+    while let Some(n) = stack.pop() {
+        for k in n.kids() {
+            match k.kind() {
+                // returns in nested lambdas and classes belong to them
+                "lambda_expression" | "class_body" => {}
+                "return_statement" => {
+                    if k.first_kid().is_some() {
+                        value_return = true;
+                    } else {
+                        void_return = true;
+                    }
+                }
+                _ => stack.push(k),
+            }
+        }
+    }
+    let ends_abruptly = body.kids().last().is_some_and(|l| l.kind() == "throw_statement");
+    LambdaCompat { void_ok: !value_return, value_ok: (value_return && !void_return) || (ends_abruptly && !void_return) }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
@@ -43,7 +84,8 @@ impl<'t> FileModel<'t> {
                     Some(p) => p.kids().iter().filter(|k| matches!(k.kind(), "identifier" | "formal_parameter" | "spread_parameter")).count(),
                     None => 0,
                 };
-                ArgShape::Lambda(n)
+                let compat = a.field("body").map(lambda_compat).unwrap_or(LambdaCompat { void_ok: true, value_ok: true });
+                ArgShape::Lambda(n, compat)
             }
             "method_reference" => ArgShape::MethodRef,
             _ => ArgShape::Ty(self.type_of(a)),
@@ -139,13 +181,20 @@ impl<'t> FileModel<'t> {
 
     fn fit(&self, param: &Ty, arg: &ArgShape) -> Fit {
         match arg {
-            ArgShape::Lambda(n) => {
+            ArgShape::Lambda(n, compat) => {
                 if param.mentions_type_var() && param.class_name().is_none() {
                     return Fit::Maybe;
                 }
                 match param.class_name().and_then(|c| self.class(c)) {
                     Some(c) if c.is_interface() => match self.functional_method(param) {
-                        Some(m) if m.method.params.len() == *n => Fit::Strict,
+                        Some(m) if m.method.params.len() == *n => {
+                            let void = matches!(m.method.ret, Ty::Void);
+                            if (void && !compat.void_ok) || (!void && !compat.value_ok) {
+                                Fit::No
+                            } else {
+                                Fit::Strict
+                            }
+                        }
                         Some(_) => Fit::No,
                         None => Fit::No,
                     },

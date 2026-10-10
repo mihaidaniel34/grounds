@@ -454,7 +454,10 @@ impl fmt::Debug for Flags {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Constant {
+    /// `int` (and byte/short) values, always within i32 range
     Int(i64),
+    /// `long` values
+    Long(i64),
     Float(f64),
     Bool(bool),
     Char(char),
@@ -464,14 +467,14 @@ pub enum Constant {
 impl Constant {
     pub fn as_i64(&self) -> Option<i64> {
         match self {
-            Constant::Int(v) => Some(*v),
+            Constant::Int(v) | Constant::Long(v) => Some(*v),
             Constant::Char(c) => Some(*c as i64),
             _ => None,
         }
     }
     pub fn as_f64(&self) -> Option<f64> {
         match self {
-            Constant::Int(v) => Some(*v as f64),
+            Constant::Int(v) | Constant::Long(v) => Some(*v as f64),
             Constant::Float(v) => Some(*v),
             Constant::Char(c) => Some(*c as u32 as f64),
             _ => None,

@@ -106,6 +106,34 @@ fn overloads() {
 }
 
 #[test]
+fn constant_folding_uses_java_integer_semantics() {
+    let cases: &[(&str, Constant)] = &[
+        ("2147483647 + 1", Constant::Int(-2147483648)),
+        ("1 << 32", Constant::Int(1)),
+        ("1 << 33", Constant::Int(2)),
+        ("1L << 32", Constant::Long(1 << 32)),
+        ("-1 >>> 28", Constant::Int(15)),
+        ("-1L >>> 60", Constant::Long(15)),
+        ("0xFFFFFFFF", Constant::Int(-1)),
+        ("-2147483648", Constant::Int(-2147483648)),
+        ("2147483647 + 1L", Constant::Long(2147483648)),
+        ("65536 * 65536", Constant::Int(0)),
+        ("(int) 3000000000L", Constant::Int(-1294967296)),
+        ("'a' + 1", Constant::Int(98)),
+        ("2147483647 + 1 > 0", Constant::Bool(false)),
+    ];
+    for (expr, want) in cases {
+        let src = format!("class T {{ void m() {{ Object x = {expr}; }} }}");
+        let pf = ParsedFile::parse(src.clone());
+        let mut idx = Index::new(jdk());
+        idx.set_file(Arc::from("T.java"), Arc::new(extract(&pf)));
+        let fm = FileModel::new(&pf, &idx, Arc::from("T.java"));
+        let d = pf.root().descendants().find(|n| n.kind() == "variable_declarator").unwrap();
+        assert_eq!(fm.constant_value(d.field("value").unwrap()).as_ref(), Some(want), "{expr}");
+    }
+}
+
+#[test]
 fn constants() {
     let src = "class T { static final int A = 2; static final String S = \"a\" + A; void m() { final int b = A * 3; int x = b; String s = S + \"!\"; } }";
     let pf = ParsedFile::parse(src);

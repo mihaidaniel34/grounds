@@ -298,7 +298,10 @@ where
                 self.visit_kids(n);
                 self.owners.pop();
             }
-            "block" | "constructor_body" | "switch_block_statement_group" | "switch_rule" => {
+            // locals declared in a colon-style case group stay in scope for
+            // the following groups: the scope is the whole switch block
+            // (`case 0: int v; case 1: v = 2;` is valid Java)
+            "block" | "constructor_body" | "switch_block" | "switch_rule" => {
                 let is_init_block = n.kind() == "block" && n.parent().is_some_and(|p| matches!(p.kind(), "class_body" | "enum_body_declarations"));
                 if is_init_block {
                     self.owners.push(n);

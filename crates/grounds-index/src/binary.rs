@@ -57,7 +57,7 @@ fn element_value(v: &ElementValue) -> AnnotationValue {
 fn const_value(c: &ConstValue) -> Constant {
     match c {
         ConstValue::Int(i) => Constant::Int(*i as i64),
-        ConstValue::Long(i) => Constant::Int(*i),
+        ConstValue::Long(i) => Constant::Long(*i),
         ConstValue::Float(f) => Constant::Float(*f as f64),
         ConstValue::Double(f) => Constant::Float(*f),
         ConstValue::String(s) => Constant::Str(Arc::from(s.as_str())),

@@ -220,7 +220,9 @@ fn overflows_i32<'t>(n: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
                 "*" => a.checked_mul(b),
                 "+" => a.checked_add(b),
                 "-" => a.checked_sub(b),
-                "<<" if (0..64).contains(&b) => a.checked_mul(1i128 << b),
+                // shifts are bit manipulation (`1 << 31` is the sign bit), and
+                // distances >= 32 belong to bad-shift-amount
+                "<<" => None,
                 "/" if b != 0 => Some(a / b),
                 _ => None,
             };
@@ -250,11 +252,11 @@ declare_rule!(ConstantOverflow {
 impl Rule for ConstantOverflow {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
-        if !matches!(op(n), "*" | "+" | "-" | "<<") || cx.type_of(n) != Ty::Prim(Prim::Int) {
+        if !matches!(op(n), "*" | "+" | "-") || cx.type_of(n) != Ty::Prim(Prim::Int) {
             return;
         }
         if let Some(p) = n.parent_unparen() {
-            if p.kind() == "binary_expression" && cx.type_of(p) == Ty::Prim(Prim::Int) && matches!(op(p), "*" | "+" | "-" | "<<") && cx.fm.constant_value(p).is_some() {
+            if p.kind() == "binary_expression" && cx.type_of(p) == Ty::Prim(Prim::Int) && matches!(op(p), "*" | "+" | "-") && cx.fm.constant_value(p).is_some() {
                 return;
             }
         }

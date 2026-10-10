@@ -38,8 +38,10 @@ pub struct Cfg<'t> {
     /// Uncaught exception.
     pub exc_exit: BlockId,
     pub owner: Node<'t>,
-    /// For each element node id: (block, index in block)
+    /// For each element node id: (block, index in block) of its first copy
     pub positions: rustc_hash::FxHashMap<usize, (BlockId, usize)>,
+    /// Further copies of elements lowered more than once (finally bodies)
+    pub copies: rustc_hash::FxHashMap<usize, Vec<(BlockId, usize)>>,
 }
 
 struct Jump {
@@ -48,11 +50,19 @@ struct Jump {
     continue_to: Option<BlockId>,
     /// `yield` target for switch expressions
     is_switch_expr: bool,
+    /// `tries.len()` when the statement was entered: try statements above
+    /// this depth are left by a jump to this target
+    try_depth: usize,
 }
 
-struct TryCtx {
+struct TryCtx<'t> {
     catches: Vec<BlockId>,
+    /// finally copy entered by exceptions (continues to outer handlers)
     finally: Option<BlockId>,
+    /// finally copy entered by `return` (continues to the outer return target)
+    finally_ret: Option<BlockId>,
+    /// the finally body, inlined before every break/continue/yield leaving it
+    finally_body: Option<Node<'t>>,
 }
 
 struct Builder<'t, 's> {
@@ -62,7 +72,7 @@ struct Builder<'t, 's> {
     exit: BlockId,
     exc_exit: BlockId,
     jumps: Vec<Jump>,
-    tries: Vec<TryCtx>,
+    tries: Vec<TryCtx<'t>>,
     pending_label: Option<String>,
 }
 
@@ -77,11 +87,18 @@ impl<'t, 's> Builder<'t, 's> {
         }
     }
     fn emit(&mut self, n: Node<'t>) {
+        if may_throw(n) {
+            // the exception leaves with the state *before* `n`: end the block
+            // here so the solver does not apply `n` or anything after it
+            // (`x = f()` where f throws never assigns x)
+            let before = self.cur;
+            self.exceptional_edges(before);
+            let next = self.new_block();
+            self.edge(before, next, EdgeKind::Normal);
+            self.cur = next;
+        }
         let c = self.cur;
         self.blocks[c].elems.push(n);
-        if may_throw(n) {
-            self.exceptional_edges(c);
-        }
     }
     fn exceptional_edges(&mut self, from: BlockId) {
         let targets: Vec<BlockId> = match self.tries.last() {
@@ -108,8 +125,26 @@ impl<'t, 's> Builder<'t, 's> {
         self.edge(c, to, EdgeKind::Normal);
     }
 
+    /// Jump out of every try statement entered after `depth`, running their
+    /// finally bodies innermost first (as javac inlines them), then to `to`.
+    fn jump_through_finally(&mut self, depth: usize, to: BlockId) {
+        let saved = std::mem::take(&mut self.tries);
+        let mut i = saved.len();
+        while i > depth {
+            i -= 1;
+            if let Some(body) = saved[i].finally_body {
+                // exceptions inside the finally body go to the handlers outside it
+                self.tries = saved[..i].iter().map(|t| TryCtx { catches: t.catches.clone(), finally: t.finally, finally_ret: t.finally_ret, finally_body: t.finally_body }).collect();
+                self.stmt(body);
+            }
+        }
+        self.tries = saved;
+        self.goto(to);
+    }
+
+    /// Where a `return` goes: the innermost finally's return copy.
     fn finally_target(&self) -> Option<BlockId> {
-        self.tries.iter().rev().find_map(|t| t.finally)
+        self.tries.iter().rev().find_map(|t| t.finally_ret)
     }
 
     // ----- expressions -----
@@ -318,8 +353,13 @@ impl<'t, 's> Builder<'t, 's> {
     fn simple_cond(&mut self, c: Node<'t>, t: BlockId, f: BlockId) {
         self.expr(c);
         let cur = self.cur;
-        self.edge(cur, t, EdgeKind::True(c));
-        self.edge(cur, f, EdgeKind::False(c));
+        // a literal condition has one outcome (`while (true)` only exits by break)
+        if c.kind() != "false" {
+            self.edge(cur, t, EdgeKind::True(c));
+        }
+        if c.kind() != "true" {
+            self.edge(cur, f, EdgeKind::False(c));
+        }
     }
 
     // ----- statements -----
@@ -381,7 +421,7 @@ impl<'t, 's> Builder<'t, 's> {
                 if let Some(c) = n.field("condition") {
                     self.cond(c, body, exit);
                 }
-                self.jumps.push(Jump { label, break_to: exit, continue_to: Some(head), is_switch_expr: false });
+                self.jumps.push(Jump { label, break_to: exit, continue_to: Some(head), is_switch_expr: false, try_depth: self.tries.len() });
                 self.cur = body;
                 if let Some(s) = n.field("body") {
                     self.stmt(s);
@@ -395,7 +435,7 @@ impl<'t, 's> Builder<'t, 's> {
                 let cond_b = self.new_block();
                 let exit = self.new_block();
                 self.goto(body);
-                self.jumps.push(Jump { label, break_to: exit, continue_to: Some(cond_b), is_switch_expr: false });
+                self.jumps.push(Jump { label, break_to: exit, continue_to: Some(cond_b), is_switch_expr: false, try_depth: self.tries.len() });
                 self.cur = body;
                 if let Some(s) = n.field("body") {
                     self.stmt(s);
@@ -426,7 +466,7 @@ impl<'t, 's> Builder<'t, 's> {
                     Some(c) => self.cond(c, body, exit),
                     None => self.goto(body),
                 }
-                self.jumps.push(Jump { label, break_to: exit, continue_to: Some(update), is_switch_expr: false });
+                self.jumps.push(Jump { label, break_to: exit, continue_to: Some(update), is_switch_expr: false, try_depth: self.tries.len() });
                 self.cur = body;
                 if let Some(s) = n.field("body") {
                     self.stmt(s);
@@ -454,7 +494,7 @@ impl<'t, 's> Builder<'t, 's> {
                 self.cur = body;
                 // the loop variable is (re)defined here
                 self.emit(n);
-                self.jumps.push(Jump { label, break_to: exit, continue_to: Some(head), is_switch_expr: false });
+                self.jumps.push(Jump { label, break_to: exit, continue_to: Some(head), is_switch_expr: false, try_depth: self.tries.len() });
                 if let Some(s) = n.field("body") {
                     self.stmt(s);
                 }
@@ -471,7 +511,7 @@ impl<'t, 's> Builder<'t, 's> {
                         self.stmt(s);
                     } else {
                         let exit = self.new_block();
-                        self.jumps.push(Jump { label: name, break_to: exit, continue_to: None, is_switch_expr: false });
+                        self.jumps.push(Jump { label: name, break_to: exit, continue_to: None, is_switch_expr: false, try_depth: self.tries.len() });
                         self.stmt(s);
                         self.jumps.pop();
                         self.goto(exit);
@@ -504,24 +544,24 @@ impl<'t, 's> Builder<'t, 's> {
             "break_statement" => {
                 let lbl = n.kids().into_iter().find(|k| k.kind() == "identifier").map(|i| i.text(self.src).to_string());
                 let target = match &lbl {
-                    Some(l) => self.jumps.iter().rev().find(|j| j.label.as_deref() == Some(l)).map(|j| j.break_to),
-                    None => self.jumps.iter().rev().find(|j| !j.is_switch_expr).map(|j| j.break_to),
+                    Some(l) => self.jumps.iter().rev().find(|j| j.label.as_deref() == Some(l)).map(|j| (j.break_to, j.try_depth)),
+                    None => self.jumps.iter().rev().find(|j| !j.is_switch_expr).map(|j| (j.break_to, j.try_depth)),
                 };
                 self.emit(n);
-                if let Some(t) = target {
-                    self.goto(t);
+                if let Some((t, depth)) = target {
+                    self.jump_through_finally(depth, t);
                 }
                 self.dead();
             }
             "continue_statement" => {
                 let lbl = n.kids().into_iter().find(|k| k.kind() == "identifier").map(|i| i.text(self.src).to_string());
                 let target = match &lbl {
-                    Some(l) => self.jumps.iter().rev().find(|j| j.label.as_deref() == Some(l)).and_then(|j| j.continue_to),
-                    None => self.jumps.iter().rev().find_map(|j| j.continue_to),
+                    Some(l) => self.jumps.iter().rev().find(|j| j.label.as_deref() == Some(l)).and_then(|j| j.continue_to.map(|c| (c, j.try_depth))),
+                    None => self.jumps.iter().rev().find_map(|j| j.continue_to.map(|c| (c, j.try_depth))),
                 };
                 self.emit(n);
-                if let Some(t) = target {
-                    self.goto(t);
+                if let Some((t, depth)) = target {
+                    self.jump_through_finally(depth, t);
                 }
                 self.dead();
             }
@@ -530,8 +570,8 @@ impl<'t, 's> Builder<'t, 's> {
                     self.expr(e);
                 }
                 self.emit(n);
-                if let Some(t) = self.jumps.iter().rev().find(|j| j.is_switch_expr).map(|j| j.break_to) {
-                    self.goto(t);
+                if let Some((t, depth)) = self.jumps.iter().rev().find(|j| j.is_switch_expr).map(|j| (j.break_to, j.try_depth)) {
+                    self.jump_through_finally(depth, t);
                 }
                 self.dead();
             }
@@ -589,7 +629,7 @@ impl<'t, 's> Builder<'t, 's> {
             self.cur = exit;
             return;
         };
-        self.jumps.push(Jump { label: None, break_to: exit, continue_to: None, is_switch_expr: is_expr });
+        self.jumps.push(Jump { label: None, break_to: exit, continue_to: None, is_switch_expr: is_expr, try_depth: self.tries.len() });
         let mut has_default = false;
         let mut prev_end: Option<BlockId> = None;
         for group in body.kids() {
@@ -654,13 +694,16 @@ impl<'t, 's> Builder<'t, 's> {
         let catches: Vec<Node> = n.kids_of_kind("catch_clause");
         let finally = n.kid_of_kind("finally_clause").and_then(|f| f.kid_of_kind("block"));
         let catch_blocks: Vec<BlockId> = catches.iter().map(|_| self.new_block()).collect();
-        // The finally body is lowered twice: once for normal completion of the
-        // try/catch (continuing after the statement) and once for abrupt
-        // completion (exception, return, break), which continues outward.
+        // The finally body is lowered once per way of leaving the statement,
+        // so their states never mix: normal completion (continues after the
+        // statement), exception (continues to the outer handlers) and return
+        // (continues to the outer return target). break/continue/yield
+        // inline their own copy (see jump_through_finally).
         let finally_normal = finally.map(|_| self.new_block());
         let finally_abrupt = finally.map(|_| self.new_block());
+        let finally_ret = finally.map(|_| self.new_block());
         let after = self.new_block();
-        self.tries.push(TryCtx { catches: catch_blocks.clone(), finally: finally_abrupt });
+        self.tries.push(TryCtx { catches: catch_blocks.clone(), finally: finally_abrupt, finally_ret, finally_body: finally });
         if let Some(rs) = n.field("resources") {
             for r in rs.kids() {
                 if let Some(v) = r.field("value") {
@@ -676,7 +719,7 @@ impl<'t, 's> Builder<'t, 's> {
         let body_end = self.cur;
         self.edge(body_end, finally_normal.unwrap_or(after), EdgeKind::Normal);
         // catch clauses: exceptions inside them go to the abrupt finally
-        self.tries.push(TryCtx { catches: Vec::new(), finally: finally_abrupt });
+        self.tries.push(TryCtx { catches: Vec::new(), finally: finally_abrupt, finally_ret, finally_body: finally });
         for (c, b) in catches.iter().zip(&catch_blocks) {
             self.cur = *b;
             if let Some(p) = c.kid_of_kind("catch_formal_parameter") {
@@ -689,19 +732,23 @@ impl<'t, 's> Builder<'t, 's> {
             self.edge(end, finally_normal.unwrap_or(after), EdgeKind::Normal);
         }
         self.tries.pop();
-        if let (Some(fb), Some(fnb), Some(fab)) = (finally, finally_normal, finally_abrupt) {
+        if let (Some(fb), Some(fnb), Some(fab), Some(frb)) = (finally, finally_normal, finally_abrupt, finally_ret) {
             // normal copy
             self.cur = fnb;
             self.stmt(fb);
             let end = self.cur;
             self.edge(end, after, EdgeKind::Normal);
-            // abrupt copy
+            // exception copy: the exception keeps propagating
             self.cur = fab;
+            self.stmt(fb);
+            let end = self.cur;
+            self.exceptional_edges(end);
+            // return copy
+            self.cur = frb;
             self.stmt(fb);
             let end = self.cur;
             let outer = self.finally_target().unwrap_or(self.exit);
             self.edge(end, outer, EdgeKind::Normal);
-            self.exceptional_edges(end);
         }
         self.cur = after;
     }
@@ -790,12 +837,17 @@ pub fn build<'t>(owner: Node<'t>, src: &str) -> Cfg<'t> {
         }
     }
     let mut positions = rustc_hash::FxHashMap::default();
+    let mut copies: rustc_hash::FxHashMap<usize, Vec<(BlockId, usize)>> = rustc_hash::FxHashMap::default();
     for (bi, bl) in blocks.iter().enumerate() {
         for (ei, e) in bl.elems.iter().enumerate() {
-            positions.entry(e.id()).or_insert((bi, ei));
+            if positions.contains_key(&e.id()) {
+                copies.entry(e.id()).or_default().push((bi, ei));
+            } else {
+                positions.insert(e.id(), (bi, ei));
+            }
         }
     }
-    Cfg { blocks, entry, exit: b.exit, exc_exit: b.exc_exit, owner, positions }
+    Cfg { blocks, entry, exit: b.exit, exc_exit: b.exc_exit, owner, positions, copies }
 }
 
 impl<'t> Cfg<'t> {

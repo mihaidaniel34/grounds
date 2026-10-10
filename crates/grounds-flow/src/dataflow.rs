@@ -110,41 +110,76 @@ pub fn solve<'t, A: Analysis<'t>>(cfg: &Cfg<'t>, a: &A) -> Results<A::Fact> {
 }
 
 impl<F: Clone> Results<F> {
-    /// Fact immediately before `elem` executes (forward analyses).
+    /// Fact immediately before `elem` executes (forward analyses). For an
+    /// element lowered more than once (a finally body) this is the join over
+    /// its reachable copies: a fact at a source location must hold on every
+    /// path through it.
     pub fn before<'t, A: Analysis<'t, Fact = F>>(&self, cfg: &Cfg<'t>, a: &A, elem: Node<'t>) -> Option<F> {
-        let (b, i) = cfg.position(elem)?;
-        if !self.reached[b] {
-            return None;
+        let first = cfg.position(elem)?;
+        let mut acc: Option<F> = None;
+        for (b, i) in std::iter::once(first).chain(cfg.copies.get(&elem.id()).into_iter().flatten().copied()) {
+            if !self.reached[b] {
+                continue;
+            }
+            let mut f = self.block_in[b].clone();
+            for e in &cfg.blocks[b].elems[..i] {
+                a.transfer(*e, &mut f);
+            }
+            acc = Some(match acc {
+                Some(x) => a.join(&x, &f),
+                None => f,
+            });
         }
-        let mut f = self.block_in[b].clone();
-        for e in &cfg.blocks[b].elems[..i] {
-            a.transfer(*e, &mut f);
-        }
-        Some(f)
+        acc
     }
 
     /// Fact immediately after `elem` in program order, for backward analyses
-    /// (i.e. the fact flowing *into* the element from its successors).
+    /// (i.e. the fact flowing *into* the element from its successors), joined
+    /// over the element's copies.
     pub fn after_backward<'t, A: Analysis<'t, Fact = F>>(&self, cfg: &Cfg<'t>, a: &A, elem: Node<'t>) -> Option<F> {
-        let (b, i) = cfg.position(elem)?;
-        let mut f = self.block_out[b].clone();
-        for e in cfg.blocks[b].elems[i + 1..].iter().rev() {
-            a.transfer(*e, &mut f);
+        let first = cfg.position(elem)?;
+        let mut acc: Option<F> = None;
+        for (b, i) in std::iter::once(first).chain(cfg.copies.get(&elem.id()).into_iter().flatten().copied()) {
+            let mut f = self.block_out[b].clone();
+            for e in cfg.blocks[b].elems[i + 1..].iter().rev() {
+                a.transfer(*e, &mut f);
+            }
+            acc = Some(match acc {
+                Some(x) => a.join(&x, &f),
+                None => f,
+            });
         }
-        Some(f)
+        acc
     }
 
-    /// Visit every element with the fact before it (forward).
+    /// Visit every element with the fact before it (forward). Elements
+    /// lowered more than once are visited once, with the join of their copies.
     pub fn for_each_before<'t, A: Analysis<'t, Fact = F>>(&self, cfg: &Cfg<'t>, a: &A, mut f: impl FnMut(Node<'t>, &F)) {
+        let mut joined: rustc_hash::FxHashMap<usize, (Node<'t>, F)> = rustc_hash::FxHashMap::default();
+        let mut order: Vec<usize> = Vec::new();
         for (b, bl) in cfg.blocks.iter().enumerate() {
             if !self.reached[b] {
                 continue;
             }
             let mut fact = self.block_in[b].clone();
             for e in &bl.elems {
-                f(*e, &fact);
+                if cfg.copies.contains_key(&e.id()) {
+                    match joined.get_mut(&e.id()) {
+                        Some((_, acc)) => *acc = a.join(acc, &fact),
+                        None => {
+                            order.push(e.id());
+                            joined.insert(e.id(), (*e, fact.clone()));
+                        }
+                    }
+                } else {
+                    f(*e, &fact);
+                }
                 a.transfer(*e, &mut fact);
             }
+        }
+        for id in order {
+            let (e, fact) = &joined[&id];
+            f(*e, fact);
         }
     }
 }

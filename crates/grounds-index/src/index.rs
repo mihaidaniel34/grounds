@@ -423,14 +423,7 @@ impl Index {
             }
             ConstExpr::Unary(op, v) => {
                 let v = self.eval_const_expr(v, scope, done, raw, depth + 1)?;
-                match (&**op, v) {
-                    ("-", Constant::Int(i)) => Some(Constant::Int(i.wrapping_neg())),
-                    ("-", Constant::Float(f)) => Some(Constant::Float(-f)),
-                    ("+", v) => Some(v),
-                    ("!", Constant::Bool(b)) => Some(Constant::Bool(!b)),
-                    ("~", Constant::Int(i)) => Some(Constant::Int(!i)),
-                    _ => None,
-                }
+                crate::stubs::fold_unary(op, v)
             }
             ConstExpr::Binary(op, l, r) => {
                 let l = self.eval_const_expr(l, scope, done, raw, depth + 1)?;
@@ -763,7 +756,7 @@ pub fn coerce_constant(v: Constant, ty: &Ty) -> Option<Constant> {
             Constant::Float(f) => f as i32 as i64,
             c => c.as_i64()? as i32 as i64,
         }),
-        Ty::Prim(Prim::Long) => Constant::Int(match v {
+        Ty::Prim(Prim::Long) => Constant::Long(match v {
             Constant::Float(f) => f as i64,
             c => c.as_i64()?,
         }),
