@@ -426,3 +426,35 @@ pub fn is_throwable_expr<'t>(fm: &FileModel<'t>, n: Node<'t>) -> bool {
     }
     false
 }
+
+/// Next named sibling that is not a comment.
+pub fn next_sibling_stmt(n: Node) -> Option<Node> {
+    let mut s = n.next_named_sibling();
+    while let Some(x) = s {
+        if !grounds_syntax::is_comment(x.kind()) {
+            return Some(x);
+        }
+        s = x.next_named_sibling();
+    }
+    None
+}
+
+/// Previous named sibling that is not a comment.
+pub fn prev_sibling_stmt(n: Node) -> Option<Node> {
+    let mut s = n.prev_named_sibling();
+    while let Some(x) = s {
+        if !grounds_syntax::is_comment(x.kind()) {
+            return Some(x);
+        }
+        s = x.prev_named_sibling();
+    }
+    None
+}
+
+/// Does a block contain a comment on its own line (not trailing the `{`)?
+pub fn block_has_own_line_comment(b: Node) -> bool {
+    let start_row = b.start_position().row;
+    let mut c = b.walk();
+    let r = b.children(&mut c).any(|k| grounds_syntax::is_comment(k.kind()) && k.start_position().row > start_row);
+    r
+}

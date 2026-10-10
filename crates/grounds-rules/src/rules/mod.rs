@@ -2,6 +2,7 @@
 
 pub mod api;
 pub mod concurrency;
+pub mod control;
 pub mod equality;
 pub mod exceptions;
 pub mod numbers;
@@ -17,5 +18,6 @@ pub fn all() -> Vec<Box<dyn Rule>> {
     v.extend(exceptions::rules());
     v.extend(concurrency::rules());
     v.extend(api::rules());
+    v.extend(control::rules());
     v
 }
