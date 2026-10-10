@@ -407,6 +407,20 @@ impl<'t> ClassLookup for FileModel<'t> {
             self.local_lowered.borrow_mut().insert(Arc::from(name), Some(arc.clone()));
             return Some(arc);
         }
+        // a class declared in this file (possibly duplicated elsewhere) comes from this file
+        if self.index.is_duplicated(name) {
+            if let Some(raw) = self.stub.classes.iter().find(|c| &*c.name == name) {
+                if let Some(c) = self.local_lowered.borrow().get(name) {
+                    return c.clone();
+                }
+                self.local_lowered.borrow_mut().insert(Arc::from(name), None);
+                let scope = self.index.scope_for_class(name).unwrap_or_default();
+                let info = self.index.lower_raw_class(raw, &Scope { package: &self.stub.package, imports: &self.stub.imports, ..scope }, Origin::Source { file: self.path.clone() });
+                let arc = Arc::new(info);
+                self.local_lowered.borrow_mut().insert(Arc::from(name), Some(arc.clone()));
+                return Some(arc);
+            }
+        }
         self.index.class(name)
     }
 }

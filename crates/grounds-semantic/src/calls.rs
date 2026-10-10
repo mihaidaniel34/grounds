@@ -94,6 +94,14 @@ impl<'t> FileModel<'t> {
                     }
                     return (out, c.superclass.clone(), false);
                 }
+                // `Iface.super.m()`: instance methods of the named supertype
+                if call.kid_of_kind("super").is_some() {
+                    if let Some(Symbol::Type(t)) = self.symbol(obj) {
+                        let ms = self.methods_named(&Ty::class(&t), name);
+                        let recv = self.enclosing_class(call).map(|c| c.this_type());
+                        return (ms, recv, false);
+                    }
+                }
                 if matches!(obj.kind(), "identifier" | "field_access" | "scoped_identifier") {
                     if let Some(Symbol::Type(t)) = self.symbol(obj) {
                         let ms = self.methods_named(&Ty::class(&t), name);
@@ -311,16 +319,25 @@ impl<'t> FileModel<'t> {
             return None;
         }
         let best_phase = fits.iter().map(|(_, f)| f.0).min().unwrap();
+        // If the winner only fits "maybe" (an argument type is unknown) while
+        // another overload with a different result also fits, the choice is a
+        // guess: flag it so callers do not trust the result type.
+        let uncertain = {
+            let winners: Vec<&(MethodRef, (u8, Fit))> = fits.iter().filter(|(_, f)| f.0 == best_phase).collect();
+            let winner_maybe = winners.iter().any(|(_, f)| f.1 == Fit::Maybe);
+            let rets: Vec<Ty> = fits.iter().map(|(m, _)| m.method.ret.erasure()).collect();
+            winner_maybe && fits.len() > 1 && rets.iter().any(|r| *r != rets[0])
+        };
         let mut pool: Vec<MethodRef> = fits.into_iter().filter(|(_, f)| f.0 == best_phase).map(|(m, _)| m).collect();
         if pool.len() == 1 {
-            return Some((pool.pop().unwrap(), false));
+            return Some((pool.pop().unwrap(), uncertain));
         }
         // most specific
         let maximal: Vec<usize> = (0..pool.len())
             .filter(|&i| (0..pool.len()).all(|j| i == j || self.more_specific(&pool[i].method, &pool[j].method, n)))
             .collect();
         if maximal.len() == 1 {
-            return Some((pool.swap_remove(maximal[0]), false));
+            return Some((pool.swap_remove(maximal[0]), uncertain));
         }
         // ambiguous: keep first, flag it
         let first = pool.remove(0);
@@ -390,6 +407,11 @@ impl<'t> FileModel<'t> {
         }
         let (r, clean) = self.clean(|| self.guard(call.id(), TAG_RESOLVE, None, || {
             let sel = self.select_method(call)?;
+            if sel.ambiguous && call.kind() == "method_invocation" {
+                let mut rc = (*sel).clone();
+                rc.ret = Ty::Unknown;
+                return Some(Rc::new(rc));
+            }
             if call.kind() != "method_invocation" {
                 let mut rc = (*sel).clone();
                 rc.ret = self.creation_type(call);

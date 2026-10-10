@@ -145,7 +145,9 @@ pub struct Index {
     classes: FxHashMap<Name, (Arc<str>, u32)>,
     packages: FxHashMap<Name, u32>,
     cache: DashMap<Name, Option<Arc<ClassInfo>>>,
-    /// Overlay of synthetic classes (e.g. local classes registered by analysis).
+    /// Number of source files defining each class name (>1 = duplicated
+    /// across modules, e.g. test fixtures).
+    defs: FxHashMap<Name, u32>,
     pub generation: u64,
 }
 
@@ -155,13 +157,14 @@ thread_local! {
 
 impl Index {
     pub fn new(classpath: Arc<Classpath>) -> Index {
-        Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), generation: 0 }
+        Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), generation: 0 }
     }
 
     pub fn set_file(&mut self, path: Arc<str>, stub: Arc<FileStub>) {
         self.remove_file_inner(&path);
         for (i, c) in stub.classes.iter().enumerate() {
             self.classes.entry(c.name.clone()).or_insert((path.clone(), i as u32));
+            *self.defs.entry(c.name.clone()).or_insert(0) += 1;
         }
         let mut p: &str = &stub.package;
         loop {
@@ -185,6 +188,12 @@ impl Index {
     fn remove_file_inner(&mut self, path: &str) {
         if let Some(old) = self.files.remove(path) {
             for c in &old.classes {
+                if let Some(d) = self.defs.get_mut(&c.name) {
+                    *d -= 1;
+                    if *d == 0 {
+                        self.defs.remove(&c.name);
+                    }
+                }
                 if self.classes.get(&c.name).is_some_and(|(p, _)| &**p == path) {
                     self.classes.remove(&c.name);
                     // another file may define the same class name
@@ -226,6 +235,11 @@ impl Index {
 
     pub fn source_class_names(&self) -> impl Iterator<Item = &Name> {
         self.classes.keys()
+    }
+
+    /// Is this class name defined in more than one source file?
+    pub fn is_duplicated(&self, name: &str) -> bool {
+        self.defs.get(name).is_some_and(|d| *d > 1)
     }
 
     pub fn is_source_class(&self, name: &str) -> bool {
