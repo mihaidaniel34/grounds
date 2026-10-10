@@ -114,11 +114,11 @@ impl Project {
             Ok(text) => {
                 let pf = ParsedFile::parse(text);
                 let stub = Arc::new(extract(&pf));
+                // always install: referenced names and positions change with
+                // body-only edits; the DI model stores positions too
                 let changed = old != Some(stub.signature_hash);
-                if changed {
-                    self.index.set_file(key, stub);
-                    self.rebuild_di();
-                }
+                self.index.set_file(key, stub);
+                self.rebuild_di();
                 changed
             }
             Err(_) => {

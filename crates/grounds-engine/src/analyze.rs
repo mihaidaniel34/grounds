@@ -33,9 +33,11 @@ pub struct Finding {
     pub end: u32,
 }
 
-pub fn build_ruleset(project: &Project) -> (RuleSet, RuleOptions) {
+/// The rules the project configuration selects (`[rules] enable/disable`
+/// by id, category or source id).
+pub fn selected_rules(project: &Project) -> Vec<Box<dyn grounds_rules::Rule>> {
     let cfg = &project.config.rules;
-    let rules = all_rules()
+    all_rules()
         .into_iter()
         .filter(|r| {
             let m = r.meta();
@@ -45,7 +47,12 @@ pub fn build_ruleset(project: &Project) -> (RuleSet, RuleOptions) {
             }
             m.default_enabled && !named(&cfg.disable)
         })
-        .collect();
+        .collect()
+}
+
+pub fn build_ruleset(project: &Project) -> (RuleSet, RuleOptions) {
+    let cfg = &project.config.rules;
+    let rules = selected_rules(project);
     let mut options = RuleOptions::default();
     for (k, v) in &cfg.options {
         if let Some(t) = v.as_table() {
@@ -86,12 +93,11 @@ fn to_finding(project: &Project, pf: &ParsedFile, fm: &FileModel, rel: &str, d: 
     let s = pf.lines.line_col(&pf.text, d.range.start);
     let e = pf.lines.line_col(&pf.text, d.range.end);
     let line_text = pf.lines.line_text(&pf.text, (s.line - 1) as usize).trim().to_string();
-    // enclosing member for fingerprint stability
+    // enclosing member for fingerprint stability: every enclosing type and
+    // the member with its parameter types (`Outer.Inner.f(String,int)`), so
+    // the same statement in another class or overload is a different finding
     let node = pf.root().descendant_for_byte_range(d.range.start as usize, d.range.start as usize);
-    let member = node
-        .and_then(|n| n.ancestors().find(|a| matches!(a.kind(), "method_declaration" | "constructor_declaration" | "field_declaration" | "class_declaration")))
-        .and_then(|m| m.field("name").map(|n| fm.text(n).to_string()).or_else(|| Some(m.kind().to_string())))
-        .unwrap_or_default();
+    let member = node.map(|n| member_path(n, fm.src)).unwrap_or_default();
     let base = format!("{}|{}|{}|{}", d.rule, rel, member, line_text);
     let n = seen.entry(base.clone()).or_insert(0);
     *n += 1;
@@ -154,4 +160,28 @@ pub fn expand_paths(project: &Project, paths: &[PathBuf]) -> Vec<PathBuf> {
 
 pub fn shared_key(p: &Path) -> Arc<str> {
     path_key(p)
+}
+
+fn member_path(n: grounds_syntax::Node, src: &str) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    let mut cur = Some(n);
+    while let Some(a) = cur {
+        let name = || a.field("name").map(|x| x.text(src).to_string()).unwrap_or_default();
+        match a.kind() {
+            "class_declaration" | "interface_declaration" | "enum_declaration" | "record_declaration" | "annotation_type_declaration" => parts.push(name()),
+            "object_creation_expression" if a.kid_of_kind("class_body").is_some() => parts.push("<anon>".into()),
+            "method_declaration" | "constructor_declaration" => {
+                let params: Vec<String> = a
+                    .field("parameters")
+                    .map(|p| p.kids().into_iter().filter(|k| matches!(k.kind(), "formal_parameter" | "spread_parameter")).filter_map(|k| k.field("type").map(|t| t.text(src).split_whitespace().collect::<String>())).collect())
+                    .unwrap_or_default();
+                parts.push(format!("{}({})", name(), params.join(",")));
+            }
+            "field_declaration" => parts.push(a.fields("declarator").into_iter().filter_map(|d| d.field("name")).map(|x| x.text(src).to_string()).collect::<Vec<_>>().join(",")),
+            _ => {}
+        }
+        cur = a.parent();
+    }
+    parts.reverse();
+    parts.join(".")
 }

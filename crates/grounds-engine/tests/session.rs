@@ -60,3 +60,54 @@ fn edit_checkpoint_baseline_and_pending_callers() {
     assert!(r.pending.is_empty(), "{:?}", r.pending);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn body_only_edits_update_references() {
+    let dir = std::env::temp_dir().join(format!("grounds-session-refs-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, "src/main/java/demo/Api.java", "package demo;\npublic class Api {\n    public void old() {}\n}\n");
+    write(&dir, "src/main/java/demo/Caller.java", "package demo;\npublic class Caller {\n    void test(Api a) {}\n}\n");
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+    let mut s = Session::open(&dir).unwrap();
+    let caller = dir.join("src/main/java/demo/Caller.java").canonicalize().unwrap();
+    let api = dir.join("src/main/java/demo/Api.java").canonicalize().unwrap();
+    let opts = |files: Vec<std::path::PathBuf>| CheckOptions { mode: Mode::Edit, files, all_lines: false, use_baseline: false, min_severity: Severity::Info };
+
+    // body-only edit: Caller starts using Api.old() (its signature is unchanged)
+    write(&dir, "src/main/java/demo/Caller.java", "package demo;\npublic class Caller {\n    void test(Api a) { a.old(); }\n}\n");
+    s.check(&opts(vec![caller.clone()]));
+    // renaming Api.old() must list Caller as a broken caller
+    write(&dir, "src/main/java/demo/Api.java", "package demo;\npublic class Api {\n    public void renamed() {}\n}\n");
+    let r = s.check(&opts(vec![api]));
+    assert_eq!(r.pending.len(), 1, "{:?}", r.pending);
+    assert!(r.pending[0].path.ends_with("Caller.java"), "{:?}", r.pending);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn baseline_does_not_hide_the_same_bug_in_another_class() {
+    let dir = std::env::temp_dir().join(format!("grounds-session-fp-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, "src/main/java/demo/Pair.java", "package demo;\nclass Pair {\n}\n");
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+    let mut s = Session::open(&dir).unwrap();
+    let opts = CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: true, use_baseline: true, min_severity: Severity::Info };
+    // A.f() has a bug; accept it into the baseline
+    write(&dir, "src/main/java/demo/Pair.java", "package demo;\nclass Pair {\n    static class A {\n        void f() {\n            Object x = null;\n            x.toString();\n        }\n    }\n}\n");
+    assert!(s.check(&opts).findings.iter().any(|f| f.rule == "null-dereference"));
+    s.write_baseline(&[], false).unwrap();
+    assert!(!s.check(&opts).findings.iter().any(|f| f.rule == "null-dereference"));
+    // fix A.f(), introduce the identical statement in B.f(): a new bug
+    write(&dir, "src/main/java/demo/Pair.java", "package demo;\nclass Pair {\n    static class A {\n        void f() {\n        }\n    }\n    static class B {\n        void f() {\n            Object x = null;\n            x.toString();\n        }\n    }\n}\n");
+    let r = s.check(&opts);
+    assert!(r.findings.iter().any(|f| f.rule == "null-dereference"), "{:?}", r.findings);
+    let _ = std::fs::remove_dir_all(&dir);
+}

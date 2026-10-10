@@ -93,8 +93,9 @@ impl Session {
 
     pub fn from_project(project: Project) -> Session {
         let (all_rules, options) = build_ruleset(&project);
-        let edit_rules = RuleSet::new(grounds_rules::all_rules().into_iter().filter(|r| r.meta().tier == Tier::Edit && r.meta().default_enabled && !project.config.rules.disable.iter().any(|d| d == r.meta().id)).collect());
-        let resolution_rules = RuleSet::new(grounds_rules::all_rules().into_iter().filter(|r| r.meta().id.starts_with("unresolved-")).collect());
+        // same configuration as full checks, narrowed to edit-tier rules
+        let edit_rules = RuleSet::new(crate::analyze::selected_rules(&project).into_iter().filter(|r| r.meta().tier == Tier::Edit).collect());
+        let resolution_rules = RuleSet::new(crate::analyze::selected_rules(&project).into_iter().filter(|r| r.meta().id.starts_with("unresolved-")).collect());
         let mut s = Session { project, all_rules, edit_rules, resolution_rules, options, mtimes: FxHashMap::default() };
         for f in &s.project.workspace.files {
             if let Ok(m) = std::fs::metadata(&f.path).and_then(|m| m.modified()) {
@@ -129,6 +130,7 @@ impl Session {
         }
         let mut changed = Vec::new();
         let mut any_decl_change = false;
+        let mut di_stale = false;
         for p in stale {
             let exists = p.exists();
             // refresh_file rebuilds the DI model itself; batch it below instead
@@ -138,8 +140,14 @@ impl Session {
                 if let Ok(text) = std::fs::read_to_string(&p) {
                     let pf = ParsedFile::parse(text);
                     let stub = Arc::new(extract(&pf));
-                    if old != Some(stub.signature_hash) {
-                        self.project.index.set_file(key, stub);
+                    // install the new stub even when signatures are unchanged:
+                    // referenced names (for broken callers) and declaration
+                    // positions change with body-only edits
+                    let decl_change = old != Some(stub.signature_hash);
+                    // the DI model stores positions of beans and injection points
+                    di_stale |= decl_change || self.project.di.beans.iter().any(|b| b.file.as_deref() == Some(&*key)) || self.project.di.points.iter().any(|pt| pt.file.as_deref() == Some(&*key));
+                    self.project.index.set_file(key, stub);
+                    if decl_change {
                         any_decl_change = true;
                         changed.push(p.clone());
                     }
@@ -154,7 +162,7 @@ impl Session {
                 changed.push(p.clone());
             }
         }
-        if any_decl_change {
+        if any_decl_change || di_stale {
             self.project.rebuild_di();
         }
         changed
