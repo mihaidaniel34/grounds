@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-const VERSION: u32 = 6; // bump whenever stub extraction changes
+const VERSION: u32 = 7; // bump whenever stub extraction changes
 
 #[derive(Default, Serialize, Deserialize)]
 pub struct StubCache {
@@ -23,7 +23,7 @@ impl StubCache {
     pub fn load(root: &Path) -> StubCache {
         let p = Self::path(root);
         let Ok(bytes) = std::fs::read(&p) else { return StubCache { version: VERSION, ..Default::default() } };
-        match bincode::deserialize::<StubCache>(&bytes) {
+        match postcard::from_bytes::<StubCache>(&bytes) {
             Ok(c) if c.version == VERSION => c,
             _ => StubCache { version: VERSION, ..Default::default() },
         }
@@ -49,7 +49,7 @@ impl StubCache {
         if let Some(d) = p.parent() {
             std::fs::create_dir_all(d)?;
         }
-        let bytes = bincode::serialize(self)?;
+        let bytes = postcard::to_stdvec(self)?;
         let tmp = p.with_extension("tmp");
         std::fs::write(&tmp, bytes)?;
         std::fs::rename(tmp, p)?;

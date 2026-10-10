@@ -12,4 +12,3 @@ parking_lot.workspace = true
 rustc-hash.workspace = true
 rayon.workspace = true
 anyhow.workspace = true
-smallvec.workspace = true

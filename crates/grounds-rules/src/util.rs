@@ -5,7 +5,7 @@ use grounds_index::*;
 use grounds_semantic::FileModel;
 use grounds_syntax::{Node, NodeExt};
 
-pub fn op<'t>(n: Node<'t>) -> &'static str {
+pub fn op<'t>(n: Node<'t>) -> &'t str {
     n.field("operator").map(|o| o.kind()).unwrap_or("")
 }
 

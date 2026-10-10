@@ -21,7 +21,7 @@ pub fn rules() -> Vec<Box<dyn Rule>> {
 pub fn cognitive_complexity(body: Node, src: &str, method_name: &str) -> u32 {
     fn logical_sequences(e: Node) -> u32 {
         // count changes of operator in sequences of && / ||
-        fn flatten<'t>(e: Node<'t>, out: &mut Vec<&'static str>) {
+        fn flatten<'t>(e: Node<'t>, out: &mut Vec<&'t str>) {
             let e = e.unparen();
             if e.kind() == "binary_expression" {
                 let o = e.field("operator").map(|o| o.kind()).unwrap_or("");

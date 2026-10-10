@@ -8,11 +8,11 @@ use grounds_syntax::{Node, NodeExt};
 use rustc_hash::FxHashSet;
 
 /// Per-rule cumulative time (enabled with GROUNDS_PROFILE=1).
-pub static PROFILE: once_cell::sync::Lazy<parking_lot::Mutex<rustc_hash::FxHashMap<&'static str, std::time::Duration>>> =
-    once_cell::sync::Lazy::new(Default::default);
+pub static PROFILE: std::sync::LazyLock<parking_lot::Mutex<rustc_hash::FxHashMap<&'static str, std::time::Duration>>> =
+    std::sync::LazyLock::new(Default::default);
 
 fn profiling() -> bool {
-    static P: once_cell::sync::Lazy<bool> = once_cell::sync::Lazy::new(|| std::env::var("GROUNDS_PROFILE").is_ok());
+    static P: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var("GROUNDS_PROFILE").is_ok());
     *P
 }
 

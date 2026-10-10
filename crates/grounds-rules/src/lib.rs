@@ -22,7 +22,7 @@ pub fn all_rules() -> Vec<Box<dyn Rule>> {
 
 /// Metadata of every rule in the catalog.
 pub fn catalog() -> &'static [&'static RuleMeta] {
-    static C: once_cell::sync::OnceCell<Vec<&'static RuleMeta>> = once_cell::sync::OnceCell::new();
+    static C: std::sync::OnceLock<Vec<&'static RuleMeta>> = std::sync::OnceLock::new();
     C.get_or_init(|| all_rules().iter().map(|r| r.meta()).collect())
 }
 
