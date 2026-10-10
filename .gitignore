@@ -1,4 +1,26 @@
-/target
-.grounds/
+# Opt-in: everything is ignored unless listed below. Add a line when the
+# repository gains a new kind of file.
+*
+!*/
+
+!/.gitignore
+!/Cargo.toml
+!/Cargo.lock
+!/LICENSE
+!/README.md
+!/flake.nix
+!/flake.lock
+!/nix/*.nix
+!/docs/*.md
+
+!/crates/*/Cargo.toml
+!/crates/*/src/**/*.rs
+!/crates/*/examples/*.rs
+!/crates/*/tests/**/*.rs
+# rule fixtures and the stub sources they compile against
+!/crates/grounds-rules/tests/**/*.java
+
+# never descend into build output
+/target/
 /result
-.DS_Store
+.grounds/
