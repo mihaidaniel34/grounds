@@ -313,13 +313,17 @@ impl Rule for ProxyAnnotationOnPrivate {
             "static"
         } else if n.has_modifier("final") {
             // a JDK interface proxy still intercepts a final method that
-            // implements an interface method
+            // implements an interface method, but Spring Boot proxies classes
+            // by default: only when the project opts into interface proxies
+            let jdk_proxies = cx.fm.index.source_class_names().filter_map(|c| cx.fm.class(c)).any(|c| {
+                c.annotations.iter().any(|a| a.arg("proxyTargetClass").and_then(|v| v.as_bool()) == Some(false))
+            });
             let name = method_name(n, cx.src);
             let arity = n.field("parameters").map(|p| p.kids().iter().filter(|k| matches!(k.kind(), "formal_parameter" | "spread_parameter")).count()).unwrap_or(0);
             let via_interface = owning_type_decl(n).and_then(|d| cx.fm.class_of_decl(d)).is_some_and(|c| {
                 cx.fm.all_supertypes(&c.this_type()).iter().filter_map(|t| t.class_name().and_then(|cn| cx.fm.class(cn))).any(|i| i.is_interface() && i.methods.iter().any(|m| *m.name == *name && m.params.len() == arity))
             });
-            if via_interface {
+            if jdk_proxies && via_interface {
                 return;
             }
             "final"
@@ -915,8 +919,22 @@ impl Rule for InjectionInNonBean {
         if let Some(first) = injected.first() {
             // registered programmatically (`ctx.registerBean(Sample.class)`,
             // `new AnnotationConfigApplicationContext(Sample.class)`)
-            let literal = format!("{}.class", simple_name_of(&name));
-            if cx.src.contains(&literal) {
+            let simple = simple_name_of(&name);
+            let registered = cx.fm.root().descendants().any(|d| {
+                if d.kind() != "class_literal" || d.first_kid().is_none_or(|t| type_simple_name(t, cx.src) != simple) {
+                    return false;
+                }
+                let Some(call) = d.parent().filter(|p| p.kind() == "argument_list").and_then(|p| p.parent()) else { return false };
+                match call.kind() {
+                    "method_invocation" => matches!(cx.fm.call_name(call), Some("register" | "registerBean" | "run" | "sources" | "child" | "parent")),
+                    "object_creation_expression" => call.field("type").is_some_and(|t| {
+                        let t = type_simple_name(t, cx.src);
+                        t.ends_with("ApplicationContext") || t.starts_with("SpringApplication")
+                    }),
+                    _ => false,
+                }
+            });
+            if registered {
                 return;
             }
             // subclasses may be beans

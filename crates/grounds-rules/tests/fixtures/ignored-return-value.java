@@ -15,6 +15,7 @@ class A {
         int[] calls = {0};
         o.map(x -> ++calls[0]); // the callback runs
         UUID.fromString(s); // validates by throwing
+        try { s.trim(); } catch (RuntimeException e) { throw e; } // expect
     }
     boolean valid(String date) {
         try {

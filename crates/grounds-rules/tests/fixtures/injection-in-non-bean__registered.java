@@ -10,3 +10,7 @@ class Sample {
 class NotABean {
     @Autowired Object value; // expect
 }
+class Logged {
+    static final java.util.logging.Logger LOG = java.util.logging.Logger.getLogger(Logged.class.getName());
+    @Autowired Object value; // expect
+}

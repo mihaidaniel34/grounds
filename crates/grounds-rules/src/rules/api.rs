@@ -111,8 +111,7 @@ impl Rule for IgnoredReturnValue {
         // `UUID.fromString(id);`, often inside try/catch) or running a callback
         // (`optional.map(x -> counter++)`)
         let name = &*c.method.name;
-        let validates = name.starts_with("parse") || matches!(name, "of" | "ofPattern" | "from" | "fromString" | "valueOf" | "decode" | "compile" | "ofEpochSecond" | "ofEpochMilli")
-            || n.ancestors().any(|a| a.kind() == "try_statement" && a.kid_of_kind("catch_clause").is_some());
+        let validates = name.starts_with("parse") || matches!(name, "of" | "ofPattern" | "from" | "fromString" | "valueOf" | "decode" | "compile" | "ofEpochSecond" | "ofEpochMilli");
         let callback = cx.fm.args_of(e).iter().any(|a| matches!(a.unparen().kind(), "lambda_expression" | "method_reference"));
         if validates || callback {
             return;

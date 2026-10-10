@@ -444,11 +444,31 @@ impl Rule for NullCheckWrongOperator {
         if reassigned {
             return;
         }
+        // a dereference behind its own guard (`... || (x != null && x.f())`) is safe
+        let guarded = |d: Node<'t>| {
+            let mut child = d;
+            for a in d.ancestors().take_while(|a| *a != n) {
+                let checks_non_null = |side: Option<Node<'t>>| {
+                    side.is_some_and(|s| std::iter::once(s).chain(s.descendants()).any(|b| b.kind() == "binary_expression" && op(b) == "!=" && lr(b).is_some_and(|(x, y)| (normalized(x, cx.src) == vt && is_null_literal(y)) || (normalized(y, cx.src) == vt && is_null_literal(x)))))
+                };
+                if a.kind() == "binary_expression" && op(a) == "&&" && a.field("right") == Some(child) && checks_non_null(a.field("left")) {
+                    return true;
+                }
+                if a.kind() == "ternary_expression" && a.field("consequence") == Some(child) && checks_non_null(a.field("condition")) {
+                    return true;
+                }
+                child = a;
+            }
+            false
+        };
         // does the right side dereference the same expression?
-        let derefs = r.descendants().any(|d| match d.kind() {
-            "method_invocation" | "field_access" => d.field("object").is_some_and(|o| normalized(o, cx.src) == vt),
-            "array_access" => d.field("array").is_some_and(|o| normalized(o, cx.src) == vt),
-            _ => false,
+        let derefs = r.descendants().any(|d| {
+            let target = match d.kind() {
+                "method_invocation" | "field_access" => d.field("object").is_some_and(|o| normalized(o, cx.src) == vt),
+                "array_access" => d.field("array").is_some_and(|o| normalized(o, cx.src) == vt),
+                _ => false,
+            };
+            target && !guarded(d)
         });
         if derefs {
             cx.report(n, format!("`{}` is dereferenced exactly when it is null; use `{}`", cx.text(var), if o == "&&" { "!= null &&" } else { "== null ||" }));
