@@ -125,9 +125,187 @@ impl ParsedFile {
 }
 
 /// Work around constructs tree-sitter-java cannot parse, preserving byte
-/// offsets by blanking text with spaces:
+/// offsets (node text is read from the original source):
 /// - type annotations before varargs ellipsis: `String @Nullable ... args`
+///   (blanked with spaces)
+/// - qualified record patterns, `case Shape.Circle(double r)` and
+///   `o instanceof Shape.Circle(var r)`, which the grammar parses as method
+///   calls: the dots are replaced with `$`, so the parser sees one identifier
+///   whose original text is still `Shape.Circle`
 pub fn fixup_for_grammar(text: &str) -> Option<Vec<u8>> {
+    let varargs = fixup_varargs_annotations(text);
+    fixup_record_patterns(text, varargs)
+}
+
+fn fixup_record_patterns(text: &str, mut out: Option<Vec<u8>>) -> Option<Vec<u8>> {
+    if !(text.contains("case") || text.contains("instanceof")) {
+        return out;
+    }
+    let b = text.as_bytes();
+    let n = b.len();
+    let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'$';
+    let word_at = |i: usize, w: &[u8]| i + w.len() <= n && &b[i..i + w.len()] == w && (i == 0 || !ident(b[i - 1])) && (i + w.len() == n || !ident(b[i + w.len()]));
+    // end of a char or string literal starting at `i` (quotes and brackets
+    // inside literals, like `case '(' ->`, must not count)
+    let skip_literal = |i: usize| -> usize {
+        let q = b[i];
+        let mut j = i + 1;
+        while j < n && b[j] != q && b[j] != b'\n' {
+            if b[j] == b'\\' {
+                j += 1;
+            }
+            j += 1;
+        }
+        (j + 1).min(n)
+    };
+    // in a pattern region, turn `A.B(` into `A$B(`; returns where it stopped
+    let patch = |start: usize, end: usize, out: &mut Option<Vec<u8>>| {
+        let mut i = start;
+        while i < end {
+            if ident(b[i]) && (i == 0 || !(ident(b[i - 1]) || b[i - 1] == b'.')) {
+                let s0 = i;
+                let mut dots = Vec::new();
+                let mut j = i;
+                loop {
+                    while j < end && ident(b[j]) {
+                        j += 1;
+                    }
+                    if j + 1 < end && b[j] == b'.' && ident(b[j + 1]) {
+                        dots.push(j);
+                        j += 1;
+                        continue;
+                    }
+                    break;
+                }
+                let mut k = j;
+                while k < end && b[k].is_ascii_whitespace() {
+                    k += 1;
+                }
+                if !dots.is_empty() && k < end && b[k] == b'(' && b[s0].is_ascii_alphabetic() {
+                    let o = out.get_or_insert_with(|| b.to_vec());
+                    for d in dots {
+                        o[d] = b'$';
+                    }
+                }
+                i = j.max(i + 1);
+            } else {
+                i += 1;
+            }
+        }
+    };
+    let mut i = 0;
+    while i < n {
+        match b[i] {
+            // skip comments and literals
+            b'/' if i + 1 < n && b[i + 1] == b'/' => {
+                while i < n && b[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'/' if i + 1 < n && b[i + 1] == b'*' => {
+                i += 2;
+                while i + 1 < n && !(b[i] == b'*' && b[i + 1] == b'/') {
+                    i += 1;
+                }
+                i += 2;
+            }
+            b'"' => {
+                if i + 2 < n && b[i + 1] == b'"' && b[i + 2] == b'"' {
+                    i += 3;
+                    while i + 2 < n && !(b[i] == b'"' && b[i + 1] == b'"' && b[i + 2] == b'"' && b[i - 1] != b'\\') {
+                        i += 1;
+                    }
+                    i += 3;
+                } else {
+                    i += 1;
+                    while i < n && b[i] != b'"' && b[i] != b'\n' {
+                        if b[i] == b'\\' {
+                            i += 1;
+                        }
+                        i += 1;
+                    }
+                    i += 1;
+                }
+            }
+            b'\'' => {
+                i += 1;
+                while i < n && b[i] != b'\'' && b[i] != b'\n' {
+                    if b[i] == b'\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+                i += 1;
+            }
+            _ if word_at(i, b"case") => {
+                // the pattern part of the label: up to `->`, `:` or `when` at depth 0
+                let start = i + 4;
+                let mut j = start;
+                let mut depth = 0i32;
+                while j < n {
+                    match b[j] {
+                        b'\'' | b'"' => {
+                            j = skip_literal(j);
+                            continue;
+                        }
+                        b'(' => depth += 1,
+                        b')' => depth -= 1,
+                        b'-' if depth == 0 && j + 1 < n && b[j + 1] == b'>' => break,
+                        b':' if depth == 0 => break,
+                        b';' | b'{' | b'}' if depth <= 0 => break,
+                        _ if depth == 0 && word_at(j, b"when") => break,
+                        _ => {}
+                    }
+                    j += 1;
+                }
+                patch(start, j, &mut out);
+                i = j;
+            }
+            _ if word_at(i, b"instanceof") => {
+                // `instanceof [final] A.B(...)`: the record pattern and its body
+                let mut j = i + 10;
+                while j < n && b[j].is_ascii_whitespace() {
+                    j += 1;
+                }
+                if word_at(j, b"final") {
+                    j += 5;
+                }
+                let start = j;
+                while j < n && (ident(b[j]) || b[j] == b'.' || b[j].is_ascii_whitespace()) {
+                    j += 1;
+                }
+                if j < n && b[j] == b'(' {
+                    let mut depth = 0i32;
+                    while j < n {
+                        match b[j] {
+                            b'\'' | b'"' => {
+                                j = skip_literal(j);
+                                continue;
+                            }
+                            b'(' => depth += 1,
+                            b')' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    j += 1;
+                                    break;
+                                }
+                            }
+                            b';' | b'{' => break,
+                            _ => {}
+                        }
+                        j += 1;
+                    }
+                    patch(start, j.min(n), &mut out);
+                }
+                i = j.max(i + 10);
+            }
+            _ => i += 1,
+        }
+    }
+    out
+}
+
+fn fixup_varargs_annotations(text: &str) -> Option<Vec<u8>> {
     if !text.contains("...") || !text.contains('@') {
         return None;
     }
@@ -490,5 +668,29 @@ mod tests {
         assert!(!field.has_modifier("public"));
         let lit = f.root().descendants().find(|n| n.kind() == "string_literal").unwrap();
         assert_eq!(string_literal_value(lit, &f.text).unwrap(), "a\tb");
+    }
+}
+
+#[cfg(test)]
+mod fixup_tests {
+    use super::*;
+
+    fn kinds(src: &str) -> String {
+        ParsedFile::parse(src).root().to_sexp()
+    }
+
+    #[test]
+    fn qualified_record_patterns_parse() {
+        let t = kinds("class T { Object a(Object o) { if (o instanceof A.B(var x)) return x; return switch (o) { case A.B(A.C(var y), var z) when z.isEmpty() -> y; default -> null; }; } }");
+        assert!(!t.contains("ERROR") && t.matches("record_pattern ").count() == 3, "{t}");
+    }
+
+    #[test]
+    fn literals_in_case_labels_are_not_brackets() {
+        let src = "class T { void m(char c, StringBuilder s) { switch (c) { case '(', '[', '{' -> { s.append(c); } case '\"' -> s.append(c); default -> {} } } }";
+        let pf = ParsedFile::parse(src);
+        let t = pf.root().to_sexp();
+        assert!(!t.contains("ERROR") && !t.contains("record_pattern"), "{t}");
+        assert!(fixup_for_grammar(src).is_none_or(|b| !String::from_utf8_lossy(&b).contains("s$append")));
     }
 }

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-const VERSION: u32 = 13; // bump whenever stub extraction changes
+const VERSION: u32 = 14; // bump whenever stub extraction changes
 
 #[derive(Default, Serialize, Deserialize)]
 pub struct StubCache {

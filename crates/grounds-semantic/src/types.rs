@@ -267,6 +267,7 @@ impl<'t> FileModel<'t> {
                     LocalKind::Local | LocalKind::Resource => decl.decl_node.field("value").map(|v| self.type_of(v)).unwrap_or(Ty::Unknown),
                     LocalKind::ForEach => decl.decl_node.field("value").map(|v| self.element_type_of_iterable(&self.type_of(v))).unwrap_or(Ty::Unknown),
                     LocalKind::LambdaParam => self.lambda_param_type(decl.decl_node, decl.name_node),
+                    LocalKind::Pattern if decl.decl_node.kind() == "record_pattern_component" => self.record_pattern_component_type(decl.decl_node),
                     _ => Ty::Unknown,
                 },
             };

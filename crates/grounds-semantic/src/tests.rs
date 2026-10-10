@@ -233,3 +233,22 @@ fn overloads_with_unknown_parameter_types_stay_ambiguous() {
     assert!(fm.select_method(call).unwrap().ambiguous);
     assert_eq!(fm.type_of(call), Ty::Unknown);
 }
+
+#[test]
+fn qualified_record_patterns() {
+    let t = types_of(
+        "sealed interface Shape permits Shape.Circle, Shape.Group {
+           record Circle(double radius) implements Shape {}
+           record Group(java.util.List<Shape> members, String name) implements Shape {} }
+         class T {
+           Object a(Shape s) { switch (s) {
+             case Shape.Circle(double r) -> { return /*T*/ r; }
+             case Shape.Group(var ms, var name) when /*T*/ name.isEmpty() -> { return /*T*/ ms; }
+             default -> { return null; } } }
+           Object b(Object o) {
+             if (o instanceof Shape.Circle(var r)) return /*T*/ r;
+             if (o instanceof Shape.Group(Shape.Circle(var x), var n)) return /*T*/ x;
+             switch (o) { case Shape.Circle c: return /*T*/ c; default: return null; } } }",
+    );
+    assert_eq!(t, vec!["double", "boolean", "java.util.List<Shape>", "double", "double", "Shape.Circle"]);
+}

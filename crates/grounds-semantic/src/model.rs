@@ -279,6 +279,33 @@ impl<'t> FileModel<'t> {
         self.index.resolve_type(&ts, &scope)
     }
 
+    /// Type of a record pattern: a type node, or (after the parser fixup for
+    /// qualified record patterns) an identifier whose text is `Shape.Circle`.
+    pub fn resolve_pattern_type(&self, n: Node<'t>) -> Ty {
+        let text = n.text(self.src);
+        if n.kind() == "identifier" {
+            let segs = text.split('.').map(|s| (Arc::<str>::from(s.trim()), Vec::new())).collect();
+            return self.resolve_type_syntax_at(&TypeSyntax::Named(segs), n);
+        }
+        self.resolve_type_node(n)
+    }
+
+    /// Type of a `var` component of a record pattern: the record's component
+    /// at the same position (unknown for generic components).
+    pub fn record_pattern_component_type(&self, component: Node<'t>) -> Ty {
+        let Some(body) = component.parent().filter(|b| b.kind() == "record_pattern_body") else { return Ty::Unknown };
+        let parts: Vec<Node> = body.kids().into_iter().filter(|k| matches!(k.kind(), "record_pattern_component" | "record_pattern")).collect();
+        let Some(pos) = parts.iter().position(|k| *k == component) else { return Ty::Unknown };
+        let Some(type_node) = body.parent().and_then(|p| p.kids().into_iter().find(|k| k.kind() != "record_pattern_body")) else { return Ty::Unknown };
+        let record = self.resolve_pattern_type(type_node);
+        let Some(cls) = record.class_name().and_then(|c| self.class(c)) else { return Ty::Unknown };
+        let comps: Vec<&FieldInfo> = cls.fields.iter().filter(|f| f.flags.has(Flags::RECORD_COMPONENT)).collect();
+        match comps.get(pos) {
+            Some(f) if comps.len() == parts.len() && !f.ty.mentions_type_var() => f.ty.clone(),
+            _ => Ty::Unknown,
+        }
+    }
+
     pub fn resolve_type_syntax_at(&self, ts: &TypeSyntax, at: Node<'t>) -> Ty {
         let scope = self.scope_at(at);
         self.index.resolve_type(ts, &scope)
