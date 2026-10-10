@@ -130,7 +130,7 @@ PATH. Without one, most rules have little to work with.
 grounds check                 # whole project, from the project root
 grounds changed               # changed lines since HEAD (git), baseline applied
 grounds explain null-dereference
-grounds beans --type MailSender   # which beans can be injected for a type, and why not
+grounds beans --type MailSender   # beans of a type, and how each injection point of it resolves
 grounds impacted-tests --gradle   # ./gradlew :module:test --tests ... for affected tests
 ```
 

@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 grounds-engine.workspace = true
+grounds-di.workspace = true
 grounds-rules.workspace = true
 grounds-index.workspace = true
 anyhow.workspace = true

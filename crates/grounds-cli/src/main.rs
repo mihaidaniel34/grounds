@@ -253,27 +253,7 @@ fn main() -> anyhow::Result<()> {
         Cmd::Beans { root, ty } => {
             let root = find_root(root);
             let p = grounds_engine::Project::load(&root)?;
-            let di = &p.di;
-            let filter: Option<String> = ty.map(|t| {
-                if t.contains('.') {
-                    t
-                } else {
-                    p.index.source_class_names().find(|n| grounds_index::simple_name_of(n) == t).map(|n| n.to_string()).unwrap_or(t)
-                }
-            });
-            let idx: Vec<usize> = match &filter {
-                Some(t) => di.candidates(&p.index, &grounds_index::Ty::class(t), true).0,
-                None => (0..di.beans.len()).collect(),
-            };
-            for i in idx {
-                let b = &di.beans[i];
-                let mut flags = Vec::new();
-                if b.primary { flags.push("primary"); }
-                if b.conditional { flags.push("conditional"); }
-                if b.is_test { flags.push("test"); }
-                println!("{:<40} {:<60} {:?} {}", b.name, b.ty.to_string(), b.source, flags.join(","));
-            }
-            eprintln!("{} beans, {} injection points, scan roots: {:?}", di.beans.len(), di.points.len(), di.scan_roots);
+            beans(&p, ty.as_deref(), style);
         }
         Cmd::Rules { json, markdown } => {
             let cat = grounds_rules::catalog();
@@ -497,4 +477,121 @@ fn type_stats(root: &std::path::Path, show: bool) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// `grounds beans [--type T]`: the bean model as grounds sees it. With a
+/// type: the beans assignable to it and every injection point requesting it,
+/// with how each resolves.
+fn beans(p: &grounds_engine::Project, ty: Option<&str>, style: report::Style) {
+    use grounds_di::{BeanSource, PointKind, Resolution};
+    use grounds_index::simple_name_of;
+    let di = &p.di;
+    let root = p.workspace.root.to_string_lossy().to_string();
+    let rel = |f: &Option<std::sync::Arc<str>>| f.as_deref().map(|f| f.strip_prefix(&root).unwrap_or(f).trim_start_matches('/').to_string()).unwrap_or_default();
+    let is_test_file = |f: &Option<std::sync::Arc<str>>| f.as_deref().is_some_and(|f| grounds_engine::workspace::classify(std::path::Path::new(f)) == grounds_engine::workspace::SourceKind::Test);
+    let describe = |i: usize| {
+        let b = &di.beans[i];
+        let how = match &b.source {
+            BeanSource::Component => "component".to_string(),
+            BeanSource::FactoryMethod(m) => format!("@Bean {}.{}()", simple_name_of(&b.declaring_class), m),
+            BeanSource::Repository => "repository".to_string(),
+            BeanSource::Client => "client".to_string(),
+            BeanSource::Mapper => "mapper".to_string(),
+        };
+        let mut flags: Vec<String> = Vec::new();
+        if b.primary { flags.push("primary".into()); }
+        if b.conditional { flags.push("conditional".into()); }
+        if b.is_test { flags.push("test".into()); }
+        if !b.qualifiers.is_empty() { flags.push(format!("qualifier={}", b.qualifiers.join(","))); }
+        [b.name.clone(), simple_name_of(&b.ty.to_string()).to_string(), how, flags.join(" "), rel(&b.file)]
+    };
+    let table = |rows: Vec<[String; 5]>| {
+        let mut w = [0usize; 4];
+        for r in &rows {
+            for (i, c) in r.iter().take(4).enumerate() {
+                w[i] = w[i].max(c.chars().count());
+            }
+        }
+        for r in rows {
+            println!("  {:<w0$}  {:<w1$}  {:<w2$}  {:<w3$}  {}", r[0], r[1], r[2], r[3], style.dim(&r[4]), w0 = w[0], w1 = w[1], w2 = w[2], w3 = w[3]);
+        }
+    };
+    let Some(t) = ty else {
+        let mut idx: Vec<usize> = (0..di.beans.len()).collect();
+        idx.sort_by(|a, b| di.beans[*a].name.cmp(&di.beans[*b].name));
+        table(idx.into_iter().map(describe).collect());
+        eprintln!("{} beans, {} injection points; scan roots: {}", di.beans.len(), di.points.len(), di.scan_roots.join(", "));
+        return;
+    };
+    let full = if t.contains('.') {
+        t.to_string()
+    } else {
+        let matches: Vec<String> = p.index.source_class_names().filter(|n| simple_name_of(n) == t).map(|n| n.to_string()).collect();
+        if matches.len() > 1 {
+            eprintln!("`{t}` is ambiguous, use the qualified name: {}", matches.join(", "));
+            std::process::exit(2);
+        }
+        matches.into_iter().next().unwrap_or_else(|| t.to_string())
+    };
+    if p.index.class(&full).is_none() {
+        eprintln!("type `{t}` not found in the project or on the classpath");
+        std::process::exit(2);
+    }
+    let want = grounds_index::Ty::class(&full);
+    let library = !p.index.is_source_class(&full);
+    let mut cands = di.candidates(&p.index, &want, true).0;
+    cands.sort_by(|a, b| di.beans[*a].name.cmp(&di.beans[*b].name));
+    println!("{}", style.bold(&format!("Beans assignable to {} ({}):", simple_name_of(&full), cands.len())));
+    if cands.is_empty() {
+        println!("  none");
+    }
+    table(cands.into_iter().map(describe).collect());
+
+    let mut points: Vec<&grounds_di::InjectionPoint> = di.points.iter().filter(|pt| pt.ty.class_name() == Some(full.as_str())).collect();
+    points.sort_by_key(|pt| (rel(&pt.file), pt.range.map(|r| r.0)));
+    println!();
+    println!("{}", style.bold(&format!("Injection points requesting {} ({}):", simple_name_of(&full), points.len())));
+    if points.is_empty() {
+        println!("  none");
+    }
+    let mut texts: std::collections::HashMap<String, String> = Default::default();
+    let names = |v: &[usize]| v.iter().map(|i| di.beans[*i].name.as_str()).collect::<Vec<_>>().join(", ");
+    let mut rows: Vec<(String, String, String)> = Vec::new();
+    for pt in points {
+        let owner = simple_name_of(&pt.owner);
+        let site = match &pt.kind {
+            PointKind::ConstructorParam(_) => format!("{owner}({})", pt.name),
+            PointKind::Field => format!("{owner}.{}", pt.name),
+            PointKind::MethodParam(m, _) | PointKind::FactoryParam(m, _) => format!("{owner}.{m}({})", pt.name),
+        };
+        let mut site = site;
+        if let Some(q) = &pt.qualifier { site.push_str(&format!(" @{q}")); }
+        let file = rel(&pt.file);
+        let line = match (pt.file.as_deref(), pt.range) {
+            (Some(f), Some((start, _))) => {
+                let text = texts.entry(f.to_string()).or_insert_with(|| std::fs::read_to_string(f).unwrap_or_default());
+                text.as_bytes()[..(start as usize).min(text.len())].iter().filter(|b| **b == b'\n').count() + 1
+            }
+            _ => 0,
+        };
+        let outcome = match di.resolve(&p.index, pt, is_test_file(&pt.file)) {
+            Resolution::Unique(i) => format!("-> {}", di.beans[i].name),
+            Resolution::Multiple(v) => format!("-> all of: {}", names(&v)),
+            Resolution::Absent => "-> nothing (optional)".to_string(),
+            Resolution::NotFound => style.paint_error("-> no bean of this type"),
+            Resolution::Ambiguous(v) => style.paint_error(&format!("-> ambiguous: {}", names(&v))),
+            Resolution::QualifierNotFound { qualifier, candidates } => style.paint_error(&format!("-> qualifier \"{qualifier}\" matches none of: {}", names(&candidates))),
+            Resolution::Unknown if !library => style.dim("-> not judged (depends on something grounds cannot see)"),
+            Resolution::Unknown => style.dim("-> not judged (library type: beans from auto-configuration are not modeled)"),
+        };
+        rows.push((site, outcome, format!("{file}:{line}")));
+    }
+    let w0 = rows.iter().map(|r| r.0.chars().count()).max().unwrap_or(0);
+    // the outcome may carry color codes: pad on its visible width
+    let visible = |s: &str| if style.color { s.chars().count().saturating_sub(9) } else { s.chars().count() };
+    let w1 = rows.iter().map(|r| visible(&r.1)).max().unwrap_or(0);
+    for (site, outcome, at) in rows {
+        let pad = w1 - visible(&outcome);
+        println!("  {site:<w0$}  {outcome}{}  {}", " ".repeat(pad), style.dim(&at));
+    }
 }

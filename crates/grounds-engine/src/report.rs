@@ -42,6 +42,10 @@ impl Style {
         self.paint(code, s.as_str())
     }
 
+    pub fn paint_error(&self, s: &str) -> String {
+        self.paint("31", s)
+    }
+
     pub fn dim(&self, s: &str) -> String {
         self.paint("2", s)
     }
