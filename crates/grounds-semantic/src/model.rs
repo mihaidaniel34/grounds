@@ -68,6 +68,8 @@ pub struct FileModel<'t> {
     /// while this changed are provisional and not memoized.
     pub(crate) cycle_hits: std::cell::Cell<u64>,
     pub(crate) symbols: RefCell<FxHashMap<usize, Option<Symbol<'t>>>>,
+    captures: std::cell::OnceCell<FxHashMap<usize, Vec<usize>>>,
+    occurrences: std::cell::OnceCell<FxHashMap<&'t str, Vec<Node<'t>>>>,
 }
 
 impl<'t> FileModel<'t> {
@@ -99,6 +101,8 @@ impl<'t> FileModel<'t> {
             in_progress: RefCell::new(FxHashSet::default()),
             cycle_hits: std::cell::Cell::new(0),
             symbols: RefCell::new(FxHashMap::default()),
+            captures: std::cell::OnceCell::new(),
+            occurrences: std::cell::OnceCell::new(),
         };
         m.collect_classes();
         m
@@ -304,6 +308,48 @@ impl<'t> FileModel<'t> {
             }
         }
         v
+    }
+
+    /// All `identifier`/`type_identifier` nodes in the file with this text.
+    pub fn occurrences(&self, name: &str) -> &[Node<'t>] {
+        let map = self.occurrences.get_or_init(|| {
+            let mut m: FxHashMap<&'t str, Vec<Node<'t>>> = FxHashMap::default();
+            let src = self.src;
+            grounds_syntax::walk(self.file.root(), |n| {
+                if matches!(n.kind(), "identifier" | "type_identifier") {
+                    m.entry(&src[n.start_byte()..n.end_byte()]).or_default().push(n);
+                }
+                grounds_syntax::WalkControl::Continue
+            });
+            m
+        });
+        map.get(name).map(|v| v.as_slice()).unwrap_or(&[])
+    }
+
+    /// Locals declared outside a lambda / anonymous class body but used
+    /// inside it (by lambda or class_body node id).
+    pub fn captured_locals(&self, n: Node<'t>) -> &[usize] {
+        let map = self.captures.get_or_init(|| {
+            let mut m: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
+            for (i, d) in self.binder.decls.iter().enumerate() {
+                let decl_pos = d.name_node.start_byte();
+                for u in &self.binder.uses[i] {
+                    for a in u.ancestors() {
+                        if a.start_byte() <= decl_pos && decl_pos < a.end_byte() {
+                            break;
+                        }
+                        if matches!(a.kind(), "lambda_expression" | "class_body") {
+                            let e = m.entry(a.id()).or_default();
+                            if !e.contains(&i) {
+                                e.push(i);
+                            }
+                        }
+                    }
+                }
+            }
+            m
+        });
+        map.get(&n.id()).map(|v| v.as_slice()).unwrap_or(&[])
     }
 
     pub(crate) fn guard<R>(&self, id: usize, tag: u8, default: R, f: impl FnOnce() -> R) -> R {

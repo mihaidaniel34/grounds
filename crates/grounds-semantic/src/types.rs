@@ -372,6 +372,20 @@ impl<'t> FileModel<'t> {
                 if let Some(i) = self.binder.decl_index_of_ref(n) {
                     return Some(Symbol::Local(i, self.binder.decls[i].clone()));
                 }
+                if let Some(p) = n.parent() {
+                    let non_expr = match p.kind() {
+                        "method_invocation" => p.field("name") == Some(n),
+                        "method_reference" => p.kids().last() == Some(&n) && p.kids().len() > 1,
+                        "variable_declarator" | "formal_parameter" | "catch_formal_parameter" | "enhanced_for_statement" | "resource" => p.field("name") == Some(n),
+                        "method_declaration" | "constructor_declaration" | "class_declaration" | "interface_declaration" | "enum_declaration" | "record_declaration" | "annotation_type_declaration" | "enum_constant" => p.field("name") == Some(n),
+                        "labeled_statement" | "break_statement" | "continue_statement" | "element_value_pair" | "inferred_parameters" => true,
+                        "lambda_expression" => p.field("parameters") == Some(n),
+                        _ => false,
+                    };
+                    if non_expr {
+                        return None;
+                    }
+                }
                 let name = n.text(self.src);
                 // fields of enclosing classes
                 let mut cur = self.enclosing_class_node(n);

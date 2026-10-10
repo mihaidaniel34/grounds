@@ -147,6 +147,14 @@ fn check(root: &std::path::Path, paths: &[PathBuf], format: &str, rules: Option<
             _ => print!("{}", report::text(&findings, max)),
         }
     }
+    if std::env::var("GROUNDS_PROFILE").is_ok() {
+        let prof = grounds_rules::runner::PROFILE.lock();
+        let mut v: Vec<_> = prof.iter().collect();
+        v.sort_by_key(|x| std::cmp::Reverse(*x.1));
+        for (r, d) in v.iter().take(25) {
+            eprintln!("{:>10.1?} {r}", d);
+        }
+    }
     if format == "text" {
         eprintln!("{} in {} files (load {:?}, analyze {:?}, {} rules)", report::summary(&findings), files.len(), t_load, t.elapsed(), ruleset.len());
     }

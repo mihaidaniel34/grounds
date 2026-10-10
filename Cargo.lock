@@ -368,6 +368,7 @@ dependencies = [
  "grounds-semantic",
  "grounds-syntax",
  "once_cell",
+ "parking_lot",
  "rustc-hash",
  "serde",
 ]

@@ -58,13 +58,13 @@ fn nullness_paths() {
             res.for_each_before(cfg, &na, |e, f| {
                 for (i, n) in na.derefs(e) {
                     if let Some(s) = f.get(&i) {
-                        if *s != Nullness::NonNull {
+                        if !matches!(*s, Nullness::NonNull | Nullness::MaybeAssignedNull) {
                             hits.push(format!("{}:{:?}", fm.text(n), s));
                         }
                     }
                 }
             });
-            assert_eq!(hits, vec!["s:Null", "u:Nullable", "v:Null"]);
+            assert_eq!(hits, vec!["s:Null", "v:Null"]);
         },
     );
 }

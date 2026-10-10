@@ -11,17 +11,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Locals captured by a lambda or anonymous class body (declared outside it).
 pub fn captured_locals<'t>(fm: &FileModel<'t>, n: Node<'t>) -> Vec<usize> {
-    let r = n.text_range();
-    let mut out = Vec::new();
-    for (i, d) in fm.binder.decls.iter().enumerate() {
-        if r.contains(d.name_node.start_byte() as u32) {
-            continue;
-        }
-        if fm.binder.uses[i].iter().any(|u| r.contains(u.start_byte() as u32)) {
-            out.push(i);
-        }
-    }
-    out
+    fm.captured_locals(n).to_vec()
 }
 
 /// Local written by an element, with whether it is a plain overwrite.
@@ -120,6 +110,32 @@ pub enum Nullness {
     NonNull,
     /// Null on at least one path (or annotated @Nullable).
     Nullable,
+    /// Definitely null because a null literal was assigned.
+    AssignedNull,
+    /// Null on some path only because it was initialized/assigned null and
+    /// conditionally reassigned. Reporting these needs path correlation, so
+    /// rules treat it as unknown.
+    MaybeAssignedNull,
+}
+
+impl Nullness {
+    pub fn is_definitely_null(self) -> bool {
+        matches!(self, Nullness::Null | Nullness::AssignedNull)
+    }
+}
+
+/// Join of two nullness states (`None` = unknown).
+pub fn join_nullness(a: Option<Nullness>, b: Option<Nullness>) -> Option<Nullness> {
+    use Nullness::*;
+    match (a, b) {
+        (Some(x), Some(y)) if x == y => Some(x),
+        (Some(Null), Some(AssignedNull)) | (Some(AssignedNull), Some(Null)) => Some(Null),
+        (Some(Null), _) | (_, Some(Null)) => Some(Nullable),
+        (Some(Nullable), _) | (_, Some(Nullable)) => Some(Nullable),
+        (Some(AssignedNull), _) | (_, Some(AssignedNull)) => Some(MaybeAssignedNull),
+        (Some(MaybeAssignedNull), _) | (_, Some(MaybeAssignedNull)) => Some(MaybeAssignedNull),
+        _ => None,
+    }
 }
 
 pub type NullFact = FxHashMap<usize, Nullness>;
@@ -135,6 +151,10 @@ pub struct NullnessAnalysis<'a, 't> {
 
 const REQUIRE_NON_NULL: &[MethodMatcher] = &[
     MethodMatcher::statics("java.util.Objects").named(&["requireNonNull", "requireNonNullElse"]),
+    MethodMatcher::statics("org.junit.jupiter.api.Assertions").named(&["assertNotNull"]),
+    MethodMatcher::statics("org.junit.Assert").named(&["assertNotNull"]),
+    MethodMatcher::statics("org.testng.Assert").named(&["assertNotNull"]),
+    MethodMatcher::statics("junit.framework.Assert").named(&["assertNotNull"]),
     MethodMatcher::statics("com.google.common.base.Preconditions").named(&["checkNotNull"]),
     MethodMatcher::statics("org.springframework.util.Assert").named(&["notNull"]),
     MethodMatcher::statics("org.apache.commons.lang3.Validate").named(&["notNull"]),
@@ -145,7 +165,7 @@ impl<'a, 't> NullnessAnalysis<'a, 't> {
     pub fn eval(&self, v: Node<'t>, f: &NullFact) -> Option<Nullness> {
         let v = v.unparen();
         match v.kind() {
-            "null_literal" => Some(Nullness::Null),
+            "null_literal" => Some(Nullness::AssignedNull),
             "object_creation_expression" | "array_creation_expression" | "string_literal" | "this" | "class_literal" | "array_initializer"
             | "lambda_expression" | "method_reference" | "template_expression" => Some(Nullness::NonNull),
             "binary_expression" if self.fm.type_of(v).is_string() => Some(Nullness::NonNull),
@@ -159,14 +179,15 @@ impl<'a, 't> NullnessAnalysis<'a, 't> {
                 let b = self.eval(v.field("alternative")?, f);
                 match (a, b) {
                     (Some(x), Some(y)) if x == y => Some(x),
-                    (Some(Nullness::Null), _) | (_, Some(Nullness::Null)) => Some(Nullness::Nullable),
+                    // `c ? null : v` is usually correlated with later checks of `c`
+                    (Some(x), _) | (_, Some(x)) if x.is_definitely_null() => Some(Nullness::MaybeAssignedNull),
                     (Some(Nullness::Nullable), _) | (_, Some(Nullness::Nullable)) => Some(Nullness::Nullable),
                     _ => None,
                 }
             }
             "method_invocation" => {
                 let c = self.fm.select_method(v)?;
-                if c.method.annotations.iter().any(is_nullable_annotation) {
+                if c.method.annotations.iter().any(is_nullable_annotation) && !c.method.ret.is_array() {
                     return Some(Nullness::Nullable);
                 }
                 if self.fm.call_matches_any(v, REQUIRE_NON_NULL) {
@@ -239,7 +260,7 @@ impl<'a, 't> NullnessAnalysis<'a, 't> {
                             out.push((i, if is_null { Nullness::NonNull } else { Nullness::Null }, false));
                         }
                     }
-                    "isEmpty" | "isBlank" | "isNullOrEmpty" | "hasText" | "hasLength" | "isNotEmpty" | "isNotBlank" if c.field("object").is_some() && !args.is_empty() => {
+                    "isEmpty" | "isBlank" | "isNullOrEmpty" | "hasText" | "hasLength" | "isNotEmpty" | "isNotBlank" if !args.is_empty() => {
                         // StringUtils.isEmpty(x): false => non-null; hasText(x): true => non-null
                         if let Some(i) = first_local {
                             let nonnull_on_true = matches!(name, "hasText" | "hasLength" | "isNotEmpty" | "isNotBlank");
@@ -305,7 +326,8 @@ impl<'a, 't> Analysis<'t> for NullnessAnalysis<'a, 't> {
                     continue;
                 }
                 let anns = self.fm.annotations_of(p);
-                if anns.iter().any(is_nullable_annotation) {
+                let is_array = p.field("type").is_some_and(|t| t.kind() == "array_type") || p.field("dimensions").is_some();
+                if anns.iter().any(is_nullable_annotation) && !is_array {
                     if let Some(n) = p.field("name") {
                         if let Some(i) = self.fm.binder.decl_index(n) {
                             f.insert(i, Nullness::Nullable);
@@ -320,12 +342,7 @@ impl<'a, 't> Analysis<'t> for NullnessAnalysis<'a, 't> {
         let mut out = FxHashMap::default();
         let keys: FxHashSet<usize> = a.keys().chain(b.keys()).copied().collect();
         for k in keys {
-            let v = match (a.get(&k), b.get(&k)) {
-                (Some(x), Some(y)) if x == y => Some(*x),
-                (Some(Nullness::Null), _) | (_, Some(Nullness::Null)) => Some(Nullness::Nullable),
-                (Some(Nullness::Nullable), _) | (_, Some(Nullness::Nullable)) => Some(Nullness::Nullable),
-                _ => None,
-            };
+            let v = join_nullness(a.get(&k).copied(), b.get(&k).copied());
             if let Some(v) = v {
                 out.insert(k, v);
             }
@@ -375,13 +392,16 @@ impl<'a, 't> Analysis<'t> for NullnessAnalysis<'a, 't> {
             }
             "method_invocation" => {
                 if self.fm.call_matches_any(e, REQUIRE_NON_NULL) {
-                    if let Some(a) = self.fm.args_of(e).first() {
+                    for a in self.fm.args_of(e) {
                         let a = a.unparen();
                         if a.kind() == "identifier" {
                             if let Some(i) = self.fm.binder.decl_index_of_ref(a) {
-                                f.insert(i, Nullness::NonNull);
+                                if !self.fm.local_type(i).is_string() || self.fm.args_of(e).len() == 1 || true {
+                                    f.insert(i, Nullness::NonNull);
+                                }
                             }
                         }
+                        break;
                     }
                 }
             }

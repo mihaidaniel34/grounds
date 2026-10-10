@@ -7,6 +7,15 @@ use grounds_semantic::FileModel;
 use grounds_syntax::{Node, NodeExt};
 use rustc_hash::FxHashSet;
 
+/// Per-rule cumulative time (enabled with GROUNDS_PROFILE=1).
+pub static PROFILE: once_cell::sync::Lazy<parking_lot::Mutex<rustc_hash::FxHashMap<&'static str, std::time::Duration>>> =
+    once_cell::sync::Lazy::new(Default::default);
+
+fn profiling() -> bool {
+    static P: once_cell::sync::Lazy<bool> = once_cell::sync::Lazy::new(|| std::env::var("GROUNDS_PROFILE").is_ok());
+    *P
+}
+
 pub struct RuleSet {
     rules: Vec<Box<dyn Rule>>,
     /// kind id -> rule indices
@@ -79,7 +88,11 @@ impl RuleSet {
                                 }
                                 let rule = &self.rules[ri];
                                 let mut cx = Ctx { fm, src: fm.src, info, di, options, rule: rule.meta(), out: &mut out, flow: &flow };
+                                let t0 = if profiling() { Some(std::time::Instant::now()) } else { None };
                                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rule.check_node(n, &mut cx)));
+                                if let Some(t0) = t0 {
+                                    *PROFILE.lock().entry(rule.meta().id).or_default() += t0.elapsed();
+                                }
                                 if r.is_err() {
                                     eprintln!("grounds: rule {} panicked on {}", rule.meta().id, info.path);
                                 }
@@ -106,7 +119,11 @@ impl RuleSet {
             }
             let rule = &self.rules[ri];
             let mut cx = Ctx { fm, src: fm.src, info, di, options, rule: rule.meta(), out: &mut out, flow: &flow };
+            let t0 = if profiling() { Some(std::time::Instant::now()) } else { None };
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rule.check_file(&mut cx)));
+            if let Some(t0) = t0 {
+                *PROFILE.lock().entry(rule.meta().id).or_default() += t0.elapsed();
+            }
             if r.is_err() {
                 eprintln!("grounds: rule {} panicked on {}", rule.meta().id, info.path);
             }

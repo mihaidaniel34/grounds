@@ -12,6 +12,7 @@ grounds-di.workspace = true
 rustc-hash.workspace = true
 serde.workspace = true
 once_cell.workspace = true
+parking_lot.workspace = true
 
 [dev-dependencies]
 grounds-classfile.workspace = true

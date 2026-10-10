@@ -160,7 +160,7 @@ impl<'t, 's> Builder<'t, 's> {
                 for k in n.kids() {
                     match k.kind() {
                         "argument_list" => self.expr_list(k),
-                        "class_body" => {}
+                        "class_body" => self.emit(k),
                         _ if k.field("x").is_none() && n.field("type") != Some(k) && n.field("type_arguments") != Some(k) => {
                             // qualified creation: outer.new Inner()
                             if is_expression(k.kind()) {
@@ -562,9 +562,10 @@ impl<'t, 's> Builder<'t, 's> {
                     let fc = self.cur;
                     self.blocks[fc].elems.push(n);
                     self.exceptional_edges(fc);
+                    // analyses assume assertions are enabled: only the passing edge continues
+                    let _ = skip;
                     self.cur = t;
                     self.goto(join);
-                    self.edge(skip, join, EdgeKind::Normal);
                     self.cur = join;
                 }
             }
@@ -652,12 +653,15 @@ impl<'t, 's> Builder<'t, 's> {
 
     fn try_stmt(&mut self, n: Node<'t>) {
         let catches: Vec<Node> = n.kids_of_kind("catch_clause");
-        let finally = n.kid_of_kind("finally_clause");
+        let finally = n.kid_of_kind("finally_clause").and_then(|f| f.kid_of_kind("block"));
         let catch_blocks: Vec<BlockId> = catches.iter().map(|_| self.new_block()).collect();
-        let finally_block = finally.map(|_| self.new_block());
+        // The finally body is lowered twice: once for normal completion of the
+        // try/catch (continuing after the statement) and once for abrupt
+        // completion (exception, return, break), which continues outward.
+        let finally_normal = finally.map(|_| self.new_block());
+        let finally_abrupt = finally.map(|_| self.new_block());
         let after = self.new_block();
-        // resources are evaluated inside the try scope
-        self.tries.push(TryCtx { catches: catch_blocks.clone(), finally: finally_block });
+        self.tries.push(TryCtx { catches: catch_blocks.clone(), finally: finally_abrupt });
         if let Some(rs) = n.field("resources") {
             for r in rs.kids() {
                 if let Some(v) = r.field("value") {
@@ -666,20 +670,14 @@ impl<'t, 's> Builder<'t, 's> {
                 self.emit(r);
             }
         }
-        // entering a try can always transfer to handlers (conservative)
-        let entry = self.cur;
-        let _ = entry;
         if let Some(b) = n.field("body") {
             self.stmt(b);
         }
         self.tries.pop();
         let body_end = self.cur;
-        match finally_block {
-            Some(f) => self.edge(body_end, f, EdgeKind::Normal),
-            None => self.edge(body_end, after, EdgeKind::Normal),
-        }
-        // catch clauses run within the outer try context but route to finally
-        self.tries.push(TryCtx { catches: Vec::new(), finally: finally_block });
+        self.edge(body_end, finally_normal.unwrap_or(after), EdgeKind::Normal);
+        // catch clauses: exceptions inside them go to the abrupt finally
+        self.tries.push(TryCtx { catches: Vec::new(), finally: finally_abrupt });
         for (c, b) in catches.iter().zip(&catch_blocks) {
             self.cur = *b;
             if let Some(p) = c.kid_of_kind("catch_formal_parameter") {
@@ -689,20 +687,19 @@ impl<'t, 's> Builder<'t, 's> {
                 self.stmt(body);
             }
             let end = self.cur;
-            match finally_block {
-                Some(f) => self.edge(end, f, EdgeKind::Normal),
-                None => self.edge(end, after, EdgeKind::Normal),
-            }
+            self.edge(end, finally_normal.unwrap_or(after), EdgeKind::Normal);
         }
         self.tries.pop();
-        if let (Some(fnode), Some(fb)) = (finally, finally_block) {
-            self.cur = fb;
-            if let Some(b) = fnode.kid_of_kind("block") {
-                self.stmt(b);
-            }
+        if let (Some(fb), Some(fnb), Some(fab)) = (finally, finally_normal, finally_abrupt) {
+            // normal copy
+            self.cur = fnb;
+            self.stmt(fb);
             let end = self.cur;
             self.edge(end, after, EdgeKind::Normal);
-            // abrupt completions routed through finally continue outward
+            // abrupt copy
+            self.cur = fab;
+            self.stmt(fb);
+            let end = self.cur;
             let outer = self.finally_target().unwrap_or(self.exit);
             self.edge(end, outer, EdgeKind::Normal);
             self.exceptional_edges(end);
@@ -796,7 +793,7 @@ pub fn build<'t>(owner: Node<'t>, src: &str) -> Cfg<'t> {
     let mut positions = rustc_hash::FxHashMap::default();
     for (bi, bl) in blocks.iter().enumerate() {
         for (ei, e) in bl.elems.iter().enumerate() {
-            positions.insert(e.id(), (bi, ei));
+            positions.entry(e.id()).or_insert((bi, ei));
         }
     }
     Cfg { blocks, entry, exit: b.exit, exc_exit: b.exc_exit, owner, positions }

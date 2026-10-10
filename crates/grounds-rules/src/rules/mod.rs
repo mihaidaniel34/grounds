@@ -6,8 +6,10 @@ pub mod concurrency;
 pub mod control;
 pub mod equality;
 pub mod exceptions;
+pub mod flow;
 pub mod numbers;
 pub mod strings;
+pub mod unused;
 
 use crate::framework::Rule;
 
@@ -21,5 +23,7 @@ pub fn all() -> Vec<Box<dyn Rule>> {
     v.extend(api::rules());
     v.extend(control::rules());
     v.extend(classes::rules());
+    v.extend(unused::rules());
+    v.extend(flow::rules());
     v
 }
