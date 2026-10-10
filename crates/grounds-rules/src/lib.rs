@@ -9,6 +9,7 @@
 pub mod framework;
 pub mod rules;
 pub mod runner;
+pub mod text;
 pub mod util;
 
 pub use framework::{Category, Diagnostic, Fix, Rule, RuleMeta, Scope, Severity, Tier};

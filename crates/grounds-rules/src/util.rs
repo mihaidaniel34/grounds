@@ -413,3 +413,16 @@ pub fn snippet(s: &str) -> String {
         one
     }
 }
+
+/// Is the expression a Throwable (by type, or because it is a catch parameter
+/// whose type could not be resolved)?
+pub fn is_throwable_expr<'t>(fm: &FileModel<'t>, n: Node<'t>) -> bool {
+    let n = n.unparen();
+    if is_subtype_any(fm, &fm.type_of(n), &["java.lang.Throwable"]) {
+        return true;
+    }
+    if let Some(i) = fm.local_ref(n) {
+        return fm.binder.decls[i].kind == grounds_semantic::LocalKind::CatchParam;
+    }
+    false
+}
