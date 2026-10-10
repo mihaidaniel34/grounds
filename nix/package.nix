@@ -49,10 +49,7 @@ rustPlatform.buildRustPackage {
 
   meta = {
     description = "Fast, incremental static analysis for Java, built for coding agents";
-    license = with lib.licenses; [
-      mit
-      asl20
-    ];
+    license = lib.licenses.asl20;
     mainProgram = "grounds";
     platforms = lib.platforms.unix;
   };
