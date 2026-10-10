@@ -183,7 +183,8 @@ impl Rule for InsecureCipherMode {
             _ => None,
         };
         if let Some(p) = problem {
-            cx.report(a, format!("`{t}`: {p}; use AES/GCM/NoPadding"));
+            let instead = if alg == "RSA" { "RSA/ECB/OAEPWithSHA-256AndMGF1Padding" } else { "AES/GCM/NoPadding" };
+            cx.report(a, format!("`{t}`: {p}; use {instead}"));
         }
     }
 }

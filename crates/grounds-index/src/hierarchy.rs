@@ -291,8 +291,12 @@ pub trait ClassLookup {
             for m in c.methods.iter().filter(|m| &*m.name == name) {
                 let sm = subst_method(m, &map);
                 let erased: Vec<Ty> = sm.params.iter().map(|p| p.ty.erasure()).collect();
+                // methods of one class are distinct overloads; an unknown
+                // parameter type cannot prove an override either
                 let overridden = out.iter().any(|o| {
-                    o.method.params.len() == erased.len() && o.method.params.iter().zip(&erased).all(|(p, e)| p.ty.erasure() == *e)
+                    o.owner != *cn
+                        && o.method.params.len() == erased.len()
+                        && o.method.params.iter().zip(&erased).all(|(p, e)| !e.has_unknown() && p.ty.erasure() == *e)
                 });
                 if overridden {
                     continue;
@@ -316,9 +320,10 @@ pub trait ClassLookup {
                 }
                 let sm = subst_method(m, &map);
                 let dup = out.iter().any(|o| {
-                    o.method.name == sm.name
+                    o.owner != *cn
+                        && o.method.name == sm.name
                         && o.method.params.len() == sm.params.len()
-                        && o.method.params.iter().zip(&sm.params).all(|(a, b)| a.ty.erasure() == b.ty.erasure())
+                        && o.method.params.iter().zip(&sm.params).all(|(a, b)| !b.ty.has_unknown() && a.ty.erasure() == b.ty.erasure())
                 });
                 if !dup {
                     out.push(MethodRef { owner: cn.clone(), method: sm, owner_kind: c.kind, owner_flags: c.flags });

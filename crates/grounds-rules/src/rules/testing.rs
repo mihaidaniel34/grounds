@@ -154,13 +154,20 @@ impl Rule for PrivateTestMethod {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
         let anns = annotation_names(n, cx.src);
-        let is_test = anns.iter().any(|a| TEST_ANNOTATIONS.contains(a) || matches!(*a, "BeforeEach" | "AfterEach"));
-        if !is_test || !owning_type_decl(n).is_some_and(|d| is_junit5_class(d, cx)) {
+        let is_test = anns.iter().any(|a| TEST_ANNOTATIONS.contains(a));
+        // @BeforeEach/@AfterEach must not be private (or static) either, but
+        // they are not tests: say so
+        let lifecycle = anns.iter().find(|a| matches!(**a, "BeforeEach" | "AfterEach")).copied();
+        if !(is_test || lifecycle.is_some()) || !owning_type_decl(n).is_some_and(|d| is_junit5_class(d, cx)) {
             return;
         }
         if n.has_modifier("private") || n.has_modifier("static") {
+            let what = if n.has_modifier("private") { "private" } else { "static" };
             if let Some(nm) = n.field("name") {
-                cx.report(nm, format!("JUnit 5 ignores {} test methods; this test never runs", if n.has_modifier("private") { "private" } else { "static" }));
+                match lifecycle {
+                    Some(l) if !is_test => cx.report(nm, format!("JUnit 5 requires @{l} methods to be non-{what}; depending on the version it is ignored or rejected")),
+                    _ => cx.report(nm, format!("JUnit 5 ignores {what} test methods; this test never runs")),
+                }
             }
         }
     }
@@ -360,7 +367,12 @@ impl Rule for IncompleteAssertJ {
             "as" | "describedAs" | "withFailMessage" | "overridingErrorMessage" => e.field("object").is_some_and(|o| cx.text(o).contains("assertThat")),
             _ => false,
         };
-        if incomplete && (cx.fm.select_method(e).is_some_and(|c| c.owner.contains("assertj") || c.owner.contains("Truth")) || cx.fm.stub.imports.iter().any(|i| i.path.contains("assertj"))) {
+        // AssertJ's assertThat takes one argument; Hamcrest's
+        // MatcherAssert.assertThat(reason, actual, matcher) is complete
+        let entry = if e.field("object").is_some_and(|o| cx.text(o).contains("assertThat")) { e.field("object").map(|o| o.unparen()).unwrap_or(e) } else { e };
+        let single_arg = cx.fm.args_of(entry).len() == 1;
+        let other_owner = cx.fm.select_method(entry).is_some_and(|c| !(c.owner.contains("assertj") || c.owner.contains("Truth")));
+        if incomplete && single_arg && !other_owner && (cx.fm.select_method(e).is_some_and(|c| c.owner.contains("assertj") || c.owner.contains("Truth")) || cx.fm.stub.imports.iter().any(|i| i.path.contains("assertj"))) {
             cx.report(e, "AssertJ assertion has no check (e.g. `.isEqualTo(...)`); it verifies nothing");
         }
     }
@@ -386,6 +398,15 @@ impl Rule for IncompleteMockito {
         }
         let name = cx.fm.call_name(e).unwrap_or("");
         if !matches!(name, "when" | "verify" | "given" | "doReturn" | "doThrow") {
+            return;
+        }
+        // Mockito's versions take the mock; Reactor's StepVerifier.verify() and
+        // other libraries' methods of the same name do not
+        if cx.fm.args_of(e).is_empty() || cx.fm.select_method(e).is_some_and(|c| !c.owner.starts_with("org.mockito")) {
+            return;
+        }
+        // static-imported, or called on Mockito/BDDMockito (not `jwt.verify(token)`)
+        if e.field("object").is_some_and(|o| !matches!(cx.text(o).rsplit('.').next(), Some("Mockito" | "BDDMockito"))) {
             return;
         }
         let is_mockito = cx.fm.select_method(e).is_some_and(|c| c.owner.starts_with("org.mockito")) || cx.fm.stub.imports.iter().any(|i| i.path.starts_with("org.mockito"));

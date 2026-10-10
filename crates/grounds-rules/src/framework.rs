@@ -196,6 +196,11 @@ impl<'a, 't> Ctx<'a, 't> {
         self.options.get(&format!("{}.{}", self.rule.id, key)).map(|s| s.as_str())
     }
 
+    /// Project-wide setting (not namespaced by rule), e.g. `classpath.exact`.
+    pub fn global_option(&self, key: &str) -> Option<&str> {
+        self.options.get(key).map(|s| s.as_str())
+    }
+
     pub fn option_usize(&self, key: &str, default: usize) -> usize {
         self.option(key).and_then(|v| v.parse().ok()).unwrap_or(default)
     }

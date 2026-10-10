@@ -3,7 +3,9 @@
 use crate::cache::{content_hash, StubCache};
 use crate::config::Config;
 use crate::workspace::{SourceKind, SourceSets, Workspace};
-use grounds_index::{extract, Classpath, FileStub, Index};
+use grounds_index::lombok::LombokConfig;
+use grounds_index::stubs::extract_with;
+use grounds_index::{Classpath, FileStub, Index};
 use grounds_syntax::ParsedFile;
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
@@ -31,6 +33,89 @@ pub struct Project {
     /// Dependency-injection model (rebuilt when declarations change).
     pub di: grounds_di::DiModel,
     pub source_sets: SourceSets,
+    pub lombok: LombokConfigs,
+}
+
+/// Parsed `lombok.config` files by directory.
+#[derive(Debug, Default, Clone)]
+pub struct LombokConfigs {
+    dirs: Vec<(PathBuf, Vec<(String, String, String)>)>,
+}
+
+impl LombokConfigs {
+    pub fn discover(root: &Path) -> LombokConfigs {
+        let mut dirs = Vec::new();
+        let walker = ignore::WalkBuilder::new(root)
+            .hidden(false)
+            .filter_entry(|e| !matches!(e.file_name().to_str(), Some(".git" | "build" | "target" | "node_modules" | ".gradle" | "out" | "src")))
+            .build();
+        for e in walker.flatten() {
+            if e.file_name() == "lombok.config" {
+                if let (Some(dir), Ok(text)) = (e.path().parent(), std::fs::read_to_string(e.path())) {
+                    let mut entries = Vec::new();
+                    for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+                        if let Some(key) = line.strip_prefix("clear ") {
+                            entries.push((key.trim().to_ascii_lowercase(), "clear".to_string(), String::new()));
+                        } else if let Some((k, v)) = line.split_once("+=") {
+                            entries.push((k.trim().to_ascii_lowercase(), "+=".to_string(), v.trim().to_string()));
+                        } else if let Some((k, v)) = line.split_once("-=") {
+                            entries.push((k.trim().to_ascii_lowercase(), "-=".to_string(), v.trim().to_string()));
+                        } else if let Some((k, v)) = line.split_once('=') {
+                            entries.push((k.trim().to_ascii_lowercase(), "=".to_string(), v.trim().to_string()));
+                        }
+                    }
+                    dirs.push((dir.to_path_buf(), entries));
+                }
+            }
+        }
+        LombokConfigs { dirs }
+    }
+
+    /// Settings for a source file: configs from the outermost directory to
+    /// the nearest one, stopping at `config.stopBubbling = true`.
+    pub fn for_file(&self, file: &Path) -> LombokConfig {
+        let mut chain: Vec<&Vec<(String, String, String)>> = Vec::new();
+        let mut dir = file.parent();
+        while let Some(d) = dir {
+            if let Some((_, entries)) = self.dirs.iter().find(|(p, _)| p == d) {
+                chain.push(entries);
+                if entries.iter().any(|(k, op, v)| k == "config.stopbubbling" && op == "=" && v.eq_ignore_ascii_case("true")) {
+                    break;
+                }
+            }
+            dir = d.parent();
+        }
+        let mut cfg = LombokConfig::default();
+        for entries in chain.into_iter().rev() {
+            for (k, op, v) in entries {
+                let truthy = v.eq_ignore_ascii_case("true");
+                match (k.as_str(), op.as_str()) {
+                    ("lombok.accessors.fluent", "=") => cfg.fluent = truthy,
+                    ("lombok.accessors.fluent", "clear") => cfg.fluent = false,
+                    ("lombok.accessors.chain", "=") => cfg.chain = truthy,
+                    ("lombok.accessors.chain", "clear") => cfg.chain = false,
+                    ("lombok.accessors.prefix", "+=") => cfg.prefixes.push(v.clone()),
+                    ("lombok.accessors.prefix", "-=") => cfg.prefixes.retain(|p| p != v),
+                    ("lombok.accessors.prefix", "clear") => cfg.prefixes.clear(),
+                    ("lombok.copyableannotations", "+=") => cfg.copyable.push(v.clone()),
+                    ("lombok.copyableannotations", "-=") => cfg.copyable.retain(|p| p != v),
+                    ("lombok.copyableannotations", "clear") => cfg.copyable.clear(),
+                    _ => {}
+                }
+            }
+        }
+        cfg
+    }
+
+    /// Mixed into stub cache keys so a config change re-extracts.
+    pub fn key_for(&self, file: &Path) -> u64 {
+        let cfg = self.for_file(file);
+        if cfg == LombokConfig::default() {
+            0
+        } else {
+            xxhash_rust::xxh3::xxh3_64(format!("{cfg:?}").as_bytes())
+        }
+    }
 }
 
 pub fn path_key(p: &Path) -> Arc<str> {
@@ -61,19 +146,20 @@ impl Project {
         stats.t_classpath = t.elapsed();
 
         let t = Instant::now();
+        let lombok = LombokConfigs::discover(&workspace.root);
         let cache = StubCache::load(&workspace.root);
         let results: Vec<(PathBuf, u64, Arc<FileStub>, bool)> = workspace
             .files
             .par_iter()
             .filter_map(|f| {
                 let text = std::fs::read_to_string(&f.path).ok()?;
-                let h = content_hash(&text);
+                let h = content_hash(&text) ^ lombok.key_for(&f.path);
                 let key = f.path.to_string_lossy();
                 if let Some(s) = cache.get(&key, h) {
                     return Some((f.path.clone(), h, s, true));
                 }
                 let pf = ParsedFile::parse(text);
-                Some((f.path.clone(), h, Arc::new(extract(&pf)), false))
+                Some((f.path.clone(), h, Arc::new(extract_with(&pf, &lombok.for_file(&f.path))), false))
             })
             .collect();
         stats.t_stubs = t.elapsed();
@@ -98,7 +184,7 @@ impl Project {
         let mut di = grounds_di::DiModel::build(&index);
         di.lombok_copies_qualifiers = lombok_copies_qualifiers(&workspace.root);
         di.bean_overriding_allowed = bean_overriding_allowed(&workspace);
-        Ok(Project { config, workspace, index, stats, di, source_sets })
+        Ok(Project { config, workspace, index, stats, di, source_sets, lombok })
     }
 
     pub fn source_kind(&self, path: &Path) -> SourceKind {
@@ -113,7 +199,7 @@ impl Project {
         match std::fs::read_to_string(path) {
             Ok(text) => {
                 let pf = ParsedFile::parse(text);
-                let stub = Arc::new(extract(&pf));
+                let stub = Arc::new(self.extract(path, &pf));
                 // always install: referenced names and positions change with
                 // body-only edits; the DI model stores positions too
                 let changed = old != Some(stub.signature_hash);
@@ -127,6 +213,11 @@ impl Project {
                 old.is_some()
             }
         }
+    }
+
+    /// Declaration stub of a file, with the lombok.config settings for it.
+    pub fn extract(&self, path: &Path, pf: &ParsedFile) -> FileStub {
+        extract_with(pf, &self.lombok.for_file(path))
     }
 
     pub fn rebuild_di(&mut self) {

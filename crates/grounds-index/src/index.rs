@@ -699,6 +699,9 @@ impl Index {
                 if let Some(b) = self.binary_name_for_dotted(&imp.path) {
                     return Some(b);
                 }
+                // the import shadows same-package and on-demand classes even
+                // when its jar is missing: unknown, never a same-named class
+                return None;
             }
         }
         // same package

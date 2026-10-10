@@ -432,10 +432,12 @@ impl Rule for ObjectMethodTypo {
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
         let name = method_name(n, cx.src);
         let pc = param_count(n);
-        let intended = match (name, pc) {
-            ("hashcode" | "hashcode_" | "hashCOde" | "HashCode", 0) => "hashCode",
-            ("tostring" | "toSTring" | "ToString" | "tostr", 0) => "toString",
-            ("equal" | "Equals", 1) => "equals",
+        // the return type must match too: `Set<String> equal(K key)` is no typo
+        let ret = n.field("type").map(|t| cx.text(t)).unwrap_or("");
+        let intended = match (name, pc, ret) {
+            ("hashcode" | "hashcode_" | "hashCOde" | "HashCode", 0, "int") => "hashCode",
+            ("tostring" | "toSTring" | "ToString" | "tostr", 0, "String") => "toString",
+            ("equal" | "Equals", 1, "boolean") => "equals",
             _ => return,
         };
         if let Some(nm) = n.field("name") {

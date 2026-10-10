@@ -221,3 +221,15 @@ fn debug_stream_of2() {
     let s = fm.select_method(call).unwrap();
     eprintln!("selected {} amb={}", s.method.signature_string(), s.ambiguous);
 }
+
+#[test]
+fn overloads_with_unknown_parameter_types_stay_ambiguous() {
+    let src = "package app; import missing.Protos; class Msg {} class Event {} class P { static Msg fromProto(Protos.MsgProto p) { return null; } static Event fromProto(Protos.EventProto p) { return null; } void m(Protos.MsgProto p) { Object x = fromProto(p.getEvent()); } }";
+    let pf = ParsedFile::parse(src);
+    let mut idx = Index::new(jdk());
+    idx.set_file(Arc::from("T.java"), Arc::new(extract(&pf)));
+    let fm = FileModel::new(&pf, &idx, Arc::from("T.java"));
+    let call = pf.root().descendants().filter(|n| n.kind() == "method_invocation").find(|n| n.field("name").unwrap().text(src) == "fromProto").unwrap();
+    assert!(fm.select_method(call).unwrap().ambiguous);
+    assert_eq!(fm.type_of(call), Ty::Unknown);
+}

@@ -27,8 +27,15 @@ fn closed_class<'t>(cx: &Ctx<'_, 't>, name: &str) -> Option<std::sync::Arc<Class
     if stub.referenced_names.iter().any(|n| matches!(&**n, "Delegate" | "ExtensionMethod" | "Accessors")) {
         return None;
     }
-    // every supertype must be closed as well (a library supertype is complete
-    // only if we could read it)
+    // library supertypes are read from guessed jar versions (the newest in the
+    // Gradle/Maven caches) unless the classpath was dumped exactly: a method
+    // missing there may exist in the version the project builds against
+    if cx.global_option("classpath.exact") != Some("true") {
+        let library = cx.fm.all_supertypes(&c.this_type()).iter().filter_map(|t| t.class_name().map(str::to_string)).any(|n| !n.starts_with("java.") && cx.fm.class(&n).is_some_and(|k| !k.is_source()));
+        if library {
+            return None;
+        }
+    }
     Some(c)
 }
 
@@ -168,6 +175,18 @@ impl Rule for UnresolvedMethod {
     }
 }
 
+/// Every class the type mentions (type arguments included) is known.
+fn fully_known(cx: &Ctx<'_, '_>, t: &Ty) -> bool {
+    match t {
+        Ty::Class { name, args } => cx.fm.class(name).is_some() && args.iter().all(|a| fully_known(cx, a)),
+        Ty::Array(e) => fully_known(cx, e),
+        Ty::Wildcard(Some(b)) => match &**b {
+            WildcardBound::Extends(t) | WildcardBound::Super(t) => fully_known(cx, t),
+        },
+        _ => true,
+    }
+}
+
 /// If every overload with a matching arity has a parameter that definitely
 /// cannot accept the corresponding argument, return the argument types.
 fn definitely_incompatible<'t>(cx: &Ctx<'_, 't>, call: Node<'t>, ms: &[MethodRef]) -> Option<String> {
@@ -192,6 +211,17 @@ fn definitely_incompatible<'t>(cx: &Ctx<'_, 't>, call: Node<'t>, ms: &[MethodRef
             };
             if pt.has_unknown() || pt.mentions_type_var() {
                 return true;
+            }
+            // a type whose class is not on the classpath, or the same simple
+            // name from another package (javax vs jakarta when cached jars do
+            // not match the project's versions), proves nothing
+            if !fully_known(cx, &pt) || !fully_known(cx, at) {
+                return true;
+            }
+            if let (Some(a), Some(p)) = (at.class_name(), pt.class_name()) {
+                if a != p && simple_name_of(a) == simple_name_of(p) {
+                    return true;
+                }
             }
             // compile-time narrowing of int constants (byte b = 1 style) is not applied to calls,
             // but keep constants permissive anyway
@@ -336,7 +366,14 @@ impl Rule for OverrideWithoutSuper {
                             return true;
                         }
                         let at = grounds_index::hierarchy::apply_subst(&a.ty, &map);
-                        at.erasure() == b.ty.erasure()
+                        // unknown classes and same-named types from another
+                        // package (javax vs jakarta when the cached jars do not
+                        // match the project) may still be the same parameter
+                        let skew = match (at.erasure().class_name(), b.ty.erasure().class_name()) {
+                            (Some(x), Some(y)) => x != y && simple_name_of(x) == simple_name_of(y),
+                            _ => false,
+                        };
+                        at.erasure() == b.ty.erasure() || skew || !fully_known(cx, &at) || !fully_known(cx, &b.ty)
                     })
             });
         }
@@ -372,8 +409,10 @@ impl Rule for UnimplementedAbstractMethod {
         if cls.is_abstract() || closed_class(cx, &cls.name).is_none() {
             return;
         }
-        // enum constants with bodies implement abstract methods themselves
-        if cls.is_enum() && cx.text(n).contains("abstract ") {
+        // enum constants with bodies implement abstract (or interface)
+        // methods themselves
+        let constant_bodies = n.field("body").is_some_and(|b| b.kids().iter().any(|k| k.kind() == "enum_constant" && k.kid_of_kind("class_body").is_some()));
+        if cls.is_enum() && (constant_bodies || cx.text(n).contains("abstract ")) {
             return;
         }
         let mut missing: Vec<String> = Vec::new();

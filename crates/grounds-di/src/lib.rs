@@ -321,6 +321,17 @@ impl<'a> Builder<'a> {
         })
     }
 
+    /// Conditional directly or through a composed annotation carrying a
+    /// condition (`@TbCoreComponent` meta-annotated `@ConditionalOnExpression`).
+    fn conditional_meta(&self, anns: &[AnnotationInfo]) -> bool {
+        fn rec(idx: &Index, anns: &[AnnotationInfo], depth: u32) -> bool {
+            Builder::conditional(anns)
+                || (depth < 3
+                    && anns.iter().any(|a| !a.name.starts_with("java.") && idx.class(&a.name).is_some_and(|c| c.kind == ClassKind::Annotation && rec(idx, &c.annotations, depth + 1))))
+        }
+        rec(self.index, anns, 0)
+    }
+
     fn add_bean(&mut self, b: Bean) -> usize {
         let i = self.model.beans.len();
         self.model.beans.push(b);
@@ -375,6 +386,18 @@ impl<'a> Builder<'a> {
         self.model.scan_roots = roots.clone();
 
         let in_scan = |pkg: &str| roots.is_empty() || roots.iter().any(|r| pkg == r || pkg.starts_with(&format!("{r}.")));
+        // MyBatis @MapperScan: every interface in these packages is a bean
+        let mut mapper_pkgs: Vec<String> = Vec::new();
+        for n in &names {
+            let Some(c) = self.index.class(n) else { continue };
+            for a in c.annotations.iter().filter(|a| a.simple_name() == "MapperScan") {
+                mapper_pkgs.extend(["value", "basePackages"].iter().flat_map(|k| a.arg(k).map(|v| v.strings()).unwrap_or_default()));
+                if let Some(v) = a.arg("basePackageClasses") {
+                    mapper_pkgs.extend(v.values().into_iter().filter_map(|x| if let AnnotationValue::Class(t) = x { t.class_name().map(|c| package_of(c).to_string()) } else { None }));
+                }
+            }
+        }
+        let in_mapper_scan = |pkg: &str| mapper_pkgs.iter().any(|r| pkg == r || pkg.starts_with(&format!("{r}.")));
         // classes registered explicitly by scanned classes (@Import chains,
         // @EnableConfigurationProperties) are beans wherever they live
         let mut imported: rustc_hash::FxHashSet<Name> = rustc_hash::FxHashSet::default();
@@ -467,6 +490,9 @@ impl<'a> Builder<'a> {
                         _ => {}
                     }
                 }
+                if source.is_none() && in_mapper_scan(c.package()) {
+                    source = Some((BeanSource::Mapper, Framework::Spring));
+                }
                 if let Some((src, fw)) = source {
                     let qualifiers = self.qualifiers_of(&c.annotations);
                     let name = decapitalize(c.simple_name());
@@ -480,7 +506,7 @@ impl<'a> Builder<'a> {
                         // @FeignClient beans are primary by default (so fallbacks do not clash)
                         primary: c.annotations.iter().any(|a| a.simple_name() == "Primary")
                             || c.annotations.iter().any(|a| a.simple_name() == "FeignClient" && a.arg("primary").and_then(|v| v.as_bool()) != Some(false)),
-                        conditional: Self::conditional(&c.annotations),
+                        conditional: self.conditional_meta(&c.annotations),
                         file: file.clone(),
                         is_test,
                         autowire_candidate: true,
@@ -530,10 +556,15 @@ impl<'a> Builder<'a> {
             // plain classes listed in @Import are beans too
             let stereotyped = anns.iter().find_map(|a| self.stereotype(a, 0));
             let fw = stereotyped.or_else(|| imported.contains(&c.name).then_some(Framework::Spring));
-            let Some(fw) = fw else { continue };
+            // a class with @Bean methods but no recognized stereotype may still be
+            // registered (an annotation from a missing jar, spring.factories,
+            // auto-configuration imports, programmatic registration)
+            let bean_methods = c.methods.iter().any(|m| m.annotations.iter().any(|a| BEAN_METHOD_ANNOTATIONS.iter().any(|b| a.is(b))));
+            let unrecognized_config = fw.is_none() && bean_methods && !is_framework_class(&c.name);
+            let Some(fw) = fw.or(unrecognized_config.then_some(Framework::Spring)) else { continue };
             // may or may not be registered at runtime: satisfies injections but
             // its own dependencies are not judged
-            let maybe_registered = fw == Framework::Spring && (outside_scan(&c) || (properties && !imported.contains(&c.name)));
+            let maybe_registered = unrecognized_config || (fw == Framework::Spring && (outside_scan(&c) || (properties && !imported.contains(&c.name))));
             // nested non-static classes cannot be beans
             if c.is_inner() {
                 continue;
@@ -559,7 +590,7 @@ impl<'a> Builder<'a> {
             });
             let qualifiers = self.qualifiers_of(&anns);
             let primary = anns.iter().any(|a| a.simple_name() == "Primary");
-            let conditional = Self::conditional(&anns) || maybe_registered;
+            let conditional = self.conditional_meta(&anns) || maybe_registered;
             let i = self.add_bean(Bean {
                 name,
                 aliases: Vec::new(),
@@ -579,8 +610,25 @@ impl<'a> Builder<'a> {
             self.model.component_classes.insert(c.name.clone(), i);
             let class_dynamic = anns.iter().any(|a| matches!(a.simple_name(), "EachBean" | "EachProperty"));
 
-            // factory / @Bean methods
-            for m in &c.methods {
+            // factory / @Bean methods, including ones inherited from source
+            // superclasses (`class RedisConfig extends BaseRedisConfig`)
+            let mut factory_methods: Vec<MethodInfo> = c.methods.clone();
+            let mut sup = c.superclass.as_ref().and_then(|t| t.class_name()).map(str::to_string);
+            let mut hops = 0;
+            while let Some(sn) = sup.take() {
+                hops += 1;
+                let Some(sc) = self.index.class(&sn).filter(|sc| sc.is_source()) else { break };
+                for m in &sc.methods {
+                    if !factory_methods.iter().any(|x| x.name == m.name && x.params.len() == m.params.len()) {
+                        factory_methods.push(m.clone());
+                    }
+                }
+                sup = sc.superclass.as_ref().and_then(|t| t.class_name()).map(str::to_string);
+                if hops > 8 {
+                    break;
+                }
+            }
+            for m in &factory_methods {
                 if m.is_constructor() || !m.annotations.iter().any(|a| BEAN_METHOD_ANNOTATIONS.iter().any(|b| a.is(b))) {
                     continue;
                 }
@@ -606,7 +654,7 @@ impl<'a> Builder<'a> {
                     source: BeanSource::FactoryMethod(m.name.clone()),
                     qualifiers,
                     primary: m.annotations.iter().any(|a| a.simple_name() == "Primary"),
-                    conditional: conditional || Self::conditional(&m.annotations),
+                    conditional: conditional || self.conditional_meta(&m.annotations),
                     file: file.clone(),
                     is_test,
                     autowire_candidate,
@@ -634,9 +682,12 @@ impl<'a> Builder<'a> {
                 None
             };
             if let Some(ctor) = chosen {
-                // records/ConfigurationProperties bind properties, not beans
+                // records/ConfigurationProperties bind properties, not beans;
+                // prototype beans may get constructor arguments from
+                // getBean(Class, args...)
                 let binds_properties = anns.iter().any(|a| a.simple_name() == "ConfigurationProperties" || a.simple_name() == "EachProperty");
-                if !binds_properties {
+                let prototype = anns.iter().any(|a| a.simple_name() == "Scope" && a.arg("value").or_else(|| a.arg("scopeName")).is_some_and(|v| format!("{v:?}").to_ascii_lowercase().contains("prototype")));
+                if !binds_properties && !prototype {
                     for (pi, p) in ctor.params.iter().enumerate() {
                         if !maybe_registered {
                             self.add_point(&c.name, PointKind::ConstructorParam(pi), &p.ty, &p.annotations, &p.name, ctor.range, fw, false);
@@ -888,7 +939,7 @@ impl DiModel {
             0 => {
                 if p.optional {
                     Resolution::Absent
-                } else if maybe > 0 || self.opaque_imports || !self.provable_type(lk, &p.ty) || jit_possible() {
+                } else if maybe > 0 || self.opaque_imports || !self.provable_type(lk, &p.ty) || jit_possible() || self.factory_may_return(lk, &p.ty) {
                     Resolution::Unknown
                 } else {
                     Resolution::NotFound
@@ -941,6 +992,16 @@ impl DiModel {
         }
         let Some(c) = lk.class(n) else { return false };
         c.is_source() && !matches!(c.kind, ClassKind::Annotation)
+    }
+
+    /// A @Bean method declared to return a supertype of `ty` may return a `ty`
+    /// instance (`@Bean Store store() { return new RedisStore(); }`), which
+    /// Spring matches by the created instance's class.
+    fn factory_may_return(&self, lk: &dyn ClassLookup, ty: &Ty) -> bool {
+        let Some(want) = ty.class_name() else { return false };
+        self.beans.iter().any(|b| {
+            matches!(b.source, BeanSource::FactoryMethod(_)) && b.ty.class_name().is_some_and(|r| r != want && r != "java.lang.Object" && lk.is_subclass(want, r).is_yes())
+        })
     }
 
     /// Constructor-injection dependency edges between component classes.

@@ -7,7 +7,7 @@ use crate::analyze::{analyze_text, build_ruleset, Finding};
 use crate::git;
 use crate::project::{path_key, Project};
 use crate::workspace::{classify, SourceKind};
-use grounds_index::{extract, simple_name_of, FileStub, Name};
+use grounds_index::{simple_name_of, FileStub, Name};
 use grounds_rules::framework::RuleOptions;
 use grounds_rules::{RuleSet, Severity, Tier};
 use grounds_syntax::ParsedFile;
@@ -139,7 +139,7 @@ impl Session {
             if exists {
                 if let Ok(text) = std::fs::read_to_string(&p) {
                     let pf = ParsedFile::parse(text);
-                    let stub = Arc::new(extract(&pf));
+                    let stub = Arc::new(self.project.extract(&p, &pf));
                     // install the new stub even when signatures are unchanged:
                     // referenced names (for broken callers) and declaration
                     // positions change with body-only edits
@@ -189,7 +189,7 @@ impl Session {
         let mut names: FxHashSet<Name> = FxHashSet::default();
         for f in files {
             let Some(cur) = self.project.index.file(&path_key(f)).cloned() else { continue };
-            let head: Option<FileStub> = git::head_version(self.root(), f).map(|t| extract(&ParsedFile::parse(t)));
+            let head: Option<FileStub> = git::head_version(self.root(), f).map(|t| self.project.extract(f, &ParsedFile::parse(t)));
             let Some(head) = head else { continue }; // new file: nothing to break
             if head.signature_hash == cur.signature_hash {
                 continue;

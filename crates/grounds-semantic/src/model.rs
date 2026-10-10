@@ -58,7 +58,8 @@ pub struct FileModel<'t> {
     pub class_names: FxHashMap<usize, Name>,
     /// local & anonymous classes (not in the index)
     local_raw: FxHashMap<Name, (stubs::RawClass, Node<'t>)>,
-    local_simple: Vec<(Name, Name)>,
+    /// local types: (simple name, binary name, byte range of the declaring block)
+    local_simple: Vec<(Name, Name, (usize, usize))>,
     local_lowered: RefCell<FxHashMap<Name, Option<Arc<ClassInfo>>>>,
     pub(crate) types: RefCell<FxHashMap<usize, Ty>>,
     pub(crate) calls: RefCell<FxHashMap<usize, Option<Rc<ResolvedCall>>>>,
@@ -138,7 +139,9 @@ impl<'t> FileModel<'t> {
                             m.local_raw.insert(nm.clone(), (r, n));
                         }
                     }
-                    m.local_simple.push((Arc::from(simple), nm.clone()));
+                    // visible in the block that declares it
+                    let scope = n.parent().map(|p| (p.start_byte(), p.end_byte())).unwrap_or((0, usize::MAX));
+                    m.local_simple.push((Arc::from(simple), nm.clone(), scope));
                     nm
                 } else {
                     match &outer {
@@ -262,7 +265,11 @@ impl<'t> FileModel<'t> {
                 }
             }
         }
-        Scope { package: &self.stub.package, imports: &self.stub.imports, enclosing, type_vars, local_types: self.local_simple.clone() }
+        // local types whose declaring block contains `n`, innermost first
+        let mut locals: Vec<&(Name, Name, (usize, usize))> = self.local_simple.iter().filter(|(_, _, (a, b))| *a <= n.start_byte() && n.end_byte() <= *b).collect();
+        locals.sort_by_key(|(_, _, (a, b))| b - a);
+        let local_types = locals.into_iter().map(|(s, b, _)| (s.clone(), b.clone())).collect();
+        Scope { package: &self.stub.package, imports: &self.stub.imports, enclosing, type_vars, local_types }
     }
 
     /// Resolve a type syntax node in the scope where it appears.

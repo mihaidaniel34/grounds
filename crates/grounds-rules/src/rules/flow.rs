@@ -303,7 +303,9 @@ impl Rule for InfiniteRecursion {
             if e.field("object").is_some_and(|o| o.kind() != "this") {
                 return false;
             }
-            cx.fm.select_method(e).is_some_and(|c| c.method.range == range && !c.ambiguous && c.method.params.len() == m.params.len())
+            // with an argument of unknown type the call may target another overload
+            cx.fm.args_of(e).iter().all(|a| cx.type_of(*a).is_known())
+                && cx.fm.select_method(e).is_some_and(|c| c.method.range == range && !c.ambiguous && c.method.params.len() == m.params.len())
         };
         let mut blocked = vec![false; cfg.blocks.len()];
         let mut any = false;

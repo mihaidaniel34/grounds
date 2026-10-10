@@ -54,6 +54,10 @@ pub fn build_ruleset(project: &Project) -> (RuleSet, RuleOptions) {
     let cfg = &project.config.rules;
     let rules = selected_rules(project);
     let mut options = RuleOptions::default();
+    // jar versions are exact only with a dumped classpath and no cache guessing
+    if !project.config.classpath.scan_caches && !project.config.classpath.files.is_empty() {
+        options.insert("classpath.exact".to_string(), "true".to_string());
+    }
     for (k, v) in &cfg.options {
         if let Some(t) = v.as_table() {
             for (ok, ov) in t {

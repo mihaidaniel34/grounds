@@ -545,18 +545,23 @@ impl Rule for SingletonMutableState {
     }
 }
 
-fn mapping_paths<'t>(cx: &Ctx<'_, 't>, decl: Node<'t>) -> Vec<String> {
+/// Mapping templates of a declaration; `None` if one is not a constant we
+/// could evaluate (`IMAGE_URL + "/info"` with an unresolved constant).
+fn mapping_paths<'t>(cx: &Ctx<'_, 't>, decl: Node<'t>) -> Option<Vec<String>> {
     let mut out = Vec::new();
     for a in cx.fm.annotations_of(decl) {
         if matches!(a.simple_name(), "RequestMapping" | "GetMapping" | "PostMapping" | "PutMapping" | "DeleteMapping" | "PatchMapping" | "Get" | "Post" | "Put" | "Delete" | "Patch" | "Controller") {
             for k in ["value", "path", "uri", "uris"] {
                 if let Some(v) = a.arg(k) {
+                    if v.values().iter().any(|x| !matches!(x, AnnotationValue::Const(Constant::Str(_)))) {
+                        return None;
+                    }
                     out.extend(v.strings());
                 }
             }
         }
     }
-    out
+    Some(out)
 }
 
 fn template_vars(path: &str) -> Vec<String> {
@@ -589,11 +594,11 @@ declare_rule!(PathVariableMismatch {
 impl Rule for PathVariableMismatch {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
-        let method_paths = mapping_paths(cx, n);
+        let Some(method_paths) = mapping_paths(cx, n) else { return };
         if method_paths.is_empty() && !annotation_names(n, cx.src).iter().any(|a| a.ends_with("Mapping")) {
             return;
         }
-        let class_paths = owning_type_decl(n).map(|d| mapping_paths(cx, d)).unwrap_or_default();
+        let Some(class_paths) = owning_type_decl(n).map(|d| mapping_paths(cx, d)).unwrap_or(Some(Vec::new())) else { return };
         let mut vars: Vec<String> = Vec::new();
         for p in method_paths.iter().chain(class_paths.iter()) {
             vars.extend(template_vars(p));
@@ -812,6 +817,14 @@ impl Rule for BeanNameConflict {
             }
             // with overriding enabled only two scanned components still clash
             if di.bean_overriding_allowed && !matches!((&ba.source, &bb.source), (BeanSource::Component, BeanSource::Component)) {
+                continue;
+            }
+            // an @Bean method may replace a scanned component of the same class
+            // (Spring 6.1+, even with overriding disabled)
+            let same_class_override = |x: &grounds_di::Bean, y: &grounds_di::Bean| {
+                x.source == BeanSource::Component && matches!(y.source, BeanSource::FactoryMethod(_)) && y.ty.class_name() == Some(&*x.declaring_class)
+            };
+            if same_class_override(ba, bb) || same_class_override(bb, ba) {
                 continue;
             }
             for (this, other) in [(ba, bb), (bb, ba)] {

@@ -215,6 +215,11 @@ pub struct FileStub {
 }
 
 pub fn extract(file: &ParsedFile) -> FileStub {
+    extract_with(file, &crate::lombok::LombokConfig::default())
+}
+
+/// Extract with the `lombok.config` settings that apply to the file.
+pub fn extract_with(file: &ParsedFile, lombok: &crate::lombok::LombokConfig) -> FileStub {
     let src = &*file.text;
     let root = file.root();
     let mut stub = FileStub { package: Arc::from(""), has_syntax_errors: file.has_errors(), ..Default::default() };
@@ -244,7 +249,7 @@ pub fn extract(file: &ParsedFile) -> FileStub {
         }
     }
     stub.classes = ex.classes;
-    crate::lombok::apply_all(&mut stub.classes, &stub.imports);
+    crate::lombok::apply_all_with(&mut stub.classes, &stub.imports, lombok);
     // referenced names
     let mut names: Vec<Name> = Vec::new();
     let mut seen = rustc_hash::FxHashSet::default();

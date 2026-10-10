@@ -5,7 +5,7 @@ coding agent makes. It reports bugs, compile breaks and Spring/Micronaut
 wiring mistakes in changed code in about 0.1–0.3 seconds, without Gradle,
 Maven or a JVM.
 
-**Status: experimental.** It has been tested on five open-source codebases
+**Status: experimental.** It has been tested on thirteen open-source codebases
 (listed below) and nothing else. Expect false positives on code that looks different from
 those, and unsupported setups. Bug reports with a code snippet are the most
 useful thing you can send.
@@ -40,8 +40,11 @@ leaves tests for the end of the task.
   `@Primary`, profiles and conditions (treated as unknown), generics,
   factory methods, Spring Data repositories, Feign clients, MapStruct mappers
   and Micronaut's `@EachBean`, `@Replaces` and bean naming.
-- **Lombok:** generated constructors, getters, setters, `@With` and builders
-  are modeled, so code using them type-checks.
+- **Lombok:** generated constructors (including `staticName`/`staticConstructor`
+  factories), getters, setters, `@With`, `@Builder` on classes, constructors
+  and methods (with `@Builder.Default`), `@SuperBuilder` across files,
+  `@UtilityClass`, and the `lombok.config` keys that change signatures
+  (fluent/chained accessors, prefixes, copyable annotations).
 
 "Bean not found" is only reported for injection points whose type is
 declared in the project. Beans created by library auto-configuration (a
@@ -60,6 +63,14 @@ checked out, with no grounds configuration:
 | piggymetrics | 97 | 4,472 | 10 | 0.21 s | 87.4% | 0 / 17 / 61 |
 | jhipster-sample-app | 136 | 11,980 | 1 | 0.27 s | 83.6% | 0 / 4 / 19 |
 | micronaut-core | 6,373 | 697,624 | 85 | 2.9 s | 95.0% | 12 / 829 / 2,988 |
+| buckpal | 46 | 1,992 | 1 | 0.20 s | 87.8% | 0 / 3 / 4 |
+| realworld-springboot-java | 89 | 4,638 | 1 | 0.21 s | 93.7% | 3 / 10 / 13 |
+| eladmin | 274 | 23,195 | 6 | 0.28 s | 88.3% | 12 / 61 / 95 |
+| start.spring.io | 388 | 24,443 | 5 | 0.27 s | 53.4% | 0 / 7 / 14 |
+| mall | 524 | 85,204 | 8 | 0.48 s | 96.3% | 0 / 42 / 799 |
+| halo | 1,381 | 134,807 | 7 | 0.90 s | 89.1% | 2 / 347 / 508 |
+| dolphinscheduler | 2,560 | 251,783 | 145 | 1.15 s | 91.1% | 10 / 742 / 1,952 |
+| thingsboard | 6,884 | 776,052 | 111 | 4.9 s | 86.6% | 8 / 2,479 / 8,813 |
 
 "Calls resolved" is the share of method calls for which grounds found the
 exact target method. For the rest, any rule that needs the target says
@@ -81,18 +92,21 @@ on-disk cache.
 
 ## How it was tested
 
-- **Fixtures:** 348 small Java files, at least one per rule, with `// expect` markers on
+- **Fixtures:** 357 small Java files, at least one per rule, with `// expect` markers on
   the lines that must be reported. The tests fail when a rule reports
   anything else, or when a rule has no fixture. Fixtures also cover
   suppressions and options.
 - **Engine tests:** temporary git repositories go through edits, the
   baseline, broken-caller detection and impacted tests; multi-package
   projects exercise Spring bean registration (`@Import`, scan boundaries).
-- **Five unmodified open-source projects** (the table above), taken as
+- **Thirteen unmodified open-source projects** (the table above), taken as
   published. Since they compile and their applications start, any
   compile-break or DI finding on them would be a false positive. There are
-  none. Error-level findings were reviewed by hand. The remaining 12 on
-  micronaut-core are real by each rule's definition: `TrustManager`s that
+  none. Error-level findings were reviewed by hand. On the eight newer
+  projects they include genuine bugs: an `int` overflow in
+  `1000 * 60 * 60 * 24 * 365 * 10`, `String.format` with SLF4J `{}`
+  placeholders, `assertThat(x > 0)` without `.isTrue()`, DES with a constant
+  IV. The remaining 12 on micronaut-core are real by each rule's definition: `TrustManager`s that
   trust every certificate (in test and TCK code), `compareTo(...) != -1`
   and `assertSame(x, x)`. (An earlier version of this list also counted five
   `split(File.pathSeparator)` calls, which are fine; a reviewer caught it.)
@@ -116,6 +130,15 @@ on-disk cache.
   `ArrayList.equals(LinkedList)` reported as always false, `LocalDate.parse(s)`
   used for validation reported as an ignored result, `assertThatThrownBy(..)`
   reported as asserting nothing). All are fixed, each with a regression test.
+- **Newer Spring projects:** the first run on the eight projects added last
+  (all updated within weeks) produced over 1,400 compile-break and DI false
+  positives. Causes: Lombok features not yet modeled (`@SuperBuilder`,
+  `@UtilityClass`, `@Builder` on constructors, `lombok.config` fluent
+  accessors and copyable `@Lazy`), classpath skew (the newest cached jars are
+  Spring Boot 3 / `jakarta.*` while a project is on Boot 2 / `javax.*`),
+  MyBatis `@MapperScan`, configurations from annotations whose jar is
+  missing, inherited `@Bean` methods, prototype beans, and overloads whose
+  parameter types are unknown. All fixed; each pattern has a multi-file test.
 - **Precision fixes:** every false positive found during testing became a
   fixture case, for example `@Value` placeholders built by string
   concatenation, Micronaut introduction interfaces, MockMvc `andExpect` as
@@ -235,6 +258,11 @@ This runs Gradle (through an init script, without touching build files) or
 Maven a single time, about 20–40 s. It writes `.grounds/classpath.txt` and,
 for Gradle, which test task runs each source set. Set `scan_caches = false`
 to use only that file. grounds never runs the build tool on its own.
+
+With the guessed classpath, jar versions may not match the project's, so the
+compile-break rules skip classes that extend library classes (a method
+missing from the cached version may exist in the one the project uses).
+With an exact classpath and `scan_caches = false`, those are checked too.
 
 ## Design
 
