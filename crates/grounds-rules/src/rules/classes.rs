@@ -473,18 +473,19 @@ impl Rule for ClassShadowsSupertypeName {
     }
 }
 
+// Unicode-aware: `πcase` is camelCase, `Größe` is PascalCase
 fn is_pascal(s: &str) -> bool {
     let mut c = s.chars();
-    c.next().is_some_and(|f| f.is_ascii_uppercase()) && !s.contains('_') && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '$')
+    c.next().is_some_and(|f| f.is_uppercase()) && !s.contains('_') && s.chars().all(|c| c.is_alphanumeric() || c == '$')
 }
 
 fn is_camel(s: &str) -> bool {
     let mut c = s.chars();
-    c.next().is_some_and(|f| f.is_ascii_lowercase()) && s.chars().all(|c| c.is_ascii_alphanumeric())
+    c.next().is_some_and(|f| f.is_lowercase()) && s.chars().all(|c| c.is_alphanumeric())
 }
 
 fn is_upper_snake(s: &str) -> bool {
-    s.chars().next().is_some_and(|c| c.is_ascii_uppercase()) && s.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+    s.chars().next().is_some_and(|c| c.is_uppercase()) && s.chars().all(|c| c.is_uppercase() || c.is_numeric() || c == '_' || (c.is_alphabetic() && !c.is_lowercase()))
 }
 
 declare_rule!(ClassNaming {

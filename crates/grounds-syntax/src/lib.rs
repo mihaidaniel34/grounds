@@ -137,41 +137,86 @@ pub fn fixup_for_grammar(text: &str) -> Option<Vec<u8>> {
     fixup_record_patterns(text, varargs)
 }
 
-fn fixup_record_patterns(text: &str, mut out: Option<Vec<u8>>) -> Option<Vec<u8>> {
-    let has_underscore = text.as_bytes().windows(3).any(|w| w[1] == b'_' && !(w[0].is_ascii_alphanumeric() || w[0] == b'_' || w[0] == b'$') && !(w[2].is_ascii_alphanumeric() || w[2] == b'_' || w[2] == b'$'));
-    if !(text.contains("case") || text.contains("instanceof") || has_underscore) {
-        return out;
+/// Which bytes are code (not inside a comment, string, text block or char
+/// literal).
+fn code_mask(b: &[u8]) -> Vec<bool> {
+    let n = b.len();
+    let mut code = vec![true; n];
+    let mut i = 0;
+    let mark = |from: usize, to: usize, code: &mut Vec<bool>| {
+        for c in &mut code[from..to.min(n)] {
+            *c = false;
+        }
+    };
+    while i < n {
+        let start = i;
+        match b[i] {
+            b'/' if i + 1 < n && b[i + 1] == b'/' => {
+                while i < n && b[i] != b'\n' {
+                    i += 1;
+                }
+                mark(start, i, &mut code);
+            }
+            b'/' if i + 1 < n && b[i + 1] == b'*' => {
+                i += 2;
+                while i + 1 < n && !(b[i] == b'*' && b[i + 1] == b'/') {
+                    i += 1;
+                }
+                i = (i + 2).min(n);
+                mark(start, i, &mut code);
+            }
+            b'"' if i + 2 < n && b[i + 1] == b'"' && b[i + 2] == b'"' => {
+                i += 3;
+                while i < n && !(i + 2 < n && b[i] == b'"' && b[i + 1] == b'"' && b[i + 2] == b'"') {
+                    if b[i] == b'\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+                i = (i + 3).min(n);
+                mark(start, i, &mut code);
+            }
+            q @ (b'"' | b'\'') => {
+                i += 1;
+                while i < n && b[i] != q && b[i] != b'\n' {
+                    if b[i] == b'\\' {
+                        i += 1;
+                    }
+                    i += 1;
+                }
+                i = (i + 1).min(n);
+                mark(start, i, &mut code);
+            }
+            _ => i += 1,
+        }
     }
+    code
+}
+
+fn fixup_record_patterns(text: &str, mut out: Option<Vec<u8>>) -> Option<Vec<u8>> {
     let b = text.as_bytes();
     let n = b.len();
-    let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'$';
-    let word_at = |i: usize, w: &[u8]| i + w.len() <= n && &b[i..i + w.len()] == w && (i == 0 || !ident(b[i - 1])) && (i + w.len() == n || !ident(b[i + w.len()]));
-    // end of a char or string literal starting at `i` (quotes and brackets
-    // inside literals, like `case '(' ->`, must not count)
-    let skip_literal = |i: usize| -> usize {
-        let q = b[i];
-        let mut j = i + 1;
-        while j < n && b[j] != q && b[j] != b'\n' {
-            if b[j] == b'\\' {
-                j += 1;
-            }
-            j += 1;
-        }
-        (j + 1).min(n)
-    };
-    // in a pattern region, turn `A.B(` into `A$B(`; returns where it stopped
+    // identifier characters; non-ASCII bytes are parts of Unicode identifiers
+    let ident = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'$' || c >= 0x80;
+    let lone_underscore = |i: usize| b[i] == b'_' && (i == 0 || !ident(b[i - 1])) && (i + 1 >= n || !ident(b[i + 1]));
+    if !(text.contains("case") || text.contains("instanceof") || (0..n).any(lone_underscore)) {
+        return out;
+    }
+    let code = code_mask(b);
+    let word_at = |i: usize, w: &[u8]| code[i] && i + w.len() <= n && &b[i..i + w.len()] == w && (i == 0 || !ident(b[i - 1])) && (i + w.len() == n || !ident(b[i + w.len()]));
+    // in a pattern region, turn `A.B(` into `A$B(` (code bytes only)
     let patch = |start: usize, end: usize, out: &mut Option<Vec<u8>>| {
         let mut i = start;
         while i < end {
-            if ident(b[i]) && (i == 0 || !(ident(b[i - 1]) || b[i - 1] == b'.')) {
+            if code[i] && ident(b[i]) && (i == 0 || !(ident(b[i - 1]) || b[i - 1] == b'.')) {
                 let s0 = i;
                 let mut dots = Vec::new();
                 let mut j = i;
                 loop {
-                    while j < end && ident(b[j]) {
+                    while j < end && code[j] && ident(b[j]) {
                         j += 1;
                     }
-                    if j + 1 < end && b[j] == b'.' && ident(b[j + 1]) {
+                    if j + 1 < end && code[j] && b[j] == b'.' && code[j + 1] && ident(b[j + 1]) {
                         dots.push(j);
                         j += 1;
                         continue;
@@ -179,10 +224,10 @@ fn fixup_record_patterns(text: &str, mut out: Option<Vec<u8>>) -> Option<Vec<u8>
                     break;
                 }
                 let mut k = j;
-                while k < end && b[k].is_ascii_whitespace() {
+                while k < end && (b[k].is_ascii_whitespace() || !code[k]) {
                     k += 1;
                 }
-                if !dots.is_empty() && k < end && b[k] == b'(' && b[s0].is_ascii_alphabetic() {
+                if !dots.is_empty() && k < end && code[k] && b[k] == b'(' && b[s0].is_ascii_alphabetic() {
                     let o = out.get_or_insert_with(|| b.to_vec());
                     for d in dots {
                         o[d] = b'$';
@@ -196,59 +241,18 @@ fn fixup_record_patterns(text: &str, mut out: Option<Vec<u8>>) -> Option<Vec<u8>
     };
     let mut i = 0;
     while i < n {
-        match b[i] {
-            // skip comments and literals
-            b'/' if i + 1 < n && b[i + 1] == b'/' => {
-                while i < n && b[i] != b'\n' {
-                    i += 1;
-                }
-            }
-            b'/' if i + 1 < n && b[i + 1] == b'*' => {
-                i += 2;
-                while i + 1 < n && !(b[i] == b'*' && b[i + 1] == b'/') {
-                    i += 1;
-                }
-                i += 2;
-            }
-            b'"' => {
-                if i + 2 < n && b[i + 1] == b'"' && b[i + 2] == b'"' {
-                    i += 3;
-                    while i + 2 < n && !(b[i] == b'"' && b[i + 1] == b'"' && b[i + 2] == b'"' && b[i - 1] != b'\\') {
-                        i += 1;
-                    }
-                    i += 3;
-                } else {
-                    i += 1;
-                    while i < n && b[i] != b'"' && b[i] != b'\n' {
-                        if b[i] == b'\\' {
-                            i += 1;
-                        }
-                        i += 1;
-                    }
-                    i += 1;
-                }
-            }
-            b'\'' => {
-                i += 1;
-                while i < n && b[i] != b'\'' && b[i] != b'\n' {
-                    if b[i] == b'\\' {
-                        i += 1;
-                    }
-                    i += 1;
-                }
-                i += 1;
-            }
-            _ if word_at(i, b"case") => {
-                // the pattern part of the label: up to `->`, `:` or `when` at depth 0
-                let start = i + 4;
-                let mut j = start;
-                let mut depth = 0i32;
-                while j < n {
+        if !code[i] {
+            i += 1;
+            continue;
+        }
+        if word_at(i, b"case") {
+            // the pattern part of the label: up to `->`, `:` or `when` at depth 0
+            let start = i + 4;
+            let mut j = start;
+            let mut depth = 0i32;
+            while j < n {
+                if code[j] {
                     match b[j] {
-                        b'\'' | b'"' => {
-                            j = skip_literal(j);
-                            continue;
-                        }
                         b'(' => depth += 1,
                         b')' => depth -= 1,
                         b'-' if depth == 0 && j + 1 < n && b[j + 1] == b'>' => break,
@@ -257,65 +261,62 @@ fn fixup_record_patterns(text: &str, mut out: Option<Vec<u8>>) -> Option<Vec<u8>
                         _ if depth == 0 && word_at(j, b"when") => break,
                         _ => {}
                     }
-                    j += 1;
                 }
-                patch(start, j, &mut out);
-                // Java 22 unnamed patterns, possibly several per label
-                // (`case Boolean _, Byte _ ->`): the grammar supports neither.
-                // They bind nothing, so keep the first and blank the others.
-                let unnamed = (start..j).any(|k| b[k] == b'_' && !ident(b[k - 1]) && (k + 1 >= n || !ident(b[k + 1])));
-                if unnamed {
-                    let mut depth = 0i32;
-                    let mut comma = None;
-                    for k in start..j {
-                        match b[k] {
-                            b'(' | b'<' => depth += 1,
-                            b')' | b'>' => depth -= 1,
-                            b',' if depth == 0 => {
-                                comma = Some(k);
-                                break;
-                            }
-                            _ => {}
+                j += 1;
+            }
+            patch(start, j, &mut out);
+            for k in start..j {
+                if code[k] && lone_underscore(k) {
+                    out.get_or_insert_with(|| b.to_vec())[k] = b'$';
+                }
+            }
+            // Java 22 unnamed patterns, possibly several per label
+            // (`case Boolean _, Byte _ ->`): the grammar supports neither.
+            // They bind nothing, so keep the first and blank the others.
+            if (start..j).any(|k| code[k] && lone_underscore(k)) {
+                let mut depth = 0i32;
+                let comma = (start..j).find(|&k| {
+                    if !code[k] {
+                        return false;
+                    }
+                    match b[k] {
+                        b'(' | b'<' => depth += 1,
+                        b')' | b'>' => depth -= 1,
+                        b',' if depth == 0 => return true,
+                        _ => {}
+                    }
+                    false
+                });
+                if let Some(c) = comma {
+                    let o = out.get_or_insert_with(|| b.to_vec());
+                    for x in &mut o[c..j] {
+                        if *x != b'\n' {
+                            *x = b' ';
                         }
                     }
-                    if let Some(c) = comma {
-                        let o = out.get_or_insert_with(|| b.to_vec());
-                        for x in &mut o[c..j] {
-                            if *x != b'\n' {
-                                *x = b' ';
-                            }
-                        }
-                    }
                 }
-                i = j;
             }
-            // unnamed variables `_` (patterns, lambdas, catch, locals) become `$`
-            b'_' if (i == 0 || !ident(b[i - 1])) && (i + 1 >= n || !ident(b[i + 1])) => {
-                let o = out.get_or_insert_with(|| b.to_vec());
-                o[i] = b'$';
-                i += 1;
+            i = j;
+            continue;
+        }
+        if word_at(i, b"instanceof") {
+            // `instanceof [final] A.B(...)`: the record pattern and its body
+            let mut j = i + 10;
+            while j < n && b[j].is_ascii_whitespace() {
+                j += 1;
             }
-            _ if word_at(i, b"instanceof") => {
-                // `instanceof [final] A.B(...)`: the record pattern and its body
-                let mut j = i + 10;
-                while j < n && b[j].is_ascii_whitespace() {
-                    j += 1;
-                }
-                if word_at(j, b"final") {
-                    j += 5;
-                }
-                let start = j;
-                while j < n && (ident(b[j]) || b[j] == b'.' || b[j].is_ascii_whitespace()) {
-                    j += 1;
-                }
-                if j < n && b[j] == b'(' {
-                    let mut depth = 0i32;
-                    while j < n {
+            if word_at(j, b"final") {
+                j += 5;
+            }
+            let start = j;
+            while j < n && code[j] && (ident(b[j]) || b[j] == b'.' || b[j].is_ascii_whitespace()) {
+                j += 1;
+            }
+            if j < n && code[j] && b[j] == b'(' {
+                let mut depth = 0i32;
+                while j < n {
+                    if code[j] {
                         match b[j] {
-                            b'\'' | b'"' => {
-                                j = skip_literal(j);
-                                continue;
-                            }
                             b'(' => depth += 1,
                             b')' => {
                                 depth -= 1;
@@ -327,14 +328,20 @@ fn fixup_record_patterns(text: &str, mut out: Option<Vec<u8>>) -> Option<Vec<u8>
                             b';' | b'{' => break,
                             _ => {}
                         }
-                        j += 1;
                     }
-                    patch(start, j.min(n), &mut out);
+                    j += 1;
                 }
-                i = j.max(i + 10);
+                patch(start, j.min(n), &mut out);
             }
-            _ => i += 1,
+            i += 10;
+            continue;
         }
+        // unnamed variables `_` (patterns, lambdas, catch, locals) become `$`
+        if lone_underscore(i) {
+            let o = out.get_or_insert_with(|| b.to_vec());
+            o[i] = b'$';
+        }
+        i += 1;
     }
     out
 }
@@ -738,5 +745,31 @@ mod unnamed_tests {
         let src = "class T { Object m(Object v) { try { return switch (v) { case Boolean _, Byte _ -> 1; case java.util.Collection<?> _, java.util.Map<?, ?> _ when v != null -> 2; case 1, 2 -> 3; default -> 4; }; } catch (RuntimeException _) { java.util.function.BiFunction<Object, Object, Object> f = (_, b) -> b; return f; } } }";
         let t = ParsedFile::parse(src).root().to_sexp();
         assert!(!t.contains("ERROR"), "{t}");
+    }
+}
+
+#[cfg(test)]
+mod fixup_review_tests {
+    use super::*;
+
+    fn clean(src: &str) {
+        let t = ParsedFile::parse(src).root().to_sexp();
+        assert!(!t.contains("ERROR"), "{t}");
+    }
+
+    #[test]
+    fn strings_comments_and_unicode_do_not_trigger_rewrites() {
+        // `_` and `,` inside a case-label string
+        clean("class T { int f(String s) { return switch (s) { case \"_,x\" -> 1; default -> 0; }; } int g() { return 1; } }");
+        // a parenthesis in a comment inside a label must not extend the region
+        let src = "class T { void run() {} void f(int n) { switch (n) { case 1 /* ( */ -> this.run(); } } }";
+        clean(src);
+        assert!(fixup_for_grammar(src).is_none_or(|b| !String::from_utf8_lossy(&b).contains("this$run")));
+        // `case` as the suffix of a Unicode identifier is not the keyword
+        let src = "class T { int run() { return 1; } void f() { int πcase = this.run(); } }";
+        clean(src);
+        assert!(fixup_for_grammar(src).is_none_or(|b| !String::from_utf8_lossy(&b).contains("this$run")));
+        // text blocks and char literals
+        clean("class T { String s = \"\"\"\n case A.B( _ , x\n \"\"\"; char c = '_'; int x_1 = 1; }");
     }
 }

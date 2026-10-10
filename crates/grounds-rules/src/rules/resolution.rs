@@ -90,6 +90,11 @@ declare_rule!(UnresolvedMethod {
 impl Rule for UnresolvedMethod {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
+        // inside a case label's pattern (not its guard) a call is never valid
+        // Java: it is a pattern the grammar did not understand (`case R(_)`)
+        if n.ancestors().take_while(|a| a.kind() != "switch_block").any(|a| a.kind() == "switch_label") && !n.ancestors().any(|a| a.kind() == "guard") {
+            return;
+        }
         let Some(name) = cx.fm.call_name(n) else { return };
         // `Iface.super.m()` parses as object `Iface` plus a `super` child
         if n.kid_of_kind("super").is_some() {
@@ -218,8 +223,10 @@ fn definitely_incompatible<'t>(cx: &Ctx<'_, 't>, call: Node<'t>, ms: &[MethodRef
             if !fully_known(cx, &pt) || !fully_known(cx, at) {
                 return true;
             }
+            // skew is only possible for jar classes, not between project classes
             if let (Some(a), Some(p)) = (at.class_name(), pt.class_name()) {
-                if a != p && simple_name_of(a) == simple_name_of(p) {
+                let from_jar = |n: &str| cx.fm.class(n).is_some_and(|c| !c.is_source());
+                if a != p && simple_name_of(a) == simple_name_of(p) && (from_jar(a) || from_jar(p)) {
                     return true;
                 }
             }
@@ -370,7 +377,10 @@ impl Rule for OverrideWithoutSuper {
                         // package (javax vs jakarta when the cached jars do not
                         // match the project) may still be the same parameter
                         let skew = match (at.erasure().class_name(), b.ty.erasure().class_name()) {
-                            (Some(x), Some(y)) => x != y && simple_name_of(x) == simple_name_of(y),
+                            (Some(x), Some(y)) => {
+                                let from_jar = |n: &str| cx.fm.class(n).is_some_and(|c| !c.is_source());
+                                x != y && simple_name_of(x) == simple_name_of(y) && (from_jar(x) || from_jar(y))
+                            }
                             _ => false,
                         };
                         at.erasure() == b.ty.erasure() || skew || !fully_known(cx, &at) || !fully_known(cx, &b.ty)

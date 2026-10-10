@@ -34,6 +34,30 @@ pub struct Project {
     pub di: grounds_di::DiModel,
     pub source_sets: SourceSets,
     pub lombok: LombokConfigs,
+    /// classes listed in META-INF/spring.factories and META-INF/spring/*.imports
+    pub registered: Vec<String>,
+}
+
+/// Class names registered through Spring's META-INF files in any module.
+fn spring_registrations(ws: &Workspace) -> Vec<String> {
+    let mut out = Vec::new();
+    for m in &ws.modules {
+        let meta = m.dir.join("src/main/resources/META-INF");
+        if let Ok(t) = std::fs::read_to_string(meta.join("spring.factories")) {
+            // key=a.B,\ c.D  (values may continue over lines)
+            for v in t.replace("\\\n", "").lines().filter_map(|l| l.split_once('=').map(|(_, v)| v.to_string())) {
+                out.extend(v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
+            }
+        }
+        if let Ok(rd) = std::fs::read_dir(meta.join("spring")) {
+            for e in rd.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "imports")) {
+                if let Ok(t) = std::fs::read_to_string(e.path()) {
+                    out.extend(t.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from));
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Parsed `lombok.config` files by directory.
@@ -181,10 +205,11 @@ impl Project {
         if stats.parsed > 0 {
             let _ = new_cache.save(&workspace.root);
         }
-        let mut di = grounds_di::DiModel::build(&index);
+        let registered = spring_registrations(&workspace);
+        let mut di = grounds_di::DiModel::build_with(&index, &registered);
         di.lombok_copies_qualifiers = lombok_copies_qualifiers(&workspace.root);
         di.bean_overriding_allowed = bean_overriding_allowed(&workspace);
-        Ok(Project { config, workspace, index, stats, di, source_sets, lombok })
+        Ok(Project { config, workspace, index, stats, di, source_sets, lombok, registered })
     }
 
     pub fn source_kind(&self, path: &Path) -> SourceKind {
@@ -222,7 +247,7 @@ impl Project {
 
     pub fn rebuild_di(&mut self) {
         let (copies, overriding) = (self.di.lombok_copies_qualifiers, self.di.bean_overriding_allowed);
-        self.di = grounds_di::DiModel::build(&self.index);
+        self.di = grounds_di::DiModel::build_with(&self.index, &self.registered);
         self.di.lombok_copies_qualifiers = copies;
         self.di.bean_overriding_allowed = overriding;
     }

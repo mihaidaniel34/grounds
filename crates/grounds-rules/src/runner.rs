@@ -128,6 +128,21 @@ impl RuleSet {
                 eprintln!("grounds: rule {} panicked on {}", rule.meta().id, info.path);
             }
         }
+        // code the parser could not read is not judged: drop findings that
+        // overlap a syntax error
+        if fm.root().has_error() {
+            let mut errors: Vec<(u32, u32)> = Vec::new();
+            let mut stack = vec![fm.root()];
+            while let Some(n) = stack.pop() {
+                if n.is_error() || n.is_missing() {
+                    errors.push((n.start_byte() as u32, n.end_byte() as u32));
+                } else if n.has_error() {
+                    let mut c = n.walk();
+                    stack.extend(n.children(&mut c));
+                }
+            }
+            out.retain(|d| !errors.iter().any(|(s, e)| d.range.start <= *e && *s <= d.range.end));
+        }
         let sup = Suppressions::new(fm);
         out.retain(|d| {
             let meta = self.rules.iter().find(|r| r.meta().id == d.rule).map(|r| r.meta());

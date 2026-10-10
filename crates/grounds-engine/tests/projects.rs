@@ -102,3 +102,52 @@ fn spring_registration_patterns() {
     let found = findings(&dir, DI);
     assert!(found.is_empty(), "{found:?}");
 }
+
+#[test]
+fn review_regressions_stay_reported() {
+    // a plain class with a leftover @Bean method registers nothing
+    let dir = project(
+        "plain-bean-method",
+        &[
+            ("src/main/java/app/App.java", "package app;\n@org.springframework.boot.autoconfigure.SpringBootApplication\npublic class App {}\n"),
+            ("src/main/java/app/Missing.java", "package app;\npublic class Missing {}\n"),
+            ("src/main/java/app/Forgotten.java", "package app;\nclass Forgotten {\n    @org.springframework.context.annotation.Bean\n    Missing missing() { return new Missing(); }\n}\n"),
+            ("src/main/java/app/Consumer.java", "package app;\n@org.springframework.stereotype.Component\nclass Consumer {\n    Consumer(Missing missing) {}\n}\n"),
+            // autowireCandidate = false factories satisfy nothing
+            ("src/main/java/app/Store.java", "package app;\npublic interface Store {}\n"),
+            ("src/main/java/app/RedisStore.java", "package app;\npublic class RedisStore implements Store {}\n"),
+            ("src/main/java/app/StoreConfig.java", "package app;\n@org.springframework.context.annotation.Configuration\nclass StoreConfig {\n    @org.springframework.context.annotation.Bean(autowireCandidate = false)\n    Store store() { return new RedisStore(); }\n    @org.springframework.context.annotation.Bean\n    String user(RedisStore redis) { return \"ok\"; }\n}\n"),
+        ],
+    );
+    let found = findings(&dir, DI);
+    assert_eq!(found, vec!["src/main/java/app/Consumer.java:4 bean-not-found".to_string(), "src/main/java/app/StoreConfig.java:7 bean-not-found".to_string()], "{found:?}");
+
+    // same simple name in two project packages is a real mismatch
+    let dir = project(
+        "same-simple-name",
+        &[
+            ("src/main/java/a/Item.java", "package a;\npublic class Item {}\n"),
+            ("src/main/java/b/Item.java", "package b;\npublic class Item {}\n"),
+            ("src/main/java/app/Target.java", "package app;\nclass Target {\n    void accept(a.Item item) {}\n}\n"),
+            ("src/main/java/app/Test.java", "package app;\nclass Test {\n    void f() { new Target().accept(new b.Item()); }\n}\n"),
+            ("src/main/java/app/Child.java", "package app;\nclass Child extends Target {\n    @Override void accept(b.Item item) {}\n}\n"),
+        ],
+    );
+    let mut found = findings(&dir, COMPILE);
+    found.sort();
+    assert_eq!(found, vec!["src/main/java/app/Child.java:3 override-matches-nothing".to_string(), "src/main/java/app/Test.java:3 unresolved-method".to_string()], "{found:?}");
+}
+
+#[test]
+fn inherited_bean_methods_with_generics_and_overloads() {
+    let dir = project(
+        "inherited-generic",
+        &[
+            ("src/main/java/app/Store.java", "package app;\npublic class Store {}\n"),
+            ("src/main/java/app/Base.java", "package app;\nabstract class Base<T> {\n    @org.springframework.context.annotation.Bean\n    T value() { return create(); }\n    abstract T create();\n    @org.springframework.context.annotation.Bean\n    Store make(String text) { return new Store(); }\n}\n"),
+            ("src/main/java/app/App.java", "package app;\n@org.springframework.context.annotation.Configuration\nclass App extends Base<Store> {\n    Store create() { return new Store(); }\n    public void make(int n) {}\n    @org.springframework.context.annotation.Bean\n    String text() { return \"ok\"; }\n    @org.springframework.context.annotation.Bean\n    String consumer(Store s) { return \"ok\"; }\n}\n"),
+        ],
+    );
+    let found = findings(&dir, DI);
+    assert!(found.iter().all(|f| !f.contains("bean-not-found")), "{found:?}");
+}

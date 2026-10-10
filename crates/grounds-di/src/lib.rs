@@ -232,6 +232,8 @@ struct Builder<'a> {
     /// memo: annotation name -> is stereotype / qualifier
     stereo: FxHashMap<Name, Option<Framework>>,
     qualifier_ann: FxHashMap<Name, bool>,
+    /// classes registered through META-INF files
+    registered: rustc_hash::FxHashSet<String>,
 }
 
 impl<'a> Builder<'a> {
@@ -560,7 +562,11 @@ impl<'a> Builder<'a> {
             // registered (an annotation from a missing jar, spring.factories,
             // auto-configuration imports, programmatic registration)
             let bean_methods = c.methods.iter().any(|m| m.annotations.iter().any(|a| BEAN_METHOD_ANNOTATIONS.iter().any(|b| a.is(b))));
-            let unrecognized_config = fw.is_none() && bean_methods && !is_framework_class(&c.name);
+            // ... with evidence: an annotation we could not resolve (a stereotype
+            // from a missing jar) or a listing in META-INF registration files;
+            // a plain class with a leftover @Bean method is not a bean
+            let evidence = anns.iter().any(|a| !a.resolved && !matches!(a.simple_name(), "SuppressWarnings" | "Deprecated")) || self.registered.contains(&*c.name) || self.registered.contains(&c.name.replace('$', "."));
+            let unrecognized_config = fw.is_none() && bean_methods && evidence && !is_framework_class(&c.name);
             let Some(fw) = fw.or(unrecognized_config.then_some(Framework::Spring)) else { continue };
             // may or may not be registered at runtime: satisfies injections but
             // its own dependencies are not judged
@@ -613,17 +619,26 @@ impl<'a> Builder<'a> {
             // factory / @Bean methods, including ones inherited from source
             // superclasses (`class RedisConfig extends BaseRedisConfig`)
             let mut factory_methods: Vec<MethodInfo> = c.methods.clone();
-            let mut sup = c.superclass.as_ref().and_then(|t| t.class_name()).map(str::to_string);
+            // walk the superclass chain with type arguments substituted
+            // (`class App extends Base<Store>`: Base's `@Bean T value()` is a Store)
+            let same_sig = |a: &MethodInfo, b: &MethodInfo| a.name == b.name && a.params.len() == b.params.len() && a.params.iter().zip(&b.params).all(|(x, y)| x.ty.erasure() == y.ty.erasure());
+            let mut sup: Option<Ty> = c.superclass.clone();
             let mut hops = 0;
-            while let Some(sn) = sup.take() {
+            while let Some(st) = sup.take() {
                 hops += 1;
-                let Some(sc) = self.index.class(&sn).filter(|sc| sc.is_source()) else { break };
+                let Some(sc) = st.class_name().and_then(|sn| self.index.class(sn)).filter(|sc| sc.is_source()) else { break };
+                let map = grounds_index::hierarchy::substitution(&sc, st.args());
                 for m in &sc.methods {
-                    if !factory_methods.iter().any(|x| x.name == m.name && x.params.len() == m.params.len()) {
-                        factory_methods.push(m.clone());
+                    let mut m = m.clone();
+                    m.ret = grounds_index::hierarchy::apply_subst(&m.ret, &map);
+                    for p in &mut m.params {
+                        p.ty = grounds_index::hierarchy::apply_subst(&p.ty, &map);
+                    }
+                    if !factory_methods.iter().any(|x| same_sig(x, &m)) {
+                        factory_methods.push(m);
                     }
                 }
-                sup = sc.superclass.as_ref().and_then(|t| t.class_name()).map(str::to_string);
+                sup = sc.superclass.as_ref().map(|t| grounds_index::hierarchy::apply_subst(t, &map));
                 if hops > 8 {
                     break;
                 }
@@ -813,7 +828,13 @@ pub fn unwrap_injected(ty: &Ty) -> (Ty, bool, bool, bool) {
 
 impl DiModel {
     pub fn build(index: &Index) -> DiModel {
-        let mut b = Builder { index, model: DiModel::default(), stereo: FxHashMap::default(), qualifier_ann: FxHashMap::default() };
+        Self::build_with(index, &[])
+    }
+
+    /// `registered`: classes listed in META-INF/spring.factories or
+    /// META-INF/spring/*.imports (auto-configurations and similar).
+    pub fn build_with(index: &Index, registered: &[String]) -> DiModel {
+        let mut b = Builder { index, model: DiModel::default(), stereo: FxHashMap::default(), qualifier_ann: FxHashMap::default(), registered: registered.iter().cloned().collect() };
         b.scan();
         let mut m = b.model;
         m.index_providers(index);
@@ -1000,7 +1021,7 @@ impl DiModel {
     fn factory_may_return(&self, lk: &dyn ClassLookup, ty: &Ty) -> bool {
         let Some(want) = ty.class_name() else { return false };
         self.beans.iter().any(|b| {
-            matches!(b.source, BeanSource::FactoryMethod(_)) && b.ty.class_name().is_some_and(|r| r != want && r != "java.lang.Object" && lk.is_subclass(want, r).is_yes())
+            matches!(b.source, BeanSource::FactoryMethod(_)) && b.autowire_candidate && b.ty.class_name().is_some_and(|r| r != want && r != "java.lang.Object" && lk.is_subclass(want, r).is_yes())
         })
     }
 
