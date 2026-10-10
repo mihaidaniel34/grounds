@@ -299,8 +299,11 @@ dependencies = [
 name = "grounds-di"
 version = "0.1.0"
 dependencies = [
+ "grounds-classfile",
  "grounds-index",
  "grounds-syntax",
+ "rustc-hash",
+ "serde",
 ]
 
 [[package]]
@@ -332,8 +335,11 @@ dependencies = [
 name = "grounds-flow"
 version = "0.1.0"
 dependencies = [
+ "grounds-classfile",
  "grounds-index",
+ "grounds-semantic",
  "grounds-syntax",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -355,8 +361,15 @@ dependencies = [
 name = "grounds-rules"
 version = "0.1.0"
 dependencies = [
+ "grounds-classfile",
+ "grounds-di",
+ "grounds-flow",
  "grounds-index",
+ "grounds-semantic",
  "grounds-syntax",
+ "once_cell",
+ "rustc-hash",
+ "serde",
 ]
 
 [[package]]

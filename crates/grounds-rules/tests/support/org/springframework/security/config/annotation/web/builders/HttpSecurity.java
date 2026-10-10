@@ -1,0 +1,1 @@
+package org.springframework.security.config.annotation.web.builders; public class HttpSecurity { public CsrfConfigurer csrf() { return null; } public HttpSecurity csrf(java.util.function.Consumer<CsrfConfigurer> c) { return this; } public static class CsrfConfigurer { public HttpSecurity disable() { return null; } } }

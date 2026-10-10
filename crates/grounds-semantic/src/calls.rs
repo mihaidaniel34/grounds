@@ -592,7 +592,9 @@ impl<'t> FileModel<'t> {
         if exp.is_known() {
             let tvars: Vec<Name> = ci.type_params.iter().map(|p| p.name.clone()).collect();
             let mut b = Vec::new();
-            unify(self, &ci.this_type(), &exp, &tvars, &mut b);
+            let this = ci.this_type();
+            let sup = exp.class_name().and_then(|en| self.as_super(&this, en)).unwrap_or(this);
+            unify(self, &sup, &exp, &tvars, &mut b);
             if b.len() == tvars.len() {
                 return apply_subst(&ci.this_type(), &b);
             }

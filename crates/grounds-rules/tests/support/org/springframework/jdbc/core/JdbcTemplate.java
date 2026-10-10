@@ -1,0 +1,1 @@
+package org.springframework.jdbc.core; import java.util.*; public class JdbcTemplate { public void execute(String sql) {} public int update(String sql, Object... args) { return 0; } public List<Map<String,Object>> queryForList(String sql, Object... args) { return null; } public <T> T queryForObject(String sql, Class<T> t, Object... args) { return null; } }

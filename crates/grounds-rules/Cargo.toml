@@ -6,3 +6,12 @@ edition.workspace = true
 [dependencies]
 grounds-syntax.workspace = true
 grounds-index.workspace = true
+grounds-semantic.workspace = true
+grounds-flow.workspace = true
+grounds-di.workspace = true
+rustc-hash.workspace = true
+serde.workspace = true
+once_cell.workspace = true
+
+[dev-dependencies]
+grounds-classfile.workspace = true

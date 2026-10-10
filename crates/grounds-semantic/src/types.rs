@@ -3,7 +3,7 @@
 
 use crate::binder::LocalKind;
 use crate::model::{FileModel, Symbol};
-use grounds_index::stubs::{self, fold_binary, literal_constant};
+use grounds_index::stubs::{fold_binary, literal_constant};
 use grounds_index::*;
 use grounds_syntax::{Node, NodeExt};
 use std::sync::Arc;
@@ -688,7 +688,4 @@ impl<'t> FileModel<'t> {
         }
     }
 
-    pub(crate) fn type_syntax_of(&self, n: Node<'t>) -> TypeSyntax {
-        stubs::type_syntax(n, self.src)
-    }
 }

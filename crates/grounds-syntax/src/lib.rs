@@ -219,7 +219,7 @@ pub trait NodeExt<'t>: Sized {
     fn parent_unparen(&self) -> Option<Node<'t>>;
     fn modifiers(&self) -> Option<Node<'t>>;
     fn has_modifier(&self, keyword: &str) -> bool;
-    fn range(&self) -> TextRange;
+    fn text_range(&self) -> TextRange;
     fn is_kind(&self, kind: &str) -> bool;
     fn descendants(&self) -> Descendants<'t>;
 }
@@ -289,7 +289,7 @@ impl<'t> NodeExt<'t> for Node<'t> {
             None => false,
         }
     }
-    fn range(&self) -> TextRange {
+    fn text_range(&self) -> TextRange {
         TextRange::of(*self)
     }
     fn is_kind(&self, kind: &str) -> bool {

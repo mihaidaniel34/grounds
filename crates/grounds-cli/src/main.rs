@@ -15,6 +15,35 @@ enum Cmd {
         #[arg(default_value = ".")]
         root: PathBuf,
     },
+    /// Analyze files (default: whole project) and print findings.
+    Check {
+        /// Files or directories; default is all sources.
+        paths: Vec<PathBuf>,
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+        /// text | json | sarif
+        #[arg(long, default_value = "text")]
+        format: String,
+        /// Only run these rules (comma separated ids or categories).
+        #[arg(long)]
+        rules: Option<String>,
+        /// Minimum severity: error | warning | info
+        #[arg(long)]
+        min_severity: Option<String>,
+        /// Maximum findings to print (text format).
+        #[arg(long)]
+        max: Option<usize>,
+        /// Print per-rule counts instead of findings.
+        #[arg(long)]
+        stats: bool,
+    },
+    /// List all rules.
+    Rules {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Explain a rule.
+    Explain { rule: String },
     /// Debug: measure expression typing coverage over the project.
     TypeStats {
         #[arg(default_value = ".")]
@@ -59,8 +88,69 @@ fn main() -> anyhow::Result<()> {
             println!("resolved {} classes in {:?}; param types unknown {}/{}", names.len(), t.elapsed(), unknown, total);
         }
         Cmd::TypeStats { root, show_unresolved } => type_stats(&root, show_unresolved)?,
+        Cmd::Check { paths, root, format, rules, min_severity, max, stats } => {
+            let code = check(&root, &paths, &format, rules, min_severity, max, stats)?;
+            std::process::exit(code);
+        }
+        Cmd::Rules { json } => {
+            let cat = grounds_rules::catalog();
+            if json {
+                println!("{}", serde_json::to_string_pretty(&cat).unwrap());
+            } else {
+                for m in cat {
+                    println!("{:<40} {:<8} {:<13} {}", m.id, m.severity.as_str(), m.category.as_str(), m.name);
+                }
+                println!("{} rules", cat.len());
+            }
+        }
+        Cmd::Explain { rule } => match grounds_rules::meta_of(&rule) {
+            Some(m) => {
+                println!("{} ({}, {})\n\n{}\n\nsources: {}", m.name, m.severity.as_str(), m.category.as_str(), m.description, m.sources.join(", "));
+            }
+            None => {
+                eprintln!("unknown rule {rule}");
+                std::process::exit(2);
+            }
+        },
     }
     Ok(())
+}
+
+fn check(root: &std::path::Path, paths: &[PathBuf], format: &str, rules: Option<String>, min_sev: Option<String>, max: Option<usize>, stats: bool) -> anyhow::Result<i32> {
+    use grounds_engine::{analyze, report};
+    let t = std::time::Instant::now();
+    let mut project = grounds_engine::Project::load(root)?;
+    if let Some(r) = rules {
+        project.config.rules.enable = r.split(',').map(|s| s.trim().to_string()).collect();
+    }
+    let (ruleset, options) = analyze::build_ruleset(&project);
+    let files = analyze::expand_paths(&project, paths);
+    let t_load = t.elapsed();
+    let t = std::time::Instant::now();
+    let mut findings = analyze::analyze_files(&project, &ruleset, &options, &files);
+    let min = min_sev.as_deref().and_then(grounds_rules::Severity::parse).unwrap_or(grounds_rules::Severity::Info);
+    findings.retain(|f| f.severity <= min);
+    if stats {
+        let mut by: std::collections::BTreeMap<&str, usize> = Default::default();
+        for f in &findings {
+            *by.entry(f.rule).or_default() += 1;
+        }
+        let mut v: Vec<_> = by.into_iter().collect();
+        v.sort_by_key(|x| std::cmp::Reverse(x.1));
+        for (r, n) in v {
+            println!("{n:6} {r}");
+        }
+    } else {
+        match format {
+            "json" => println!("{}", report::json(&findings)),
+            "sarif" => println!("{}", report::sarif(&findings)),
+            _ => print!("{}", report::text(&findings, max)),
+        }
+    }
+    if format == "text" {
+        eprintln!("{} in {} files (load {:?}, analyze {:?}, {} rules)", report::summary(&findings), files.len(), t_load, t.elapsed(), ruleset.len());
+    }
+    Ok(if findings.iter().any(|f| f.severity == grounds_rules::Severity::Error) { 1 } else { 0 })
 }
 
 fn type_stats(root: &std::path::Path, show: bool) -> anyhow::Result<()> {
