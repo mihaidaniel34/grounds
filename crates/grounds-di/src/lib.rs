@@ -54,6 +54,8 @@ pub struct Bean {
     /// Names come from configuration (@EachBean/@EachProperty factories):
     /// any qualifier may match at runtime.
     pub dynamic_names: bool,
+    /// Declares @Replaces (Micronaut): replacement semantics we do not model fully.
+    pub replaces: bool,
 }
 
 /// Module directory of a source path (the part before `/src/`).
@@ -137,6 +139,8 @@ pub struct DiModel {
     providers: FxHashMap<Name, Vec<usize>>,
     /// beans whose supertype closure is incomplete (unknown library types)
     incomplete: Vec<usize>,
+    /// classes with an @Inject constructor: just-in-time bindable in JSR-330 containers
+    jit: Vec<Name>,
 }
 
 const SPRING_STEREOTYPES: &[&str] = &[
@@ -183,6 +187,13 @@ pub const QUALIFIER_ANNOTATIONS: &[&str] = &["org.springframework.beans.factory.
 pub const INJECT_ANNOTATIONS: &[&str] = &["org.springframework.beans.factory.annotation.Autowired", "jakarta.inject.Inject", "javax.inject.Inject", "jakarta.annotation.Resource", "javax.annotation.Resource"];
 const BEAN_METHOD_ANNOTATIONS: &[&str] = &["org.springframework.context.annotation.Bean", "io.micronaut.context.annotation.Bean", "jakarta.inject.Singleton", "javax.inject.Singleton", "io.micronaut.context.annotation.Prototype", "io.micronaut.context.annotation.Context", "jakarta.enterprise.inject.Produces", "javax.enterprise.inject.Produces"];
 const CONDITIONAL_PREFIXES: &[&str] = &["Profile", "Conditional", "Requires", "Requirements", "IfBuildProperty", "LookupIfProperty"];
+
+/// Is this class part of a DI framework itself (not user code that happens to
+/// live under a framework's namespace, like Spring's sample applications)?
+pub fn is_framework_class(n: &str) -> bool {
+    const FRAMEWORK_PACKAGES: &[&str] = &["io.micronaut.", "org.springframework.", "jakarta.", "javax.", "com.google.inject.", "io.quarkus."];
+    FRAMEWORK_PACKAGES.iter().any(|p| n.starts_with(p)) && !n.starts_with("org.springframework.samples.") && !n.starts_with("io.micronaut.docs.")
+}
 
 /// Introspector.decapitalize semantics used by Spring for bean names.
 pub fn decapitalize(s: &str) -> String {
@@ -283,7 +294,14 @@ impl<'a> Builder<'a> {
                     return Some(n);
                 }
             }
+            if a.simple_name() == "Any" {
+                return Some(String::new());
+            }
             if self.is_custom_qualifier(a) {
+                // qualifier annotations with members select by member values, which we do not model
+                if !a.args.is_empty() {
+                    return Some(String::new());
+                }
                 return Some(format!("@{}", a.name));
             }
         }
@@ -355,7 +373,7 @@ impl<'a> Builder<'a> {
             if c.is_interface() && c.kind != ClassKind::Annotation {
                 let mut source = None;
                 let no_repo = c.annotations.iter().any(|a| a.simple_name() == "NoRepositoryBean");
-                if !no_repo && !c.name.starts_with("org.springframework") {
+                if !no_repo && !is_framework_class(&c.name) {
                     if self.index.is_subclass(&c.name, "org.springframework.data.repository.Repository").is_yes() {
                         source = Some((BeanSource::Repository, Framework::Spring));
                     } else if let Some((stub, raw)) = self.index.raw_class(&c.name) {
@@ -373,12 +391,15 @@ impl<'a> Builder<'a> {
                 }
                 for a in &c.annotations {
                     match a.simple_name() {
+                        "ConfigurationProperties" | "EachProperty" | "ConfigurationReader" if a.name.starts_with("io.micronaut") || !a.resolved => source = Some((BeanSource::Component, Framework::Micronaut)),
                         "FeignClient" | "HttpExchange" => source = Some((BeanSource::Client, Framework::Spring)),
                         "Client" if a.name.starts_with("io.micronaut") || !a.resolved => source = Some((BeanSource::Client, Framework::Micronaut)),
                         "Repository" | "JdbcRepository" | "MongoRepository" | "R2dbcRepository" if a.name.starts_with("io.micronaut") => source = Some((BeanSource::Repository, Framework::Micronaut)),
                         "Mapper" => {
+                            // MapStruct (component model may come from a compiler option) or MyBatis
                             let model = first_string(a, &["componentModel"]).unwrap_or_default();
-                            if matches!(model.as_str(), "spring" | "jsr330" | "cdi" | "jakarta" | "jakarta-cdi") || a.arg("componentModel").is_some_and(|v| matches!(v, AnnotationValue::Expr(e) if e.contains("SPRING") || e.contains("JSR330") || e.contains("JAKARTA"))) {
+                            let explicit_default = model == "default" || a.arg("componentModel").is_some_and(|v| matches!(v, AnnotationValue::Expr(e) if e.contains("DEFAULT")));
+                            if !explicit_default {
                                 source = Some((BeanSource::Mapper, Framework::Spring));
                             }
                         }
@@ -404,15 +425,41 @@ impl<'a> Builder<'a> {
                         autowire_candidate: true,
                         framework: fw,
                         dynamic_names: false,
+                        replaces: false,
                     });
                     self.model.component_classes.insert(c.name.clone(), i);
                 }
                 continue;
             }
-            if c.is_abstract() || c.flags.has(Flags::ANON) {
+            if c.flags.has(Flags::ANON) {
+                continue;
+            }
+            if c.is_abstract() {
+                if c.annotations.iter().any(|a| a.simple_name() == "Mapper") {
+                    let i = self.add_bean(Bean {
+                        name: decapitalize(c.simple_name()),
+                        aliases: Vec::new(),
+                        ty: c.this_type(),
+                        declaring_class: c.name.clone(),
+                        source: BeanSource::Mapper,
+                        qualifiers: Vec::new(),
+                        primary: false,
+                        conditional: false,
+                        file: file.clone(),
+                        is_test,
+                        autowire_candidate: true,
+                        framework: Framework::Spring,
+                        dynamic_names: false,
+                        replaces: false,
+                    });
+                    self.model.component_classes.insert(c.name.clone(), i);
+                }
                 continue;
             }
             let anns = c.annotations.clone();
+            if c.constructors().any(|m| m.annotations.iter().any(|a| a.is("jakarta.inject.Inject") || a.is("javax.inject.Inject"))) {
+                self.model.jit.push(c.name.clone());
+            }
             let fw = anns.iter().find_map(|a| self.stereotype(a, 0));
             let Some(fw) = fw else { continue };
             if fw == Framework::Spring && !in_scan(c.package()) {
@@ -447,6 +494,7 @@ impl<'a> Builder<'a> {
                 autowire_candidate: true,
                 framework: fw,
                 dynamic_names: anns.iter().any(|a| matches!(a.simple_name(), "EachBean" | "EachProperty")),
+                replaces: anns.iter().any(|a| a.simple_name() == "Replaces"),
             });
             self.model.component_classes.insert(c.name.clone(), i);
             let class_dynamic = anns.iter().any(|a| matches!(a.simple_name(), "EachBean" | "EachProperty"));
@@ -484,6 +532,7 @@ impl<'a> Builder<'a> {
                     autowire_candidate,
                     framework: fw,
                     dynamic_names: class_dynamic || m.annotations.iter().any(|a| matches!(a.simple_name(), "EachBean" | "EachProperty")),
+                    replaces: m.annotations.iter().any(|a| a.simple_name() == "Replaces"),
                 };
                 self.add_bean(mbean);
                 // factory method parameters are injection points
@@ -512,9 +561,12 @@ impl<'a> Builder<'a> {
                 }
             }
             // field injection
+            let raw_inits: Vec<Name> = self.index.raw_class(&c.name).map(|(_, r)| r.fields.iter().filter(|f| f.has_initializer).map(|f| f.name.clone()).collect()).unwrap_or_default();
             for f in &c.fields {
                 if f.annotations.iter().any(|a| INJECT_ANNOTATIONS.iter().any(|x| a.is(x))) {
-                    let optional = f.annotations.iter().any(|a| a.simple_name() == "Autowired" && a.arg("required").and_then(|v| v.as_bool()) == Some(false));
+                    // Micronaut keeps the field's default value when no bean exists
+                    let defaulted = fw != Framework::Spring && raw_inits.contains(&f.name);
+                    let optional = defaulted || f.annotations.iter().any(|a| a.simple_name() == "Autowired" && a.arg("required").and_then(|v| v.as_bool()) == Some(false));
                     self.add_point(&c.name, PointKind::Field, &f.ty, &f.annotations, &f.name, f.range, fw, optional);
                 }
             }
@@ -527,6 +579,29 @@ impl<'a> Builder<'a> {
                 for (pi, p) in m.params.iter().enumerate() {
                     self.add_point(&c.name, PointKind::MethodParam(m.name.clone(), pi), &p.ty, &p.annotations, &p.name, m.range, fw, optional);
                 }
+            }
+        }
+        // Micronaut @Replaces: the replaced bean no longer exists
+        let mut replaced: Vec<Name> = Vec::new();
+        for n in &names {
+            let Some(c) = self.index.class(n) else { continue };
+            let anns: Vec<&AnnotationInfo> = c.annotations.iter().chain(c.methods.iter().flat_map(|m| m.annotations.iter())).collect();
+            for a in anns {
+                if a.simple_name() != "Replaces" {
+                    continue;
+                }
+                for k in ["value", "bean"] {
+                    if let Some(AnnotationValue::Class(t)) = a.arg(k) {
+                        if let Some(tn) = t.class_name() {
+                            replaced.push(Arc::from(tn));
+                        }
+                    }
+                }
+            }
+        }
+        for b in &mut self.model.beans {
+            if b.source == BeanSource::Component && replaced.iter().any(|r| *r == b.declaring_class) {
+                b.autowire_candidate = false;
             }
         }
         let mut by_class: FxHashMap<Name, Vec<usize>> = FxHashMap::default();
@@ -562,6 +637,19 @@ impl<'a> Builder<'a> {
             file: self.index.source_file_of(owner).cloned(),
         });
     }
+}
+
+/// Micronaut/JSR-330 style implicit names: `@Named("v8")` or `@V8` selects
+/// `V8Engine` when injecting `Engine` (class name minus the type's name).
+fn micronaut_name_matches(b: &Bean, want_simple: &str, q: &str) -> bool {
+    let q = q.trim_start_matches('@');
+    let q = q.rsplit(['.', '$']).next().unwrap_or(q).to_ascii_lowercase();
+    let simple = match &b.source {
+        BeanSource::FactoryMethod(m) => m.to_string(),
+        _ => simple_name_of(&b.declaring_class).to_string(),
+    };
+    let base = simple.strip_suffix(want_simple).unwrap_or(&simple).to_ascii_lowercase();
+    !base.is_empty() && base == q
 }
 
 /// Unwrap Optional<T>, Provider<T>, List<T>... Returns (element, optional, multiple, lazy).
@@ -675,7 +763,18 @@ impl DiModel {
                 return Resolution::Unknown;
             }
             let before = cands.clone();
-            cands.retain(|&i| self.beans[i].matches_qualifier(q));
+            let want_simple = p.ty.class_name().map(simple_name_of).unwrap_or("");
+            cands.retain(|&i| {
+                let b = &self.beans[i];
+                b.matches_qualifier(q) || (b.framework != Framework::Spring && micronaut_name_matches(b, want_simple, q))
+            });
+            if cands.is_empty() && before.iter().any(|&i| self.beans[i].replaces) {
+                return Resolution::Unknown;
+            }
+            // JSR-330 containers bind classes with @Inject constructors just in time
+            if cands.is_empty() && p.framework != Framework::Spring && self.jit.iter().any(|j| p.ty.class_name().is_some_and(|t| lk.is_subclass(j, t).is_yes())) {
+                return Resolution::Unknown;
+            }
             if cands.is_empty() && before.iter().any(|&i| self.beans[i].dynamic_names) {
                 return Resolution::Unknown;
             }
@@ -692,11 +791,12 @@ impl DiModel {
         if p.multiple {
             return Resolution::Multiple(cands);
         }
+        let jit_possible = || self.jit.iter().any(|j| p.ty.class_name().is_some_and(|t| lk.is_subclass(j, t).is_yes()));
         match cands.len() {
             0 => {
                 if p.optional {
                     Resolution::Absent
-                } else if maybe > 0 || !self.provable_type(lk, &p.ty) {
+                } else if maybe > 0 || !self.provable_type(lk, &p.ty) || jit_possible() {
                     Resolution::Unknown
                 } else {
                     Resolution::NotFound
@@ -717,6 +817,9 @@ impl DiModel {
                 // conditional beans (profiles, @ConditionalOn...) may be mutually exclusive;
                 // beans from other modules may not be on the same runtime classpath
                 let point_module = p.file.as_deref().map(module_of).unwrap_or("");
+                if cands.iter().any(|&i| self.beans[i].replaces) {
+                    return Resolution::Unknown;
+                }
                 let unconditional: Vec<usize> = cands
                     .iter()
                     .copied()
@@ -741,8 +844,7 @@ impl DiModel {
         let Some(n) = ty.class_name() else { return false };
         // container infrastructure (contexts, environments, conversion services...)
         // is registered programmatically by the framework itself
-        const FRAMEWORK_PACKAGES: &[&str] = &["io.micronaut.", "org.springframework.", "jakarta.", "javax.", "com.google.inject.", "io.quarkus."];
-        if FRAMEWORK_PACKAGES.iter().any(|p| n.starts_with(p)) {
+        if is_framework_class(n) {
             return false;
         }
         let Some(c) = lk.class(n) else { return false };

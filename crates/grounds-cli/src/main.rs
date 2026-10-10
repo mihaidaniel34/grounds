@@ -96,6 +96,15 @@ enum Cmd {
     Hook { event: String },
     /// Print the Claude Code hook configuration for .claude/settings.json.
     Hooks,
+    /// List beans of the dependency-injection model (optionally those that
+    /// can be injected as a given type).
+    Beans {
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// Simple or qualified type name to look up.
+        #[arg(long = "type")]
+        ty: Option<String>,
+    },
     /// List all rules.
     Rules {
         #[arg(long)]
@@ -217,6 +226,31 @@ fn main() -> anyhow::Result<()> {
         }
         Cmd::Hook { event } => std::process::exit(hook(&event)?),
         Cmd::Hooks => println!("{}", HOOKS_JSON),
+        Cmd::Beans { root, ty } => {
+            let root = find_root(root);
+            let p = grounds_engine::Project::load(&root)?;
+            let di = &p.di;
+            let filter: Option<String> = ty.map(|t| {
+                if t.contains('.') {
+                    t
+                } else {
+                    p.index.source_class_names().find(|n| grounds_index::simple_name_of(n) == t).map(|n| n.to_string()).unwrap_or(t)
+                }
+            });
+            let idx: Vec<usize> = match &filter {
+                Some(t) => di.candidates(&p.index, &grounds_index::Ty::class(t), true).0,
+                None => (0..di.beans.len()).collect(),
+            };
+            for i in idx {
+                let b = &di.beans[i];
+                let mut flags = Vec::new();
+                if b.primary { flags.push("primary"); }
+                if b.conditional { flags.push("conditional"); }
+                if b.is_test { flags.push("test"); }
+                println!("{:<40} {:<60} {:?} {}", b.name, b.ty.to_string(), b.source, flags.join(","));
+            }
+            eprintln!("{} beans, {} injection points, scan roots: {:?}", di.beans.len(), di.points.len(), di.scan_roots);
+        }
         Cmd::Rules { json, markdown } => {
             let cat = grounds_rules::catalog();
             if markdown {
