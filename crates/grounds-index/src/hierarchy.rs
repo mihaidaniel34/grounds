@@ -100,8 +100,11 @@ pub fn substitution(class: &ClassInfo, args: &[Ty]) -> Vec<(Name, Ty)> {
             })
             .collect()
     } else {
-        // raw type: erase to bounds
-        class.type_params.iter().map(|p| (p.name.clone(), p.bounds.first().map(|b| b.erasure()).unwrap_or_else(Ty::object))).collect()
+        // missing type arguments: javac erases a raw type to the bounds, but
+        // here they are far more often arguments we could not infer, where
+        // the bound is wrong (a lambda over `ColumnFamily<DbLong, ..>` would
+        // see `DbKey`): unknown, so nothing is concluded from them
+        class.type_params.iter().map(|p| (p.name.clone(), Ty::Unknown)).collect()
     }
 }
 

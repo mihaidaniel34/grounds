@@ -63,11 +63,16 @@ pub struct FileModel<'t> {
     local_lowered: RefCell<FxHashMap<Name, Option<Arc<ClassInfo>>>>,
     pub(crate) types: RefCell<FxHashMap<usize, Ty>>,
     pub(crate) calls: RefCell<FxHashMap<usize, Option<Rc<ResolvedCall>>>>,
+    /// method invocation types without target typing (see `arg_type`)
+    pub(crate) standalone: RefCell<FxHashMap<(usize, u8), Ty>>,
     pub(crate) selected: RefCell<FxHashMap<usize, Option<Rc<ResolvedCall>>>>,
     pub(crate) in_progress: RefCell<FxHashSet<(usize, u8)>>,
     /// Incremented whenever a cycle guard short-circuits; results computed
     /// while this changed are provisional and not memoized.
     pub(crate) cycle_hits: std::cell::Cell<u64>,
+    /// Guarded computations so far; past `WORK_BUDGET` results that hit a
+    /// cycle are memoized as unknown, so pathological files stay polynomial.
+    pub(crate) work: std::cell::Cell<u64>,
     pub(crate) symbols: RefCell<FxHashMap<usize, Option<Symbol<'t>>>>,
     captures: std::cell::OnceCell<FxHashMap<usize, Vec<usize>>>,
     occurrences: std::cell::OnceCell<FxHashMap<&'t str, Vec<Node<'t>>>>,
@@ -98,9 +103,11 @@ impl<'t> FileModel<'t> {
             local_lowered: RefCell::new(FxHashMap::default()),
             types: RefCell::new(FxHashMap::default()),
             calls: RefCell::new(FxHashMap::default()),
+            standalone: RefCell::new(FxHashMap::default()),
             selected: RefCell::new(FxHashMap::default()),
             in_progress: RefCell::new(FxHashSet::default()),
             cycle_hits: std::cell::Cell::new(0),
+            work: std::cell::Cell::new(0),
             symbols: RefCell::new(FxHashMap::default()),
             captures: std::cell::OnceCell::new(),
             occurrences: std::cell::OnceCell::new(),
@@ -387,6 +394,7 @@ impl<'t> FileModel<'t> {
     }
 
     pub(crate) fn guard<R>(&self, id: usize, tag: u8, default: R, f: impl FnOnce() -> R) -> R {
+        self.work.set(self.work.get() + 1);
         if !self.in_progress.borrow_mut().insert((id, tag)) {
             self.cycle_hits.set(self.cycle_hits.get() + 1);
             return default;
@@ -396,13 +404,43 @@ impl<'t> FileModel<'t> {
         r
     }
 
-    /// Run `f` and report whether it completed without hitting a cycle.
-    pub(crate) fn clean<R>(&self, f: impl FnOnce() -> R) -> (R, bool) {
+    /// Run `f` and report whether its result may be memoized: it completed
+    /// without hitting a cycle. Once the file has used up its work budget, a
+    /// result that did hit a cycle is replaced by "unknown" and memoized, so
+    /// provisional answers never pass for definitive ones.
+    pub(crate) fn clean<R: Unknowable>(&self, f: impl FnOnce() -> R) -> (R, bool) {
         let before = self.cycle_hits.get();
         let r = f();
-        (r, self.cycle_hits.get() == before)
+        if self.cycle_hits.get() == before {
+            (r, true)
+        } else if self.work.get() > WORK_BUDGET {
+            (R::unknown(), true)
+        } else {
+            (r, false)
+        }
     }
 }
+
+/// The "don't know" value of a memoized query.
+pub(crate) trait Unknowable {
+    fn unknown() -> Self;
+}
+
+impl<T> Unknowable for Option<T> {
+    fn unknown() -> Self {
+        None
+    }
+}
+
+impl Unknowable for Ty {
+    fn unknown() -> Self {
+        Ty::Unknown
+    }
+}
+
+// Ordinary files stay below ~50k (largest seen across the corpus); nested
+// Hamcrest matcher trees reach millions.
+const WORK_BUDGET: u64 = 300_000;
 
 impl<'t> ClassLookup for FileModel<'t> {
     fn class(&self, name: &str) -> Option<Arc<ClassInfo>> {

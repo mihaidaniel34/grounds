@@ -20,6 +20,13 @@
 # rule fixtures and the stub sources they compile against
 !/crates/grounds-rules/tests/**/*.java
 
+# regression corpus: pinned projects, planted bugs, and the scripts driving it
+!/scripts/*.sh
+!/scripts/*.py
+!/corpus/projects.tsv
+!/corpus/planted/*.patch
+!/corpus/planted/*.expected
+
 # never descend into build output
 /target/
 /result

@@ -386,6 +386,16 @@ impl<'t> FileModel<'t> {
                     if non_expr {
                         return None;
                     }
+                    // the member of `obj.name` is what the qualified expression
+                    // denotes, not whatever `name` means as a simple name
+                    let member = match p.kind() {
+                        "field_access" => p.field("field") == Some(n),
+                        "scoped_identifier" => p.field("name") == Some(n),
+                        _ => false,
+                    };
+                    if member {
+                        return self.symbol(p);
+                    }
                 }
                 let name = n.text(self.src);
                 // fields of enclosing classes

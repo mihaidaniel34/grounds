@@ -293,6 +293,12 @@ impl Rule for InfiniteRecursion {
             return;
         }
         let Some(m) = cx.fm.method_of_decl(n) else { return };
+        // with generic parameters, overload applicability needs real inference
+        // (`concat(A, List<A>)` vs `concat(List<A>...)`); stay silent
+        let arity = m.params.len();
+        if !m.type_params.is_empty() && cx.fm.enclosing_class(n).is_some_and(|c| cx.fm.methods_named(&c.this_type(), &m.name).iter().any(|o| o.method.range != m.range && o.method.accepts_arity(arity))) {
+            return;
+        }
         let range = m.range;
         let cfg = cx.cfg(n);
         // blocks containing a self call (implicit or `this.` receiver)
@@ -303,8 +309,22 @@ impl Rule for InfiniteRecursion {
             if e.field("object").is_some_and(|o| o.kind() != "this") {
                 return false;
             }
+            // a lambda where our parameter is not functional targets another
+            // overload, possibly one we cannot see (inherited from a library)
+            let args = cx.fm.args_of(e);
+            let lambda_misfit = args.iter().enumerate().any(|(i, a)| {
+                let varargs_elem = (m.flags.has(Flags::VARARGS) && i + 1 >= m.params.len()).then(|| m.params.last().and_then(|p| if let Ty::Array(e) = &p.ty { Some((**e).clone()) } else { None }));
+                let pty = match varargs_elem {
+                    Some(elem) => elem,
+                    None => m.params.get(i).map(|p| p.ty.clone()),
+                };
+                matches!(a.unparen().kind(), "lambda_expression" | "method_reference") && pty.is_none_or(|t| cx.fm.functional_method(&t).is_none())
+            });
+            if lambda_misfit {
+                return false;
+            }
             // with an argument of unknown type the call may target another overload
-            cx.fm.args_of(e).iter().all(|a| cx.type_of(*a).is_known())
+            args.iter().all(|a| cx.type_of(*a).is_known())
                 && cx.fm.select_method(e).is_some_and(|c| c.method.range == range && !c.ambiguous && c.method.params.len() == m.params.len())
         };
         let mut blocked = vec![false; cfg.blocks.len()];
@@ -431,6 +451,14 @@ impl Rule for UninitializedFieldRead {
         let mut assigned: rustc_hash::FxHashSet<String> = raw_init.into_iter().collect();
         // instance initializer blocks run before the constructor body
         if let Some(class_body) = owning_type_decl(n).and_then(|d| d.field("body")) {
+            // field initializers, also of local classes (not in the index)
+            for fd in class_body.kids().into_iter().filter(|k| k.kind() == "field_declaration") {
+                for d in fd.fields("declarator") {
+                    if let (Some(name), Some(_)) = (d.field("name"), d.field("value")) {
+                        assigned.insert(name.text(cx.src).to_string());
+                    }
+                }
+            }
             for block in class_body.kids().into_iter().filter(|k| k.kind() == "block") {
                 assigned.extend(assigned_names(block, cx.src).into_iter().map(String::from));
             }

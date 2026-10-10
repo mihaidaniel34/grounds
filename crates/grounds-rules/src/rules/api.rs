@@ -116,6 +116,20 @@ impl Rule for IgnoredReturnValue {
         if validates || callback {
             return;
         }
+        // `try { d.toNanos(); } catch (ArithmeticException e) {...}`: called for
+        // the specific exception it throws (a blanket catch proves nothing)
+        let in_try_with_catch = n.ancestors().take_while(|a| !matches!(a.kind(), "method_declaration" | "lambda_expression" | "class_body")).any(|a| {
+            a.kind() == "try_statement"
+                && a.field("body").is_some_and(|b| b.kids().len() == 1 && b.kids()[0] == n)
+                && a.kids().iter().filter(|k| k.kind() == "catch_clause").any(|c| {
+                    c.descendants().filter(|t| t.kind() == "catch_type").any(|t| t.kids().iter().any(|ty| !matches!(type_simple_name(*ty, cx.src), "Exception" | "RuntimeException" | "Throwable" | "")))
+                })
+        });
+        // `verify(mock).method()`: the call is the verification
+        let verified = e.field("object").is_some_and(|o| o.kind() == "method_invocation" && cx.fm.call_name(o) == Some("verify"));
+        if in_try_with_catch || verified {
+            return;
+        }
         if pure_method(cx, &c) {
             cx.report(e, format!("The result of `{}.{}()` is ignored; the call has no other effect", simple_name_of(&c.owner), c.method.name));
         }
@@ -350,7 +364,8 @@ declare_rule!(ArraysAsListPrimitive {
 impl Rule for ArraysAsListPrimitive {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
-        if !cx.fm.call_matches(n, &MethodMatcher::statics("java.util.Arrays").named(&["asList"])) && !cx.fm.call_matches(n, &MethodMatcher::statics("java.util.List").named(&["of"])) && !cx.fm.call_matches(n, &MethodMatcher::statics("java.util.Set").named(&["of"])) {
+        // `List.of(bytes)` is usually meant as a `List<byte[]>`
+        if !cx.fm.call_matches(n, &MethodMatcher::statics("java.util.Arrays").named(&["asList"])) {
             return;
         }
         let args = cx.fm.args_of(n);
@@ -466,7 +481,13 @@ impl Rule for ModifyCollectionInForeach {
             let stmt = c.parent().filter(|p| p.kind() == "expression_statement");
             if let Some(s) = stmt {
                 if let Some(next) = s.next_named_sibling() {
-                    if matches!(next.kind(), "break_statement" | "return_statement" | "throw_statement") {
+                    // `continue outer`, where `outer` labels a loop enclosing the
+                    // iterating one, abandons this iterator as well
+                    let labeled_continue = next.kind() == "continue_statement"
+                        && next.kid_of_kind("identifier").is_some_and(|l| {
+                            n.ancestors().any(|a| a.kind() == "labeled_statement" && a.kid_of_kind("identifier").is_some_and(|al| cx.text(al) == cx.text(l)))
+                        });
+                    if matches!(next.kind(), "break_statement" | "return_statement" | "throw_statement") || labeled_continue {
                         continue;
                     }
                 }
@@ -966,7 +987,7 @@ declare_rule!(DateGetTime {
     name: "new Date().getTime() instead of currentTimeMillis()",
     category: Performance,
     severity: Info,
-    sources: ["pmd:AvoidCallingNewDateGetTime", "sonar:S2143"],
+    sources: ["sonar:S2143"],
     kinds: ["method_invocation"],
     description: "`new Date().getTime()` allocates an object just to read the clock; `System.currentTimeMillis()` (or `Instant.now()`) does it directly.",
 });
@@ -989,7 +1010,7 @@ declare_rule!(EnumKeyedHashMap {
     name: "HashMap/HashSet keyed by an enum",
     category: Performance,
     severity: Info,
-    sources: ["sonar:S1640", "pmd:UseEnumMap"],
+    sources: ["sonar:S1640", "pmd:UseEnumCollections"],
     kinds: ["object_creation_expression"],
     description: "`EnumMap`/`EnumSet` are array-backed and much faster and smaller than hash collections for enum keys.",
 });

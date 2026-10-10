@@ -7,3 +7,12 @@ class Outer {
     private Outer() {}
     static class Inner extends Outer {}
 }
+class Holder {
+    private static class Implicit { int x; } // expect
+    private static class Anon {}
+    Object a = new Anon() {};
+}
+class Pool extends java.util.concurrent.ThreadPoolExecutor { // expect
+    private Pool() { super(1, 1, 0L, java.util.concurrent.TimeUnit.SECONDS, new java.util.concurrent.LinkedBlockingQueue<>()); }
+}
+class Base<T> { private Base() {} static class Sub extends Base<String> {} }

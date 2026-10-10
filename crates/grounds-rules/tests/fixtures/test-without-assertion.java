@@ -14,3 +14,15 @@ class ATest {
     void checkResult(int r) { assertTrue(r > 0); }
     int compute() { return 1; }
 }
+abstract class HarnessBase { void rewriteRun(String before, String after) { if (!before.equals(after)) throw new AssertionError(); } }
+class RecipeTest extends HarnessBase {
+    @Test void inherited() { rewriteRun("a", "a"); }
+    @Test void unresolvedBase() { missingHelper(); }
+    @Test void staticHelperOnly() { java.util.Collections.emptyList(); } // expect
+}
+class Computing { int compute() { return 42; } }
+class ComputeTest extends Computing {
+    @Test void bad() { compute(); } // expect
+    @Test void own() { helper(); } // expect
+    void helper() { String assertionMessage = "unused"; }
+}

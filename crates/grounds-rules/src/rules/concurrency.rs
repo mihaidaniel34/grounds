@@ -71,7 +71,7 @@ declare_rule!(WaitNotInLoop {
     name: "wait() not called in a loop",
     category: Concurrency,
     severity: Warning,
-    sources: ["sonar:S2274", "spotbugs:WA_NOT_IN_LOOP", "pmd:AvoidWaitOutsideLoop"],
+    sources: ["sonar:S2274", "spotbugs:WA_NOT_IN_LOOP"],
     kinds: ["method_invocation"],
     description: "Threads can wake up spuriously or after the condition changed again; `wait()` must be called in a `while (!condition)` loop.",
 });

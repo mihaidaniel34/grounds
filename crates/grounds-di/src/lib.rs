@@ -128,6 +128,12 @@ pub struct DiModel {
     by_class: FxHashMap<Name, Vec<usize>>,
     pub frameworks: Vec<Framework>,
     pub scan_roots: Vec<String>,
+    /// (scan root, module declaring it)
+    pub scan_root_modules: Vec<(String, String)>,
+    /// simple names referenced by classes that register beans
+    /// programmatically (BeanDefinitionRegistryPostProcessor,
+    /// ImportBeanDefinitionRegistrar): such types may have beans we cannot see
+    pub dynamic_types: rustc_hash::FxHashSet<String>,
     /// lombok.config copies @Qualifier/@Value onto generated constructors.
     pub lombok_copies_qualifiers: bool,
     /// `spring.main.allow-bean-definition-overriding=true` in some
@@ -344,6 +350,9 @@ impl<'a> Builder<'a> {
         let names: Vec<Name> = self.index.source_class_names().cloned().collect();
         // frameworks in use and scan roots
         let mut roots = Vec::new();
+        // (root package, declared on a conditional class such as @Profile,
+        // module declaring it)
+        let mut root_conditions: Vec<(String, bool, String)> = Vec::new();
         let mut spring = false;
         let mut micronaut = false;
         for (_, stub) in self.index.files() {
@@ -370,12 +379,11 @@ impl<'a> Builder<'a> {
                         .iter()
                         .flat_map(|k| a.arg(k).map(|v| v.values().into_iter().filter_map(|x| if let AnnotationValue::Class(t) = x { t.class_name().map(|c| package_of(c).to_string()) } else { None }).collect::<Vec<_>>()).unwrap_or_default())
                         .collect();
-                    if explicit.is_empty() && classes.is_empty() {
-                        roots.push(c.package().to_string());
-                    } else {
-                        roots.extend(explicit);
-                        roots.extend(classes);
-                    }
+                    let declared: Vec<String> = if explicit.is_empty() && classes.is_empty() { vec![c.package().to_string()] } else { explicit.into_iter().chain(classes).collect() };
+                    let cond = self.conditional_meta(&c.annotations);
+                    let module = c.source_file().map(module_of).unwrap_or("").to_string();
+                    root_conditions.extend(declared.iter().map(|r| (r.clone(), cond, module.clone())));
+                    roots.extend(declared);
                 }
             }
         }
@@ -386,6 +394,7 @@ impl<'a> Builder<'a> {
             self.model.frameworks.push(Framework::Micronaut);
         }
         self.model.scan_roots = roots.clone();
+        self.model.scan_root_modules = root_conditions.iter().map(|(r, _, m)| (r.clone(), m.clone())).collect();
 
         let in_scan = |pkg: &str| roots.is_empty() || roots.iter().any(|r| pkg == r || pkg.starts_with(&format!("{r}.")));
         // MyBatis @MapperScan: every interface in these packages is a bean
@@ -400,6 +409,15 @@ impl<'a> Builder<'a> {
             }
         }
         let in_mapper_scan = |pkg: &str| mapper_pkgs.iter().any(|r| pkg == r || pkg.starts_with(&format!("{r}.")));
+        for n in &names {
+            let registers = ["org.springframework.beans.factory.support.BeanDefinitionRegistryPostProcessor", "org.springframework.context.annotation.ImportBeanDefinitionRegistrar"].iter().any(|i| self.index.is_subclass(n, i).is_yes())
+                || self.index.raw_class(n).is_some_and(|(_, r)| r.interfaces.iter().any(|t| t.last_name().is_some_and(|l| matches!(l, "BeanDefinitionRegistryPostProcessor" | "ImportBeanDefinitionRegistrar"))));
+            if registers {
+                if let Some(stub) = self.index.source_file_of(n).and_then(|f| self.index.file(f)) {
+                    self.model.dynamic_types.extend(stub.referenced_names.iter().map(|r| r.to_string()));
+                }
+            }
+        }
         // classes registered explicitly by scanned classes (@Import chains,
         // @EnableConfigurationProperties) are beans wherever they live
         let mut imported: rustc_hash::FxHashSet<Name> = rustc_hash::FxHashSet::default();
@@ -596,7 +614,16 @@ impl<'a> Builder<'a> {
             });
             let qualifiers = self.qualifiers_of(&anns);
             let primary = anns.iter().any(|a| a.simple_name() == "Primary");
-            let conditional = self.conditional_meta(&anns) || maybe_registered;
+            // registered only by scans on conditional classes (@Profile("broker")
+            // scanning the broker package) means conditional too
+            let pkg = c.package().to_string();
+            // roots declared in this module decide; roots from other modules
+            // (an example app scanning `io.camunda`) only if this one has none
+            let own_module = file.as_deref().map(module_of).unwrap_or("").to_string();
+            let local = root_conditions.iter().any(|(_, _, m)| *m == own_module);
+            let covering: Vec<bool> = root_conditions.iter().filter(|(r, _, m)| (!local || *m == own_module) && (pkg == *r || pkg.starts_with(&format!("{r}.")))).map(|(_, c, _)| *c).collect();
+            let scanned_conditionally = fw == Framework::Spring && !covering.is_empty() && covering.iter().all(|c| *c);
+            let conditional = self.conditional_meta(&anns) || maybe_registered || scanned_conditionally;
             let i = self.add_bean(Bean {
                 name,
                 aliases: Vec::new(),
@@ -630,6 +657,11 @@ impl<'a> Builder<'a> {
             while let Some(st) = sup.take() {
                 hops += 1;
                 let Some(sc) = st.class_name().and_then(|sn| self.index.class(sn)).filter(|sc| sc.is_source()) else { break };
+                // a base that is a bean itself registers its own @Bean methods
+                let base_anns = sc.annotations.clone();
+                if base_anns.iter().any(|a| self.stereotype(a, 0).is_some()) {
+                    break;
+                }
                 for m in &sc.methods {
                     if !factory_methods.iter().any(|x| same_sig(x, m)) {
                         factory_methods.push(m.clone());
@@ -730,6 +762,40 @@ impl<'a> Builder<'a> {
                         self.add_point(&c.name, PointKind::MethodParam(m.name.clone(), pi), &p.ty, &p.annotations, &p.name, m.range, fw, optional);
                     }
                 }
+            }
+        }
+        // Spring test mocks: @MockitoBean / @MockBean / spy fields (and the
+        // class-level `types = ...` form) put a bean of that type into the
+        // test's context
+        const MOCKS: &[&str] = &["MockitoBean", "MockitoSpyBean", "MockBean", "SpyBean"];
+        for n in &names {
+            let Some(c) = self.index.class(n) else { continue };
+            let file = c.source_file().map(Arc::from);
+            let mut mocks: Vec<(String, Ty)> = c.fields.iter().filter(|f| f.annotations.iter().any(|a| MOCKS.contains(&a.simple_name()))).map(|f| (f.name.to_string(), f.ty.clone())).collect();
+            for a in c.annotations.iter().filter(|a| MOCKS.contains(&a.simple_name())) {
+                for v in a.arg("types").or_else(|| a.arg("value")).map(|v| v.values()).unwrap_or_default() {
+                    if let AnnotationValue::Class(t) = v {
+                        mocks.push((t.class_name().map(|n| decapitalize(simple_name_of(n))).unwrap_or_default(), t.clone()));
+                    }
+                }
+            }
+            for (name, ty) in mocks {
+                self.add_bean(Bean {
+                    name,
+                    aliases: Vec::new(),
+                    ty,
+                    declaring_class: c.name.clone(),
+                    source: BeanSource::Component,
+                    qualifiers: Vec::new(),
+                    primary: false,
+                    conditional: false,
+                    file: file.clone(),
+                    is_test: true,
+                    autowire_candidate: true,
+                    framework: Framework::Spring,
+                    dynamic_names: false,
+                    replaces: false,
+                });
             }
         }
         // Micronaut @Replaces: the replaced bean no longer exists
@@ -937,7 +1003,7 @@ impl DiModel {
             }
             if cands.is_empty() {
                 if before.is_empty() {
-                    return if maybe > 0 || self.opaque_imports || !self.provable_type(lk, &p.ty) { Resolution::Unknown } else if p.optional { Resolution::Absent } else { Resolution::NotFound };
+                    return if maybe > 0 || self.opaque_imports || !self.provable_type(lk, &p.ty) || self.dynamically_registered(&p.ty) { Resolution::Unknown } else if p.optional { Resolution::Absent } else { Resolution::NotFound };
                 }
                 if maybe > 0 {
                     return Resolution::Unknown;
@@ -945,6 +1011,11 @@ impl DiModel {
                 // @Autowired(required = false), Optional<...>: left unset
                 if p.optional {
                     return Resolution::Absent;
+                }
+                // a library type may get named beans from its own
+                // auto-configuration (clients configured by properties)
+                if !self.provable_type(lk, &p.ty) || self.dynamically_registered(&p.ty) {
+                    return Resolution::Unknown;
                 }
                 return Resolution::QualifierNotFound { qualifier: q.clone(), candidates: before };
             }
@@ -957,7 +1028,7 @@ impl DiModel {
             0 => {
                 if p.optional {
                     Resolution::Absent
-                } else if maybe > 0 || self.opaque_imports || !self.provable_type(lk, &p.ty) || jit_possible() || self.factory_may_return(lk, &p.ty) {
+                } else if maybe > 0 || self.opaque_imports || !self.provable_type(lk, &p.ty) || jit_possible() || self.factory_may_return(lk, &p.ty) || self.dynamically_registered(&p.ty) {
                     Resolution::Unknown
                 } else {
                     Resolution::NotFound
@@ -991,6 +1062,11 @@ impl DiModel {
                     return Resolution::Unknown;
                 }
                 if unconditional.len() < 2 || maybe > 0 {
+                    return Resolution::Unknown;
+                }
+                // configurations nested in test classes belong to that test's
+                // own context; they do not compete with each other
+                if unconditional.iter().any(|&i| self.beans[i].is_test && self.beans[i].declaring_class.contains('$')) {
                     return Resolution::Unknown;
                 }
                 Resolution::Ambiguous(unconditional)
@@ -1040,6 +1116,22 @@ impl DiModel {
     }
 
     /// Beans sharing a name (Spring refuses to start without overriding enabled).
+    fn dynamically_registered(&self, ty: &Ty) -> bool {
+        ty.class_name().is_some_and(|c| self.dynamic_types.contains(simple_name_of(c)))
+    }
+
+    fn share_scan_root(&self, a: &Bean, b: &Bean) -> bool {
+        if self.scan_roots.len() < 2 {
+            return true;
+        }
+        let pkg = |x: &Bean| package_of(&x.declaring_class).to_string();
+        let (pa, pb) = (pkg(a), pkg(b));
+        let covers = |r: &str, p: &str| p == r || p.starts_with(&format!("{r}."));
+        let module = a.file.as_deref().map(module_of).unwrap_or("");
+        let local = self.scan_root_modules.iter().any(|(_, m)| m == module);
+        self.scan_root_modules.iter().filter(|(_, m)| !local || m == module).any(|(r, _)| covers(r, &pa) && covers(r, &pb))
+    }
+
     pub fn name_conflicts(&self) -> Vec<(usize, usize)> {
         // names only clash inside one application (module)
         let mut seen: FxHashMap<(&str, &str), usize> = FxHashMap::default();
@@ -1050,7 +1142,10 @@ impl DiModel {
             }
             let key = (b.file.as_deref().map(module_of).unwrap_or(""), b.name.as_str());
             match seen.get(&key) {
-                Some(&j) => out.push((j, i)),
+                // with several scan roots (separate application contexts are
+                // common, e.g. one per package), both must be under one root
+                Some(&j) if self.share_scan_root(&self.beans[j], b) => out.push((j, i)),
+                Some(_) => {}
                 None => {
                     seen.insert(key, i);
                 }

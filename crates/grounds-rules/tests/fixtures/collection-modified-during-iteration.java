@@ -14,6 +14,22 @@ class A {
         }
         for (String s : new ArrayList<>(l)) { l.remove(s); }
         l.removeIf(String::isEmpty);
+        for (String x : l) {
+            inner: for (int i = 0; i < 1; i++) {
+                l.remove(x); // expect
+                continue inner;
+            }
+        }
+        scan: for (String x : l) {
+            l.remove(x); // expect
+            continue scan;
+        }
+        List<String> incoming = new ArrayList<>(List.of("b"));
+        next: for (String e : l) {
+            for (String in : incoming) {
+                if (in.equals(e)) { incoming.remove(in); continue next; }
+            }
+        }
     }
     // declared by interface: may be a CopyOnWriteArrayList
     void param(List<String> l) {

@@ -324,6 +324,22 @@ pub fn line_of(n: Node) -> usize {
 }
 
 /// Enclosing method/constructor declaration node (not lambda).
+/// Whether `n` is (inside) an argument of an `assert*` call in the same
+/// statement: `assertFalse(a.equals("x"))`, `assertTrue(!a.equals(null))`.
+pub fn in_assertion_argument(n: Node<'_>, src: &str) -> bool {
+    let mut cur = n;
+    while let Some(p) = cur.parent() {
+        if p.kind().ends_with("statement") || p.kind() == "block" || p.kind() == "lambda_expression" {
+            return false;
+        }
+        if p.kind() == "argument_list" && p.parent().is_some_and(|c| c.kind() == "method_invocation" && c.field("name").is_some_and(|nm| nm.text(src).starts_with("assert"))) {
+            return true;
+        }
+        cur = p;
+    }
+    false
+}
+
 pub fn enclosing_method_decl<'t>(n: Node<'t>) -> Option<Node<'t>> {
     for a in n.ancestors() {
         match a.kind() {

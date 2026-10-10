@@ -559,6 +559,9 @@ fn mapping_paths<'t>(cx: &Ctx<'_, 't>, decl: Node<'t>) -> Option<Vec<String>> {
                     out.extend(v.strings());
                 }
             }
+        } else if a.simple_name().ends_with("Mapping") {
+            // a composed mapping annotation (`@CamundaPostMapping(path = ...)`)
+            return None;
         }
     }
     Some(out)
@@ -817,6 +820,15 @@ impl Rule for BeanNameConflict {
             }
             // with overriding enabled only two scanned components still clash
             if di.bean_overriding_allowed && !matches!((&ba.source, &bb.source), (BeanSource::Component, BeanSource::Component)) {
+                continue;
+            }
+            // the same @Bean method seen twice through inheritance
+            // (`class AutoConfig extends Config {}`)
+            let inherited = |x: &grounds_di::Bean, y: &grounds_di::Bean| match (&x.source, &y.source) {
+                (BeanSource::FactoryMethod(mx), BeanSource::FactoryMethod(my)) => mx == my && (cx.fm.is_subclass(&x.declaring_class, &y.declaring_class).is_yes() || cx.fm.is_subclass(&y.declaring_class, &x.declaring_class).is_yes()),
+                _ => false,
+            };
+            if inherited(ba, bb) {
                 continue;
             }
             // an @Bean method may replace a scanned component of the same class

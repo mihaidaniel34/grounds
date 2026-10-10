@@ -208,6 +208,10 @@ pub struct FileStub {
     /// Every simple identifier mentioned in the file (sorted, deduped). Used
     /// for cheap reverse-dependency queries.
     pub referenced_names: Vec<Name>,
+    /// Type names, as written (simple or qualified), that this file
+    /// instantiates (`new X(...)`, anonymous classes included) or extends
+    /// (sorted, deduped).
+    pub constructed_names: Vec<Name>,
     /// Hash of the declaration shape, excluding source positions. Body-only
     /// edits keep this stable.
     pub signature_hash: u64,
@@ -264,6 +268,26 @@ pub fn extract_with(file: &ParsedFile, lombok: &crate::lombok::LombokConfig) -> 
     });
     names.sort();
     stub.referenced_names = names;
+    let mut constructed: Vec<Name> = Vec::new();
+    grounds_syntax::walk(root, |n| {
+        let ty = match n.kind() {
+            "object_creation_expression" => n.child_by_field_name("type"),
+            "superclass" => n.named_child(0),
+            _ => None,
+        };
+        if let Some(mut t) = ty {
+            if t.kind() == "generic_type" {
+                t = t.named_child(0).unwrap_or(t);
+            }
+            if let Ok(text) = t.utf8_text(src.as_bytes()) {
+                constructed.push(Arc::from(text.chars().filter(|c| !c.is_whitespace()).collect::<String>().as_str()));
+            }
+        }
+        grounds_syntax::WalkControl::Continue
+    });
+    constructed.sort();
+    constructed.dedup();
+    stub.constructed_names = constructed;
     stub.signature_hash = signature_hash(&stub);
     stub
 }
@@ -1049,7 +1073,13 @@ impl<'s> Extractor<'s> {
                         .iter()
                         .map(|c| RawParam { name: c.name.clone(), ty: c.ty.clone(), annotations: vec![], flags: Flags::default() })
                         .collect();
-                    methods.push(implicit_method("<init>", Flags(Flags::PUBLIC | Flags::CONSTRUCTOR | Flags::IMPLICIT), ps, TypeSyntax::Void));
+                    // `record R(String a, Object... rest)`: the canonical constructor is varargs
+                    let varargs = node.field("parameters").and_then(|p| p.kids().into_iter().last()).is_some_and(|k| k.kind() == "spread_parameter");
+                    let mut flags = Flags(Flags::PUBLIC | Flags::CONSTRUCTOR | Flags::IMPLICIT);
+                    if varargs {
+                        flags.set(Flags::VARARGS);
+                    }
+                    methods.push(implicit_method("<init>", flags, ps, TypeSyntax::Void));
                 }
             }
             _ => {}

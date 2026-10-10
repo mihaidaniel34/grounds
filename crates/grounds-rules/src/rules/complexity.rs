@@ -227,7 +227,7 @@ declare_rule!(TodoComment {
     name: "TODO comment",
     category: Style,
     severity: Info,
-    sources: ["sonar:S1135", "pmd:TodoComment"],
+    sources: ["sonar:S1135"],
     kinds: ["line_comment", "block_comment"],
     description: "TODOs mark unfinished work. New TODOs in a change are worth a second look: they often stand for code an agent or developer meant to come back to.",
 });

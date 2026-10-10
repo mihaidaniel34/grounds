@@ -1,0 +1,16 @@
+src/main/java/org/springframework/samples/petclinic/config/ExtraConfig.java:9 bean-name-conflict
+src/main/java/org/springframework/samples/petclinic/rest/controller/v1/OwnerRestControllerV1.java:64 ambiguous-bean
+src/main/java/org/springframework/samples/petclinic/rest/controller/v1/PetRestControllerV1.java:47 ambiguous-bean
+src/main/java/org/springframework/samples/petclinic/rest/controller/v1/PetTypeRestControllerV1.java:46 ambiguous-bean
+src/main/java/org/springframework/samples/petclinic/rest/controller/v1/SpecialtyRestControllerV1.java:48 ambiguous-bean
+src/main/java/org/springframework/samples/petclinic/rest/controller/v1/VetRestControllerV1.java:50 ambiguous-bean
+src/main/java/org/springframework/samples/petclinic/rest/controller/v1/VisitRestControllerV1.java:49 ambiguous-bean
+src/main/java/org/springframework/samples/petclinic/rest/controller/v2/OwnerRestControllerV2.java:26 ambiguous-bean
+src/main/java/org/springframework/samples/petclinic/rest/controller/v2/PetRestControllerV2.java:26 ambiguous-bean
+src/main/java/org/springframework/samples/petclinic/service/Cycle.java:11 circular-constructor-dependency
+src/main/java/org/springframework/samples/petclinic/service/Cycle.java:6 circular-constructor-dependency
+src/main/java/org/springframework/samples/petclinic/service/Exporter.java:10 lombok-constructor-drops-qualifier
+src/main/java/org/springframework/samples/petclinic/service/Exporter.java:11 ambiguous-bean
+src/main/java/org/springframework/samples/petclinic/service/Exporter.java:9 bean-name-conflict
+src/main/java/org/springframework/samples/petclinic/service/ReportService.java:11 bean-not-found
+src/main/java/org/springframework/samples/petclinic/service/ReportService.java:11 qualifier-not-found

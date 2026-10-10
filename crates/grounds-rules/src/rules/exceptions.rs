@@ -108,7 +108,7 @@ impl Rule for CatchThrowable {
                     let mut calls = Vec::new();
                     find_kind(b, "method_invocation", &mut calls);
                     let propagated = calls.iter().any(|c| {
-                        !is_log_call(*c, cx) && cx.fm.args_of(*c).iter().any(|a| cx.text(*a) == v) && !matches!(cx.fm.call_name(*c), Some("println" | "print" | "printf"))
+                        !is_log_like(*c, cx) && cx.fm.args_of(*c).iter().any(|a| cx.text(*a) == v) && !matches!(cx.fm.call_name(*c), Some("println" | "print" | "printf"))
                     });
                     if propagated {
                         return;
@@ -218,11 +218,70 @@ impl Rule for LostStackTrace {
             return;
         }
         let Some(body) = c.field("body") else { return };
-        // any reference to the catch variable other than getMessage() keeps information
-        let mentions_var = e.descendants().any(|d| {
-            d.kind() == "identifier" && d.text(cx.src) == v && !d.parent().is_some_and(|p| p.kind() == "method_invocation" && p.field("name").is_some_and(|nm| matches!(nm.text(cx.src), "getMessage" | "getLocalizedMessage" | "toString")) && p.field("object") == Some(d))
-        });
-        if mentions_var {
+        // The exception survives when it (or a Throwable obtained from it, such as
+        // `e.getCause()`) is passed on; `e.getMessage()` or `e.getCode()` alone
+        // drops the stack trace. Locals initialized from it are aliases.
+        let keeps = |d: Node<'t>, names: &[&str]| {
+            d.kind() == "identifier"
+                && names.contains(&d.text(cx.src))
+                && match d.parent() {
+                    Some(p) if p.kind() == "method_invocation" && p.field("object") == Some(d) => {
+                        if p.field("name").is_some_and(|nm| matches!(nm.text(cx.src), "getMessage" | "getLocalizedMessage" | "toString")) {
+                            return false;
+                        }
+                        let t = cx.type_of(p);
+                        t.is_unknown() || t.class_name().is_some_and(|c| c == "java.lang.Throwable" || cx.fm.is_subclass(c, "java.lang.Throwable").is_yes())
+                    }
+                    _ => true,
+                }
+        };
+        let throwable_or_unknown = |t: Ty| t.is_unknown() || t.class_name().is_some_and(|c| c == "java.lang.Throwable" || cx.fm.is_subclass(c, "java.lang.Throwable").is_yes());
+        let mut names = vec![v];
+        for d in body.descendants().filter(|d| d.kind() == "variable_declarator") {
+            if let (Some(name), Some(value)) = (d.field("name"), d.field("value")) {
+                // `Throwable cause = e.getCause()`, not `String msg = String.valueOf(e)`
+                let declared = d.parent().and_then(|decl| decl.field("type")).map(|t| if t.text(cx.src) == "var" { cx.type_of(value) } else { cx.fm.resolve_type_node(t) });
+                if declared.is_some_and(throwable_or_unknown) && value.descendants().any(|x| keeps(x, &[v])) {
+                    names.push(name.text(cx.src));
+                }
+            }
+        }
+        // `e.getCause() instanceof SocketException se`
+        for d in body.descendants().filter(|d| d.kind() == "instanceof_expression") {
+            if let (Some(left), Some(name)) = (d.field("left"), d.field("name")) {
+                let bound = d.field("right").map(|t| cx.fm.resolve_type_node(t));
+                if bound.is_some_and(throwable_or_unknown) && left.descendants().any(|x| keeps(x, &[v])) {
+                    names.push(name.text(cx.src));
+                }
+            }
+        }
+        if e.descendants().any(|d| keeps(d, &names)) {
+            return;
+        }
+        // handed to a logger or a void (or unresolved) handler by a statement
+        // that runs before the throw on its path: an earlier statement of a
+        // block enclosing the throw, inside the catch block
+        let hands_off = |st: Node<'t>| {
+            st.kind() == "expression_statement"
+                && st.first_kid().is_some_and(|d| {
+                    d.kind() == "method_invocation"
+                        && !matches!(cx.fm.call_name(d), Some("println" | "print" | "printf"))
+                        && cx.fm.args_of(d).iter().any(|a| names.contains(&cx.text(*a)))
+                        && (is_log_like(d, cx) || cx.fm.select_method(d).is_none_or(|m| m.method.ret == Ty::Void))
+                })
+        };
+        let mut handed_off = false;
+        let mut cur = n;
+        while let Some(block) = cur.parent() {
+            if block.kind() == "block" {
+                handed_off |= block.kids().iter().take_while(|k| k.start_byte() < cur.start_byte()).any(|k| hands_off(*k));
+            }
+            if block == body || handed_off {
+                break;
+            }
+            cur = block;
+        }
+        if handed_off {
             return;
         }
         // initCause / addSuppressed elsewhere in the catch block
@@ -377,6 +436,11 @@ impl Rule for RethrowOnly {
         }
         cx.report(n.child(0).unwrap_or(n), "Catch block only rethrows the exception; remove it");
     }
+}
+
+/// A logger call or a logging helper (`Tracer.logError(msg, e)`, `logException(e)`).
+fn is_log_like<'t>(n: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+    is_log_call(n, cx) || (n.kind() == "method_invocation" && cx.fm.call_name(n).and_then(|m| m.strip_prefix("log")).is_some_and(|r| r.starts_with(|c: char| c.is_ascii_uppercase())))
 }
 
 fn is_log_call<'t>(n: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
@@ -652,7 +716,7 @@ declare_rule!(CatchAndReturnNull {
     name: "Exception converted to a null return",
     category: BadPractice,
     severity: Info,
-    sources: ["sonar:S1168", "pmd:ReturnEmptyCollectionRatherThanNull"],
+    sources: ["sonar:S1166"],
     kinds: ["catch_clause"],
     description: "Swallowing an exception and returning null pushes the failure to a later NullPointerException far from the cause. Rethrow, return an empty result/Optional, or at least log.",
 });

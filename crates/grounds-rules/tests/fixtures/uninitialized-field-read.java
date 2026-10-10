@@ -10,3 +10,11 @@ class A {
     }
     A() { this("x"); }
 }
+class Outer {
+    void run() {
+        class Bank {
+            final java.util.Map<String, Double> accounts = new java.util.HashMap<>();
+            Bank() { accounts.put("Mario", 50.0); }
+        }
+    }
+}

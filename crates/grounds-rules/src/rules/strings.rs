@@ -225,7 +225,7 @@ declare_rule!(ReplaceAllWithLiteral {
     name: "replaceAll() with a non-regex literal",
     category: Performance,
     severity: Info,
-    sources: ["sonar:S5361", "pmd:UseStringReplace"],
+    sources: ["sonar:S5361"],
     kinds: ["method_invocation"],
     description: "`replaceAll` compiles a regular expression on every call. When the pattern has no regex metacharacters, `replace()` does the same thing faster.",
 });
@@ -694,7 +694,7 @@ declare_rule!(EqualsEmptyString {
     name: "Comparison with \"\" via equals()",
     category: Style,
     severity: Info,
-    sources: ["pmd:UseStringIsEmpty", "sonar:S7158", "intellij:StringEqualsEmptyString"],
+    sources: ["sonar:S7158", "intellij:StringEqualsEmptyString"],
     kinds: ["method_invocation"],
     description: "`s.equals(\"\")` is clearer as `s.isEmpty()` (and `\"\".equals(s)` as a null-safe emptiness check).",
 });
@@ -934,7 +934,7 @@ declare_rule!(PatternCompileInLoop {
     name: "Regular expression compiled repeatedly in a loop",
     category: Performance,
     severity: Info,
-    sources: ["sonar:S4248", "pmd:AvoidRecompilingPatterns"],
+    sources: ["sonar:S4248"],
     kinds: ["method_invocation"],
     description: "`String.matches`, `replaceAll`, `split` (for multi-char patterns) and `Pattern.compile` with a constant regex recompile it on each iteration. Hoist a `static final Pattern`.",
 });

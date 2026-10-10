@@ -1,0 +1,103 @@
+diff --git a/src/main/java/org/springframework/samples/petclinic/config/ExtraConfig.java b/src/main/java/org/springframework/samples/petclinic/config/ExtraConfig.java
+new file mode 100644
+index 0000000..0da8b36
+--- /dev/null
++++ b/src/main/java/org/springframework/samples/petclinic/config/ExtraConfig.java
+@@ -0,0 +1,10 @@
++package org.springframework.samples.petclinic.config;
++
++import org.springframework.context.annotation.Bean;
++import org.springframework.context.annotation.Configuration;
++
++@Configuration
++public class ExtraConfig {
++    @Bean
++    public Object exporter() { return new Object(); }
++}
+diff --git a/src/main/java/org/springframework/samples/petclinic/service/CachingClinicService.java b/src/main/java/org/springframework/samples/petclinic/service/CachingClinicService.java
+new file mode 100644
+index 0000000..ebf057f
+--- /dev/null
++++ b/src/main/java/org/springframework/samples/petclinic/service/CachingClinicService.java
+@@ -0,0 +1,12 @@
++package org.springframework.samples.petclinic.service;
++
++import org.springframework.samples.petclinic.repository.*;
++import org.springframework.stereotype.Service;
++
++@Service
++public class CachingClinicService extends ClinicServiceImpl {
++    public CachingClinicService(PetRepository petRepository, VetRepository vetRepository, OwnerRepository ownerRepository,
++                                VisitRepository visitRepository, SpecialtyRepository specialtyRepository, PetTypeRepository petTypeRepository) {
++        super(petRepository, vetRepository, ownerRepository, visitRepository, specialtyRepository, petTypeRepository);
++    }
++}
+diff --git a/src/main/java/org/springframework/samples/petclinic/service/Cycle.java b/src/main/java/org/springframework/samples/petclinic/service/Cycle.java
+new file mode 100644
+index 0000000..30c885e
+--- /dev/null
++++ b/src/main/java/org/springframework/samples/petclinic/service/Cycle.java
+@@ -0,0 +1,13 @@
++package org.springframework.samples.petclinic.service;
++
++import org.springframework.stereotype.Component;
++
++@Component
++class InvoiceService {
++    InvoiceService(PaymentService payments) {}
++}
++
++@Component
++class PaymentService {
++    PaymentService(InvoiceService invoices) {}
++}
+diff --git a/src/main/java/org/springframework/samples/petclinic/service/Exporter.java b/src/main/java/org/springframework/samples/petclinic/service/Exporter.java
+new file mode 100644
+index 0000000..2102508
+--- /dev/null
++++ b/src/main/java/org/springframework/samples/petclinic/service/Exporter.java
+@@ -0,0 +1,12 @@
++package org.springframework.samples.petclinic.service;
++
++import lombok.RequiredArgsConstructor;
++import org.springframework.beans.factory.annotation.Qualifier;
++import org.springframework.stereotype.Service;
++
++@Service
++@RequiredArgsConstructor
++public class Exporter {
++    @Qualifier("clinicServiceImpl")
++    private final ClinicService clinicService;
++}
+diff --git a/src/main/java/org/springframework/samples/petclinic/service/MailSender.java b/src/main/java/org/springframework/samples/petclinic/service/MailSender.java
+new file mode 100644
+index 0000000..313cce4
+--- /dev/null
++++ b/src/main/java/org/springframework/samples/petclinic/service/MailSender.java
+@@ -0,0 +1,5 @@
++package org.springframework.samples.petclinic.service;
++
++public interface MailSender {
++    void send(String to, String body);
++}
+diff --git a/src/main/java/org/springframework/samples/petclinic/service/ReportService.java b/src/main/java/org/springframework/samples/petclinic/service/ReportService.java
+new file mode 100644
+index 0000000..45f1ec7
+--- /dev/null
++++ b/src/main/java/org/springframework/samples/petclinic/service/ReportService.java
+@@ -0,0 +1,15 @@
++package org.springframework.samples.petclinic.service;
++
++import org.springframework.beans.factory.annotation.Qualifier;
++import org.springframework.stereotype.Service;
++
++@Service
++public class ReportService {
++    private final ClinicService clinicService;
++    private final MailSender mailSender;
++
++    public ReportService(@Qualifier("clinicServiceImp") ClinicService clinicService, MailSender mailSender) {
++        this.clinicService = clinicService;
++        this.mailSender = mailSender;
++    }
++}

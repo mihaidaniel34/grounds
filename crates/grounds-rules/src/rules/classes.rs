@@ -52,16 +52,12 @@ pub fn rules() -> Vec<Box<dyn Rule>> {
     ]
 }
 
-fn class_decls() -> &'static [&'static str] {
-    &["class_declaration"]
-}
-
 declare_rule!(UtilityClassConstructor {
     id: "utility-class-instantiable",
     name: "Utility class with an implicit public constructor",
     category: Style,
     severity: Info,
-    sources: ["sonar:S1118", "pmd:UseUtilityClass", "intellij:UtilityClassWithoutPrivateConstructor"],
+    sources: ["sonar:S1118", "pmd:InstantiableUtilityClass", "intellij:UtilityClassWithoutPrivateConstructor"],
     kinds: ["class_declaration"],
     description: "A class with only static members should not be instantiated; add a private constructor (and make it final).",
 });
@@ -76,7 +72,7 @@ impl Rule for UtilityClassConstructor {
             return;
         }
         let ms = members(n);
-        let mut static_methods = 0;
+        let mut static_members = 0;
         for m in &ms {
             match m.kind() {
                 "method_declaration" => {
@@ -86,29 +82,59 @@ impl Rule for UtilityClassConstructor {
                     if is_main_method(*m, cx.src) {
                         return;
                     }
-                    static_methods += 1;
+                    static_members += 1;
                 }
                 "field_declaration" => {
                     if !m.has_modifier("static") {
                         return;
                     }
+                    static_members += 1;
                 }
                 "constructor_declaration" => return,
                 "block" => return,
                 _ => {}
             }
         }
-        if static_methods == 0 {
+        if static_members == 0 {
             return;
         }
         // Lombok @UtilityClass / Spring @SpringBootApplication etc.
         if !annotation_names(n, cx.src).is_empty() {
             return;
         }
+        // instantiated or extended somewhere: a private constructor would not compile
+        if constructed_elsewhere(n, cx) {
+            return;
+        }
         if let Some(name) = n.field("name") {
             cx.report(name, "Utility class has an implicit public constructor; add a private one");
         }
     }
+}
+
+/// Whether some file may instantiate or extend the class declared by `n`:
+/// it names the type qualified, or by simple name from where it is visible
+/// (same package, single-type or on-demand import). Nested classes match by
+/// simple name alone.
+fn constructed_elsewhere<'t>(n: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+    let Some(simple) = n.field("name").map(|x| x.text(cx.src)) else { return false };
+    let pkg = &*cx.fm.stub.package;
+    let nested = n.parent().is_some_and(|p| p.kind() != "program");
+    let fqn = if pkg.is_empty() { simple.to_string() } else { format!("{pkg}.{simple}") };
+    cx.fm.index.files().any(|(_, st)| {
+        st.constructed_names.iter().any(|c| {
+            if c.rsplit('.').next() != Some(simple) {
+                return false;
+            }
+            if nested {
+                return true;
+            }
+            if c.contains('.') {
+                return **c == *fqn;
+            }
+            &*st.package == pkg || st.imports.iter().any(|i| !i.is_static && if i.on_demand { &*i.path == pkg } else { *i.path == *fqn })
+        })
+    })
 }
 
 declare_rule!(ConstantInterface {
@@ -552,7 +578,11 @@ impl Rule for ConstantNaming {
         let Some(t) = n.field("type") else { return };
         let ty = cx.fm.resolve_type_node(t);
         // only clearly constant types; loggers and mutable singletons follow other conventions
-        if !(ty.is_prim() || ty.is_string() || ty.is_boxed()) {
+        let immutable = ty.is_prim()
+            || ty.is_string()
+            || ty.is_boxed()
+            || ty.class_name().is_some_and(|c| IMMUTABLE_VALUE_TYPES.contains(&c) || cx.fm.class(c).is_some_and(|ci| ci.is_enum()));
+        if !immutable {
             return;
         }
         for d in n.fields("declarator") {
@@ -566,6 +596,24 @@ impl Rule for ConstantNaming {
     }
 }
 
+const IMMUTABLE_VALUE_TYPES: &[&str] = &[
+    "java.util.regex.Pattern",
+    "java.math.BigDecimal",
+    "java.math.BigInteger",
+    "java.util.UUID",
+    "java.net.URI",
+    "java.nio.charset.Charset",
+    "java.time.Duration",
+    "java.time.Period",
+    "java.time.Instant",
+    "java.time.LocalDate",
+    "java.time.LocalTime",
+    "java.time.LocalDateTime",
+    "java.time.ZoneId",
+    "java.time.ZoneOffset",
+    "java.time.format.DateTimeFormatter",
+];
+
 declare_rule!(FieldNaming {
     id: "field-naming",
     name: "Field name does not follow camelCase",
@@ -573,13 +621,13 @@ declare_rule!(FieldNaming {
     severity: Info,
     sources: ["sonar:S116", "pmd:FieldNamingConventions"],
     kinds: ["field_declaration"],
-    description: "Non-constant field names should be camelCase (`orderCount`).",
+    description: "Non-constant field names (instance fields and static fields that are not final) should be camelCase (`orderCount`).",
 });
 
 impl Rule for FieldNaming {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
-        if n.has_modifier("static") {
+        if n.has_modifier("static") && n.has_modifier("final") {
             return;
         }
         if n.parent().is_some_and(|p| p.kind() == "interface_body") {
@@ -588,7 +636,12 @@ impl Rule for FieldNaming {
         for d in n.fields("declarator") {
             if let Some(name) = d.field("name") {
                 let s = name.text(cx.src);
-                if !is_camel(s) {
+                if is_camel(s) {
+                    continue;
+                }
+                if n.has_modifier("static") && is_upper_snake(s) {
+                    cx.report(name, format!("Static field `{s}` is not final: make it final if it is a constant, otherwise name it in camelCase"));
+                } else {
                     cx.report(name, format!("Field `{s}` should be camelCase"));
                 }
             }
@@ -1009,7 +1062,7 @@ declare_rule!(StaticViaInstance {
     name: "Static member accessed through an instance",
     category: Style,
     severity: Info,
-    sources: ["sonar:S2209", "pmd:StaticMemberAccessedViaInstance", "intellij:StaticMethodReferencedViaSubclass"],
+    sources: ["sonar:S2209", "intellij:StaticMethodReferencedViaSubclass"],
     kinds: ["method_invocation", "field_access"],
     description: "`obj.staticMethod()` reads as if it depended on `obj`; it does not (and the instance expression may not even be evaluated as expected). Use the class name.",
 });
@@ -1148,6 +1201,12 @@ impl Rule for UselessOverride {
             // widening visibility (protected -> public) is a legitimate reason
             let Some(sel) = cx.fm.select_method(call) else { return };
             if sel.method.flags.has(Flags::PROTECTED) && n.has_modifier("public") {
+                return;
+            }
+            // re-declaring a method of a non-public superclass in a public class
+            // puts it into the public API (javadoc, reflective access)
+            let owner_public = cx.fm.class(&sel.owner).is_none_or(|c| c.flags.has(Flags::PUBLIC));
+            if !owner_public && owning_type_decl(n).is_some_and(|d| d.has_modifier("public")) {
                 return;
             }
             if sel.method.flags.has(Flags::SYNCHRONIZED) != n.has_modifier("synchronized") || n.has_modifier("final") {
@@ -1391,19 +1450,30 @@ impl Rule for PrivateConstructorNotFinal {
             return;
         }
         let ctors: Vec<Node> = members(n).into_iter().filter(|m| m.kind() == "constructor_declaration").collect();
-        if ctors.is_empty() || !ctors.iter().all(|c| c.has_modifier("private")) {
+        // the implicit constructor of a private nested class is private too
+        let implicit_private = ctors.is_empty() && n.has_modifier("private") && n.parent().is_some_and(|p| p.kind() == "class_body");
+        if !implicit_private && (ctors.is_empty() || !ctors.iter().all(|c| c.has_modifier("private"))) {
             return;
         }
-        // nested subclasses inside the same file can extend it
+        // subclasses inside the same file (nested or anonymous) can extend it
         let name = n.field("name").map(|x| x.text(cx.src)).unwrap_or("");
-        let root = cx.fm.root();
-        let extended = root.descendants().any(|d| d.kind() == "superclass" && cx.text(d).contains(name));
+        let names_it = |t: Option<Node<'t>>| {
+            t.is_some_and(|t| {
+                let t = if t.kind() == "generic_type" { t.first_kid().unwrap_or(t) } else { t };
+                cx.text(t).rsplit('.').next() == Some(name)
+            })
+        };
+        let extended = cx.fm.root().descendants().any(|d| match d.kind() {
+            "superclass" => names_it(d.first_kid()),
+            "object_creation_expression" => d.kid_of_kind("class_body").is_some() && names_it(d.field("type")),
+            _ => false,
+        });
         if extended {
             return;
         }
-        let _ = class_decls();
         if let Some(nm) = n.field("name") {
-            cx.report(nm, "Class has only private constructors; make it final");
+            let msg = if implicit_private { "Private class is never extended; make it final" } else { "Class has only private constructors; make it final" };
+            cx.report(nm, msg);
         }
     }
 }

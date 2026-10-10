@@ -11,3 +11,12 @@ class A {
         return o instanceof String;
     }
 }
+interface SF {}
+final class Docs implements SF {}
+final class PE implements SF {}
+class Parse {
+    java.util.stream.Stream<SF> m(java.util.stream.Stream<String> in) {
+        return in.map(s -> { try { return (SF) new Docs(); } catch (RuntimeException e) { return new PE(); } })
+                 .map(sf -> sf instanceof Docs ? sf : null);
+    }
+}

@@ -143,6 +143,10 @@ impl Rule for EqualsIncompatibleTypes {
         if is_null_literal(b) || is_null_literal(a) {
             return;
         }
+        // tests of the equals contract: `assertFalse(a.equals("other"))`
+        if in_assertion_argument(n, cx.src) {
+            return;
+        }
         let (at, bt) = (cx.type_of(a), cx.type_of(b));
         if at.is_array() || bt.is_array() {
             return;
@@ -480,7 +484,8 @@ impl Rule for EqualsNull {
             return;
         }
         let args = cx.fm.args_of(n);
-        if args.len() == 1 && is_null_literal(args[0]) {
+        // tests of the equals contract: `assertFalse(a.equals(null))`
+        if args.len() == 1 && is_null_literal(args[0]) && !in_assertion_argument(n, cx.src) {
             if let Some(o) = n.field("object") {
                 let fix = Fix::replace("Compare with ==", n, format!("{} == null", cx.text(o)));
                 cx.report_fix(n, "`equals(null)` is always false; use `== null`", fix);
@@ -587,6 +592,22 @@ impl Rule for EqualsWithoutHashCode {
                         || c.superclass.as_ref().is_some_and(|s| s.is_unknown())
                 });
                 if inherits_hashcode {
+                    return;
+                }
+                // `return obj == this;` keeps identity equality, which Object.hashCode() matches
+                let param = m.field("parameters").and_then(|p| p.kids().first().and_then(|fp| fp.field("name"))).map(|x| cx.text(x));
+                let identity_only = m.field("body").is_some_and(|b| {
+                    let st = b.kids();
+                    st.len() == 1
+                        && st[0].kind() == "return_statement"
+                        && st[0].first_kid().map(|x| x.unparen()).is_some_and(|x| x.kind() == "binary_expression" && x.child_by_field_name("operator").is_some_and(|o| o.kind() == "==") && {
+                                let (l, r) = (x.field("left").map(|k| k.unparen()), x.field("right").map(|k| k.unparen()));
+                                let is_this = |k: Option<Node<'t>>| k.is_some_and(|k| k.kind() == "this");
+                                let is_param = |k: Option<Node<'t>>| k.is_some_and(|k| Some(cx.text(k)) == param);
+                                (is_this(l) && is_param(r)) || (is_param(l) && is_this(r))
+                            })
+                });
+                if identity_only {
                     return;
                 }
                 if let Some(name) = m.field("name") {
@@ -707,7 +728,12 @@ impl Rule for LiteralFirstInComparison {
         }
         let args = cx.fm.args_of(n);
         let Some(o) = n.field("object") else { return };
-        if args.len() != 1 || args[0].unparen().kind() != "string_literal" || o.unparen().kind() == "string_literal" {
+        // a literal or a `static final String` compile-time constant (never null)
+        let constant = |e: Node<'t>| {
+            let e = e.unparen();
+            e.kind() == "string_literal" || cx.fm.field_ref(e).is_some_and(|f| f.field.flags.is_static() && f.field.flags.is_final() && f.field.ty.is_string() && f.field.constant.is_some())
+        };
+        if args.len() != 1 || !constant(args[0]) || constant(o) {
             return;
         }
         if !cx.type_of(o).is_string() {
@@ -718,10 +744,10 @@ impl Rule for LiteralFirstInComparison {
             return;
         }
         if matches!(name, "equals" | "equalsIgnoreCase") {
-            let fix = Fix::replace("Put the literal first", n, format!("{}.{name}({})", cx.text(args[0]), cx.text(o)));
-            cx.report_fix(n, "Put the string literal first to avoid a NullPointerException", fix);
+            let fix = Fix::replace("Put the constant first", n, format!("{}.{name}({})", cx.text(args[0]), cx.text(o)));
+            cx.report_fix(n, "Put the string constant first to avoid a NullPointerException", fix);
         } else {
-            cx.report(n, "Put the string literal first to avoid a NullPointerException");
+            cx.report(n, "Put the string constant first to avoid a NullPointerException");
         }
     }
 }
@@ -935,7 +961,58 @@ impl Rule for ReferenceEqualityOnValueType {
                 return;
             }
         }
+        if identity_fast_path(n, l, r, cx.src) {
+            return;
+        }
         cx.report(n, format!("`{}` overrides `equals()`; `{}` compares identity", simple_name_of(ln), op(n)));
+    }
+}
+
+/// `if (a == b) return a;`, `t.x == x ? t : new T(x)`, `if (mapped != repo)
+/// return mapped;`: the identity test is a change check that yields one of
+/// the compared objects (on either branch), or yields the unchanged owner
+/// (`this`, or the object whose field is compared) when they are identical.
+/// Common in immutable trees. Yielding the owner when they differ
+/// (`if (this.v != v) return this;`) is the bug the rule exists for.
+fn identity_fast_path(n: Node<'_>, l: Node<'_>, r: Node<'_>, src: &str) -> bool {
+    let mut operands: Vec<&str> = Vec::new();
+    let mut owners: Vec<&str> = vec!["this"];
+    for side in [l.unparen(), r.unparen()] {
+        operands.push(side.text(src));
+        if side.kind() == "field_access" {
+            if let Some(o) = side.field("object") {
+                owners.push(o.text(src));
+            }
+        }
+    }
+    let yields = |e: Option<Node<'_>>, identical: bool| {
+        e.is_some_and(|e| {
+            let t = e.unparen().text(src);
+            operands.contains(&t) || (identical && owners.contains(&t))
+        })
+    };
+    // climb through parentheses and && / || to the whole condition
+    let mut cond = n;
+    while let Some(p) = cond.parent() {
+        let logical = p.kind() == "binary_expression" && matches!(p.child_by_field_name("operator").map(|o| o.kind()), Some("&&" | "||"));
+        if p.kind() == "parenthesized_expression" && p.parent().is_some_and(|g| g.kind() != "if_statement") || logical {
+            cond = p;
+        } else {
+            break;
+        }
+    }
+    let Some(p) = cond.parent() else { return false };
+    let eq = op(n) == "==";
+    match p.kind() {
+        // consequence runs when the condition holds: identical for `==`
+        "ternary_expression" if p.field("condition") == Some(cond) => yields(p.field("consequence"), eq) || yields(p.field("alternative"), !eq),
+        "parenthesized_expression" => {
+            let Some(stmt) = p.parent().filter(|g| g.kind() == "if_statement") else { return false };
+            let Some(then) = stmt.field("consequence") else { return false };
+            let first = if then.kind() == "block" { then.kids().first().copied() } else { Some(then) };
+            first.is_some_and(|f| f.kind() == "return_statement" && yields(f.first_kid(), eq))
+        }
+        _ => false,
     }
 }
 
@@ -968,7 +1045,7 @@ declare_rule!(EnumEqualsNull {
     name: "Enum compared with equals()",
     category: Style,
     severity: Info,
-    sources: ["sonar:S4551", "pmd:CompareObjectsWithEquals"],
+    sources: ["sonar:S4551"],
     kinds: ["method_invocation"],
     description: "Enum constants are singletons: `==` is null-safe, faster and checked at compile time for type compatibility, while `equals()` throws on a null receiver.",
 });

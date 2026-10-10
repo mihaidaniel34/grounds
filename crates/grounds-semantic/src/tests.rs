@@ -252,3 +252,36 @@ fn qualified_record_patterns() {
     );
     assert_eq!(t, vec!["double", "boolean", "java.util.List<Shape>", "double", "double", "Shape.Circle"]);
 }
+
+#[test]
+fn nested_generic_overloads_stay_polynomial() {
+    // Hamcrest-style matcher trees: every level is an overloaded generic call
+    // whose argument is the next level. Typing used to redo each subtree per
+    // overload candidate and per target-type query (helidon's CmModelTest).
+    let leaf = "prop(Rec::name, is(\"a\"))";
+    let mut e = leaf.to_string();
+    for i in 0..14 {
+        e = if i % 2 == 0 { format!("hasItem(allOf({e}, {leaf}))") } else { format!("is(allOf(java.util.List.of({e}, {leaf})))") };
+    }
+    let src = format!(
+        "import java.util.function.Function; interface M<T> {{}} record Rec(String name) {{}}
+         class T {{
+           static <X> M<X> is(X x) {{ return null; }}
+           static <X> M<X> is(M<X> m) {{ return null; }}
+           static <X> M<X> allOf(Iterable<M<? super X>> ms) {{ return null; }}
+           @SafeVarargs static <X> M<X> allOf(M<? super X>... ms) {{ return null; }}
+           static <X> M<Iterable<? super X>> hasItem(X x) {{ return null; }}
+           static <X> M<Iterable<? super X>> hasItem(M<? super X> m) {{ return null; }}
+           static <A, B> M<A> prop(Function<A, B> f, M<B> m) {{ return null; }}
+           static <X> void assertThat(X x, M<? super X> m) {{}}
+           void t(java.util.List<Rec> l) {{ assertThat(l, {e}); }} }}"
+    );
+    let pf = ParsedFile::parse(src.as_str());
+    let mut idx = Index::new(jdk());
+    idx.set_file(Arc::from("T.java"), Arc::new(extract(&pf)));
+    let fm = FileModel::new(&pf, &idx, Arc::from("T.java"));
+    for n in pf.root().descendants().filter(|n| n.kind() == "method_invocation") {
+        fm.type_of(n);
+    }
+    assert!(fm.work.get() < 20_000, "{} guarded computations", fm.work.get());
+}

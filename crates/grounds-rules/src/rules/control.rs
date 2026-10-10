@@ -363,7 +363,7 @@ declare_rule!(AssignmentInCondition {
     category: Bug,
     severity: Warning,
     tier: Edit,
-    sources: ["sonar:S1121", "spotbugs:QBA_QUESTIONABLE_BOOLEAN_ASSIGNMENT", "pmd:AssignmentInOperand", "intellij:AssignmentUsedAsCondition"],
+    sources: ["sonar:S1121", "spotbugs:QBA_QUESTIONABLE_BOOLEAN_ASSIGNMENT", "intellij:AssignmentUsedAsCondition"],
     kinds: ["if_statement", "while_statement", "do_statement", "ternary_expression"],
     description: "`if (done = true)` assigns instead of comparing and is always true. Use `==` (or just `if (done)`).",
 });
@@ -748,7 +748,7 @@ declare_rule!(SwitchMissingDefault {
     category: Style,
     severity: Info,
     enabled: false,
-    sources: ["sonar:S131", "pmd:SwitchStmtsShouldHaveDefault", "intellij:SwitchStatementWithoutDefaultBranch"],
+    sources: ["sonar:S131", "pmd:NonExhaustiveSwitch", "intellij:SwitchStatementWithoutDefaultBranch"],
     kinds: ["switch_expression"],
     description: "A switch statement without a `default` silently ignores unexpected values. Add a default that handles or rejects them.",
 });
@@ -1191,7 +1191,7 @@ declare_rule!(ElseAfterReturn {
     category: Style,
     severity: Info,
     enabled: false,
-    sources: ["intellij:RedundantElse", "pmd:UnnecessaryElse"],
+    sources: ["intellij:RedundantElse"],
     kinds: ["if_statement"],
     description: "When the if-branch always returns or throws, the else block can be un-nested.",
 });

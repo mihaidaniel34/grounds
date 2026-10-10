@@ -5,7 +5,7 @@ coding agent makes. It reports bugs, compile breaks and Spring/Micronaut
 wiring mistakes in changed code in about 0.1–0.3 seconds, without Gradle,
 Maven or a JVM.
 
-**Status: experimental.** It has been tested on thirteen open-source codebases
+**Status: experimental.** It has been tested on twenty-one open-source codebases
 (listed below) and nothing else. Expect false positives on code that looks different from
 those, and unsupported setups. Bug reports with a code snippet are the most
 useful thing you can send.
@@ -53,24 +53,33 @@ grounds stays silent instead of guessing.
 
 ## Numbers
 
-Release build, Apple M4 Pro (14 cores), machine not idle. Each project as
-checked out, with no grounds configuration:
+Release build, Apple M4 Pro (14 cores), machine not idle. Each project at
+the commit pinned in [corpus/projects.tsv](corpus/projects.tsv), with no
+grounds configuration:
 
 | project | Java files | lines | modules | full check | calls resolved | errors / warnings / info |
 |---|---:|---:|---:|---:|---:|---|
-| spring-petclinic | 50 | 4,297 | 1 | 0.22 s | 96.6% | 0 / 16 / 7 |
-| spring-petclinic-rest | 109 | 8,675 | 1 | 0.24 s | 91.6% | 0 / 29 / 22 |
+| spring-petclinic | 50 | 4,297 | 1 | 0.22 s | 95.9% | 0 / 16 / 8 |
+| spring-petclinic-rest | 109 | 8,675 | 1 | 0.25 s | 91.3% | 0 / 29 / 22 |
 | piggymetrics | 97 | 4,472 | 10 | 0.21 s | 87.4% | 0 / 17 / 61 |
-| jhipster-sample-app | 136 | 11,980 | 1 | 0.27 s | 83.6% | 0 / 4 / 19 |
-| micronaut-core | 6,373 | 697,624 | 85 | 2.9 s | 95.0% | 12 / 829 / 2,988 |
-| buckpal | 46 | 1,992 | 1 | 0.20 s | 87.8% | 0 / 3 / 4 |
-| realworld-springboot-java | 89 | 4,638 | 1 | 0.21 s | 93.7% | 3 / 10 / 13 |
-| eladmin | 274 | 23,195 | 6 | 0.28 s | 88.3% | 12 / 61 / 95 |
-| start.spring.io | 388 | 24,443 | 5 | 0.27 s | 53.4% | 0 / 7 / 14 |
-| mall | 524 | 85,204 | 8 | 0.48 s | 96.3% | 0 / 42 / 799 |
-| halo | 1,381 | 134,807 | 7 | 0.90 s | 89.1% | 2 / 347 / 508 |
-| dolphinscheduler | 2,560 | 251,783 | 145 | 1.15 s | 91.1% | 10 / 742 / 1,952 |
-| thingsboard | 6,884 | 776,052 | 111 | 4.9 s | 86.6% | 8 / 2,479 / 8,813 |
+| jhipster-sample-app | 136 | 11,980 | 1 | 0.27 s | 82.4% | 0 / 4 / 20 |
+| micronaut-core | 6,371 | 697,519 | 85 | 3.00 s | 94.9% | 12 / 774 / 3,068 |
+| buckpal | 46 | 1,992 | 1 | 0.20 s | 87.8% | 0 / 3 / 5 |
+| realworld-springboot-java | 89 | 4,638 | 1 | 0.22 s | 93.7% | 3 / 2 / 13 |
+| eladmin | 274 | 23,195 | 6 | 0.28 s | 88.3% | 12 / 54 / 97 |
+| start.spring.io | 377 | 23,857 | 5 | 0.28 s | 53.4% | 0 / 1 / 15 |
+| mall | 524 | 85,204 | 8 | 0.53 s | 96.3% | 0 / 42 / 799 |
+| halo | 1,381 | 134,807 | 7 | 0.89 s | 88.8% | 2 / 337 / 520 |
+| dolphinscheduler | 2,560 | 251,783 | 145 | 1.22 s | 91.1% | 10 / 707 / 2,003 |
+| thingsboard | 6,884 | 776,052 | 111 | 4.69 s | 86.5% | 8 / 1,902 / 8,983 |
+| apollo | 756 | 98,135 | 15 | 0.61 s | 87.4% | 1 / 164 / 296 |
+| camunda | 15,743 | 2,299,131 | 149 | 9.65 s | 83.1% | 14 / 2,284 / 7,367 |
+| helidon | 6,325 | 1,037,072 | 522 | 4.33 s | 91.9% | 22 / 2,119 / 4,850 |
+| langchain4j | 3,632 | 516,267 | 120 | 2.49 s | 84.7% | 15 / 746 / 3,495 |
+| nacos | 5,293 | 813,767 | 63 | 3.57 s | 98.8% | 16 / 1,427 / 4,852 |
+| rewrite | 3,764 | 899,832 | 36 | 3.91 s | 94.3% | 11 / 1,335 / 5,267 |
+| spring-ai | 2,309 | 403,772 | 169 | 2.11 s | 76.2% | 2 / 646 / 1,667 |
+| spring-modulith | 704 | 67,972 | 49 | 0.45 s | 81.7% | 5 / 60 / 465 |
 
 "Calls resolved" is the share of method calls for which grounds found the
 exact target method. For the rest, any rule that needs the target says
@@ -92,17 +101,21 @@ on-disk cache.
 
 ## How it was tested
 
-- **Fixtures:** 357 small Java files, at least one per rule, with `// expect` markers on
+- **Fixtures:** 361 small Java files, at least one per rule, with `// expect` markers on
   the lines that must be reported. The tests fail when a rule reports
   anything else, or when a rule has no fixture. Fixtures also cover
   suppressions and options.
 - **Engine tests:** temporary git repositories go through edits, the
   baseline, broken-caller detection and impacted tests; multi-package
   projects exercise Spring bean registration (`@Import`, scan boundaries).
-- **Thirteen unmodified open-source projects** (the table above), taken as
-  published. Since they compile and their applications start, any
-  compile-break or DI finding on them would be a false positive. There are
-  none. Error-level findings were reviewed by hand. On the eight newer
+- **Twenty-one unmodified open-source projects** (the table above), pinned
+  to fixed commits in [corpus/projects.tsv](corpus/projects.tsv). Since they
+  compile and their applications start, any compile-break or DI finding on
+  them would be a false positive. There are none. `scripts/corpus.sh check`
+  runs all of them in about a minute and fails on a parse error, on any
+  compile-break or DI finding, or when a planted bug (below) is no longer
+  reported; every other change in the findings is shown as a diff against
+  the last accepted baseline. Error-level findings were reviewed by hand. On the eight newer
   projects they include genuine bugs: an `int` overflow in
   `1000 * 60 * 60 * 24 * 365 * 10`, `String.format` with SLF4J `{}`
   placeholders, `assertThat(x > 0)` without `.isTrue()`, DES with a constant
@@ -110,15 +123,31 @@ on-disk cache.
   trust every certificate (in test and TCK code), `compareTo(...) != -1`
   and `assertSame(x, x)`. (An earlier version of this list also counted five
   `split(File.pathSeparator)` calls, which are fine; a reviewer caught it.)
+  On the last eight projects added (apollo, camunda, helidon, langchain4j,
+  nacos, rewrite, spring-ai, spring-modulith) all error-level findings were
+  reviewed too. The first pass found 273 false positives in 12 patterns, all
+  fixed with fixtures. Two examples are custom `@…Mapping` annotations and a
+  lambda argument that selects another overload. What is left includes
+  genuine bugs:
+  - two methods in rewrite that call themselves unconditionally;
+  - an unsynchronized `wait()` in nacos whose exception is swallowed;
+  - a `UserInfo` kept in a `HashSet` with `equals` but no `hashCode`;
+  - a `private` `@ParameterizedTest` that never runs;
+  - about twenty AssertJ `assertThat(...)` calls that check nothing.
+
+  The remaining error-level findings are trust-all `TrustManager`s and
+  similar in test code.
   Warnings were sampled, not reviewed one by one.
-- **Planted bugs:** in a copy of spring-petclinic-rest, all of these were
+- **Planted bugs:** in a copy of spring-petclinic-rest
+  ([the patch](corpus/planted/spring-petclinic-rest.patch)), all of these are
   reported: an ambiguous bean (9 injection sites), a misspelled qualifier, a
   missing bean, a constructor cycle, and Lombok dropping `@Qualifier`.
   Renaming a method in petclinic listed all 15 broken callers. Changing
   `getPet(String)` to take two parameters flagged every call with the old
   arguments.
 - **External review:** three rounds of review by OpenAI Codex (gpt-6.1-sol)
-  on the shared analyses and engine, and one by gpt-6-astra on the rules,
+  on the shared analyses and engine, and several by gpt-6-astra on the rules
+  and on the fixes from the corpus and PMD rounds,
   each writing Java test cases, compiling them with javac and running Spring,
   AssertJ or Mockito to confirm every report. The first round found 16 defects (among
   them exception paths that saw assignments made after the throwing call,
@@ -139,6 +168,20 @@ on-disk cache.
   MyBatis `@MapperScan`, configurations from annotations whose jar is
   missing, inherited `@Bean` methods, prototype beans, and overloads whose
   parameter types are unknown. All fixed; each pattern has a multi-file test.
+- **Comparison with PMD:** `scripts/pmd_compare.py` runs PMD 7 (source
+  only, no build) with exactly the PMD rules that grounds rules cite, and
+  matches findings by file and line. On the 21 projects, the disagreements
+  were triaged by sampling. They turned up three grounds bugs:
+  - `builder.count` read from an enclosing class was resolved as the outer
+    `count`, giving 1,524 false "unused private field" reports;
+  - deeply nested Hamcrest matchers made expression typing exponential (one
+    helidon test hung);
+  - Javadoc links wrapped across lines left their imports looking unused.
+
+  It also found a dozen recall gaps and eight rules citing the wrong PMD rule.
+  Most remaining PMD-only findings are PMD lacking a classpath (on-demand
+  imports, supertypes in other files) or scope differences (grounds skips
+  test code and commented empty blocks on purpose).
 - **Precision fixes:** every false positive found during testing became a
   fixture case, for example `@Value` placeholders built by string
   concatenation, Micronaut introduction interfaces, MockMvc `andExpect` as

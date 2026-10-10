@@ -105,7 +105,7 @@ fn top_level_decl<'t>(n: Node<'t>) -> Option<Node<'t>> {
 }
 
 const REFLECTIVE_CLASS_ANNOTATIONS: &[&str] = &[
-    "Entity", "Embeddable", "MappedSuperclass", "Document", "Table", "Data", "Value", "Getter", "Setter", "JsonAutoDetect", "Introspected", "Serdeable", "ConfigurationProperties", "XmlRootElement", "XmlAccessorType", "Builder", "AllArgsConstructor", "RequiredArgsConstructor", "Jacksonized", "EachProperty", "ConfigurationProperties",
+    "Entity", "Embeddable", "MappedSuperclass", "Document", "Table", "Data", "Value", "Getter", "Setter", "JsonAutoDetect", "Introspected", "Serdeable", "ConfigurationProperties", "XmlRootElement", "XmlAccessorType", "Builder", "AllArgsConstructor", "RequiredArgsConstructor", "Jacksonized", "EachProperty", "FieldNameConstants",
 ];
 
 declare_rule!(UnusedPrivateField {
@@ -347,6 +347,7 @@ impl Rule for UnusedImport {
                 }
             }
         }
+        let doc_refs = javadoc_references(&comments);
         let mut seen: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
         let mut out = Vec::new();
         for imp in root.kids().into_iter().filter(|k| k.kind() == "import_declaration") {
@@ -380,8 +381,7 @@ impl Rule for UnusedImport {
             if used.contains(last) {
                 continue;
             }
-            let jd = [format!("{{@link {last}"), format!("{{@linkplain {last}"), format!("@see {last}"), format!("@throws {last}"), format!("{{@link {last}#"), format!("@exception {last}"), format!("{{@value {last}")];
-            if jd.iter().any(|p| comments.contains(p.as_str())) {
+            if doc_refs.contains(last) {
                 continue;
             }
             out.push((imp, format!("Unused import `{path}`")));
@@ -393,12 +393,55 @@ impl Rule for UnusedImport {
     }
 }
 
+/// Identifiers named by Javadoc references (`{@link Foo#bar(Baz, int)}`,
+/// `@see a.b.Foo`, `@throws FooException`...), also when the reference is
+/// wrapped onto the next comment line.
+fn javadoc_references(comments: &str) -> rustc_hash::FxHashSet<&str> {
+    // longer tags first: `{@link` is a prefix of `{@linkplain`
+    const TAGS: &[&str] = &["{@linkplain", "{@link", "{@value", "@see", "@throws", "@exception"];
+    let b = comments.as_bytes();
+    let mut out = rustc_hash::FxHashSet::default();
+    let mut i = 0;
+    while let Some(at) = comments[i..].find('@').map(|k| i + k) {
+        i = at + 1;
+        let start = if at > 0 && b[at - 1] == b'{' { at - 1 } else { at };
+        let Some(tag) = TAGS.iter().find(|t| comments[start..].starts_with(**t)) else { continue };
+        let mut j = start + tag.len();
+        if j < b.len() && (b[j].is_ascii_alphanumeric() || b[j] == b'_') {
+            continue; // `@seeAlso`, `{@linkx`
+        }
+        // skip whitespace and the `*` that starts a continued comment line
+        while j < b.len() && (b[j].is_ascii_whitespace() || b[j] == b'*') {
+            j += 1;
+        }
+        let ref_start = j;
+        let mut depth = 0;
+        while j < b.len() {
+            match b[j] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                b'}' => break,
+                c if c.is_ascii_whitespace() && depth <= 0 => break,
+                _ => {}
+            }
+            j += 1;
+        }
+        for id in comments[ref_start..j].split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')) {
+            if !id.is_empty() {
+                out.insert(id);
+            }
+        }
+        i = j.max(i);
+    }
+    out
+}
+
 declare_rule!(UnusedPrivateClass {
     id: "unused-private-class",
     name: "Unused private nested class",
     category: BadPractice,
     severity: Info,
-    sources: ["sonar:S1144", "pmd:UnusedPrivateClass"],
+    sources: ["sonar:S1144"],
     kinds: ["class_declaration", "interface_declaration", "enum_declaration", "record_declaration"],
     description: "A private nested type that is never referenced is dead code.",
 });

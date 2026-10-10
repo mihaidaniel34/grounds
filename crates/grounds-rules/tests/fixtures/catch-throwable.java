@@ -9,6 +9,7 @@ class A {
         try { work(); } catch (Throwable t) { f.completeExceptionally(t); }
         try { work(); } catch (Throwable t) { throw new IllegalStateException(t); }
         try { work(); } catch (Exception e) { log.error("x", e); }
+        try { work(); } catch (Throwable t) { Tracer.logError("x", t); } // expect
     }
     public static void main(String[] args) {
         try { } catch (Throwable t) { }
@@ -16,3 +17,4 @@ class A {
     void work() {}
     void cleanup() {}
 }
+class Tracer { static void logError(String m, Throwable t) {} }

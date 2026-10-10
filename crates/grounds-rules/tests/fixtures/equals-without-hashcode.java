@@ -11,3 +11,13 @@ class C {
 }
 @lombok.EqualsAndHashCode
 class D { int x; }
+class Token {
+    @Override public boolean equals(Object o) { return o == this; }
+}
+class NotIdentity {
+    int id;
+    @Override public boolean equals(Object o) { return this.id == ((NotIdentity) o).id; } // expect
+}
+class Everything {
+    @Override public boolean equals(Object other) { return this == this; } // expect
+}

@@ -198,6 +198,16 @@ fn apply_one(c: &mut RawClass, imported: bool, cfg: &LombokConfig) -> Vec<RawCla
         }
     }
 
+    // @FieldDefaults(makeFinal = true): instance fields become final (so
+    // @Data / @RequiredArgsConstructor take them, setters skip them)
+    if has("FieldDefaults").is_some_and(|a| a.bool_arg("makeFinal") == Some(true)) {
+        for f in &mut c.fields {
+            if !f.flags.is_static() && !f.flags.has(Flags::ENUM_CONSTANT) && !f.annotations.iter().any(|a| a.simple_name() == "NonFinal") {
+                f.flags.set(Flags::FINAL);
+            }
+        }
+    }
+
     // Loggers
     for (ann, ty) in [
         ("Slf4j", "org.slf4j.Logger"),
@@ -272,7 +282,12 @@ fn apply_one(c: &mut RawClass, imported: bool, cfg: &LombokConfig) -> Vec<RawCla
             }
         }
         if f.annotations.iter().any(|a| is_lombok(a, "With", imported) || is_lombok(a, "Wither", imported)) || has("With").is_some() {
-            let n = format!("with{}", cap(&f.name));
+            // `boolean isReadable` gets `withReadable`, like its getter/setter
+            let with_base = match base.strip_prefix("is") {
+                Some(rest) if f.ty.is_boolean_prim() && rest.chars().next().is_some_and(|c| c.is_uppercase()) => rest.to_string(),
+                _ => cap(&base),
+            };
+            let n = format!("with{with_base}");
             if !has_method(c, &n, 1) {
                 let st = self_type(c);
                 c.methods.push(gen_method(&n, Flags::PUBLIC, vec![param(&f.name, f.ty.clone())], st, f.range));
@@ -296,14 +311,17 @@ fn apply_one(c: &mut RawClass, imported: bool, cfg: &LombokConfig) -> Vec<RawCla
         }
     }
 
-    // Constructors
+    // Constructors. A @Builder.Default field's initializer moves into a
+    // static method, so for constructors it counts as uninitialized.
+    let builder_default = |f: &RawField| f.annotations.iter().any(|a| a.name.ends_with("Builder.Default") || (&*a.name == "Default" && imported));
+    let initialized = |f: &RawField| f.has_initializer && !builder_default(f);
     let instance_fields: Vec<&RawField> = fields.iter().filter(|f| !f.flags.is_static() && !f.flags.has(Flags::ENUM_CONSTANT)).collect();
     let required: Vec<&RawField> = instance_fields
         .iter()
         .copied()
-        .filter(|f| !f.has_initializer && (f.flags.is_final() || f.annotations.iter().any(|a| a.simple_name() == "NonNull")))
+        .filter(|f| !initialized(f) && (f.flags.is_final() || f.annotations.iter().any(|a| a.simple_name() == "NonNull")))
         .collect();
-    let all: Vec<&RawField> = instance_fields.iter().copied().filter(|f| !(f.flags.is_final() && f.has_initializer)).collect();
+    let all: Vec<&RawField> = instance_fields.iter().copied().filter(|f| !(f.flags.is_final() && initialized(f))).collect();
     let explicit_ctor = c.methods.iter().any(|m| m.flags.has(Flags::CONSTRUCTOR) && !m.flags.has(Flags::IMPLICIT));
     let mut new_ctors: Vec<Vec<&RawField>> = Vec::new();
     // `staticName = "of"` (constructor annotations) and
@@ -374,7 +392,6 @@ fn apply_one(c: &mut RawClass, imported: bool, cfg: &LombokConfig) -> Vec<RawCla
     let super_builder = has("SuperBuilder").is_some();
     if let Some(b) = builder {
         // @Builder.Default fields keep their initializer but are settable
-        let builder_default = |f: &RawField| f.annotations.iter().any(|a| a.name.ends_with("Builder.Default") || (&*a.name == "Default" && imported));
         let items: Vec<(Name, TypeSyntax, (u32, u32))> = instance_fields
             .iter()
             .filter(|f| !(f.flags.is_final() && f.has_initializer) || builder_default(f))

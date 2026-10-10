@@ -134,7 +134,40 @@ impl ParsedFile {
 ///   whose original text is still `Shape.Circle`
 pub fn fixup_for_grammar(text: &str) -> Option<Vec<u8>> {
     let varargs = fixup_varargs_annotations(text);
-    fixup_record_patterns(text, varargs)
+    let patterns = fixup_record_patterns(text, varargs);
+    fixup_text_blocks(text, patterns)
+}
+
+/// tree-sitter-java lexes `//` inside a text block as a comment start
+/// (`"""\n  //comment"""` swallows the closing quotes): in the parse copy,
+/// slashes inside text blocks become `x`. String values are read from the
+/// original source, so rules still see the real content.
+fn fixup_text_blocks(text: &str, mut out: Option<Vec<u8>>) -> Option<Vec<u8>> {
+    if !text.contains("\"\"\"") || !text.contains('/') {
+        return out;
+    }
+    let b = text.as_bytes();
+    let n = b.len();
+    let code = code_mask(b);
+    let mut i = 0;
+    while i + 2 < n {
+        // a text block starts at a non-code `"""` whose previous byte is code
+        if b[i] == b'"' && b[i + 1] == b'"' && b[i + 2] == b'"' && !code[i] && (i == 0 || code[i - 1]) {
+            let mut j = i + 3;
+            while j < n && !code[j] {
+                j += 1;
+            }
+            for k in i + 3..j.saturating_sub(3) {
+                if b[k] == b'/' {
+                    out.get_or_insert_with(|| b.to_vec())[k] = b'x';
+                }
+            }
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    out
 }
 
 /// Which bytes are code (not inside a comment, string, text block or char
@@ -269,6 +302,11 @@ fn fixup_record_patterns(text: &str, mut out: Option<Vec<u8>>) -> Option<Vec<u8>
                 if code[k] && lone_underscore(k) {
                     out.get_or_insert_with(|| b.to_vec())[k] = b'$';
                 }
+                // `case final X x`, `case R(final var y)`: the grammar has no
+                // modifiers in patterns; `final` changes nothing for analysis
+                if word_at(k, b"final") {
+                    out.get_or_insert_with(|| b.to_vec())[k..k + 5].fill(b' ');
+                }
             }
             // Java 22 unnamed patterns, possibly several per label
             // (`case Boolean _, Byte _ ->`): the grammar supports neither.
@@ -306,6 +344,7 @@ fn fixup_record_patterns(text: &str, mut out: Option<Vec<u8>>) -> Option<Vec<u8>
                 j += 1;
             }
             if word_at(j, b"final") {
+                out.get_or_insert_with(|| b.to_vec())[j..j + 5].fill(b' ');
                 j += 5;
             }
             let start = j;
@@ -332,6 +371,11 @@ fn fixup_record_patterns(text: &str, mut out: Option<Vec<u8>>) -> Option<Vec<u8>
                     j += 1;
                 }
                 patch(start, j.min(n), &mut out);
+                for k in start..j.min(n) {
+                    if word_at(k, b"final") {
+                        out.get_or_insert_with(|| b.to_vec())[k..k + 5].fill(b' ');
+                    }
+                }
             }
             i += 10;
             continue;
@@ -786,5 +830,19 @@ mod varargs_mask_tests {
         let fixed = fixup_for_grammar(src).map(|b| String::from_utf8(b).unwrap()).unwrap_or_else(|| src.to_string());
         assert!(fixed.contains("s.length()") && fixed.contains("\"String @A(\""), "{fixed}");
         assert!(!ParsedFile::parse(src).root().to_sexp().contains("ERROR"));
+    }
+}
+
+#[cfg(test)]
+mod final_and_text_block_tests {
+    use super::*;
+
+    #[test]
+    fn final_in_patterns_and_slashes_in_text_blocks() {
+        let src = "class T { int f(Object o) { if (o instanceof final String s) return 1; return switch (o) { case final Integer i -> i; case R(final var x, final int y) -> 2; default -> 0; }; } String t = \"\"\"\n\n        //comment\"\"\"; int after() { return 1; } }";
+        let t = ParsedFile::parse(src).root().to_sexp();
+        assert!(!t.contains("ERROR"), "{t}");
+        // the original text (and so the string value) is untouched
+        assert!(ParsedFile::parse(src).text.contains("//comment"));
     }
 }

@@ -6,6 +6,11 @@ use crate::hierarchy::ClassLookup;
 use crate::model::*;
 use crate::stubs::*;
 use crate::stubs::fold_binary;
+
+thread_local! {
+    /// (class, simple name) member-type lookups in progress on this thread
+    static MEMBER_LOOKUPS: std::cell::RefCell<Vec<(Name, Name)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
 use dashmap::DashMap;
 use grounds_classfile::ClassContainer;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -619,6 +624,31 @@ impl Index {
 
     /// Member type `simple` of class `owner`, including inherited member types.
     pub fn member_type(&self, owner: &str, simple: &str) -> Option<Name> {
+        // Resolving a supertype resolves names, which can come back here for
+        // the same lookup (classes nested in and extending each other): a
+        // re-entrant lookup is "not found" instead of unbounded recursion.
+        let key: (Name, Name) = (Arc::from(owner), Arc::from(simple));
+        let entered = MEMBER_LOOKUPS.with(|l| {
+            let mut l = l.borrow_mut();
+            if l.len() > 64 || l.contains(&key) {
+                false
+            } else {
+                l.push(key);
+                true
+            }
+        });
+        if !entered {
+            return None;
+        }
+        struct Pop;
+        impl Drop for Pop {
+            fn drop(&mut self) {
+                MEMBER_LOOKUPS.with(|l| {
+                    l.borrow_mut().pop();
+                });
+            }
+        }
+        let _pop = Pop;
         let mut seen = FxHashSet::default();
         self.member_type_rec(owner, simple, &mut seen, 0)
     }
@@ -707,9 +737,31 @@ impl Index {
         // same package
         let same = if scope.package.is_empty() { simple.to_string() } else { format!("{}.{}", scope.package, simple) };
         if self.class_exists(&same) {
+            // a same-package class from another module (a test fixture in a
+            // module this one does not depend on) loses to an on-demand
+            // import that provides the name; javac would not see it
+            let module = |n: &str| self.source_file_of(n).map(|f| f.split("/src/").next().unwrap_or("").to_string());
+            let here = scope.enclosing.last().and_then(|e| module(e));
+            let other_module = matches!((module(&same), here), (Some(a), Some(b)) if a != b);
+            if !other_module {
+                return Some(Arc::from(same.as_str()));
+            }
+            if let Some(n) = self.resolve_on_demand(simple, scope) {
+                return Some(n);
+            }
             return Some(Arc::from(same.as_str()));
         }
-        // on-demand imports
+        if let Some(n) = self.resolve_on_demand(simple, scope) {
+            return Some(n);
+        }
+        let jl = format!("java.lang.{simple}");
+        if self.class_exists(&jl) {
+            return Some(Arc::from(jl.as_str()));
+        }
+        None
+    }
+
+    fn resolve_on_demand(&self, simple: &str, scope: &Scope) -> Option<Name> {
         for imp in scope.imports.iter().filter(|i| i.on_demand) {
             if self.package_exists(&imp.path) && !imp.is_static {
                 let c = format!("{}.{}", imp.path, simple);
@@ -722,10 +774,6 @@ impl Index {
                     return Some(n);
                 }
             }
-        }
-        let jl = format!("java.lang.{simple}");
-        if self.class_exists(&jl) {
-            return Some(Arc::from(jl.as_str()));
         }
         None
     }

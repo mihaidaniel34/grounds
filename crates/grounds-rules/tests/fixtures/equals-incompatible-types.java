@@ -16,4 +16,13 @@ class A {
         r = i.equals(5);
         return r;
     }
+    void contract(User u) {
+        org.junit.jupiter.api.Assertions.assertFalse(u.equals("not a user"));
+    }
+}
+class Widen {
+    boolean m(boolean b, List<String> strings, ArrayList<Integer> ints) {
+        Object value = java.util.stream.Stream.of(b).map(flag -> { if (flag) return strings; return ints; }).findFirst().get().get(0);
+        return value.equals(1);
+    }
 }

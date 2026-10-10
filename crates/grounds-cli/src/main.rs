@@ -386,6 +386,24 @@ fn hook(event: &str) -> anyhow::Result<i32> {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Relative paths are taken from the working directory, or else from the
+/// project root (`--root app src/...` from elsewhere); a path that exists in
+/// neither is an error rather than a silent "0 findings".
+fn resolve_paths(root: &std::path::Path, paths: &[PathBuf]) -> anyhow::Result<Vec<PathBuf>> {
+    paths
+        .iter()
+        .map(|p| {
+            if p.exists() {
+                Ok(p.clone())
+            } else if p.is_relative() && root.join(p).exists() {
+                Ok(root.join(p))
+            } else {
+                anyhow::bail!("no such file or directory: {} (also not under --root {})", p.display(), root.display())
+            }
+        })
+        .collect()
+}
+
 fn check(root: &std::path::Path, paths: &[PathBuf], format: &str, rules: Option<String>, min_sev: Option<String>, max: Option<usize>, stats: bool, style: report::Style) -> anyhow::Result<i32> {
     use grounds_engine::analyze;
     let t = std::time::Instant::now();
@@ -394,7 +412,7 @@ fn check(root: &std::path::Path, paths: &[PathBuf], format: &str, rules: Option<
         project.config.rules.enable = r.split(',').map(|s| s.trim().to_string()).collect();
     }
     let (ruleset, options) = analyze::build_ruleset(&project);
-    let files = analyze::expand_paths(&project, paths);
+    let files = analyze::expand_paths(&project, &resolve_paths(root, paths)?);
     let t_load = t.elapsed();
     let t = std::time::Instant::now();
     let mut findings = analyze::analyze_files(&project, &ruleset, &options, &files);

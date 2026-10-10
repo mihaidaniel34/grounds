@@ -21,7 +21,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `finalize-usage` | warning | checkpoint | sonar:S1113, sonar:S1111, pmd:AvoidCallingFinalize, spotbugs:FI_EXPLICIT_INVOCATION |
 | `close-in-finally-unguarded` | info | checkpoint | sonar:S2093, pmd:UseTryWithResources |
 | `exception-message-only-logged` | info | checkpoint | sonar:S1166, intellij:ThrowableNotPassedToLogger |
-| `catch-return-null` | info | checkpoint | sonar:S1168, pmd:ReturnEmptyCollectionRatherThanNull |
+| `catch-return-null` | info | checkpoint | sonar:S1166 |
 | `ignored-status-result` | warning | checkpoint | sonar:S899, spotbugs:RV_RETURN_VALUE_IGNORED_BAD_PRACTICE |
 | `collection-method-returns-null` | warning | checkpoint | sonar:S1168, spotbugs:PZLA_PREFER_ZERO_LENGTH_ARRAYS, pmd:ReturnEmptyCollectionRatherThanNull |
 | `system-exit` | warning | checkpoint | sonar:S1147, spotbugs:DM_EXIT, pmd:DoNotTerminateVM |
@@ -43,7 +43,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `unused-private-field` | warning | checkpoint | sonar:S1068, spotbugs:URF_UNREAD_FIELD, spotbugs:UUF_UNUSED_FIELD, pmd:UnusedPrivateField |
 | `unused-private-method` | warning | checkpoint | sonar:S1144, spotbugs:UPM_UNCALLED_PRIVATE_METHOD, pmd:UnusedPrivateMethod |
 | `unused-parameter` | info | checkpoint | sonar:S1172, pmd:UnusedFormalParameter, intellij:UnusedParameters |
-| `unused-private-class` | info | checkpoint | sonar:S1144, pmd:UnusedPrivateClass |
+| `unused-private-class` | info | checkpoint | sonar:S1144 |
 | `dead-store` | warning | checkpoint | sonar:S1854, spotbugs:DLS_DEAD_LOCAL_STORE, pmd:UnusedAssignment, intellij:UnusedAssignment |
 | `legacy-date-api` *off* | info | checkpoint | sonar:S2143 |
 
@@ -119,7 +119,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `empty-control-statement-body` | warning | edit | sonar:S1116, errorprone:EmptyIf, pmd:EmptyControlStatement, intellij:ControlFlowStatementWithoutBraces |
 | `identical-branches` | warning | checkpoint | sonar:S1871, sonar:S3923, spotbugs:DB_DUPLICATE_BRANCHES, spotbugs:DB_DUPLICATE_SWITCH_CLAUSES, intellij:IfStatementWithIdenticalBranches |
 | `identical-conditions` | error | edit | sonar:S1862, intellij:DuplicateCondition |
-| `assignment-in-condition` | warning | edit | sonar:S1121, spotbugs:QBA_QUESTIONABLE_BOOLEAN_ASSIGNMENT, pmd:AssignmentInOperand, intellij:AssignmentUsedAsCondition |
+| `assignment-in-condition` | warning | edit | sonar:S1121, spotbugs:QBA_QUESTIONABLE_BOOLEAN_ASSIGNMENT, intellij:AssignmentUsedAsCondition |
 | `non-short-circuit-logic` | warning | checkpoint | sonar:S2178, spotbugs:NS_DANGEROUS_NON_SHORT_CIRCUIT, spotbugs:NS_NON_SHORT_CIRCUIT |
 | `null-check-wrong-operator` | error | edit | sonar:S1697, spotbugs:NP_NULL_ON_SOME_PATH, intellij:ConstantConditions |
 | `loop-wrong-direction` | error | edit | sonar:S2251, errorprone:LoopDirection |
@@ -177,7 +177,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 |---|---|---|---|
 | `interrupted-exception-swallowed` | warning | checkpoint | sonar:S2142 |
 | `thread-run-called-directly` | error | edit | sonar:S1217, spotbugs:RU_INVOKE_RUN, pmd:DontCallThreadRun |
-| `wait-not-in-loop` | warning | checkpoint | sonar:S2274, spotbugs:WA_NOT_IN_LOOP, pmd:AvoidWaitOutsideLoop |
+| `wait-not-in-loop` | warning | checkpoint | sonar:S2274, spotbugs:WA_NOT_IN_LOOP |
 | `notify-instead-of-notifyall` | info | checkpoint | sonar:S2446, spotbugs:NO_NOTIFY_NOT_NOTIFYALL, pmd:UseNotifyAllInsteadOfNotify |
 | `wait-notify-without-lock` | error | checkpoint | sonar:S2273, spotbugs:MWN_MISMATCHED_WAIT, spotbugs:MWN_MISMATCHED_NOTIFY |
 | `synchronized-on-value-object` | warning | checkpoint | sonar:S1860, spotbugs:DL_SYNCHRONIZATION_ON_BOXED_PRIMITIVE, spotbugs:DL_SYNCHRONIZATION_ON_SHARED_CONSTANT, spotbugs:DL_SYNCHRONIZATION_ON_BOOLEAN |
@@ -232,7 +232,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `random-used-once` | warning | checkpoint | sonar:S2119, spotbugs:DMI_RANDOM_USED_ONLY_ONCE |
 | `string-constructor` | info | checkpoint | sonar:S2129, spotbugs:DM_STRING_CTOR, spotbugs:DM_STRING_VOID_CTOR, pmd:StringInstantiation |
 | `boxed-primitive-constructor` | warning | checkpoint | sonar:S2129, spotbugs:DM_NUMBER_CTOR, spotbugs:DM_BOOLEAN_CTOR, pmd:PrimitiveWrapperInstantiation |
-| `replaceall-with-literal` | info | checkpoint | sonar:S5361, pmd:UseStringReplace |
+| `replaceall-with-literal` | info | checkpoint | sonar:S5361 |
 | `case-insensitive-equals` | info | checkpoint | sonar:S1157, pmd:UnnecessaryCaseChange |
 | `string-concat-in-loop` | info | checkpoint | sonar:S1643, pmd:UseStringBufferForStringAppends, intellij:StringConcatenationInLoops |
 | `log-string-concatenation` | info | checkpoint | sonar:S2629, pmd:GuardLogStatement, intellij:LoggingStringTemplateAsArgument |
@@ -240,13 +240,13 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `boxed-tostring` | info | checkpoint | sonar:S2131, spotbugs:DM_BOXED_PRIMITIVE_TOSTRING, spotbugs:DM_BOXED_PRIMITIVE_FOR_COMPARE |
 | `valueof-to-primitive` | info | checkpoint | sonar:S2130, spotbugs:DM_BOXED_PRIMITIVE_FOR_PARSING |
 | `unnecessary-boxing` | info | checkpoint | sonar:S2153, pmd:UnnecessaryBoxing, spotbugs:BX_BOXING_IMMEDIATELY_UNBOXED |
-| `regex-compiled-in-loop` | info | checkpoint | sonar:S4248, pmd:AvoidRecompilingPatterns |
+| `regex-compiled-in-loop` | info | checkpoint | sonar:S4248 |
 | `legacy-synchronized-collection` | info | checkpoint | sonar:S1149, pmd:ReplaceVectorWithList, pmd:ReplaceHashtableWithMap, pmd:AvoidStringBufferField |
 | `map-keyset-then-get` | info | checkpoint | sonar:S2864, spotbugs:WMI_WRONG_MAP_ITERATOR |
 | `explicit-gc` | warning | checkpoint | sonar:S1215, spotbugs:DM_GC, pmd:DoNotCallGarbageCollectionExplicitly |
 | `optional-orelse-eager-call` | info | checkpoint | sonar:S3655, intellij:OptionalGetWithoutIsPresent |
-| `new-date-gettime` | info | checkpoint | pmd:AvoidCallingNewDateGetTime, sonar:S2143 |
-| `enum-keyed-hash-collection` | info | checkpoint | sonar:S1640, pmd:UseEnumMap |
+| `new-date-gettime` | info | checkpoint | sonar:S2143 |
+| `enum-keyed-hash-collection` | info | checkpoint | sonar:S1640, pmd:UseEnumCollections |
 | `stream-sorted-findfirst` | info | checkpoint | sonar:S4266, intellij:SimplifyStreamApiCallChains |
 | `toarray-presized` *off* | info | checkpoint | intellij:ToArrayCallWithZeroLengthArrayArgument, pmd:OptimizableToArrayCall |
 | `stream-count-comparison` | info | checkpoint | sonar:S4034 |
@@ -284,11 +284,11 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | id | severity | tier | origin |
 |---|---|---|---|
 | `literal-first-in-comparison` | info | checkpoint | sonar:S1132, pmd:LiteralsFirstInComparisons, intellij:LiteralAsArgToStringEquals |
-| `enum-compared-with-equals` | info | checkpoint | sonar:S4551, pmd:CompareObjectsWithEquals |
-| `lowercase-long-literal` | info | checkpoint | sonar:S818, pmd:LongVariable, errorprone:LongLiteralLowerCaseSuffix |
+| `enum-compared-with-equals` | info | checkpoint | sonar:S4551 |
+| `lowercase-long-literal` | info | checkpoint | sonar:S818, errorprone:LongLiteralLowerCaseSuffix |
 | `string-tostring` | info | checkpoint | sonar:S1858, pmd:StringToString |
 | `use-isempty` | info | checkpoint | sonar:S1155, sonar:S7158, pmd:UseCollectionIsEmpty, intellij:SizeReplaceableByIsEmpty |
-| `equals-empty-string` | info | checkpoint | pmd:UseStringIsEmpty, sonar:S7158, intellij:StringEqualsEmptyString |
+| `equals-empty-string` | info | checkpoint | sonar:S7158, intellij:StringEqualsEmptyString |
 | `useless-string-valueof` | info | checkpoint | sonar:S1153, pmd:UselessStringValueOf |
 | `trim-isempty` | info | checkpoint | sonar:S7158, intellij:StringOperationCanBeSimplified |
 | `format-without-arguments` | info | checkpoint | sonar:S3457 |
@@ -305,7 +305,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `boolean-literal-comparison` | info | checkpoint | sonar:S1125, pmd:SimplifyBooleanExpressions, intellij:PointlessBooleanExpression |
 | `redundant-if-return-boolean` | info | checkpoint | sonar:S1126, pmd:SimplifyBooleanReturns, intellij:SimplifiableIfStatement |
 | `double-negation` | info | checkpoint | sonar:S2761, intellij:DoubleNegation |
-| `switch-missing-default` *off* | info | checkpoint | sonar:S131, pmd:SwitchStmtsShouldHaveDefault, intellij:SwitchStatementWithoutDefaultBranch |
+| `switch-missing-default` *off* | info | checkpoint | sonar:S131, pmd:NonExhaustiveSwitch, intellij:SwitchStatementWithoutDefaultBranch |
 | `switch-with-few-cases` *off* | info | checkpoint | sonar:S1301, pmd:TooFewBranchesForSwitch |
 | `nested-ternary` | info | checkpoint | sonar:S3358, intellij:NestedConditionalExpression |
 | `collapsible-if` | info | checkpoint | sonar:S1066, pmd:CollapsibleIfStatements, intellij:IfStatementMissingBreakInLoop |
@@ -315,8 +315,8 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `redundant-cast` | info | checkpoint | sonar:S1905, pmd:UnnecessaryCast, intellij:RedundantCast |
 | `inverted-comparison` | info | checkpoint | sonar:S1940, pmd:LogicInversion, intellij:NegatedEqualityExpression |
 | `stray-semicolon` | info | checkpoint | sonar:S1116, pmd:UnnecessarySemicolon, intellij:UnnecessarySemicolon |
-| `else-after-return` *off* | info | checkpoint | intellij:RedundantElse, pmd:UnnecessaryElse |
-| `utility-class-instantiable` | info | checkpoint | sonar:S1118, pmd:UseUtilityClass, intellij:UtilityClassWithoutPrivateConstructor |
+| `else-after-return` *off* | info | checkpoint | intellij:RedundantElse |
+| `utility-class-instantiable` | info | checkpoint | sonar:S1118, pmd:InstantiableUtilityClass, intellij:UtilityClassWithoutPrivateConstructor |
 | `constant-interface` | info | checkpoint | sonar:S1214, pmd:ConstantsInInterface |
 | `class-naming` | info | checkpoint | sonar:S101, pmd:ClassNamingConventions |
 | `method-naming` | info | checkpoint | sonar:S100, pmd:MethodNamingConventions |
@@ -326,7 +326,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `package-naming` | info | checkpoint | sonar:S120, pmd:PackageCase |
 | `type-parameter-naming` *off* | info | checkpoint | sonar:S119, pmd:GenericsNaming |
 | `abstract-class-public-constructor` | info | checkpoint | sonar:S5993 |
-| `static-member-via-instance` | info | checkpoint | sonar:S2209, pmd:StaticMemberAccessedViaInstance, intellij:StaticMethodReferencedViaSubclass |
+| `static-member-via-instance` | info | checkpoint | sonar:S2209, intellij:StaticMethodReferencedViaSubclass |
 | `empty-method` | info | checkpoint | sonar:S1186, pmd:UncommentedEmptyMethodBody |
 | `missing-override` | info | checkpoint | sonar:S1161, pmd:MissingOverride, intellij:MissingOverrideAnnotation |
 | `useless-override` | info | checkpoint | sonar:S1185, pmd:UselessOverridingMethod |
@@ -337,7 +337,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `unused-import` | info | edit | sonar:S1128, pmd:UnnecessaryImport, intellij:UnusedImport |
 | `unused-pattern-variable` | info | checkpoint | sonar:S1481, intellij:UnusedDeclaration |
 | `junit5-unnecessary-public` *off* | info | checkpoint | sonar:S5786 |
-| `todo-comment` | info | checkpoint | sonar:S1135, pmd:TodoComment |
+| `todo-comment` | info | checkpoint | sonar:S1135 |
 | `fixme-comment` | warning | checkpoint | sonar:S1134 |
 | `commented-out-code` | info | checkpoint | sonar:S125 |
 | `redundant-response-body` | info | checkpoint | sonar:S6837 |
@@ -346,7 +346,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 
 | id | severity | tier | origin |
 |---|---|---|---|
-| `assertion-argument-order` | warning | checkpoint | sonar:S3415, pmd:JUnitAssertionsShouldIncludeMessage |
+| `assertion-argument-order` | warning | checkpoint | sonar:S3415 |
 | `test-without-assertion` | warning | checkpoint | sonar:S2699, pmd:UnitTestShouldIncludeAssert |
 | `junit5-private-test-method` | error | checkpoint | sonar:S5810 |
 | `mixed-junit-versions` | error | checkpoint | sonar:S5967, sonar:S6073 |

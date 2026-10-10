@@ -12,6 +12,16 @@ use std::sync::Arc;
 const TAG_SELECT: u8 = 10;
 const TAG_RESOLVE: u8 = 11;
 const TAG_PARTIAL: u8 = 12;
+// 13..=15: TAG_STANDALONE + Target
+const TAG_STANDALONE: u8 = 13;
+
+/// Where a generic method invocation takes its target type from.
+#[derive(Clone, Copy)]
+enum Target {
+    Full = 0,
+    Param = 1,
+    None = 2,
+}
 
 /// Shape of an argument for overload resolution.
 #[derive(Clone, Debug)]
@@ -88,7 +98,7 @@ impl<'t> FileModel<'t> {
                 ArgShape::Lambda(n, compat)
             }
             "method_reference" => ArgShape::MethodRef,
-            _ => ArgShape::Ty(self.type_of(a)),
+            _ => ArgShape::Ty(self.arg_type(a, Target::None)),
         }
     }
 
@@ -449,7 +459,53 @@ impl<'t> FileModel<'t> {
         if let Some(r) = self.calls.borrow().get(&call.id()) {
             return r.clone();
         }
-        let (r, clean) = self.clean(|| self.guard(call.id(), TAG_RESOLVE, None, || {
+        let (r, clean) = self.clean(|| self.guard(call.id(), TAG_RESOLVE, None, || self.infer_call(call, Target::Full)));
+        if clean {
+            self.calls.borrow_mut().insert(call.id(), r.clone());
+        }
+        r
+    }
+
+    /// Type of an argument as overload selection (`Target::None`) or partial
+    /// inference (`Target::Param`) of the enclosing call sees it. A method
+    /// invocation is not typed through `expected_type`: its target is the
+    /// enclosing call being resolved, and asking for it cycles, which leaves
+    /// every level of nested generic calls (`is(allOf(hasItem(...)))`)
+    /// unmemoized and exponential. `Target::Param` uses the selected
+    /// parameter type of the enclosing call instead, enough for
+    /// `collect(Collectors.toList())`.
+    fn arg_type(&self, a: Node<'t>, target: Target) -> Ty {
+        if a.kind() != "method_invocation" {
+            return self.type_of(a);
+        }
+        let key = (a.id(), target as u8);
+        if let Some(t) = self.standalone.borrow().get(&key) {
+            return t.clone();
+        }
+        let (t, clean) = self.clean(|| {
+            self.guard(a.id(), TAG_STANDALONE + target as u8, Ty::Unknown, || {
+                self.infer_call(a, target).map(|c| c.ret.clone()).unwrap_or(Ty::Unknown)
+            })
+        });
+        if clean {
+            self.standalone.borrow_mut().insert(key, t.clone());
+        }
+        t
+    }
+
+    /// Parameter type of the selected enclosing method for an argument,
+    /// without inference.
+    fn selected_param_type(&self, arg: Node<'t>) -> Ty {
+        let Some(list) = arg.parent().filter(|p| p.kind() == "argument_list") else { return Ty::Unknown };
+        let Some(call) = list.parent() else { return Ty::Unknown };
+        let Some(sel) = self.select_method(call) else { return Ty::Unknown };
+        let args = list.kids();
+        let idx = args.iter().position(|k| *k == arg).unwrap_or(0);
+        param_type_for_arg(&sel.method, idx, args.len()).unwrap_or(Ty::Unknown)
+    }
+
+    fn infer_call(&self, call: Node<'t>, target: Target) -> Option<Rc<ResolvedCall>> {
+        {
             let sel = self.select_method(call)?;
             if sel.ambiguous && call.kind() == "method_invocation" {
                 let mut rc = (*sel).clone();
@@ -496,7 +552,11 @@ impl<'t> FileModel<'t> {
             // target type
             let ret_unbound = tvars.iter().any(|v| !bindings.iter().any(|(k, _)| k == v) && mentions(&rc.method.ret, v));
             if ret_unbound {
-                let exp = self.expected_type(call);
+                let exp = match target {
+                    Target::Full => self.expected_type(call),
+                    Target::Param => self.selected_param_type(call),
+                    Target::None => Ty::Unknown,
+                };
                 if exp.is_known() {
                     unify(self, &rc.method.ret, &exp, &tvars, &mut bindings);
                 }
@@ -506,11 +566,7 @@ impl<'t> FileModel<'t> {
             }
             rc.ret = self.finish_type(&rc.method.ret, &bindings, call);
             Some(Rc::new(rc))
-        }));
-        if clean {
-            self.calls.borrow_mut().insert(call.id(), r.clone());
         }
-        r
     }
 
     /// Substitute bindings; remaining method type variables become Unknown,
@@ -535,7 +591,7 @@ impl<'t> FileModel<'t> {
                 if matches!(a.kind(), "lambda_expression" | "method_reference") {
                     continue;
                 }
-                let at = self.type_of(a);
+                let at = self.arg_type(a, Target::Param);
                 let Some(pt) = param_type_for_arg_typed(m, i, args.len(), &at) else { continue };
                 if at.is_known() {
                     unify(self, &pt, &at, &tvars, &mut out);
@@ -564,7 +620,9 @@ impl<'t> FileModel<'t> {
         if body.kind() != "block" {
             return self.type_of(body);
         }
+        // all returns must agree (or widen to one of them); otherwise unknown
         let mut result = Ty::Void;
+        let mut known: Option<Ty> = None;
         let mut stack = vec![body];
         while let Some(n) = stack.pop() {
             for k in n.kids() {
@@ -573,9 +631,30 @@ impl<'t> FileModel<'t> {
                         if let Some(e) = k.first_kid() {
                             let t = self.type_of(e);
                             if t.is_known() && t != Ty::Null {
-                                return t;
+                                known = match known {
+                                    None => Some(t),
+                                    Some(prev) if prev == t => Some(prev),
+                                    Some(prev) => {
+                                        // generic types would need their arguments compared
+                                        let sub = |a: &Ty, b: &Ty| a.args().is_empty() && b.args().is_empty() && a.class_name().zip(b.class_name()).is_some_and(|(x, y)| self.is_subclass(x, y).is_yes());
+                                        let partly_unknown = |a: &Ty| a.args().iter().any(|x| !x.is_known());
+                                        if sub(&t, &prev) {
+                                            Some(prev)
+                                        } else if sub(&prev, &t) {
+                                            Some(t)
+                                        } else if prev.erasure() == t.erasure() && partly_unknown(&t) && !partly_unknown(&prev) {
+                                            // `Mono<Plugin>` and `Mono<?>` from an unresolved call
+                                            Some(prev)
+                                        } else if prev.erasure() == t.erasure() && partly_unknown(&prev) && !partly_unknown(&t) {
+                                            Some(t)
+                                        } else {
+                                            return Ty::Unknown;
+                                        }
+                                    }
+                                };
+                            } else {
+                                result = Ty::Unknown;
                             }
-                            result = Ty::Unknown;
                         }
                     }
                     "lambda_expression" | "class_body" | "class_declaration" => {}
@@ -583,7 +662,7 @@ impl<'t> FileModel<'t> {
                 }
             }
         }
-        result
+        known.unwrap_or(result)
     }
 
     fn method_ref_result_type(&self, mref: Node<'t>, sam: &MethodInfo) -> Ty {

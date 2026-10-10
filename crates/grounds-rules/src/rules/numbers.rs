@@ -590,7 +590,7 @@ declare_rule!(LowercaseLongLiteral {
     name: "Long literal with lowercase l suffix",
     category: Style,
     severity: Info,
-    sources: ["sonar:S818", "pmd:LongVariable", "errorprone:LongLiteralLowerCaseSuffix"],
+    sources: ["sonar:S818", "errorprone:LongLiteralLowerCaseSuffix"],
     kinds: ["decimal_integer_literal", "hex_integer_literal", "octal_integer_literal", "binary_integer_literal"],
     description: "A lowercase `l` suffix is easily mistaken for the digit 1 (`101l`). Use an uppercase `L`.",
 });

@@ -46,7 +46,7 @@ declare_rule!(AssertionArgumentOrder {
     category: Testing,
     severity: Warning,
     scope: Test,
-    sources: ["sonar:S3415", "pmd:JUnitAssertionsShouldIncludeMessage"],
+    sources: ["sonar:S3415"],
     kinds: ["method_invocation"],
     description: "JUnit's `assertEquals(expected, actual)` takes the expected value first; with a literal in second position the failure message reads backwards (`expected:<computed> but was:<42>`). (TestNG uses the opposite order.)",
 });
@@ -120,8 +120,28 @@ impl Rule for TestWithoutAssertion {
             }
             // helper in the same class that asserts
             if c.field("object").is_none() {
-                if let Some(cls_decl) = enclosing_method_decl(n).and_then(owning_type_decl) {
-                    return methods_of(cls_decl).iter().any(|m| method_name(*m, cx.src) == name && m.field("body").is_some_and(|b| cx.text(b).contains("assert") || cx.text(b).contains("verify") || cx.text(b).contains("fail(")));
+                if let Some(cls_decl) = owning_type_decl(n) {
+                    let own: Vec<Node<'t>> = methods_of(cls_decl).into_iter().filter(|m| method_name(*m, cx.src) == name).collect();
+                    if !own.is_empty() {
+                        return own.iter().any(|m| m.field("body").is_some_and(|b| asserts_in(b, cx)));
+                    }
+                    // inherited from a test base class or interface (`rewriteRun(...)`
+                    // from OpenRewrite's RewriteTest): the harness asserts
+                    let own_class = cx.fm.class_of_decl(cls_decl).map(|ci| ci.name.clone());
+                    return match cx.fm.select_method(*c) {
+                        // a void harness method; `int compute()` merely computes
+                        Some(m) => m.method.ret == Ty::Void && own_class.is_some_and(|oc| m.owner != oc && cx.fm.is_subclass(&oc, &m.owner).is_yes()),
+                        // not resolved: inherited from a supertype we cannot see, unless
+                        // a static import may provide it
+                        None => !cx.fm.stub.imports.iter().any(|i| {
+                            i.is_static
+                                && if i.on_demand {
+                                    cx.fm.index.binary_name_for_dotted(&i.path).is_none_or(|b| !cx.fm.methods_named(&Ty::class(&b), name).is_empty())
+                                } else {
+                                    i.last() == name
+                                }
+                        }),
+                    };
                 }
             }
             false
@@ -132,6 +152,17 @@ impl Rule for TestWithoutAssertion {
             }
         }
     }
+}
+
+/// Whether a helper body asserts: an assertion-style call, `assert`, or a
+/// thrown `AssertionError`.
+fn asserts_in<'t>(body: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+    body.descendants().any(|d| match d.kind() {
+        "method_invocation" => cx.fm.call_name(d).is_some_and(is_assertion_call),
+        "assert_statement" => true,
+        "throw_statement" => cx.text(d).contains("AssertionError"),
+        _ => false,
+    })
 }
 
 fn is_junit5_class<'t>(decl: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
@@ -360,16 +391,21 @@ impl Rule for IncompleteAssertJ {
         if e.kind() != "method_invocation" {
             return;
         }
-        let name = cx.fm.call_name(e).unwrap_or("");
-        let incomplete = match name {
-            // assertThatThrownBy(...) alone already asserts that something is thrown
-            "assertThat" | "assertThatCode" | "assertThatObject" => true,
-            "as" | "describedAs" | "withFailMessage" | "overridingErrorMessage" => e.field("object").is_some_and(|o| cx.text(o).contains("assertThat")),
-            _ => false,
-        };
+        // assertThatThrownBy(...) alone already asserts that something is thrown
+        let is_entry = |m: Node<'t>| m.kind() == "method_invocation" && matches!(cx.fm.call_name(m), Some("assertThat" | "assertThatCode" | "assertThatObject"));
+        let is_description = |m: Node<'t>| m.kind() == "method_invocation" && matches!(cx.fm.call_name(m), Some("as" | "describedAs" | "withFailMessage" | "overridingErrorMessage"));
+        // descriptions directly on assertThat(...), with no check in between;
+        // `assertThat(x).isEqualTo(1).describedAs("..")` is complete
+        let mut entry = e;
+        while is_description(entry) {
+            match entry.field("object") {
+                Some(o) => entry = o.unparen(),
+                None => break,
+            }
+        }
+        let incomplete = is_entry(entry);
         // AssertJ's assertThat takes one argument; Hamcrest's
         // MatcherAssert.assertThat(reason, actual, matcher) is complete
-        let entry = if e.field("object").is_some_and(|o| cx.text(o).contains("assertThat")) { e.field("object").map(|o| o.unparen()).unwrap_or(e) } else { e };
         let single_arg = cx.fm.args_of(entry).len() == 1;
         let other_owner = cx.fm.select_method(entry).is_some_and(|c| !(c.owner.contains("assertj") || c.owner.contains("Truth")));
         if incomplete && single_arg && !other_owner && (cx.fm.select_method(e).is_some_and(|c| c.owner.contains("assertj") || c.owner.contains("Truth")) || cx.fm.stub.imports.iter().any(|i| i.path.contains("assertj"))) {
