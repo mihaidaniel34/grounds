@@ -10,10 +10,25 @@ const GRADLE_INIT: &str = r#"
 allprojects { p ->
     p.tasks.register("groundsClasspath") {
         doLast {
-            def dir = new File(p.rootProject.projectDir, ".grounds/classpath")
+            def root = p.rootProject.projectDir
+            def dir = new File(root, ".grounds/classpath")
             dir.mkdirs()
+            def confs = new LinkedHashSet<String>(["compileClasspath", "testCompileClasspath", "annotationProcessor", "testAnnotationProcessor"])
+            def sets = []
+            def rel = root.toPath().relativize(p.projectDir.toPath()).toString()
+            def ss = p.extensions.findByName("sourceSets")
+            if (ss != null) {
+                ss.each { s ->
+                    confs << s.compileClasspathConfigurationName
+                    confs << s.annotationProcessorConfigurationName
+                    def runners = p.tasks.withType(Test).findAll { t ->
+                        try { !t.testClassesDirs.files.disjoint(s.output.classesDirs.files) } catch (Throwable ignored) { false }
+                    }.collect { it.name }
+                    sets << [rel ?: ".", s.name, runners.join(",")].join("\t")
+                }
+            }
             def lines = new LinkedHashSet<String>()
-            ["compileClasspath", "testCompileClasspath", "annotationProcessor"].each { n ->
+            confs.each { n ->
                 def c = p.configurations.findByName(n)
                 if (c != null && c.canBeResolved) {
                     try { c.resolve().each { f -> lines << f.absolutePath } } catch (Throwable ignored) { }
@@ -21,6 +36,7 @@ allprojects { p ->
             }
             def name = p.path == ":" ? "root" : p.path.replace(':', '_')
             new File(dir, name + ".txt").text = lines.join("\n")
+            new File(dir, name + ".sets").text = sets.join("\n")
         }
     }
 }
@@ -69,7 +85,12 @@ pub fn gradle(root: &Path) -> Result<usize> {
         }
     }
     let dir = root.join(".grounds/classpath");
-    let files: Vec<PathBuf> = std::fs::read_dir(&dir).map(|rd| rd.flatten().map(|e| e.path()).collect()).unwrap_or_default();
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir).map(|rd| rd.flatten().map(|e| e.path()).collect()).unwrap_or_default();
+    files.sort();
+    // source set map: module dir, source set, test tasks running it
+    let sets: Vec<String> = files.iter().filter(|f| f.extension().is_some_and(|x| x == "sets")).filter_map(|f| std::fs::read_to_string(f).ok()).filter(|t| !t.trim().is_empty()).collect();
+    std::fs::write(root.join(".grounds/source-sets.txt"), sets.join("\n"))?;
+    files.retain(|f| f.extension().is_some_and(|x| x == "txt"));
     merge(root, &files)
 }
 

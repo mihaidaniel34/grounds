@@ -306,7 +306,7 @@ impl Session {
 
     /// Test classes that reference (transitively, through project classes)
     /// any class declared in the changed files.
-    pub fn impacted_tests(&mut self, files: &[PathBuf]) -> Vec<(String, String)> {
+    pub fn impacted_tests(&mut self, files: &[PathBuf]) -> Vec<ImpactedTest> {
         let opts = CheckOptions { mode: Mode::Checkpoint, files: files.to_vec(), all_lines: true, use_baseline: false, min_severity: Severity::Info };
         let targets = self.target_files(&opts);
         self.sync(&targets);
@@ -320,7 +320,7 @@ impl Session {
             }
         }
         let mut seen_files: FxHashSet<PathBuf> = targets.iter().cloned().collect();
-        let mut tests: Vec<(String, String)> = Vec::new();
+        let mut tests: Vec<ImpactedTest> = Vec::new();
         for _depth in 0..3 {
             let mut next: FxHashSet<Name> = FxHashSet::default();
             for (p, stub) in self.project.index.files() {
@@ -333,11 +333,8 @@ impl Session {
                 }
                 seen_files.insert(pb.clone());
                 if classify(&pb) == SourceKind::Test {
-                    for c in &stub.classes {
-                        if c.outer.is_none() {
-                            let module = self.project.workspace.module_of(&pb).map(|m| self.project.workspace.modules[m].name.clone()).unwrap_or_default();
-                            tests.push((module, c.name.to_string()));
-                        }
+                    for c in stub.classes.iter().filter(|c| c.outer.is_none()) {
+                        tests.push(self.impacted_test(&pb, c.name.to_string()));
                     }
                 } else {
                     for c in &stub.classes {
@@ -355,8 +352,7 @@ impl Session {
             if classify(f) == SourceKind::Test {
                 if let Some(stub) = self.project.index.file(&path_key(f)) {
                     for c in stub.classes.iter().filter(|c| c.outer.is_none()) {
-                        let module = self.project.workspace.module_of(f).map(|m| self.project.workspace.modules[m].name.clone()).unwrap_or_default();
-                        tests.push((module, c.name.to_string()));
+                        tests.push(self.impacted_test(f, c.name.to_string()));
                     }
                 }
             }
@@ -365,6 +361,22 @@ impl Session {
         tests.dedup();
         tests
     }
+
+    fn impacted_test(&self, file: &Path, class: String) -> ImpactedTest {
+        let ws = &self.project.workspace;
+        let module = ws.module_of(file).map(|m| ws.modules[m].name.clone()).unwrap_or_default();
+        let set = crate::workspace::source_set_of(file).unwrap_or("test");
+        let task = self.project.source_sets.test_task(&module, set);
+        ImpactedTest { module, task, class }
+    }
+}
+
+/// A test class reaching changed code, with the Gradle test task running it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct ImpactedTest {
+    pub module: String,
+    pub task: String,
+    pub class: String,
 }
 
 /// Render a report for an agent: new problems first, then broken callers,

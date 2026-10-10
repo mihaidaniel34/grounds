@@ -63,8 +63,8 @@ pub fn execute(session: &mut Session, req: &Request) -> Response {
         Request::ImpactedTests { files } => {
             let tests = session.impacted_tests(files);
             let mut out = String::new();
-            for (m, t) in &tests {
-                out.push_str(&format!("{m}\t{t}\n"));
+            for t in &tests {
+                out.push_str(&format!("{}\t{}\t{}\n", t.module, t.task, t.class));
             }
             Response { code: 0, stdout: out, stderr: String::new() }
         }

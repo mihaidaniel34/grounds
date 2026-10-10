@@ -203,14 +203,15 @@ fn main() -> anyhow::Result<()> {
             let root = find_root(root);
             let resp = grounds_engine::daemon::run(&root, &grounds_engine::daemon::Request::ImpactedTests { files: abs(&files) }, false)?;
             if gradle {
-                let mut by: std::collections::BTreeMap<String, Vec<String>> = Default::default();
+                let mut by: std::collections::BTreeMap<(String, String), Vec<String>> = Default::default();
                 for l in resp.stdout.lines() {
-                    if let Some((m, t)) = l.split_once('\t') {
-                        by.entry(m.to_string()).or_default().push(t.to_string());
+                    let mut parts = l.splitn(3, '\t');
+                    if let (Some(m), Some(task), Some(t)) = (parts.next(), parts.next(), parts.next()) {
+                        by.entry((m.to_string(), task.to_string())).or_default().push(t.to_string());
                     }
                 }
-                for (m, ts) in by {
-                    let task = if m == ":" || m.is_empty() { "test".to_string() } else { format!(":{}:test", m.replace('/', ":")) };
+                for ((m, task), ts) in by {
+                    let task = if m == ":" || m.is_empty() { task } else { format!(":{}:{task}", m.replace('/', ":")) };
                     let filters: Vec<String> = ts.iter().map(|t| format!("--tests '{}'", t.replace('$', "."))).collect();
                     println!("./gradlew {task} {}", filters.join(" "));
                 }

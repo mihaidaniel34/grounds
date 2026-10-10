@@ -46,7 +46,7 @@ fn edit_checkpoint_baseline_and_pending_callers() {
 
     // impacted tests
     let tests = s.impacted_tests(&[]);
-    assert!(tests.iter().any(|(_, t)| t == "demo.OwnerTest"), "{tests:?}");
+    assert!(tests.iter().any(|t| t.class == "demo.OwnerTest" && t.task == "test"), "{tests:?}");
 
     // baseline accepts the current state
     s.write_baseline(&[], false).unwrap();

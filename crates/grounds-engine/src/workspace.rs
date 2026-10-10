@@ -1,7 +1,9 @@
 //! Workspace discovery: source files, modules and source sets, without
 //! running any build tool.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum SourceKind {
@@ -41,21 +43,78 @@ pub struct Workspace {
 
 const SKIP_DIRS: &[&str] = &["node_modules", ".git", ".gradle", ".idea", "out", ".grounds", "bin"];
 
+/// Source set names known to hold tests besides the naming heuristics: from
+/// `test_source_sets` in grounds.toml and from the source set map written by
+/// `grounds classpath` (source sets some `Test` task runs).
+static EXTRA_TEST_SETS: RwLock<Vec<String>> = RwLock::new(Vec::new());
+
+pub fn set_extra_test_sets(names: Vec<String>) {
+    if let Ok(mut w) = EXTRA_TEST_SETS.write() {
+        *w = names.into_iter().map(|n| n.to_ascii_lowercase()).collect();
+    }
+}
+
+/// The source set a file belongs to (`main`, `test`, `integrationTest`, ...),
+/// i.e. the directory after the last `src`.
+pub fn source_set_of(path: &Path) -> Option<&str> {
+    let comps: Vec<&str> = path.components().filter_map(|c| c.as_os_str().to_str()).collect();
+    comps.windows(2).rev().find(|w| w[0] == "src").map(|w| w[1])
+}
+
+fn is_test_set(set: &str) -> bool {
+    let set = set.to_ascii_lowercase();
+    const HINTS: &[&str] = &["test", "integration", "jmh", "e2e", "functional", "acceptance", "contract", "benchmark"];
+    set == "it" || HINTS.iter().any(|h| set.contains(h)) || EXTRA_TEST_SETS.read().is_ok_and(|e| e.contains(&set))
+}
+
 pub fn classify(path: &Path) -> SourceKind {
     let s = path.to_string_lossy();
     if s.contains("/build/generated") || s.contains("/target/generated-sources") || s.contains("/generated-sources/") {
         return SourceKind::Generated;
     }
-    let comps: Vec<&str> = path.components().filter_map(|c| c.as_os_str().to_str()).collect();
-    for w in comps.windows(2) {
-        if w[0] == "src" {
-            let set = w[1].to_ascii_lowercase();
-            if set.contains("test") || set == "it" || set.contains("integration") || set.contains("jmh") {
-                return SourceKind::Test;
+    match source_set_of(path) {
+        Some(set) if is_test_set(set) => SourceKind::Test,
+        _ => SourceKind::Main,
+    }
+}
+
+/// Source sets reported by the build (`.grounds/source-sets.txt`, written by
+/// `grounds classpath --gradle`): which `Test` tasks run each source set.
+#[derive(Debug, Default, Clone)]
+pub struct SourceSets {
+    /// (module name, source set) -> test task names
+    tasks: HashMap<(String, String), Vec<String>>,
+}
+
+impl SourceSets {
+    pub fn load(root: &Path) -> SourceSets {
+        let mut tasks = HashMap::new();
+        if let Ok(text) = std::fs::read_to_string(root.join(".grounds/source-sets.txt")) {
+            for line in text.lines() {
+                let mut parts = line.split('\t');
+                let (Some(module), Some(set)) = (parts.next(), parts.next()) else { continue };
+                let module = if module == "." || module.is_empty() { ":".to_string() } else { module.to_string() };
+                let ts: Vec<String> = parts.next().unwrap_or("").split(',').filter(|t| !t.is_empty()).map(String::from).collect();
+                tasks.insert((module, set.to_string()), ts);
             }
         }
+        SourceSets { tasks }
     }
-    SourceKind::Main
+
+    /// Source sets that some test task runs.
+    pub fn test_sets(&self) -> Vec<String> {
+        self.tasks.iter().filter(|(_, t)| !t.is_empty()).map(|((_, s), _)| s.clone()).collect()
+    }
+
+    /// The Gradle test task for a source set: as reported by the build, else
+    /// the convention (`test` for `test`, the suite name for JVM test suites).
+    pub fn test_task(&self, module: &str, set: &str) -> String {
+        match self.tasks.get(&(module.to_string(), set.to_string())) {
+            Some(t) if t.iter().any(|t| t == set) => set.to_string(),
+            Some(t) if !t.is_empty() => t[0].clone(),
+            _ => set.to_string(),
+        }
+    }
 }
 
 impl Workspace {

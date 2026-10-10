@@ -14,6 +14,10 @@ pub struct Config {
     pub report: ReportConfig,
     /// Extra glob patterns (relative to root) to exclude from analysis.
     pub exclude: Vec<String>,
+    /// Source set names (`src/<name>/java`) holding tests, in addition to
+    /// names containing test/integration/e2e/functional/... and those found
+    /// by `grounds classpath`.
+    pub test_source_sets: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -64,6 +68,7 @@ impl Default for Config {
             rules: RulesConfig::default(),
             report: ReportConfig::default(),
             exclude: Vec::new(),
+            test_source_sets: Vec::new(),
         }
     }
 }

@@ -2,7 +2,7 @@
 
 use crate::cache::{content_hash, StubCache};
 use crate::config::Config;
-use crate::workspace::{SourceKind, Workspace};
+use crate::workspace::{SourceKind, SourceSets, Workspace};
 use grounds_index::{extract, Classpath, FileStub, Index};
 use grounds_syntax::ParsedFile;
 use rayon::prelude::*;
@@ -30,6 +30,7 @@ pub struct Project {
     pub stats: LoadStats,
     /// Dependency-injection model (rebuilt when declarations change).
     pub di: grounds_di::DiModel,
+    pub source_sets: SourceSets,
 }
 
 pub fn path_key(p: &Path) -> Arc<str> {
@@ -45,6 +46,8 @@ impl Project {
     pub fn load_with(root: &Path, config: Config) -> anyhow::Result<Project> {
         let mut stats = LoadStats::default();
         let t = Instant::now();
+        let source_sets = SourceSets::load(root);
+        crate::workspace::set_extra_test_sets(config.test_source_sets.iter().cloned().chain(source_sets.test_sets()).collect());
         let workspace = Workspace::discover(root, &config.exclude);
         stats.t_discover = t.elapsed();
         stats.files = workspace.files.len();
@@ -94,7 +97,7 @@ impl Project {
         }
         let mut di = grounds_di::DiModel::build(&index);
         di.lombok_copies_qualifiers = lombok_copies_qualifiers(&workspace.root);
-        Ok(Project { config, workspace, index, stats, di })
+        Ok(Project { config, workspace, index, stats, di, source_sets })
     }
 
     pub fn source_kind(&self, path: &Path) -> SourceKind {

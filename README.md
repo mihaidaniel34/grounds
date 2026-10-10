@@ -81,6 +81,7 @@ Suppress a finding with `@SuppressWarnings("rule-id")` (Sonar `java:S1234`,
 ```toml
 java_release = 21
 exclude = ["**/generated/**"]
+test_source_sets = ["scenarios"]   # beyond test/integration/e2e/functional/... and what `grounds classpath` reports
 
 [classpath]
 entries = ["libs/vendor.jar"]
@@ -99,6 +100,9 @@ The classpath is best-effort by design: a type that cannot be resolved makes
 the analysis silent rather than wrong. For exact results, run
 `grounds classpath` once (it runs Gradle or Maven a single time, ~20-40 s)
 and set `scan_caches = false`; nothing invokes the build tool afterwards.
+With Gradle it also records every source set and the `Test` tasks running
+it, so custom source sets get the right classpath, test-code rules and
+`impacted-tests --gradle` task (e.g. `./gradlew verifyScenarios --tests ...`).
 
 ## Architecture
 
