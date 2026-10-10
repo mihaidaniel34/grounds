@@ -318,11 +318,10 @@ declare_rule!(SleepInTest {
 impl Rule for SleepInTest {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
-        if cx.fm.call_name(n) == Some("sleep") && cx.fm.select_method(n).is_some_and(|c| &*c.owner == "java.lang.Thread" || c.owner.ends_with("TimeUnit")) {
-            if enclosing_method_decl(n).is_some_and(|m| is_test_method(m, cx.src)) {
+        if cx.fm.call_name(n) == Some("sleep") && cx.fm.select_method(n).is_some_and(|c| &*c.owner == "java.lang.Thread" || c.owner.ends_with("TimeUnit"))
+            && enclosing_method_decl(n).is_some_and(|m| is_test_method(m, cx.src)) {
                 cx.report(n, "Avoid Thread.sleep in tests; wait for the condition instead");
             }
-        }
     }
 }
 

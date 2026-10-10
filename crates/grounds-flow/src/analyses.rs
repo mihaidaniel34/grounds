@@ -392,16 +392,13 @@ impl<'a, 't> Analysis<'t> for NullnessAnalysis<'a, 't> {
             }
             "method_invocation" => {
                 if self.fm.call_matches_any(e, REQUIRE_NON_NULL) {
-                    for a in self.fm.args_of(e) {
-                        let a = a.unparen();
+                    // the checked value is the first argument (`requireNonNull(x, msg)`)
+                    if let Some(a) = self.fm.args_of(e).first().map(|a| a.unparen()) {
                         if a.kind() == "identifier" {
                             if let Some(i) = self.fm.binder.decl_index_of_ref(a) {
-                                if !self.fm.local_type(i).is_string() || self.fm.args_of(e).len() == 1 || true {
-                                    f.insert(i, Nullness::NonNull);
-                                }
+                                f.insert(i, Nullness::NonNull);
                             }
                         }
-                        break;
                     }
                 }
             }

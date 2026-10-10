@@ -33,7 +33,6 @@ pub fn cognitive_complexity(body: Node, src: &str, method_name: &str) -> u32 {
                     if let Some(r) = e.field("right") {
                         flatten(r, out);
                     }
-                    return;
                 }
             }
         }

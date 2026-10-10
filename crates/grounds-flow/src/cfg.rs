@@ -161,12 +161,11 @@ impl<'t, 's> Builder<'t, 's> {
                     match k.kind() {
                         "argument_list" => self.expr_list(k),
                         "class_body" => self.emit(k),
-                        _ if k.field("x").is_none() && n.field("type") != Some(k) && n.field("type_arguments") != Some(k) => {
+                        _ if k.field("x").is_none() && n.field("type") != Some(k) && n.field("type_arguments") != Some(k)
                             // qualified creation: outer.new Inner()
-                            if is_expression(k.kind()) {
+                            && is_expression(k.kind()) => {
                                 self.expr(k);
                             }
-                        }
                         _ => {}
                     }
                 }

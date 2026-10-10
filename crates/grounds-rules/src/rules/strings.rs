@@ -628,11 +628,10 @@ impl Rule for DefaultCharset {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
         if n.kind() == "method_invocation" {
-            if cx.fm.call_name(n) == Some("getBytes") && cx.fm.args_of(n).is_empty() {
-                if n.field("object").is_some_and(|o| cx.type_of(o).is_string()) {
+            if cx.fm.call_name(n) == Some("getBytes") && cx.fm.args_of(n).is_empty()
+                && n.field("object").is_some_and(|o| cx.type_of(o).is_string()) {
                     cx.report(n, "`getBytes()` uses the platform default charset; pass `StandardCharsets.UTF_8`");
                 }
-            }
             return;
         }
         let t = cx.type_of(n);

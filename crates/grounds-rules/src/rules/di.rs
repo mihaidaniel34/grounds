@@ -589,7 +589,7 @@ impl Rule for PathVariableMismatch {
             if p.field("type").is_some_and(|t| cx.text(t).starts_with("Map")) {
                 continue;
             }
-            if !vars.iter().any(|v| *v == name) {
+            if !vars.contains(&name) {
                 cx.report(p, format!("Path variable `{name}` does not appear in the mapping{}", if vars.is_empty() { String::new() } else { format!(" (available: {})", vars.join(", ")) }));
             }
         }

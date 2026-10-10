@@ -149,13 +149,8 @@ impl<'t> FileModel<'t> {
                         Some(_) => Fit::No,
                         None => Fit::No,
                     },
-                    Some(_) => {
-                        if param.is_class("java.lang.Object") {
-                            Fit::No
-                        } else {
-                            Fit::No
-                        }
-                    }
+                    // a lambda never converts to a class type, Object included
+                    Some(_) => Fit::No,
                     None => Fit::Maybe,
                 }
             }

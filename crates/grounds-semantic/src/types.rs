@@ -426,13 +426,10 @@ impl<'t> FileModel<'t> {
                     (n.field("scope").or_else(|| n.first_kid())?, n.field("name").or_else(|| n.kids().last().copied())?)
                 };
                 let fname = field.text(self.src);
-                match obj.kind() {
-                    "super" => {
-                        let c = self.enclosing_class(n)?;
-                        let st = c.superclass.clone()?;
-                        return self.field(&st, fname).map(Symbol::Field);
-                    }
-                    _ => {}
+                if obj.kind() == "super" {
+                    let c = self.enclosing_class(n)?;
+                    let st = c.superclass.clone()?;
+                    return self.field(&st, fname).map(Symbol::Field);
                 }
                 match self.symbol(obj) {
                     Some(Symbol::Package(p)) => {

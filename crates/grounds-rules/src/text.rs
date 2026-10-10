@@ -239,11 +239,10 @@ pub fn check_java_regex(p: &str) -> Result<(), String> {
                         Some(k) => i += k + 1,
                         None => return Err("unclosed \\b{} escape".into()),
                     },
-                    e if e.is_ascii_alphabetic() => {
-                        if !"tnrfaedDsSwWbBAGZzhHvVRXEgN0123456789".contains(e) {
+                    e if e.is_ascii_alphabetic()
+                        && !"tnrfaedDsSwWbBAGZzhHvVRXEgN0123456789".contains(e) => {
                             return Err(format!("illegal/unsupported escape sequence '\\{e}'"));
                         }
-                    }
                     _ => {}
                 }
                 can_quantify = true;

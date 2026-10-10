@@ -600,7 +600,7 @@ impl<'a> Builder<'a> {
             }
         }
         for b in &mut self.model.beans {
-            if b.source == BeanSource::Component && replaced.iter().any(|r| *r == b.declaring_class) {
+            if b.source == BeanSource::Component && replaced.contains(&b.declaring_class) {
                 b.autowire_candidate = false;
             }
         }

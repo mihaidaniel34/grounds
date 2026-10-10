@@ -201,11 +201,10 @@ fn apply_one(c: &mut RawClass, imported: bool) -> Option<RawClass> {
         }
     }
 
-    if data || value || has("ToString").is_some() {
-        if !has_method(c, "toString", 0) {
+    if (data || value || has("ToString").is_some())
+        && !has_method(c, "toString", 0) {
             c.methods.push(gen_method("toString", Flags::PUBLIC, vec![], TypeSyntax::qualified("java.lang.String"), range));
         }
-    }
     if data || value || has("EqualsAndHashCode").is_some() {
         if !has_method(c, "equals", 1) {
             c.methods.push(gen_method("equals", Flags::PUBLIC, vec![param("o", TypeSyntax::qualified("java.lang.Object"))], TypeSyntax::Prim(Prim::Boolean), range));

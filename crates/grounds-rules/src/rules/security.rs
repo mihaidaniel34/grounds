@@ -540,7 +540,7 @@ impl Rule for WeakRsaKey {
         let Some(size) = cx.fm.args_of(n).first().and_then(|a| cx.fm.int_value(*a)) else { return };
         let min = if is_kpg { 2048 } else { 128 };
         // EC sizes are small by design
-        if is_kpg && size < 600 && size >= 224 {
+        if is_kpg && (224..600).contains(&size) {
             return;
         }
         if size < min {
@@ -657,11 +657,10 @@ impl Rule for WorldWritablePermissions {
                     cx.report(n, format!("`{name}(true, false)` grants the permission to every user"));
                 }
             }
-            "add" => {
-                if args.first().is_some_and(|a| cx.text(*a).ends_with("OTHERS_WRITE")) {
+            "add"
+                if args.first().is_some_and(|a| cx.text(*a).ends_with("OTHERS_WRITE")) => {
                     cx.report(n, "Granting OTHERS_WRITE makes the file writable by everyone");
                 }
-            }
             _ => {}
         }
     }

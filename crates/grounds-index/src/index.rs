@@ -403,10 +403,10 @@ impl Index {
             ConstExpr::Name(n) => {
                 if !n.contains('.') {
                     // earlier field of the same class
-                    if let Some(f) = done.iter().find(|f| &*f.name == &**n) {
+                    if let Some(f) = done.iter().find(|f| *f.name == **n) {
                         return f.constant.clone();
                     }
-                    if let Some(f) = raw.fields.iter().find(|f| &*f.name == &**n) {
+                    if let Some(f) = raw.fields.iter().find(|f| *f.name == **n) {
                         if let Some(c) = &f.constant {
                             return Some(c.clone());
                         }
@@ -611,7 +611,7 @@ impl Index {
                 }
             }
         }
-        if segs.len() >= 1 {
+        if !segs.is_empty() {
             // default package nested: Outer.Inner
             let mut cur: Name = Arc::from(segs[0]);
             if self.class_exists(&cur) {

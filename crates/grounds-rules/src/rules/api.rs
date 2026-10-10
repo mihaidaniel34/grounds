@@ -417,7 +417,7 @@ impl Rule for ModifyCollectionInForeach {
         }
         // a Map declared by interface is often a ConcurrentHashMap; only trust a known initializer
         if ct_ty.class_name().is_some_and(|c| matches!(c, "java.util.Map" | "java.util.Collection" | "java.util.Set" | "java.util.Queue" | "java.util.Deque")) {
-            let init = cx.fm.field_ref(coll.unparen()).and_then(|_| None::<Node>).or_else(|| {
+            let init = cx.fm.field_ref(coll.unparen()).and(None::<Node>).or_else(|| {
                 let i = cx.fm.local_ref(coll.unparen())?;
                 cx.fm.binder.decls[i].decl_node.field("value")
             });
