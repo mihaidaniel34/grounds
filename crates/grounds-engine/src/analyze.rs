@@ -173,7 +173,25 @@ fn member_path(n: grounds_syntax::Node, src: &str) -> String {
             "method_declaration" | "constructor_declaration" => {
                 let params: Vec<String> = a
                     .field("parameters")
-                    .map(|p| p.kids().into_iter().filter(|k| matches!(k.kind(), "formal_parameter" | "spread_parameter")).filter_map(|k| k.field("type").map(|t| t.text(src).split_whitespace().collect::<String>())).collect())
+                    .map(|p| {
+                        p.kids()
+                            .into_iter()
+                            .filter(|k| matches!(k.kind(), "formal_parameter" | "spread_parameter"))
+                            .map(|k| {
+                                // the type node is not a field of spread parameters
+                                let ty = k.field("type").or_else(|| k.kids().into_iter().find(|t| t.kind().ends_with("type") || t.kind() == "type_identifier"));
+                                let mut t: String = ty.map(|t| t.text(src).split_whitespace().collect()).unwrap_or_default();
+                                // `Object p[]`: dimensions after the name
+                                if let Some(d) = k.field("dimensions").or_else(|| k.kid_of_kind("variable_declarator").and_then(|v| v.field("dimensions"))) {
+                                    t.push_str(&d.text(src).split_whitespace().collect::<String>());
+                                }
+                                if k.kind() == "spread_parameter" {
+                                    t.push_str("...");
+                                }
+                                t
+                            })
+                            .collect()
+                    })
                     .unwrap_or_default();
                 parts.push(format!("{}({})", name(), params.join(",")));
             }

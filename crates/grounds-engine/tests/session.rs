@@ -111,3 +111,24 @@ fn baseline_does_not_hide_the_same_bug_in_another_class() {
     assert!(r.findings.iter().any(|f| f.rule == "null-dereference"), "{:?}", r.findings);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn fingerprints_tell_array_overloads_apart() {
+    let dir = std::env::temp_dir().join(format!("grounds-session-arr-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, "src/main/java/demo/Case.java", "package demo;\nclass Case {\n}\n");
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+    let mut s = Session::open(&dir).unwrap();
+    let opts = CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: true, use_baseline: true, min_severity: Severity::Info };
+    write(&dir, "src/main/java/demo/Case.java", "package demo;\nclass Case {\n    void f(Object p) {\n        Object x = null;\n        x.toString();\n    }\n    void f(Object p[]) {\n    }\n}\n");
+    s.check(&opts);
+    s.write_baseline(&[], false).unwrap();
+    write(&dir, "src/main/java/demo/Case.java", "package demo;\nclass Case {\n    void f(Object p) {\n    }\n    void f(Object p[]) {\n        Object x = null;\n        x.toString();\n    }\n}\n");
+    let r = s.check(&opts);
+    assert!(r.findings.iter().any(|f| f.rule == "null-dereference"), "{:?}", r.findings);
+    let _ = std::fs::remove_dir_all(&dir);
+}

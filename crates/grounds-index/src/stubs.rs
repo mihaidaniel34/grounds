@@ -534,17 +534,14 @@ pub fn fold_binary(op: &str, l: &Constant, r: &Constant) -> Option<Constant> {
         (a, b) if numeric(a) && numeric(b) => {
             let a = a.as_f64()?;
             let b = b.as_f64()?;
+            // float and double share one representation here, so comparisons
+            // cannot follow Java's float rounding (`16777217L != 16777216f` is
+            // false in Java): not folded
             Some(match op {
                 "+" => Float(a + b),
                 "-" => Float(a - b),
                 "*" => Float(a * b),
                 "/" => Float(a / b),
-                "==" => Bool(a == b),
-                "!=" => Bool(a != b),
-                "<" => Bool(a < b),
-                "<=" => Bool(a <= b),
-                ">" => Bool(a > b),
-                ">=" => Bool(a >= b),
                 _ => return None,
             })
         }

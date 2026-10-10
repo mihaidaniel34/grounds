@@ -36,3 +36,24 @@ fn imported_and_unscanned_configurations() {
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(found, vec!["src/main/java/app/Consumer.java:7 bean-not-found".to_string()], "{found:?}");
 }
+
+#[test]
+fn registration_follows_spring() {
+    let dir = std::env::temp_dir().join(format!("grounds-di-reg-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, "src/main/java/app/App.java", "package app;\nimport org.springframework.boot.autoconfigure.SpringBootApplication;\nimport org.springframework.context.annotation.Import;\n@SpringBootApplication\n@Import(other.Plain.class)\npublic class App {}\n");
+    // @Import on a class that is never registered has no effect
+    write(&dir, "src/main/java/app/Unused.java", "package app;\n@org.springframework.context.annotation.Import(other.External.class)\nclass Unused {}\n");
+    write(&dir, "src/main/java/app/Store.java", "package app;\npublic interface Store {}\n");
+    write(&dir, "src/main/java/app/DbStore.java", "package app;\n@org.springframework.stereotype.Service\nclass DbStore implements Store {}\n");
+    write(&dir, "src/main/java/app/Consumer.java", "package app;\n@org.springframework.stereotype.Service\nclass Consumer {\n    Consumer(Store store,\n             other.Plain plain) {}\n}\n");
+    write(&dir, "src/main/java/other/External.java", "package other;\nimport org.springframework.context.annotation.*;\n@Configuration\npublic class External {\n    @Bean public app.Store otherStore() { return null; }\n}\n");
+    // a plain class registered by @Import is a bean
+    write(&dir, "src/main/java/other/Plain.java", "package other;\npublic class Plain {}\n");
+    // an unscanned component's own dependencies are not judged
+    write(&dir, "src/main/java/other/Disabled.java", "package other;\ninterface Missing {}\n@org.springframework.stereotype.Service\npublic class Disabled {\n    public Disabled(Missing dependency) {}\n}\n");
+    let found = di_findings(&dir);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(found.is_empty(), "{found:?}");
+}

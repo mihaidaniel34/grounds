@@ -370,7 +370,19 @@ impl<'a> Builder<'a> {
         // classes registered explicitly by scanned classes (@Import chains,
         // @EnableConfigurationProperties) are beans wherever they live
         let mut imported: rustc_hash::FxHashSet<Name> = rustc_hash::FxHashSet::default();
-        let mut work: Vec<Name> = names.iter().filter(|n| self.index.class(n).is_some_and(|c| in_scan(c.package()))).cloned().collect();
+        // start from classes component scanning registers: an @Import on a
+        // class that is never registered has no effect
+        let mut work: Vec<Name> = Vec::new();
+        for n in &names {
+            let Some(c) = self.index.class(n) else { continue };
+            if !in_scan(c.package()) {
+                continue;
+            }
+            let anns = c.annotations.clone();
+            if anns.iter().any(|a| a.simple_name() == "SpringBootApplication" || self.stereotype(a, 0) == Some(Framework::Spring)) {
+                work.push(n.clone());
+            }
+        }
         while let Some(n) = work.pop() {
             let Some(c) = self.index.class(&n) else { continue };
             for a in &c.annotations {
@@ -490,24 +502,41 @@ impl<'a> Builder<'a> {
             if c.constructors().any(|m| m.annotations.iter().any(|a| a.is("jakarta.inject.Inject") || a.is("javax.inject.Inject"))) {
                 self.model.jit.push(c.name.clone());
             }
-            let fw = anns.iter().find_map(|a| self.stereotype(a, 0));
-            // Spring @ConfigurationProperties classes become beans through
-            // @EnableConfigurationProperties or @ConfigurationPropertiesScan
-            let properties = fw.is_none() && anns.iter().any(|a| a.is("org.springframework.boot.context.properties.ConfigurationProperties") || (!a.resolved && a.simple_name() == "ConfigurationProperties"));
-            let Some(fw) = fw.or(properties.then_some(Framework::Spring)) else { continue };
+            let is_spring_props = |a: &AnnotationInfo| a.is("org.springframework.boot.context.properties.ConfigurationProperties") || (!a.resolved && a.simple_name() == "ConfigurationProperties");
+            // a Spring @ConfigurationProperties class without another stereotype
+            // is registered by @EnableConfigurationProperties or
+            // @ConfigurationPropertiesScan (named `<prefix>-<class name>`)
+            let properties = anns.iter().any(is_spring_props)
+                && !anns.iter().any(|a| !is_spring_props(a) && SPRING_STEREOTYPES.iter().any(|s| a.is(s)));
+            // plain classes listed in @Import are beans too
+            let fw = anns.iter().find_map(|a| self.stereotype(a, 0)).or_else(|| imported.contains(&c.name).then_some(Framework::Spring));
+            let Some(fw) = fw else { continue };
+            // may or may not be registered at runtime: satisfies injections but
+            // its own dependencies are not judged
             let maybe_registered = fw == Framework::Spring && (outside_scan(&c) || (properties && !imported.contains(&c.name)));
             // nested non-static classes cannot be beans
             if c.is_inner() {
                 continue;
             }
             let explicit = anns.iter().find_map(|a| {
-                if SPRING_STEREOTYPES.iter().any(|s| a.is(s)) || a.simple_name() == "Named" {
+                // @ConfigurationProperties("x") is a property prefix, not a bean name
+                if (SPRING_STEREOTYPES.iter().any(|s| a.is(s)) && !is_spring_props(a)) || a.simple_name() == "Named" {
                     first_string(a, &["value"])
                 } else {
                     None
                 }
             });
-            let name = explicit.unwrap_or_else(|| decapitalize(c.simple_name()));
+            let name = explicit.unwrap_or_else(|| {
+                if properties {
+                    let prefix = anns.iter().find(|a| is_spring_props(a)).and_then(|a| first_string(a, &["prefix", "value"])).unwrap_or_default();
+                    if prefix.is_empty() { c.name.to_string() } else { format!("{prefix}-{}", c.name) }
+                } else if fw == Framework::Spring && imported.contains(&c.name) && !in_scan(c.package()) {
+                    // imported (not scanned) classes are named by their class name
+                    c.name.to_string()
+                } else {
+                    decapitalize(c.simple_name())
+                }
+            });
             let qualifiers = self.qualifiers_of(&anns);
             let primary = anns.iter().any(|a| a.simple_name() == "Primary");
             let conditional = Self::conditional(&anns) || maybe_registered;
@@ -568,7 +597,9 @@ impl<'a> Builder<'a> {
                 self.add_bean(mbean);
                 // factory method parameters are injection points
                 for (pi, p) in m.params.iter().enumerate() {
-                    self.add_point(&c.name, PointKind::FactoryParam(m.name.clone(), pi), &p.ty, &p.annotations, &p.name, m.range, fw, false);
+                    if !maybe_registered {
+                        self.add_point(&c.name, PointKind::FactoryParam(m.name.clone(), pi), &p.ty, &p.annotations, &p.name, m.range, fw, false);
+                    }
                 }
             }
 
@@ -587,7 +618,9 @@ impl<'a> Builder<'a> {
                 let binds_properties = anns.iter().any(|a| a.simple_name() == "ConfigurationProperties" || a.simple_name() == "EachProperty");
                 if !binds_properties {
                     for (pi, p) in ctor.params.iter().enumerate() {
-                        self.add_point(&c.name, PointKind::ConstructorParam(pi), &p.ty, &p.annotations, &p.name, ctor.range, fw, false);
+                        if !maybe_registered {
+                            self.add_point(&c.name, PointKind::ConstructorParam(pi), &p.ty, &p.annotations, &p.name, ctor.range, fw, false);
+                        }
                     }
                 }
             }
@@ -598,7 +631,9 @@ impl<'a> Builder<'a> {
                     // Micronaut keeps the field's default value when no bean exists
                     let defaulted = fw != Framework::Spring && raw_inits.contains(&f.name);
                     let optional = defaulted || f.annotations.iter().any(|a| a.simple_name() == "Autowired" && a.arg("required").and_then(|v| v.as_bool()) == Some(false));
-                    self.add_point(&c.name, PointKind::Field, &f.ty, &f.annotations, &f.name, f.range, fw, optional);
+                    if !maybe_registered {
+                        self.add_point(&c.name, PointKind::Field, &f.ty, &f.annotations, &f.name, f.range, fw, optional);
+                    }
                 }
             }
             // setter / method injection
@@ -608,7 +643,9 @@ impl<'a> Builder<'a> {
                 }
                 let optional = m.annotations.iter().any(|a| a.simple_name() == "Autowired" && a.arg("required").and_then(|v| v.as_bool()) == Some(false));
                 for (pi, p) in m.params.iter().enumerate() {
-                    self.add_point(&c.name, PointKind::MethodParam(m.name.clone(), pi), &p.ty, &p.annotations, &p.name, m.range, fw, optional);
+                    if !maybe_registered {
+                        self.add_point(&c.name, PointKind::MethodParam(m.name.clone(), pi), &p.ty, &p.annotations, &p.name, m.range, fw, optional);
+                    }
                 }
             }
         }

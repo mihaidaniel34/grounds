@@ -45,8 +45,8 @@ fn lambda_compat(body: Node) -> LambdaCompat {
     while let Some(n) = stack.pop() {
         for k in n.kids() {
             match k.kind() {
-                // returns in nested lambdas and classes belong to them
-                "lambda_expression" | "class_body" => {}
+                // returns in nested lambdas and local/anonymous types belong to them
+                "lambda_expression" | "class_body" | "class_declaration" | "enum_declaration" | "interface_declaration" | "record_declaration" | "annotation_type_declaration" => {}
                 "return_statement" => {
                     if k.first_kid().is_some() {
                         value_return = true;

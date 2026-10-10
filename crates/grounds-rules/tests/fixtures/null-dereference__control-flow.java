@@ -69,6 +69,30 @@ class FlowCases {
         return result.length();
     }
 
+    // constants take their expression's type: n + 1 is long arithmetic
+    static void longLocal() {
+        final long n = 2147483647;
+        Object x = new Object();
+        if (n + 1 < 0) x = null;
+        x.toString();
+    }
+    // long vs float compares as float in Java: not folded
+    static void floatPromotion() {
+        Object x = new Object();
+        if (16777217L != 16777216f) x = null;
+        x.toString();
+    }
+
+    // a return inside a local type does not make the lambda value-returning
+    @Nullable static String pick(Supplier<String> s) { return null; }
+    static String pick(Runnable r) { return "ok"; }
+    static int localTypeInLambda() {
+        String s = pick(() -> {
+            enum E { A; int n() { return 1; } }
+        });
+        return s.length();
+    }
+
     // still reported
     static void stillNull() {
         Object x = null;

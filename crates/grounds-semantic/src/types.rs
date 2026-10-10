@@ -606,8 +606,19 @@ impl<'t> FileModel<'t> {
 
     // ----- constants -----
 
-    /// Compile-time constant value of an expression, if any.
+    /// Compile-time constant value of an expression, if any, converted to the
+    /// expression's static type (`final long n = 1` is a long constant).
     pub fn constant_value(&self, n: Node<'t>) -> Option<Constant> {
+        let v = self.constant_value_raw(n)?;
+        Some(match self.type_of(n.unparen()) {
+            t @ Ty::Prim(Prim::Int | Prim::Long | Prim::Short | Prim::Byte | Prim::Double | Prim::Float) if !matches!(v, Constant::Bool(_) | Constant::Str(_)) => {
+                grounds_index::index::coerce_constant(v.clone(), &t).unwrap_or(v)
+            }
+            _ => v,
+        })
+    }
+
+    fn constant_value_raw(&self, n: Node<'t>) -> Option<Constant> {
         let n = n.unparen();
         if let Some(c) = literal_constant(n, self.src) {
             return Some(c);

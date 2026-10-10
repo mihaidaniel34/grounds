@@ -150,17 +150,38 @@ pub fn serve(root: &Path, idle: Duration) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn handle(session: &mut Session, stream: UnixStream) -> bool {
+/// Read one request line within a total deadline (a per-read timeout alone
+/// lets a client trickle bytes forever) and a size limit.
+fn read_request(stream: &UnixStream, within: Duration) -> Option<String> {
     use std::io::Read;
-    // requests are handled one at a time: a client that stalls or floods
-    // must not block the hooks waiting behind it
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
-    let mut reader = BufReader::new((&stream).take(MAX_REQUEST));
-    let mut line = String::new();
-    if reader.read_line(&mut line).is_err() || !line.ends_with('\n') {
-        return false;
+    let deadline = Instant::now() + within;
+    let mut buf: Vec<u8> = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return None;
+        }
+        stream.set_read_timeout(Some(left)).ok()?;
+        let n = (&*stream).read(&mut chunk).ok()?;
+        if n == 0 {
+            return None;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if let Some(end) = buf.iter().position(|b| *b == b'\n') {
+            return Some(String::from_utf8_lossy(&buf[..end]).into_owned());
+        }
+        if buf.len() as u64 > MAX_REQUEST {
+            return None;
+        }
     }
+}
+
+fn handle(session: &mut Session, stream: UnixStream) -> bool {
+    // requests are handled one at a time: a client that stalls, trickles or
+    // floods must not block the hooks waiting behind it
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(10)));
+    let Some(line) = read_request(&stream, Duration::from_secs(5)) else { return false };
     let req: Request = match serde_json::from_str(&line) {
         Ok(r) => r,
         Err(e) => {

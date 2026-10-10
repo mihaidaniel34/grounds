@@ -121,6 +121,7 @@ fn constant_folding_uses_java_integer_semantics() {
         ("(int) 3000000000L", Constant::Int(-1294967296)),
         ("'a' + 1", Constant::Int(98)),
         ("2147483647 + 1 > 0", Constant::Bool(false)),
+        ("(true ? 2147483647 : 0L) + 1", Constant::Long(2147483648)),
     ];
     for (expr, want) in cases {
         let src = format!("class T {{ void m() {{ Object x = {expr}; }} }}");
