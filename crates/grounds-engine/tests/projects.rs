@@ -151,3 +151,19 @@ fn inherited_bean_methods_with_generics_and_overloads() {
     let found = findings(&dir, DI);
     assert!(found.iter().all(|f| !f.contains("bean-not-found")), "{found:?}");
 }
+
+#[test]
+fn spring_factories_with_crlf_line_endings() {
+    let dir = project(
+        "factories-crlf",
+        &[
+            ("src/main/resources/META-INF/spring.factories", "org.springframework.boot.autoconfigure.EnableAutoConfiguration=\\\r\napp.ext.FactoryConfig\r\n"),
+            ("src/main/java/app/App.java", "package app;\n@org.springframework.boot.autoconfigure.SpringBootApplication\npublic class App {}\n"),
+            ("src/main/java/app/Store.java", "package app;\npublic class Store {}\n"),
+            ("src/main/java/app/ext/FactoryConfig.java", "package app.ext;\npublic class FactoryConfig {\n    @org.springframework.context.annotation.Bean\n    public app.Store store() { return new app.Store(); }\n}\n"),
+            ("src/main/java/app/Consumer.java", "package app;\n@org.springframework.stereotype.Service\nclass Consumer {\n    Consumer(Store store) {}\n}\n"),
+        ],
+    );
+    let found = findings(&dir, DI);
+    assert!(found.is_empty(), "{found:?}");
+}

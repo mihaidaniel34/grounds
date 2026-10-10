@@ -619,26 +619,23 @@ impl<'a> Builder<'a> {
             // factory / @Bean methods, including ones inherited from source
             // superclasses (`class RedisConfig extends BaseRedisConfig`)
             let mut factory_methods: Vec<MethodInfo> = c.methods.clone();
-            // walk the superclass chain with type arguments substituted
-            // (`class App extends Base<Store>`: Base's `@Bean T value()` is a Store)
+            // Return types are not substituted: Spring matches an inherited
+            // `@Bean T value()` by its erased type, so `App extends Base<Store>`
+            // does not provide a Store (verified against Spring 6.1). A
+            // subclass method hides an inherited one only with the same
+            // parameter types.
             let same_sig = |a: &MethodInfo, b: &MethodInfo| a.name == b.name && a.params.len() == b.params.len() && a.params.iter().zip(&b.params).all(|(x, y)| x.ty.erasure() == y.ty.erasure());
             let mut sup: Option<Ty> = c.superclass.clone();
             let mut hops = 0;
             while let Some(st) = sup.take() {
                 hops += 1;
                 let Some(sc) = st.class_name().and_then(|sn| self.index.class(sn)).filter(|sc| sc.is_source()) else { break };
-                let map = grounds_index::hierarchy::substitution(&sc, st.args());
                 for m in &sc.methods {
-                    let mut m = m.clone();
-                    m.ret = grounds_index::hierarchy::apply_subst(&m.ret, &map);
-                    for p in &mut m.params {
-                        p.ty = grounds_index::hierarchy::apply_subst(&p.ty, &map);
-                    }
-                    if !factory_methods.iter().any(|x| same_sig(x, &m)) {
-                        factory_methods.push(m);
+                    if !factory_methods.iter().any(|x| same_sig(x, m)) {
+                        factory_methods.push(m.clone());
                     }
                 }
-                sup = sc.superclass.as_ref().map(|t| grounds_index::hierarchy::apply_subst(t, &map));
+                sup = sc.superclass.clone();
                 if hops > 8 {
                     break;
                 }

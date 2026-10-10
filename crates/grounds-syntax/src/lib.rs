@@ -351,6 +351,7 @@ fn fixup_varargs_annotations(text: &str) -> Option<Vec<u8>> {
         return None;
     }
     let b = text.as_bytes();
+    let code = code_mask(b);
     let mut out: Option<Vec<u8>> = None;
     let mut search = 0;
     while let Some(pos) = text[search..].find("...") {
@@ -393,7 +394,8 @@ fn fixup_varargs_annotations(text: &str) -> Option<Vec<u8>> {
             }
             break;
         }
-        if spans.is_empty() {
+        // only real code: never blank across strings or comments
+        if spans.is_empty() || !code[dots] || spans.iter().any(|(s0, e0)| (*s0..*e0).any(|k| !code[k])) {
             continue;
         }
         // must be preceded by a type token
@@ -771,5 +773,18 @@ mod fixup_review_tests {
         assert!(fixup_for_grammar(src).is_none_or(|b| !String::from_utf8_lossy(&b).contains("this$run")));
         // text blocks and char literals
         clean("class T { String s = \"\"\"\n case A.B( _ , x\n \"\"\"; char c = '_'; int x_1 = 1; }");
+    }
+}
+
+#[cfg(test)]
+mod varargs_mask_tests {
+    use super::*;
+
+    #[test]
+    fn varargs_fixup_stays_out_of_literals() {
+        let src = "class T { void f() { String a = \"String @A(\"; String s = null; s.length(); String b = \")...\"; } void g(String @A ... xs) {} }";
+        let fixed = fixup_for_grammar(src).map(|b| String::from_utf8(b).unwrap()).unwrap_or_else(|| src.to_string());
+        assert!(fixed.contains("s.length()") && fixed.contains("\"String @A(\""), "{fixed}");
+        assert!(!ParsedFile::parse(src).root().to_sexp().contains("ERROR"));
     }
 }

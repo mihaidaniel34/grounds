@@ -45,7 +45,7 @@ fn spring_registrations(ws: &Workspace) -> Vec<String> {
         let meta = m.dir.join("src/main/resources/META-INF");
         if let Ok(t) = std::fs::read_to_string(meta.join("spring.factories")) {
             // key=a.B,\ c.D  (values may continue over lines)
-            for v in t.replace("\\\n", "").lines().filter_map(|l| l.split_once('=').map(|(_, v)| v.to_string())) {
+            for v in t.replace("\r\n", "\n").replace("\\\n", "").lines().filter_map(|l| l.split_once('=').map(|(_, v)| v.to_string())) {
                 out.extend(v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
             }
         }
