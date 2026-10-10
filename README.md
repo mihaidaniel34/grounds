@@ -127,6 +127,19 @@ are unknown), Android, Java modules (JPMS) beyond what the JDK uses.
 
 ## Install
 
+Prebuilt binary for Apple Silicon macOS (11+) from the
+[releases page](https://github.com/mihaidaniel34/grounds/releases):
+
+```bash
+curl -fsSL https://github.com/mihaidaniel34/grounds/releases/download/v0.0.1/grounds-0.0.1-aarch64-apple-darwin.tar.gz | tar -xz
+sudo mv grounds-0.0.1-aarch64-apple-darwin/grounds /usr/local/bin/
+```
+
+The binary is not notarized: if you download it with a browser, macOS
+quarantines it; `xattr -d com.apple.quarantine grounds` clears that.
+
+From source:
+
 ```bash
 cargo install --locked --path crates/grounds-cli
 ```

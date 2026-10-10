@@ -3,7 +3,7 @@ use grounds_engine::report;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "grounds", about = "Fast incremental static analysis for Java")]
+#[command(name = "grounds", about = "Fast incremental static analysis for Java", version)]
 struct Cli {
     #[command(subcommand)]
     cmd: Cmd,
