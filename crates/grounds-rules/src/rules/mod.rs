@@ -1,6 +1,8 @@
 //! Rule implementations grouped by theme.
 
+pub mod concurrency;
 pub mod equality;
+pub mod exceptions;
 pub mod numbers;
 pub mod strings;
 
@@ -11,5 +13,7 @@ pub fn all() -> Vec<Box<dyn Rule>> {
     v.extend(equality::rules());
     v.extend(numbers::rules());
     v.extend(strings::rules());
+    v.extend(exceptions::rules());
+    v.extend(concurrency::rules());
     v
 }
