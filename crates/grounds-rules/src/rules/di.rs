@@ -750,10 +750,17 @@ impl Rule for InvalidPlaceholder {
         if !matches!(name.rsplit('.').next(), Some("Value" | "Scheduled" | "Property")) {
             return;
         }
-        for lit in n.descendants().filter(|d| d.kind() == "string_literal") {
-            let Some(v) = grounds_syntax::string_literal_value(lit, cx.src) else { continue };
-            if let Some(problem) = check_placeholder(&v) {
-                cx.report(lit, format!("Malformed placeholder: {problem}"));
+        // judge whole values: a literal inside a concatenation
+        // (`"${" + KEY + "}"`) is only a fragment; the concatenation is
+        // checked when it folds to a constant and skipped otherwise
+        let in_concat = |d: Node<'t>| d.parent().is_some_and(|p| p.kind() == "binary_expression");
+        for v in n.descendants().filter(|d| matches!(d.kind(), "string_literal" | "binary_expression") && !in_concat(*d)) {
+            let text = match cx.fm.constant_value(v) {
+                Some(grounds_index::Constant::Str(s)) => s.to_string(),
+                _ => continue,
+            };
+            if let Some(problem) = check_placeholder(&text) {
+                cx.report(v, format!("Malformed placeholder: {problem}"));
             }
         }
     }
