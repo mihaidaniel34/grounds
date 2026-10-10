@@ -418,7 +418,7 @@ declare_rule!(ComponentOnAbstract {
     severity: Warning,
     sources: ["intellij:SpringJavaComponentInspection"],
     kinds: ["class_declaration", "interface_declaration"],
-    description: "@Component/@Service/@Singleton on an abstract class or plain interface creates no bean: abstract types cannot be instantiated. Annotate the concrete implementation.",
+    description: "Spring's @Component/@Service/@Controller on an abstract class or plain interface creates no bean: component scanning skips abstract types. Annotate the concrete implementation. (Not reported for jakarta @Singleton: Micronaut generates implementations for introduction advice and inherits scopes from interfaces.)",
 });
 
 impl Rule for ComponentOnAbstract {
@@ -428,9 +428,13 @@ impl Rule for ComponentOnAbstract {
             return;
         }
         let names = annotation_names(n, cx.src);
-        if let Some(a) = names.iter().find(|a| matches!(**a, "Component" | "Service" | "Controller" | "RestController" | "Singleton" | "ApplicationScoped")) {
+        if let Some(a) = names.iter().find(|a| matches!(**a, "Component" | "Service" | "Controller" | "RestController")) {
             // Spring Data / Micronaut Data interfaces annotated @Repository are fine
             if n.kind() == "interface_declaration" && names.iter().any(|x| matches!(*x, "Repository" | "Client" | "FeignClient" | "Mapper" | "JdbcRepository")) {
+                return;
+            }
+            // abstract classes with @Lookup methods are subclassed by Spring
+            if methods_of(n).iter().any(|m| annotation_names(*m, cx.src).contains(&"Lookup")) {
                 return;
             }
             if let Some(nm) = n.field("name") {
