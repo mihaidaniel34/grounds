@@ -367,6 +367,33 @@ impl<'a> Builder<'a> {
         self.model.scan_roots = roots.clone();
 
         let in_scan = |pkg: &str| roots.is_empty() || roots.iter().any(|r| pkg == r || pkg.starts_with(&format!("{r}.")));
+        // classes registered explicitly by scanned classes (@Import chains,
+        // @EnableConfigurationProperties) are beans wherever they live
+        let mut imported: rustc_hash::FxHashSet<Name> = rustc_hash::FxHashSet::default();
+        let mut work: Vec<Name> = names.iter().filter(|n| self.index.class(n).is_some_and(|c| in_scan(c.package()))).cloned().collect();
+        while let Some(n) = work.pop() {
+            let Some(c) = self.index.class(&n) else { continue };
+            for a in &c.annotations {
+                if !matches!(a.simple_name(), "Import" | "EnableConfigurationProperties") {
+                    continue;
+                }
+                for v in a.arg("value").map(|v| v.values()).unwrap_or_default() {
+                    if let AnnotationValue::Class(t) = v {
+                        if let Some(t) = t.class_name() {
+                            let t: Name = Arc::from(t);
+                            if imported.insert(t.clone()) {
+                                work.push(t);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // anything else outside the scanned packages may still be registered
+        // (AutoConfiguration.imports, ImportSelectors, manual registration):
+        // modeled as conditional, i.e. it satisfies injections but never makes
+        // them ambiguous or clashes by name
+        let outside_scan = |c: &ClassInfo| !in_scan(c.package()) && !imported.contains(&c.name);
 
         for n in &names {
             let Some(c) = self.index.class(n) else { continue };
@@ -464,10 +491,11 @@ impl<'a> Builder<'a> {
                 self.model.jit.push(c.name.clone());
             }
             let fw = anns.iter().find_map(|a| self.stereotype(a, 0));
-            let Some(fw) = fw else { continue };
-            if fw == Framework::Spring && !in_scan(c.package()) {
-                continue;
-            }
+            // Spring @ConfigurationProperties classes become beans through
+            // @EnableConfigurationProperties or @ConfigurationPropertiesScan
+            let properties = fw.is_none() && anns.iter().any(|a| a.is("org.springframework.boot.context.properties.ConfigurationProperties") || (!a.resolved && a.simple_name() == "ConfigurationProperties"));
+            let Some(fw) = fw.or(properties.then_some(Framework::Spring)) else { continue };
+            let maybe_registered = fw == Framework::Spring && (outside_scan(&c) || (properties && !imported.contains(&c.name)));
             // nested non-static classes cannot be beans
             if c.is_inner() {
                 continue;
@@ -482,7 +510,7 @@ impl<'a> Builder<'a> {
             let name = explicit.unwrap_or_else(|| decapitalize(c.simple_name()));
             let qualifiers = self.qualifiers_of(&anns);
             let primary = anns.iter().any(|a| a.simple_name() == "Primary");
-            let conditional = Self::conditional(&anns);
+            let conditional = Self::conditional(&anns) || maybe_registered;
             let i = self.add_bean(Bean {
                 name,
                 aliases: Vec::new(),
@@ -787,6 +815,10 @@ impl DiModel {
                 }
                 if maybe > 0 {
                     return Resolution::Unknown;
+                }
+                // @Autowired(required = false), Optional<...>: left unset
+                if p.optional {
+                    return Resolution::Absent;
                 }
                 return Resolution::QualifierNotFound { qualifier: q.clone(), candidates: before };
             }
