@@ -32,6 +32,26 @@ pub fn has_side_effects(n: Node) -> bool {
     })
 }
 
+/// Names of variables assigned or incremented anywhere inside `n`
+/// (`x = ..`, `x += ..`, `x++`, `this.x = ..` gives `x`).
+pub fn assigned_names<'t>(n: Node<'t>, src: &'t str) -> Vec<&'t str> {
+    let target = |t: Node<'t>| -> Option<&'t str> {
+        let t = t.unparen();
+        match t.kind() {
+            "identifier" => Some(t.text(src)),
+            "field_access" => t.field("field").map(|f| f.text(src)),
+            _ => None,
+        }
+    };
+    n.descendants()
+        .filter_map(|d| match d.kind() {
+            "assignment_expression" => d.field("left").and_then(target),
+            "update_expression" => d.first_kid().and_then(|k| if matches!(k.kind(), "++" | "--") { d.kids().last().copied() } else { Some(k) }).and_then(target),
+            _ => None,
+        })
+        .collect()
+}
+
 /// Text with whitespace and comments removed, parentheses at the top level
 /// stripped; used to compare expressions for structural equality.
 pub fn normalized(n: Node, src: &str) -> String {
@@ -273,6 +293,25 @@ pub fn definitely_unrelated(fm: &FileModel, a: &Ty, b: &Ty) -> bool {
         (false, true) => ac.flags.is_final() || ac.is_enum() || ac.is_record(),
         (true, true) => false,
     }
+}
+
+/// `a.equals(b)` is certainly false: the types cannot share an instance *and*
+/// no common supertype (other than Object) defines value equality across
+/// classes, the way `List` makes an ArrayList equal a LinkedList.
+pub fn equality_unrelated(fm: &FileModel, a: &Ty, b: &Ty) -> bool {
+    if !definitely_unrelated(fm, a, b) {
+        return false;
+    }
+    let (a, b) = (a.boxed(), b.boxed());
+    let (Some(an), Some(bn)) = (a.class_name(), b.class_name()) else { return false };
+    if !fm.hierarchy_complete(an) || !fm.hierarchy_complete(bn) {
+        return false;
+    }
+    let names = |t: &Ty| fm.all_supertypes(t).into_iter().filter_map(|s| s.class_name().map(|n| n.to_string())).collect::<Vec<_>>();
+    let bs = names(&b);
+    !names(&a).into_iter().filter(|n| n != "java.lang.Object" && bs.contains(n)).any(|n| {
+        fm.class(&n).is_some_and(|c| c.methods.iter().any(|m| &*m.name == "equals" && m.params.len() == 1 && m.params[0].ty.is_class("java.lang.Object")))
+    })
 }
 
 pub fn is_string_type(t: &Ty) -> bool {

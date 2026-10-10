@@ -257,19 +257,23 @@ declare_rule!(SplitOnRegexMetachar {
     tier: Edit,
     sources: ["spotbugs:RE_POSSIBLE_UNINTENDED_PATTERN", "errorprone:StringSplitter"],
     kinds: ["method_invocation"],
-    description: "`split(\".\")` and `replaceAll(\"|\", ...)` treat the argument as a regex: `.` matches every character and `|` the empty string. Escape it (`\"\\\\.\"`) or use `Pattern.quote`.",
+    description: "`split(\".\")` treats the argument as a regex: `.` matches every character (so the result is empty) and `|` the empty string. Escape it (`\"\\\\.\"`) or use `Pattern.quote`.",
 });
 
 impl Rule for SplitOnRegexMetachar {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
         let Some(name) = cx.fm.call_name(n) else { return };
+        // split(".") always yields an empty array, and `|` alone matches the
+        // empty string; but replaceAll(".", "*") is a deliberate "every
+        // character" (masking) as often as a mistake
         if !matches!(name, "split" | "replaceAll" | "replaceFirst") {
             return;
         }
+        let only_bar = name != "split";
         let Some(a) = regex_arg(n, cx) else { return };
         if let Some(p) = cx.fm.string_value(a) {
-            if p == "." || p == "|" || p == "$" || p == "^" {
+            if p == "|" || (!only_bar && (p == "." || p == "$" || p == "^")) {
                 cx.report(a, format!("`\"{p}\"` is a regex metacharacter here; escape it or use `Pattern.quote`"));
             }
         }
@@ -292,8 +296,14 @@ impl Rule for InvalidRegex {
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
         let Some(a) = regex_arg(n, cx) else { return };
         let Some(p) = cx.fm.string_value(a) else { return };
-        // Pattern.LITERAL flag disables syntax
-        if cx.fm.args_of(n).iter().skip(1).any(|f| cx.text(*f).contains("LITERAL")) {
+        // Pattern.LITERAL disables syntax; comment mode (COMMENTS flag or an
+        // inline `(?x)`) makes `#...` comments and whitespace insignificant,
+        // which the validator does not model
+        if cx.fm.args_of(n).iter().skip(1).any(|f| cx.text(*f).contains("LITERAL") || cx.text(*f).contains("COMMENTS")) {
+            return;
+        }
+        let comment_mode = p.match_indices("(?").any(|(i, _)| p[i + 2..].chars().take_while(|c| c.is_ascii_alphabetic()).any(|c| c == 'x'));
+        if comment_mode {
             return;
         }
         if let Err(e) = check_java_regex(&p) {
@@ -317,7 +327,8 @@ impl Rule for FileSeparatorRegex {
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
         let Some(a) = regex_arg(n, cx) else { return };
         if let Some(f) = cx.fm.field_ref(a.unparen()) {
-            if &*f.owner == "java.io.File" && matches!(&*f.field.name, "separator" | "pathSeparator") {
+            // pathSeparator (`:` / `;`) is regex-safe
+            if &*f.owner == "java.io.File" && &*f.field.name == "separator" {
                 cx.report(a, "`File.separator` is `\\` on Windows, which is not a valid regex; use `Pattern.quote()`");
             }
         }

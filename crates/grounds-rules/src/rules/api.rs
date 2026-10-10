@@ -107,6 +107,16 @@ impl Rule for IgnoredReturnValue {
         if is_subtype_any(cx.fm, &c.ret, &["java.util.stream.BaseStream"]) {
             return;
         }
+        // still an effect: validating by throwing (`LocalDate.parse(s);`,
+        // `UUID.fromString(id);`, often inside try/catch) or running a callback
+        // (`optional.map(x -> counter++)`)
+        let name = &*c.method.name;
+        let validates = name.starts_with("parse") || matches!(name, "of" | "ofPattern" | "from" | "fromString" | "valueOf" | "decode" | "compile" | "ofEpochSecond" | "ofEpochMilli")
+            || n.ancestors().any(|a| a.kind() == "try_statement" && a.kid_of_kind("catch_clause").is_some());
+        let callback = cx.fm.args_of(e).iter().any(|a| matches!(a.unparen().kind(), "lambda_expression" | "method_reference"));
+        if validates || callback {
+            return;
+        }
         if pure_method(cx, &c) {
             cx.report(e, format!("The result of `{}.{}()` is ignored; the call has no other effect", simple_name_of(&c.owner), c.method.name));
         }
@@ -196,6 +206,11 @@ impl Rule for StreamNotConsumed {
         }
         let t = cx.type_of(e);
         if !is_subtype_any(cx.fm, &t, &["java.util.stream.BaseStream"]) {
+            return;
+        }
+        // these configure the receiver itself and return it (onClose registers
+        // a handler, parallel/sequential/unordered set flags on the pipeline)
+        if matches!(cx.fm.call_name(e), Some("onClose" | "parallel" | "sequential" | "unordered")) {
             return;
         }
         // Stream-returning builder/factory methods with side effects are rare; require a receiver that is a stream
@@ -368,6 +383,12 @@ impl Rule for ToArrayCast {
         if !is_call_named(v, cx.src, &["toArray"]) || !cx.fm.args_of(v).is_empty() {
             return;
         }
+        // only Collection.toArray() is known to return a plain Object[]
+        let Some(c) = cx.fm.select_method(v) else { return };
+        let object_array = matches!(&c.ret, Ty::Array(e) if e.is_class("java.lang.Object"));
+        if c.ambiguous || !object_array || !is_subtype_any(cx.fm, &Ty::class(&c.owner), &["java.util.Collection"]) {
+            return;
+        }
         let t = cx.type_of(n);
         if let Ty::Array(e) = &t {
             if !e.is_class("java.lang.Object") && e.is_known() {
@@ -415,15 +436,14 @@ impl Rule for ModifyCollectionInForeach {
         if ct_ty.class_name().is_some_and(|c| c.starts_with("java.util.concurrent.")) {
             return;
         }
-        // a Map declared by interface is often a ConcurrentHashMap; only trust a known initializer
-        if ct_ty.class_name().is_some_and(|c| matches!(c, "java.util.Map" | "java.util.Collection" | "java.util.Set" | "java.util.Queue" | "java.util.Deque")) {
-            let init = cx.fm.field_ref(coll.unparen()).and(None::<Node>).or_else(|| {
-                let i = cx.fm.local_ref(coll.unparen())?;
-                cx.fm.binder.decls[i].decl_node.field("value")
-            });
+        // a collection declared by interface (List, Map, ...) may be a
+        // CopyOnWriteArrayList or ConcurrentHashMap: only trust a visible
+        // `new java.util.X<>()` initializer of a non-concurrent class
+        if ct_ty.class_name().and_then(|c| cx.fm.class(c)).is_none_or(|c| c.is_interface()) {
+            let init = cx.fm.local_ref(coll.unparen()).and_then(|i| cx.fm.binder.decls[i].decl_node.field("value"));
             let known_plain = init.is_some_and(|v| {
-                let t = cx.type_of(v);
-                t.class_name().is_some_and(|c| c.starts_with("java.util.") && !c.starts_with("java.util.concurrent.") && !matches!(c, "java.util.Map" | "java.util.Collection" | "java.util.Set"))
+                v.unparen().kind() == "object_creation_expression"
+                    && cx.type_of(v).class_name().is_some_and(|c| c.starts_with("java.util.") && !c.starts_with("java.util.concurrent."))
             });
             if !known_plain {
                 return;

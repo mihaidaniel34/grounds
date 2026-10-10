@@ -1,5 +1,5 @@
-import org.springframework.beans.factory.annotation.Autowired;
+import jakarta.inject.Inject;
 class A {
-    @Autowired private final Object dep = null; // expect
-    @Autowired private Object ok;
+    @Inject final Object dep = null; // expect
+    @Inject Object ok;
 }

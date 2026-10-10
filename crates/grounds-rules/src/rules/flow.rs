@@ -427,6 +427,12 @@ impl Rule for UninitializedFieldRead {
             .map(|(_, rc)| rc.fields.iter().filter(|f| f.has_initializer).map(|f| f.name.to_string()).collect())
             .unwrap_or_default();
         let mut assigned: rustc_hash::FxHashSet<String> = raw_init.into_iter().collect();
+        // instance initializer blocks run before the constructor body
+        if let Some(class_body) = owning_type_decl(n).and_then(|d| d.field("body")) {
+            for block in class_body.kids().into_iter().filter(|k| k.kind() == "block") {
+                assigned.extend(assigned_names(block, cx.src).into_iter().map(String::from));
+            }
+        }
         let this_field = |d: Node<'t>| -> Option<FieldRef> {
             let f = cx.fm.field_ref(d)?;
             if f.owner != cls.name || !candidates.iter().any(|c| c.name == f.field.name) {

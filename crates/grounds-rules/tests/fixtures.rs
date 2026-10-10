@@ -4,7 +4,8 @@
 //! enabled. Lines ending with `// expect` (or `// expect: <rule-id>`) must
 //! produce a diagnostic; all other lines must not. A first-line comment
 //! `// grounds: test` marks the fixture as test code; `// grounds:
-//! bean-overriding` enables Spring bean definition overriding.
+//! bean-overriding` enables Spring bean definition overriding; `// grounds:
+//! no-findings` marks a fixture that must produce nothing.
 //! `tests/support/**.java` provides library stubs (Spring, JUnit, SLF4J...).
 
 use grounds_index::{extract, Classpath, Index};
@@ -113,8 +114,8 @@ fn rule_fixtures() {
         let actual: BTreeSet<usize> = diags.iter().map(|d| pf.lines.line_of(d.range.start) + 1).collect();
         let expected = expected_lines(&text, &rule_id);
         checked += 1;
-        if expected.is_empty() {
-            failures.push(format!("{stem}: fixture has no `// expect` markers"));
+        if expected.is_empty() && !first.contains("grounds: no-findings") {
+            failures.push(format!("{stem}: fixture has no `// expect` markers (or `// grounds: no-findings`)"));
         }
         if actual != expected {
             let missing: Vec<_> = expected.difference(&actual).collect();

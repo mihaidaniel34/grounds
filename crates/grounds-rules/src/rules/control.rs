@@ -239,7 +239,9 @@ impl Rule for IdenticalConditions {
                 continue;
             }
             let t = normalized(conds[i], cx.src);
-            if let Some(j) = (0..i).find(|&j| normalized(conds[j], cx.src) == t) {
+            // conditions in between may change what it reads
+            // (`else if ((n = read()) < 0) ... else if (n > 0)`)
+            if let Some(j) = (0..i).find(|&j| normalized(conds[j], cx.src) == t && !(j + 1..i).any(|k| has_side_effects(conds[k]))) {
                 cx.report(conds[i], format!("Same condition as on line {}; this branch is unreachable", line_of(conds[j]) + 1));
             }
         }
@@ -437,6 +439,11 @@ impl Rule for NullCheckWrongOperator {
         let Some((a, b)) = lr(l) else { return };
         let var = if is_null_literal(b) { a } else if is_null_literal(a) { b } else { return };
         let vt = normalized(var, cx.src);
+        // reassigned on the right before use (`v != null || ((v = dflt) != null && v.isEmpty())`)
+        let reassigned = r.descendants().any(|d| d.kind() == "assignment_expression" && d.field("left").is_some_and(|x| normalized(x, cx.src) == vt));
+        if reassigned {
+            return;
+        }
         // does the right side dereference the same expression?
         let derefs = r.descendants().any(|d| match d.kind() {
             "method_invocation" | "field_access" => d.field("object").is_some_and(|o| normalized(o, cx.src) == vt),
@@ -528,6 +535,19 @@ impl Rule for WrongLoopDirection {
             return;
         };
         if !matches!(o, "<" | "<=" | ">" | ">=") {
+            return;
+        }
+        // the body may move the bound or the counter itself
+        // (`for (low = 0, high = 10; low < high; low--) { high -= 2; }`)
+        let bound = if l.kind() == "identifier" && l.text(cx.src) == var { r } else { l };
+        let bound_vars: Vec<&str> = std::iter::once(bound).chain(bound.descendants()).filter(|d| d.kind() == "identifier").map(|d| d.text(cx.src)).collect();
+        if let Some(body) = n.field("body") {
+            let changed = assigned_names(body, cx.src);
+            if changed.contains(&var) || changed.iter().any(|c| bound_vars.contains(c)) {
+                return;
+            }
+        }
+        if n.fields("update").iter().any(|u| assigned_names(*u, cx.src).iter().any(|c| bound_vars.contains(c))) {
             return;
         }
         for u in n.fields("update") {
@@ -1104,6 +1124,10 @@ impl Rule for ForLoopWrongVariable {
             }
         }
         if updated.iter().any(|u| cond_vars.contains(u)) {
+            return;
+        }
+        // the body advances the tested variable (`for (r = 3; r > 0; attempts++) { r--; }`)
+        if n.field("body").is_some_and(|b| assigned_names(b, cx.src).iter().any(|c| cond_vars.contains(c))) {
             return;
         }
         // the condition must test the declared counter for this to be clearly wrong

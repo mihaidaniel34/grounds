@@ -183,14 +183,13 @@ impl Rule for InvalidDateValue {
             ("java.time.Month", "of") => bad = check(v(0), 1, 12, "month"),
             ("java.time.DayOfWeek", "of") => bad = check(v(0), 1, 7, "day of week"),
             (_, "set") if cx.fm.is_subclass(&c.owner, "java.util.Calendar").is_yes() && args.len() == 2 => {
+                // Calendar is lenient: out-of-range values roll over on purpose
+                // (`set(DAY_OF_MONTH, 0)` is the previous month's last day).
+                // Only month 12 is the classic 1-based-month mistake.
                 let field = cx.text(args[0]);
-                bad = match field.rsplit('.').next() {
-                    Some("MONTH") => check(v(1), 0, 11, "Calendar month (0-based)"),
-                    Some("HOUR_OF_DAY") => check(v(1), 0, 23, "hour"),
-                    Some("MINUTE") | Some("SECOND") => check(v(1), 0, 59, "minute/second"),
-                    Some("DAY_OF_MONTH") => check(v(1), 1, 31, "day"),
-                    _ => None,
-                };
+                if field.rsplit('.').next() == Some("MONTH") && v(1) == Some(12) {
+                    bad = Some("Calendar months are 0-based: 12 rolls over to January of the next year (December is `Calendar.DECEMBER` = 11)".to_string());
+                }
             }
             _ => {}
         }

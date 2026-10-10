@@ -147,7 +147,7 @@ impl Rule for EqualsIncompatibleTypes {
         if at.is_array() || bt.is_array() {
             return;
         }
-        if definitely_unrelated(cx.fm, &at, &bt) {
+        if equality_unrelated(cx.fm, &at, &bt) {
             cx.report(n, format!("`{}` and `{}` are unrelated types; this equality is always false", at.display_simple(), bt.boxed().display_simple()));
         }
     }
@@ -299,7 +299,7 @@ impl Rule for CollectionIncompatibleType {
         if a.has_unknown() || is_null_literal(args[arg_idx]) {
             return;
         }
-        if definitely_unrelated(cx.fm, &elem, &a) {
+        if equality_unrelated(cx.fm, &elem, &a) {
             cx.report(args[arg_idx], format!("`{name}()` on a collection of `{}` with an argument of type `{}`; this can never match", elem.display_simple(), a.boxed().display_simple()));
         }
     }
@@ -370,6 +370,8 @@ impl Rule for SelfAssignment {
         let r = r.unparen();
         let same_text = normalized(l, cx.src) == normalized(r, cx.src) && !has_side_effects(l);
         let same_field = match (cx.fm.field_ref(l), cx.fm.field_ref(r)) {
+            // a volatile write publishes earlier mutations: `state = state` can be intended
+            (Some(a), _) if a.field.flags.has(Flags::VOLATILE) => false,
             (Some(a), Some(b)) => a.owner == b.owner && a.field.name == b.field.name && (l.kind() == "identifier" || l.field("object").is_some_and(|o| o.kind() == "this")) && (r.kind() == "identifier" || r.field("object").is_some_and(|o| o.kind() == "this")),
             _ => false,
         };
@@ -576,7 +578,17 @@ impl Rule for EqualsWithoutHashCode {
             return;
         }
         match (eq, hc) {
+            // records generate hashCode(); a class may inherit a matching one
+            // (an AbstractList subclass delegating equals to super)
+            (Some(_), None) if n.kind() == "record_declaration" => {}
             (Some((m, _, _)), None) => {
+                let inherits_hashcode = cx.fm.class_of_decl(n).is_some_and(|c| {
+                    c.superclass.as_ref().and_then(|s| s.class_name()).is_some_and(|sn| cx.fm.overrides_object_method(sn, "hashCode", 0))
+                        || c.superclass.as_ref().is_some_and(|s| s.is_unknown())
+                });
+                if inherits_hashcode {
+                    return;
+                }
                 if let Some(name) = m.field("name") {
                     cx.report(name, "Class overrides `equals()` but not `hashCode()`");
                 }

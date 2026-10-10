@@ -53,8 +53,11 @@ pub fn parse_format(s: &str) -> Result<ParsedFormat, String> {
             relative = true;
             i += 1;
         }
-        // flags
-        while i < chars.len() && "-#+ 0,(".contains(chars[i]) {
+        // flags (`<` may also appear among them: `%-<5s`)
+        while i < chars.len() && "-#+ 0,(<".contains(chars[i]) {
+            if chars[i] == '<' {
+                relative = true;
+            }
             i += 1;
         }
         // width

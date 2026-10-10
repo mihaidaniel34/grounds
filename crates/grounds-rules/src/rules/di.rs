@@ -249,14 +249,15 @@ declare_rule!(InjectFinalField {
     tier: Edit,
     sources: ["intellij:SpringJavaInjectionPointsAutowiringInspection"],
     kinds: ["field_declaration"],
-    description: "A final field cannot be set by field injection; use constructor injection instead.",
+    description: "JSR-330 containers (Micronaut, Guice, CDI) reject `@Inject` on a final field; use constructor injection. Not reported in Spring projects, where reflective injection sets final fields.",
 });
 
 impl Rule for InjectFinalField {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
         let names = annotation_names(n, cx.src);
-        if n.has_modifier("final") && names.iter().any(|a| matches!(*a, "Autowired" | "Inject")) {
+        let spring = cx.di.is_none_or(|d| d.frameworks.contains(&grounds_di::Framework::Spring));
+        if n.has_modifier("final") && names.contains(&"Inject") && !spring {
             cx.report(n, "Final fields cannot be field-injected; inject through the constructor");
         }
     }
@@ -311,6 +312,16 @@ impl Rule for ProxyAnnotationOnPrivate {
         } else if n.has_modifier("static") {
             "static"
         } else if n.has_modifier("final") {
+            // a JDK interface proxy still intercepts a final method that
+            // implements an interface method
+            let name = method_name(n, cx.src);
+            let arity = n.field("parameters").map(|p| p.kids().iter().filter(|k| matches!(k.kind(), "formal_parameter" | "spread_parameter")).count()).unwrap_or(0);
+            let via_interface = owning_type_decl(n).and_then(|d| cx.fm.class_of_decl(d)).is_some_and(|c| {
+                cx.fm.all_supertypes(&c.this_type()).iter().filter_map(|t| t.class_name().and_then(|cn| cx.fm.class(cn))).any(|i| i.is_interface() && i.methods.iter().any(|m| *m.name == *name && m.params.len() == arity))
+            });
+            if via_interface {
+                return;
+            }
             "final"
         } else {
             return;
@@ -589,8 +600,13 @@ impl Rule for PathVariableMismatch {
             let Some(pv) = anns.iter().find(|a| a.simple_name() == "PathVariable" || (a.simple_name() == "PathVariable" && a.name.starts_with("io.micronaut"))) else { continue };
             let pname = p.field("name").map(|x| cx.text(x)).unwrap_or("");
             let name = first_string_ann(pv, &["value", "name"]).unwrap_or_else(|| pname.to_string());
-            // a Map parameter receives all variables
-            if p.field("type").is_some_and(|t| cx.text(t).starts_with("Map")) {
+            // a Map parameter receives all variables; an optional variable
+            // (`required = false`, Optional<..>) may be absent from the template
+            let simple_type = p.field("type").map(|t| type_simple_name(t, cx.src)).unwrap_or("");
+            if matches!(simple_type, "Map" | "MultiValueMap" | "Optional") {
+                continue;
+            }
+            if pv.arg("required").and_then(|v| v.as_bool()) == Some(false) {
                 continue;
             }
             if !vars.contains(&name) {
@@ -897,6 +913,12 @@ impl Rule for InjectionInNonBean {
             .filter(|m| annotation_names(*m, cx.src).iter().any(|a| matches!(*a, "Autowired" | "Inject" | "Value")))
             .collect();
         if let Some(first) = injected.first() {
+            // registered programmatically (`ctx.registerBean(Sample.class)`,
+            // `new AnnotationConfigApplicationContext(Sample.class)`)
+            let literal = format!("{}.class", simple_name_of(&name));
+            if cx.src.contains(&literal) {
+                return;
+            }
             // subclasses may be beans
             if cx.fm.index.direct_source_subclasses(&name).is_empty() {
                 cx.report(*first, format!("`{}` is not a bean, so this injection never happens", simple_name_of(&name)));

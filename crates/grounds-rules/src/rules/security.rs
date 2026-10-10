@@ -224,16 +224,6 @@ impl Rule for WeakTls {
     }
 }
 
-fn method_body_trivial<'t>(m: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
-    match m.field("body") {
-        Some(b) => {
-            let k = b.kids();
-            k.is_empty() || (k.len() == 1 && cx.text(k[0]).starts_with("return") && !cx.text(k[0]).contains("throw"))
-        }
-        None => false,
-    }
-}
-
 declare_rule!(TrustAllCertificates {
     id: "trust-all-certificates",
     name: "TrustManager that accepts every certificate",
@@ -290,7 +280,8 @@ impl Rule for HostnameVerifierAcceptsAll {
         if !cx.fm.is_subclass(&cls.name, "javax.net.ssl.HostnameVerifier").is_yes() {
             return;
         }
-        if method_body_trivial(n, cx) && n.field("body").is_some_and(|b| cx.text(b).contains("true")) {
+        // the body must be exactly `return true;` (not any expression mentioning true)
+        if n.field("body").is_some_and(|b| cx.text(b).replace(char::is_whitespace, "") == "{returntrue;}") {
             if let Some(nm) = n.field("name") {
                 cx.report(nm, "HostnameVerifier accepts every host");
             }

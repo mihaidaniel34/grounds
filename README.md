@@ -59,7 +59,7 @@ checked out, with no grounds configuration:
 | spring-petclinic-rest | 109 | 8,675 | 1 | 0.24 s | 91.6% | 0 / 29 / 22 |
 | piggymetrics | 97 | 4,472 | 10 | 0.21 s | 87.4% | 0 / 17 / 61 |
 | jhipster-sample-app | 136 | 11,980 | 1 | 0.27 s | 83.6% | 0 / 4 / 19 |
-| micronaut-core | 6,373 | 697,624 | 85 | 2.9 s | 95.0% | 17 / 829 / 2,988 |
+| micronaut-core | 6,373 | 697,624 | 85 | 2.9 s | 95.0% | 12 / 829 / 2,988 |
 
 "Calls resolved" is the share of method calls for which grounds found the
 exact target method. For the rest, any rule that needs the target says
@@ -81,7 +81,7 @@ on-disk cache.
 
 ## How it was tested
 
-- **Fixtures:** 325 small Java files, at least one per rule, with `// expect` markers on
+- **Fixtures:** 348 small Java files, at least one per rule, with `// expect` markers on
   the lines that must be reported. The tests fail when a rule reports
   anything else, or when a rule has no fixture. Fixtures also cover
   suppressions and options.
@@ -91,26 +91,31 @@ on-disk cache.
 - **Five unmodified open-source projects** (the table above), taken as
   published. Since they compile and their applications start, any
   compile-break or DI finding on them would be a false positive. There are
-  none. Error-level findings were reviewed by hand. The remaining 17 on
+  none. Error-level findings were reviewed by hand. The remaining 12 on
   micronaut-core are real by each rule's definition: `TrustManager`s that
-  trust every certificate (in test and TCK code), `split(File.separator)`,
-  `compareTo(...) != -1` and `assertSame(x, x)`. Warnings were sampled, not
-  reviewed one by one.
+  trust every certificate (in test and TCK code), `compareTo(...) != -1`
+  and `assertSame(x, x)`. (An earlier version of this list also counted five
+  `split(File.pathSeparator)` calls, which are fine; a reviewer caught it.)
+  Warnings were sampled, not reviewed one by one.
 - **Planted bugs:** in a copy of spring-petclinic-rest, all of these were
   reported: an ambiguous bean (9 injection sites), a misspelled qualifier, a
   missing bean, a constructor cycle, and Lombok dropping `@Qualifier`.
   Renaming a method in petclinic listed all 15 broken callers. Changing
   `getPet(String)` to take two parameters flagged every call with the old
   arguments.
-- **External review:** three rounds of review by OpenAI Codex (gpt-6.1-sol),
-  which wrote Java test cases, compiled them with javac and ran Spring
-  contexts to confirm each report. The first round found 16 defects (among
+- **External review:** three rounds of review by OpenAI Codex (gpt-6.1-sol)
+  on the shared analyses and engine, and one by gpt-6-astra on the rules,
+  each writing Java test cases, compiling them with javac and running Spring,
+  AssertJ or Mockito to confirm every report. The first round found 16 defects (among
   them exception paths that saw assignments made after the throwing call,
   `break` skipping `finally`, `int` overflow in constant folding, `@Import`ed
   configurations ignored, a daemon that one stalled client could block, and
   a crash on malformed jars); the second found 9 more in the fixes, and the
-  third 4 smaller edge cases in Spring bean naming and registration. All are
-  fixed, each with a regression test.
+  third 4 smaller edge cases in Spring bean naming and registration. The
+  rules review found 24 false positives across 25 rules (for example
+  `ArrayList.equals(LinkedList)` reported as always false, `LocalDate.parse(s)`
+  used for validation reported as an ignored result, `assertThatThrownBy(..)`
+  reported as asserting nothing). All are fixed, each with a regression test.
 - **Precision fixes:** every false positive found during testing became a
   fixture case, for example `@Value` placeholders built by string
   concatenation, Micronaut introduction interfaces, MockMvc `andExpect` as

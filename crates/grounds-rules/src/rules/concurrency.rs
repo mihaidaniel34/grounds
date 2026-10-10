@@ -123,8 +123,23 @@ impl Rule for WaitNotifyWithoutLock {
         if in_synchronized(n) {
             return;
         }
-        // methods that are always called with the lock held are common in helpers; only flag
-        // when the enclosing method is public (entry point) or the call is on `this`
+        // helpers are commonly called with the caller's lock held: only flag a
+        // public method (an entry point) that no synchronized code in the
+        // class calls, outside lambdas (which may run under a lock)
+        if n.ancestors().take_while(|a| !matches!(a.kind(), "method_declaration" | "constructor_declaration")).any(|a| a.kind() == "lambda_expression") {
+            return;
+        }
+        let Some(m) = enclosing_method_decl(n) else { return };
+        if !m.has_modifier("public") {
+            return;
+        }
+        let name = method_name(m, cx.src);
+        let called_under_lock = owning_type_decl(m).is_some_and(|cls| {
+            cls.descendants().any(|d| d.kind() == "method_invocation" && d.field("name").is_some_and(|x| cx.text(x) == name) && in_synchronized(d))
+        });
+        if called_under_lock {
+            return;
+        }
         cx.report(n, format!("`{}()` called without holding the monitor; throws IllegalMonitorStateException", cx.fm.call_name(n).unwrap_or("")));
     }
 }

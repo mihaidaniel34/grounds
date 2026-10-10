@@ -355,7 +355,8 @@ impl Rule for IncompleteAssertJ {
         }
         let name = cx.fm.call_name(e).unwrap_or("");
         let incomplete = match name {
-            "assertThat" | "assertThatThrownBy" | "assertThatCode" | "assertThatObject" => true,
+            // assertThatThrownBy(...) alone already asserts that something is thrown
+            "assertThat" | "assertThatCode" | "assertThatObject" => true,
             "as" | "describedAs" | "withFailMessage" | "overridingErrorMessage" => e.field("object").is_some_and(|o| cx.text(o).contains("assertThat")),
             _ => false,
         };
@@ -393,6 +394,8 @@ impl Rule for IncompleteMockito {
         }
         match name {
             "when" | "given" => cx.report(e, format!("`{name}(...)` without `thenReturn`/`thenThrow` stubs nothing")),
+            // MockedStatic.verify(() -> X.call()) is a complete verification
+            "verify" if cx.fm.args_of(e).iter().any(|a| matches!(a.unparen().kind(), "lambda_expression" | "method_reference")) => {}
             "verify" => cx.report(e, "`verify(mock)` without a method call verifies nothing"),
             _ => cx.report(e, format!("`{name}(...)` without `.when(mock)` stubs nothing")),
         }

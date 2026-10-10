@@ -334,6 +334,11 @@ impl<'a> Builder<'a> {
         let mut spring = false;
         let mut micronaut = false;
         for (_, stub) in self.index.files() {
+            // the frameworks' own sources (vendored, or test stubs) say nothing
+            // about what the project uses
+            if is_framework_class(&format!("{}.X", stub.package)) {
+                continue;
+            }
             for imp in &stub.imports {
                 if imp.path.starts_with("org.springframework") {
                     spring = true;
