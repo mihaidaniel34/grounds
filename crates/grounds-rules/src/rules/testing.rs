@@ -73,7 +73,8 @@ impl Rule for AssertionArgumentOrder {
 }
 
 fn is_assertion_call(name: &str) -> bool {
-    name.starts_with("assert") || name.starts_with("verify") || name.starts_with("expect") || name.starts_with("check") || name.starts_with("should") || name == "fail" || name.starts_with("then") || name == "isEqualTo" || name.starts_with("validate") || name.starts_with("ensure") || name.starts_with("must")
+    // MockMvc `andExpect`, Awaitility `untilAsserted`
+    name.starts_with("andExpect") || name == "untilAsserted" || name.starts_with("assert") || name.starts_with("verify") || name.starts_with("expect") || name.starts_with("check") || name.starts_with("should") || name == "fail" || name.starts_with("then") || name == "isEqualTo" || name.starts_with("validate") || name.starts_with("ensure") || name.starts_with("must")
 }
 
 declare_rule!(TestWithoutAssertion {
@@ -98,6 +99,10 @@ impl Rule for TestWithoutAssertion {
             return;
         }
         let Some(body) = n.field("body") else { return };
+        // empty body: a deliberate smoke test (Spring's `contextLoads()`)
+        if body.named_children(&mut body.walk()).all(|c| c.kind().contains("comment")) {
+            return;
+        }
         let text = cx.text(body);
         if text.contains("assert ") || text.contains("fail(") {
             return;
