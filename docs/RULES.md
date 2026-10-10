@@ -356,7 +356,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `assertj-assertion-without-check` | error | checkpoint | sonar:S2970, errorprone:AssertJIsNull |
 | `mockito-incomplete-stubbing` | error | checkpoint | errorprone:MockitoUsage, sonar:S6068 |
 | `test-class-without-tests` | info | checkpoint | sonar:S2187 |
-| `junit5-static-nested-class` | error | checkpoint | sonar:S5790 |
+| `junit5-static-nested-class` | warning | checkpoint | sonar:S5790 |
 | `disabled-test-without-reason` | info | checkpoint | sonar:S1607 |
 | `constant-assertion` | warning | checkpoint | sonar:S2701, sonar:S5845 |
 | `assertthrows-multiple-calls` | info | checkpoint | sonar:S5778 |

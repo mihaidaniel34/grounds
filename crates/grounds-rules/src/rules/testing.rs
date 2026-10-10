@@ -275,17 +275,27 @@ declare_rule!(AssertSameArguments {
     scope: Test,
     sources: ["sonar:S5863"],
     kinds: ["method_invocation"],
-    description: "`assertEquals(x, x)` always passes; one argument should be the expected value.",
+    description: "`assertSame(x, x)` always passes; one argument should be the expected value. Equality assertions (`assertEquals(x, x)`, `isEqualTo`) are only reported for types with a known `equals` (primitives, boxes, String, enums): on other types they are a legitimate reflexivity test of `equals`.",
 });
 
 impl Rule for AssertSameArguments {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
-        if !matches!(cx.fm.call_name(n), Some("assertEquals" | "assertSame" | "assertNotEquals" | "assertNotSame" | "assertArrayEquals" | "isEqualTo" | "isSameAs")) {
+        let Some(name) = cx.fm.call_name(n) else { return };
+        if !matches!(name, "assertEquals" | "assertSame" | "assertNotEquals" | "assertNotSame" | "assertArrayEquals" | "isEqualTo" | "isSameAs") {
             return;
         }
+        let identity = matches!(name, "assertSame" | "assertNotSame" | "isSameAs");
+        // equality on a type with its own equals may be testing that equals
+        let trivial = |x: Node<'t>| {
+            if identity {
+                return true;
+            }
+            let t = cx.type_of(x);
+            t.is_prim() || t.is_string() || t.unboxed().is_some() || t.class_name().and_then(|c| cx.fm.class(c)).is_some_and(|c| c.is_enum())
+        };
         let args = cx.fm.args_of(n);
-        if args.len() >= 2 && same_pure_expr(args[0], args[1], cx.src) && !is_literal(args[0]) {
+        if args.len() >= 2 && same_pure_expr(args[0], args[1], cx.src) && !is_literal(args[0]) && trivial(args[0]) {
             cx.report(n, "Both sides of the assertion are the same expression");
             return;
         }
@@ -294,7 +304,7 @@ impl Rule for AssertSameArguments {
             if let Some(o) = n.field("object").map(|o| o.unparen()) {
                 if is_call_named(o, cx.src, &["assertThat"]) {
                     if let Some(a) = cx.fm.args_of(o).first() {
-                        if same_pure_expr(*a, args[0], cx.src) && !is_literal(args[0]) {
+                        if same_pure_expr(*a, args[0], cx.src) && !is_literal(args[0]) && trivial(args[0]) {
                             cx.report(n, "The actual and expected values are the same expression");
                         }
                     }
@@ -420,11 +430,11 @@ declare_rule!(StaticNestedTest {
     id: "junit5-static-nested-class",
     name: "@Nested test class is static",
     category: Testing,
-    severity: Error,
+    severity: Warning,
     scope: Test,
     sources: ["sonar:S5790"],
     kinds: ["class_declaration"],
-    description: "JUnit 5 only runs `@Nested` classes that are non-static inner classes; a static nested class annotated @Nested is skipped.",
+    description: "`@Nested` only applies to non-static inner classes. A static one is not run as part of the enclosing class: Gradle runs it as a separate top-level test class, Maven Surefire excludes nested classes by default and skips it.",
 });
 
 impl Rule for StaticNestedTest {
@@ -432,7 +442,7 @@ impl Rule for StaticNestedTest {
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
         if n.has_modifier("static") && annotation_names(n, cx.src).contains(&"Nested") {
             if let Some(nm) = n.field("name") {
-                cx.report(nm, "@Nested class must not be static; JUnit 5 skips it");
+                cx.report(nm, "@Nested has no effect on a static class; make it non-static (Maven Surefire skips static nested classes)");
             }
         }
     }
