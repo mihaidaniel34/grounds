@@ -247,6 +247,8 @@ declare_rule!(OptionalGetWithoutCheck {
     name: "Optional.get() without isPresent() check",
     category: Bug,
     severity: Warning,
+    // in a test, an empty Optional just fails the test
+    scope: Main,
     sources: ["sonar:S3655", "intellij:OptionalGetWithoutIsPresent", "errorprone:OptionalNotPresent"],
     kinds: ["<file>"],
     description: "`get()` throws NoSuchElementException on an empty Optional. Check `isPresent()` first, or better use `orElse`, `orElseThrow` with a meaningful exception, `map` or `ifPresent`.",

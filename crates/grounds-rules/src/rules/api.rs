@@ -52,6 +52,11 @@ fn pure_method(cx: &Ctx, c: &grounds_semantic::ResolvedCall) -> bool {
     if c.method.ret == Ty::Void {
         return false;
     }
+    // AssertJ navigation that asserts on the way: `singleElement()` fails
+    // unless there is exactly one element, `first()` on an empty iterable
+    if owner.starts_with("org.assertj.") && matches!(name, "singleElement" | "first" | "last" | "element" | "elements" | "asInstanceOf" | "get") {
+        return false;
+    }
     if c.method.annotations.iter().any(|a| matches!(a.simple_name(), "CheckReturnValue" | "CheckResult" | "MustBeClosed")) {
         return true;
     }

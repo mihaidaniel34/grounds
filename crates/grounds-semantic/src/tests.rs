@@ -317,3 +317,153 @@ fn ambiguous_module_imported_types_stay_unresolved() {
     assert_ne!(t[0], "javax.swing.text.Element");
     assert_eq!(t[1], "java.util.List<java.lang.String>");
 }
+
+#[test]
+fn assertj_style_generic_overloads_pick_the_specific_one() {
+    // AssertJ's Assertions mixes exact overloads with generic ones bounded by
+    // Comparable or AssertDelegateTarget; the exact match must win, and the
+    // result must not be flagged as a guess
+    let t = types_of(
+        "import java.util.*;
+         interface AssertProvider<A> { A assertThat(); } interface AssertDelegateTarget {}
+         class StrA {} class ObjA<T> {} class CmpA<T> {} class FArr {} class OArr<E> {} class ListA<E> {} class CharA {}
+         abstract class Chars implements CharSequence {}
+         record R(int x) implements Comparable<R> { public int compareTo(R o) { return 0; } }
+         class A {
+           static StrA assertThat(String s) { return null; }
+           static CharA assertThat(CharSequence c) { return null; }
+           static <T> ObjA<T> assertThat(T t) { return null; }
+           static <T extends Comparable<? super T>> CmpA<T> assertThat(T t) { return null; }
+           static <T extends AssertDelegateTarget> T assertThat(T t) { return null; }
+           static <T> T assertThat(AssertProvider<T> p) { return null; }
+           static FArr assertThat(float[] a) { return null; }
+           static <E> OArr<E> assertThat(E[] a) { return null; }
+           static <E> OArr<E[]> assertThat(E[][] a) { return null; }
+           static <E> ListA<E> assertThat(List<? extends E> l) { return null; }
+           static <E> ObjA<E> assertThat(Iterable<? extends E> l) { return null; }
+           static <E> ObjA<E> assertThat(Collection<? extends E> l) { return null; }
+           void m(List<String> l, Object o, R r, Chars sb) {
+             Object a = /*T*/ assertThat(\"x\");
+             Object b = /*T*/ assertThat(new float[0]);
+             Object c = /*T*/ assertThat(new String[0]);
+             Object d = /*T*/ assertThat(l);
+             Object e = /*T*/ assertThat(o);
+             Object f = /*T*/ assertThat(r);
+             Object g = /*T*/ assertThat(sb);
+             Object h = /*T*/ assertThat(new String[0][0]);
+           } }",
+    );
+    // `Comparable<? super T>` needs inference to confirm: unknown, not a guess
+    assert_eq!(t, vec!["StrA", "FArr", "OArr<java.lang.String>", "ListA<java.lang.String>", "ObjA<java.lang.Object>", "?unknown", "CharA", "OArr<java.lang.String[]>"]);
+}
+
+#[test]
+fn generic_overloads_never_claim_a_pick_javac_would_not_make() {
+    // erased bounds can rule a generic candidate out, not in: either javac's
+    // pick or unknown, never a confident wrong type
+    let t = types_of(
+        "interface I {} class D implements I {} class Base {} class A extends Base {} class B extends Base {}
+         class Bad implements Comparable<String> { public int compareTo(String s) { return 0; } }
+         class P1 { static <T extends Comparable<? super T>> Integer pick(T x) { return 1; } static String pick(Object x) { return null; } }
+         class P2 { static <T> T pick(T a, T b) { return a; } static String pick(Object... xs) { return null; } }
+         class P3 { static <U, T extends U> Integer pick(Class<U> c, T x) { return 1; } static String pick(Object c, Object x) { return null; } }
+         class P4 { static <T extends Number> Integer pick(T[] x) { return 1; } static String pick(java.io.Serializable[] x) { return null; } }
+         class P5 { static <T extends CharSequence> Integer pick(T x) { return 1; } static String pick(Object x) { return null; } }
+         class P6 { static <T extends Object & I> Integer pick(T x) { return 1; } static String pick(I x) { return null; } }
+         class T {
+           void m() {
+             Object a = /*T*/ P1.pick(new Bad());
+             Object b = /*T*/ P2.pick(new A(), new B());
+             Object c = /*T*/ P3.pick(String.class, Integer.valueOf(1));
+             Object d = /*T*/ P4.pick(new Integer[0]);
+             Object e = /*T*/ P5.pick(1);
+             Object f = /*T*/ P6.pick(new D());
+           } }",
+    );
+    // P4: javac picks the generic one, but proving it needs the bound: unknown
+    assert_eq!(t, vec!["?unknown", "?unknown", "?unknown", "?unknown", "java.lang.String", "?unknown"]);
+}
+
+#[test]
+fn generic_overloads_stay_unknown_where_inference_decides() {
+    let t = types_of(
+        "import java.util.*; class Base {} class A extends Base {} class B extends Base {}
+         class Q1 { static <U> Integer pick(U x, List<String> y) { return 1; } static String pick(Object x, Object y) { return null; } }
+         class Q2 { static <E extends Number> Integer pick(List<E>[] x) { return 1; } static String pick(Object x) { return null; } }
+         class Q3 { static <E> Integer pick(E x) { return 1; } static String pick(java.io.Serializable x) { return null; } }
+         class Q4 { static <T extends Base, U extends T> T pick(T a, List<U> b) { return a; } static String pick(Object a, Object b) { return null; } }
+         class Q5 { static <T extends Number> Integer pick(T x, T y) { return 1; } static <T> T pick(T x, T y) { return x; } }
+         class Q6 { static <T extends List<String>> Integer pick(T x) { return 1; } static String pick(ArrayList<?> x) { return null; } }
+         class Q7 { static <T> T get(Class<T> c) { return null; } static Object get(String name) { return null; } }
+         class T {
+           void m(List<Integer> xs, List<String>[] ls, List<B> bs, ArrayList<String> al) {
+             Object a = /*T*/ Q1.pick(new Object(), xs);
+             Object b = /*T*/ Q2.pick(ls);
+             Object c = /*T*/ Q3.<Double>pick(Integer.valueOf(1));
+             Object d = /*T*/ Q4.pick(new A(), bs);
+             Object e = /*T*/ Q5.pick(new A(), new B());
+             Object f = /*T*/ Q6.pick(al);
+             Object g = /*T*/ Q7.get(String.class);
+           } }",
+    );
+    assert_eq!(t, vec!["?unknown", "?unknown", "?unknown", "?unknown", "?unknown", "?unknown", "java.lang.String"]);
+}
+
+#[test]
+fn generic_overloads_check_fixed_type_arguments_and_wildcards() {
+    let t = types_of(
+        "import java.util.*;
+         class R1 { static <U, T> Integer pick(U x, Map<String, T> y) { return 1; } static String pick(Object x, Object y) { return null; } }
+         class R2 { static <U> Integer pick(U x, List<String>[] y) { return 1; } static String pick(Object x, Object y) { return null; } }
+         class R3 { static <T> Integer pick(List<T>[] x) { return 1; } static String pick(Object x) { return null; } }
+         class R4 { static <U, T> T pick(U u, List<T> x) { return null; } static String pick(Object u, Object x) { return null; } }
+         class R6 { static <T> Integer pick(T x, List<String>[] y) { return 1; } static String pick(String x, List<Integer>[] y) { return null; } }
+         class R7 { static <E> List<E> wrap(List<? extends E> l) { return null; } static String wrap(Object o) { return null; } }
+         class T {
+           void m(Map<Integer, Double> md, List<Integer>[] li, List<?>[] lw, List<? super Integer> ls, List<String> plain) {
+             Object a = /*T*/ R1.pick(new Object(), md);
+             Object b = /*T*/ R2.pick(new Object(), li);
+             Object c = /*T*/ R3.pick(lw);
+             Object d = /*T*/ R4.pick(new Object(), ls);
+             Object f = /*T*/ R6.pick(\"\", null);
+             Object g = /*T*/ R7.wrap(plain);
+           } }",
+    );
+    assert_eq!(t, vec!["?unknown", "?unknown", "?unknown", "?unknown", "?unknown", "java.util.List<java.lang.String>"]);
+}
+
+#[test]
+fn generic_overloads_stay_unknown_with_lambdas_and_wildcards() {
+    let t = types_of(
+        "import java.util.*; import java.util.function.*;
+         class S1 { static <U> Integer pick(U c, Collection<Integer> xs) { return 1; } static String pick(Object c, Object xs) { return null; } }
+         class S2 { static Integer pick(String k, Consumer<Integer> a) { return 1; } static <K, V> String pick(K k, Consumer<V> a) { return null; } }
+         class S3 { static <T> Integer pick(T[] xs, Supplier<String> s) { return 1; } static String pick(Object xs, Supplier<Integer> s) { return null; } }
+         class S4 { static <K, V> Integer pick(K k, List<V> v) { return 1; } static String pick(String k, List<?> v) { return null; } }
+         class T {
+           void m(List<? super Integer> ls, String[] xs, List<String> l) {
+             Object a = /*T*/ S1.pick(new Object(), ls);
+             Object b = /*T*/ S2.pick(\"\", (String s) -> {});
+             Object c = /*T*/ S3.pick(xs, () -> 1);
+             Object d = /*T*/ S4.pick(\"\", l);
+           } }",
+    );
+    assert_eq!(t, vec!["?unknown", "?unknown", "?unknown", "?unknown"]);
+}
+
+#[test]
+fn generic_overloads_through_raw_or_reshaped_supertypes() {
+    let t = types_of(
+        "import java.util.*;
+         abstract class RawBase<A> implements Iterable<A> {} abstract class Raw<X> extends RawBase {}
+         interface Pair<A, B> {} abstract class Swap<A, B> implements Pair<B, A> {}
+         class U1 { static <K, V> Integer pick(K k, Iterable<V> x) { return 1; } static String pick(String k, Raw<String> x) { return null; } }
+         class U2 { static <K> Integer pick(K k, Pair<String, ? extends Number> x) { return 1; } static String pick(String k, Swap<Integer, String> x) { return null; } }
+         class T {
+           void m() {
+             Object a = /*T*/ U1.pick(\"\", null);
+             Object b = /*T*/ U2.pick(\"\", null);
+           } }",
+    );
+    assert_eq!(t, vec!["?unknown", "java.lang.String"]);
+}

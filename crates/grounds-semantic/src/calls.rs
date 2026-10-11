@@ -275,29 +275,85 @@ impl<'t> FileModel<'t> {
         }
     }
 
-    /// Overall fit of a candidate for the given args. Returns (phase, worst fit).
-    fn candidate_fit(&self, m: &MethodInfo, args: &[ArgShape]) -> Option<(u8, Fit)> {
+    /// `fit`, but a parameter that is one of the method's own type variables
+    /// takes any reference argument within its bounds: `<T> assertThat(T)`
+    /// fits a `String` as surely as `assertThat(String)` does.
+    fn fit_in(&self, m: &MethodInfo, param: &Ty, arg: &ArgShape) -> Fit {
+        // `<E> assertThat(E[])` with a `String[]`: the element decides. A
+        // primitive element only matches the same primitive (`float[]` never
+        // fits `T[][]`)
+        if let (Ty::Array(pe), ArgShape::Ty(Ty::Array(ae))) = (param, arg) {
+            if pe.mentions_type_var() {
+                return match &**ae {
+                    Ty::Prim(_) => Fit::No,
+                    Ty::Class { .. } | Ty::Array(_) => self.fit_in(m, pe, &ArgShape::Ty((**ae).clone())),
+                    _ => self.fit(param, arg),
+                };
+            }
+        }
+        if let Ty::TypeVar(v) = param {
+            if let Some(tp) = m.type_params.iter().find(|tp| tp.name == *v) {
+                // a primitive is boxed first (phase 2), then checked like any reference
+                let (a, mut fit) = match arg {
+                    ArgShape::Ty(Ty::Prim(p)) => (Ty::class(p.box_name()), Fit::Loose),
+                    ArgShape::Ty(t @ (Ty::Class { .. } | Ty::Array(_))) => (t.clone(), Fit::Strict),
+                    _ => return self.fit(param, arg),
+                };
+                // javac's specificity for an intersection bound needs inference
+                if tp.bounds.len() > 1 {
+                    fit = fit.max(Fit::Maybe);
+                }
+                for b in &tp.bounds {
+                    let bn = b.erasure();
+                    let bn = bn.class_name().unwrap_or("java.lang.Object");
+                    let f = match &a {
+                        Ty::Class { name, .. } => match self.is_subclass(name, bn) {
+                            Tri::Yes => Fit::Strict,
+                            Tri::No => Fit::No,
+                            Tri::Unknown => Fit::Maybe,
+                        },
+                        _ if matches!(bn, "java.lang.Object" | "java.lang.Cloneable" | "java.io.Serializable") => Fit::Strict,
+                        _ => Fit::No,
+                    };
+                    // the erasure can rule a candidate out, but a bound with type
+                    // arguments or variables (`Comparable<? super T>`, `Enum<T>`,
+                    // `T extends U`) needs inference to rule it in
+                    let generic = b.mentions_type_var() || matches!(b, Ty::Class { args, .. } if !args.is_empty());
+                    fit = fit.max(if f != Fit::No && generic { Fit::Maybe } else { f });
+                }
+                return fit;
+            }
+        }
+        self.fit(param, arg)
+    }
+
+    /// Overall fit of a candidate for the given args: (phase, worst fit,
+    /// worst fit without the type-variable bound checks of `fit_in`). The
+    /// first rules candidates out; certainty about a generic winner still
+    /// comes from the second, since only inference could establish more.
+    fn candidate_fit(&self, m: &MethodInfo, args: &[ArgShape]) -> Option<(u8, Fit, Fit)> {
         let n = args.len();
         let np = m.params.len();
         // phases 1/2: fixed arity
         if n == np {
-            let mut worst = Fit::Strict;
+            let (mut worst, mut plain) = (Fit::Strict, Fit::Strict);
             let mut ok = true;
             for (p, a) in m.params.iter().zip(args) {
-                let f = self.fit(&p.ty, a);
+                let f = self.fit_in(m, &p.ty, a);
                 if f == Fit::No {
                     ok = false;
                     break;
                 }
                 worst = worst.max(f);
+                plain = plain.max(self.fit(&p.ty, a));
             }
             if ok {
-                return Some((if worst == Fit::Loose { 2 } else { 1 }, worst));
+                return Some((if worst == Fit::Loose { 2 } else { 1 }, worst, plain));
             }
         }
         // phase 3: varargs
         if m.is_varargs() && n + 1 >= np {
-            let mut worst = Fit::Strict;
+            let (mut worst, mut plain) = (Fit::Strict, Fit::Strict);
             for (i, a) in args.iter().enumerate() {
                 let pt = if i + 1 < np {
                     m.params[i].ty.clone()
@@ -307,15 +363,206 @@ impl<'t> FileModel<'t> {
                         t => t.clone(),
                     }
                 };
-                let f = self.fit(&pt, a);
+                let f = self.fit_in(m, &pt, a);
                 if f == Fit::No {
                     return None;
                 }
                 worst = worst.max(f);
+                plain = plain.max(self.fit(&pt, a));
             }
-            return Some((3, worst));
+            return Some((3, worst, plain));
         }
         None
+    }
+
+    /// `a` satisfies the bound `b` of type variable `t` once `t` is `a`
+    /// (`String` for `T extends Comparable<? super T>`). False when unsure.
+    fn bound_holds(&self, a: &Ty, b: &Ty, t: &str) -> bool {
+        let b = b.subst(&|v| (v == t).then(|| a.clone()));
+        let (Some(an), Some(bn)) = (a.class_name(), b.class_name()) else { return false };
+        if b.mentions_type_var() {
+            return false;
+        }
+        let bargs = b.args();
+        if bargs.is_empty() {
+            return self.is_subclass(an, bn).is_yes();
+        }
+        let Some(sup) = self.as_super(a, bn) else { return false };
+        let sargs = sup.args();
+        sargs.len() == bargs.len() && bargs.iter().zip(sargs).all(|(ba, sa)| contains(self, ba, sa))
+    }
+
+    /// Parameters of `m` with type arguments and no type variable of `m`
+    /// (`List<String>`) get arguments of exactly that parameterization; `fit`
+    /// compares those by erasure only.
+    fn args_match_exactly(&self, m: &MethodInfo, args: &[ArgShape]) -> bool {
+        let np = m.params.len();
+        args.iter().enumerate().all(|(i, a)| {
+            let pt = match m.params.get(i.min(np.saturating_sub(1))) {
+                Some(p) if m.is_varargs() && i + 1 >= np && !(args.len() == np && matches!(a, ArgShape::Ty(Ty::Array(_)))) => match &p.ty {
+                    Ty::Array(e) => (**e).clone(),
+                    t => t.clone(),
+                },
+                Some(p) => p.ty.clone(),
+                None => return false,
+            };
+            let vars = |t: &Ty| m.type_params.iter().any(|tp| mentions(t, &tp.name));
+            match a {
+                ArgShape::Ty(at) => self.exact_fit(&pt, at, &vars),
+                // `fit` checks a lambda's arity and void-ness, not its types
+                _ => false,
+            }
+        })
+    }
+
+    /// Argument type `at` fits parameter `pt` beyond erasure: fixed type
+    /// arguments match exactly (also inside arrays), and a type variable of
+    /// the method (`vars`) is bound only by a plain shape (`T`, `T[]`, `C<T>`,
+    /// `C<? extends T>`) to an argument without wildcards, so taking the
+    /// argument's type as its binding is what javac infers.
+    fn exact_fit(&self, pt: &Ty, at: &Ty, vars: &dyn Fn(&Ty) -> bool) -> bool {
+        let plain = |x: &Ty| !has_wildcard(x) && !x.has_unknown();
+        match (pt, at) {
+            (_, Ty::Null) => !vars(pt),
+            (Ty::TypeVar(_), _) if vars(pt) => matches!(at, Ty::Class { .. } | Ty::Array(_)) && plain(at),
+            (Ty::Array(pe), Ty::Array(ae)) => match &**pe {
+                Ty::Prim(_) => pe == ae,
+                _ => self.exact_fit(pe, ae, vars),
+            },
+            (Ty::Array(_), _) => false,
+            (Ty::Class { name: pn, args: pargs }, _) if !pargs.is_empty() => {
+                // `as_super` substitutes wildcards away: decide only on plain arguments
+                if !plain(at) {
+                    return false;
+                }
+                let Some(sup) = self.as_super(at, pn) else { return false };
+                let sargs = sup.args();
+                sargs.len() == pargs.len()
+                    && pargs.iter().zip(sargs).all(|(pa, sa)| {
+                        let var_form = match pa {
+                            Ty::TypeVar(_) => vars(pa),
+                            Ty::Wildcard(Some(w)) => match &**w {
+                                WildcardBound::Extends(x @ Ty::TypeVar(_)) | WildcardBound::Super(x @ Ty::TypeVar(_)) => vars(x),
+                                _ => false,
+                            },
+                            _ => false,
+                        };
+                        if var_form {
+                            plain(sa)
+                        } else {
+                            !vars(pa) && contains(self, pa, sa)
+                        }
+                    })
+            }
+            _ => !vars(pt) || matches!(pt, Ty::TypeVar(_)),
+        }
+    }
+
+    /// Non-generic `w` is more specific than generic `g` the way javac would
+    /// decide it: every parameter of `w` is a valid argument for `g`, with
+    /// `g`'s type variables (each in one parameter, a single bound) checked
+    /// against their bounds. False when unsure.
+    fn surely_more_specific(&self, w: &MethodInfo, g: &MethodInfo, n: usize) -> bool {
+        let at = |m: &MethodInfo, i: usize| -> Option<Ty> {
+            let np = m.params.len();
+            if m.is_varargs() && i + 1 >= np && np > 0 {
+                match &m.params[np - 1].ty {
+                    Ty::Array(e) if n != np || i + 1 > np => Some((**e).clone()),
+                    t => Some(t.clone()),
+                }
+            } else {
+                m.params.get(i).map(|p| p.ty.clone())
+            }
+        };
+        (0..n.max(w.params.len()).max(g.params.len())).all(|i| {
+            let (Some(p), Some(q)) = (at(w, i), at(g, i)) else { return false };
+            self.surely_param(&p, &q, g)
+        })
+    }
+
+    /// Parameter type `p` of the winner is a valid argument for parameter
+    /// `q` of generic `g`.
+    fn surely_param(&self, p: &Ty, q: &Ty, g: &MethodInfo) -> bool {
+        let g_vars = |t: &Ty| g.type_params.iter().any(|tp| mentions(t, &tp.name));
+        match q {
+            Ty::TypeVar(v) if g.type_params.iter().any(|tp| tp.name == *v) => {
+                let tp = g.type_params.iter().find(|tp| tp.name == *v).unwrap();
+                let once = g.params.iter().map(|x| occurrences(&x.ty, v)).sum::<usize>() == 1 && !g.type_params.iter().any(|o| o.bounds.iter().any(|b| o.name != *v && mentions(b, v)));
+                once && tp.bounds.len() <= 1
+                    && match p {
+                        Ty::Class { .. } => tp.bounds.first().is_none_or(|b| self.bound_holds(p, b, v)),
+                        // an unbounded variable takes an array too
+                        Ty::Array(_) => free_once(g, v),
+                        _ => false,
+                    }
+            }
+            // `E[]` against `String[][]`: element against element
+            Ty::Array(qe) if g_vars(q) => match p {
+                Ty::Array(pe) if !pe.is_prim() => self.surely_param(pe, qe, g),
+                _ => false,
+            },
+            // `Iterable<? extends E>` with `E` free: any `Iterable` fits;
+            // `Pair<String, ? extends Number>`: each argument contains the winner's
+            Ty::Class { name: qn, args } if !args.is_empty() => {
+                let free = |a: &Ty| match a {
+                    Ty::TypeVar(v) => free_once(g, v),
+                    Ty::Wildcard(None) => true,
+                    Ty::Wildcard(Some(w)) => match &**w {
+                        WildcardBound::Extends(Ty::TypeVar(v)) | WildcardBound::Super(Ty::TypeVar(v)) => free_once(g, v),
+                        WildcardBound::Extends(x) | WildcardBound::Super(x) => !g_vars(x),
+                    },
+                    x => !g_vars(x),
+                };
+                let Ty::Class { name: pn, args: pargs } = p else { return false };
+                if pargs.is_empty() || !args.iter().all(|a| free(a)) || !self.is_subclass(pn, qn).is_yes() {
+                    return false;
+                }
+                // which argument of `p` lands where in `q` (`List<#0>` is
+                // `Iterable<#0>`); `as_super` on `p` itself would drop wildcards
+                let decl = Ty::Class { name: pn.clone(), args: (0..pargs.len()).map(|i| Ty::TypeVar(Arc::from(format!("#{i}")))).collect() };
+                // a raw supertype on the way (`extends Base`) needs unchecked conversion
+                let supers = self.all_supertypes(&decl);
+                if supers.iter().any(|t| t.args().is_empty() && t.class_name().and_then(|c| self.class(c)).is_some_and(|c| !c.type_params.is_empty())) {
+                    return false;
+                }
+                let Some(sup) = supers.into_iter().find(|t| t.class_name() == Some(qn)) else { return false };
+                let placeholder = |t: &Ty| -> Option<Option<usize>> {
+                    match t {
+                        Ty::TypeVar(n) if n.starts_with('#') => n[1..].parse().ok().map(Some),
+                        // also a leftover variable from a raw supertype (`extends Base`)
+                        t if t.mentions_type_var() => None,
+                        _ => Some(None),
+                    }
+                };
+                sup.args().len() == args.len()
+                    && args.iter().zip(sup.args()).all(|(qa, ma)| {
+                        let pa = match placeholder(ma) {
+                            Some(Some(i)) => pargs[i].clone(),
+                            Some(None) => ma.clone(),
+                            None => return false,
+                        };
+                        let is = |t: &Ty, f: fn(&WildcardBound) -> bool| matches!(t, Ty::Wildcard(Some(w)) if f(w));
+                        match qa {
+                            Ty::Wildcard(None) => true,
+                            // `List<?>` is no `List<V>` in javac's specificity
+                            Ty::TypeVar(_) => !matches!(pa, Ty::Wildcard(_)),
+                            Ty::Wildcard(Some(w)) if matches!(&**w, WildcardBound::Extends(Ty::TypeVar(_))) => !is(&pa, |w| matches!(w, WildcardBound::Super(_))),
+                            Ty::Wildcard(Some(w)) if matches!(&**w, WildcardBound::Super(Ty::TypeVar(_))) => !matches!(pa, Ty::Wildcard(None)) && !is(&pa, |w| matches!(w, WildcardBound::Extends(_))),
+                            fixed if matches!(pa, Ty::Wildcard(_)) => pa == *fixed,
+                            fixed => contains(self, fixed, &pa),
+                        }
+                    })
+            }
+            q if !g_vars(q) => {
+                // `List<String>[]` against `List<Integer>[]`: elements must agree
+                let (mut pe, mut qe) = (p, q);
+                while let (Ty::Array(a), Ty::Array(b)) = (pe, qe) {
+                    (pe, qe) = (&**a, &**b);
+                }
+                (qe.args().is_empty() || pe == qe) && self.is_assignable(&p.erasure(), &q.erasure()).is_yes()
+            }
+            _ => false,
+        }
     }
 
     fn more_specific(&self, a: &MethodInfo, b: &MethodInfo, n: usize) -> bool {
@@ -330,10 +577,22 @@ impl<'t> FileModel<'t> {
                 m.params.get(i).map(|p| p.ty.clone()).unwrap_or(Ty::Unknown)
             }
         };
+        // a method type variable erases to its bound, also as an array element;
+        // with an intersection bound the order is javac inference: unknown
+        fn erase(m: &MethodInfo, t: &Ty) -> Option<Ty> {
+            match t {
+                Ty::TypeVar(v) => match m.type_params.iter().find(|tp| tp.name == *v) {
+                    Some(tp) if tp.bounds.len() > 1 => None,
+                    Some(tp) => Some(tp.bounds.first().map(|b| b.erasure()).unwrap_or_else(Ty::object)),
+                    None => Some(t.erasure()),
+                },
+                Ty::Array(e) => erase(m, e).map(|e| Ty::Array(Box::new(e))),
+                _ => Some(t.erasure()),
+            }
+        }
         let count = n.max(a.params.len()).max(b.params.len());
         for i in 0..count {
-            let x = pa(a, i).erasure();
-            let y = pa(b, i).erasure();
+            let (Some(x), Some(y)) = (erase(a, &pa(a, i)), erase(b, &pa(b, i))) else { return false };
             if x == y {
                 continue;
             }
@@ -366,36 +625,44 @@ impl<'t> FileModel<'t> {
             let c = cands.into_iter().next().unwrap();
             return Some((c, false));
         }
+        // a guess matters only when the overloads differ in result
+        let rets_differ = {
+            let rets: Vec<Ty> = cands.iter().map(|m| m.method.ret.erasure()).collect();
+            rets.iter().any(|r| *r != rets[0])
+        };
         let args: Vec<ArgShape> = arg_nodes.into_iter().map(|a| self.arg_shape(a)).collect();
         let args = &args[..];
-        let fits: Vec<(MethodRef, (u8, Fit))> = cands.into_iter().filter_map(|m| self.candidate_fit(&m.method, args).map(|f| (m, f))).collect();
+        let fits: Vec<(MethodRef, (u8, Fit, Fit))> = cands.into_iter().filter_map(|m| self.candidate_fit(&m.method, args).map(|f| (m, f))).collect();
         if fits.is_empty() {
             return None;
         }
         let best_phase = fits.iter().map(|(_, f)| f.0).min().unwrap();
-        // If the winner only fits "maybe" (an argument type is unknown) while
-        // another overload with a different result also fits, the choice is a
-        // guess: flag it so callers do not trust the result type.
-        let uncertain = {
-            let winners: Vec<&(MethodRef, (u8, Fit))> = fits.iter().filter(|(_, f)| f.0 == best_phase).collect();
-            let winner_maybe = winners.iter().any(|(_, f)| f.1 == Fit::Maybe);
-            let rets: Vec<Ty> = fits.iter().map(|(m, _)| m.method.ret.erasure()).collect();
-            winner_maybe && fits.len() > 1 && rets.iter().any(|r| *r != rets[0])
-        };
-        let mut pool: Vec<MethodRef> = fits.into_iter().filter(|(_, f)| f.0 == best_phase).map(|(m, _)| m).collect();
-        if pool.len() == 1 {
-            return Some((pool.pop().unwrap(), uncertain));
-        }
+        let mut pool: Vec<(MethodRef, Fit, Fit)> = fits.into_iter().filter(|(_, f)| f.0 == best_phase).map(|(m, f)| (m, f.1, f.2)).collect();
         // most specific
         let maximal: Vec<usize> = (0..pool.len())
-            .filter(|&i| (0..pool.len()).all(|j| i == j || self.more_specific(&pool[i].method, &pool[j].method, n)))
+            .filter(|&i| (0..pool.len()).all(|j| i == j || self.more_specific(&pool[i].0.method, &pool[j].0.method, n)))
             .collect();
-        if maximal.len() == 1 {
-            return Some((pool.swap_remove(maximal[0]), uncertain));
+        if maximal.len() != 1 {
+            // ambiguous: keep first, flag it
+            return Some((pool.swap_remove(0).0, true));
         }
-        // ambiguous: keep first, flag it
-        let first = pool.remove(0);
-        Some((first, true))
+        let w = maximal[0];
+        let generic = |m: &MethodInfo| m.params.iter().any(|p| m.type_params.iter().any(|tp| mentions(&p.ty, &tp.name)));
+        // The choice is a guess when an argument type is unknown, or when only
+        // inference could rule out a generic competitor: flag it so callers do
+        // not trust the result type. A generic winner is judged as before the
+        // bound checks; a non-generic one must beat every generic competitor
+        // for sure (`assertThat(String)` over `<T> assertThat(T)`).
+        let wm = &pool[w].0.method;
+        // explicit `T.<Double>pick(x)` replaces inference: not modelled here
+        let explicit = call.child_by_field_name("type_arguments").is_some();
+        let sure = !explicit
+            && pool[w].1 != Fit::Maybe
+            && wm.type_params.iter().all(|tp| !wm.params.iter().any(|p| mentions(&p.ty, &tp.name)) || free_once(wm, &tp.name))
+            && self.args_match_exactly(wm, args)
+            && pool.iter().enumerate().all(|(i, (m, _, _))| i == w || !generic(&m.method) || self.surely_more_specific(wm, &m.method, n));
+        let uncertain = rets_differ && pool.iter().any(|(_, _, plain)| *plain == Fit::Maybe) && !sure;
+        Some((pool.swap_remove(w).0, uncertain))
     }
 
     /// Overload selection only (no lambda-body inference). Receiver type
@@ -796,6 +1063,57 @@ fn mentions(t: &Ty, v: &str) -> bool {
         },
         _ => false,
     }
+}
+
+/// Type argument `ba` contains the actual argument `sa` (`? super String`
+/// contains `String`); false when unsure.
+fn contains(lk: &dyn ClassLookup, ba: &Ty, sa: &Ty) -> bool {
+    let sub = |x: &Ty, y: &Ty| {
+        x == y
+            || y.class_name() == Some("java.lang.Object")
+            || matches!((x, y), (Ty::Class { name: xn, args: xa }, Ty::Class { name: yn, args: ya }) if xa.is_empty() && ya.is_empty() && lk.is_subclass(xn, yn).is_yes())
+    };
+    match ba {
+        Ty::Wildcard(None) => true,
+        Ty::Wildcard(Some(w)) => match &**w {
+            WildcardBound::Extends(x) => sub(sa, x),
+            WildcardBound::Super(x) => sub(x, sa),
+        },
+        t => t == sa,
+    }
+}
+
+fn has_wildcard(t: &Ty) -> bool {
+    match t {
+        Ty::Wildcard(_) => true,
+        Ty::Class { args, .. } => args.iter().any(has_wildcard),
+        Ty::Array(e) => has_wildcard(e),
+        _ => false,
+    }
+}
+
+fn occurrences(t: &Ty, v: &str) -> usize {
+    match t {
+        Ty::TypeVar(n) => usize::from(&**n == v),
+        Ty::Class { args, .. } => args.iter().map(|a| occurrences(a, v)).sum(),
+        Ty::Array(e) => occurrences(e, v),
+        Ty::Wildcard(Some(b)) => match &**b {
+            WildcardBound::Extends(t) | WildcardBound::Super(t) => occurrences(t, v),
+        },
+        _ => 0,
+    }
+}
+
+/// Type variables of `m` that inference cannot get wrong: no bound but
+/// Object, used once in all of `m`'s parameters (not a varargs element), and
+/// not by another variable's bound. Any argument fixes such a variable.
+fn free_once(m: &MethodInfo, v: &str) -> bool {
+    let Some(tp) = m.type_params.iter().find(|tp| &*tp.name == v) else { return false };
+    let np = m.params.len();
+    tp.bounds.iter().all(|b| b.class_name() == Some("java.lang.Object"))
+        && m.params.iter().map(|p| occurrences(&p.ty, v)).sum::<usize>() == 1
+        && !(m.is_varargs() && np > 0 && mentions(&m.params[np - 1].ty, v))
+        && !m.type_params.iter().any(|o| o.name != tp.name && o.bounds.iter().any(|b| mentions(b, v)))
 }
 
 /// Bind type variables in `param` against the actual type `arg`.

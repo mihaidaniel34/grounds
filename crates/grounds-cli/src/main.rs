@@ -135,6 +135,9 @@ enum Cmd {
         root: PathBuf,
         #[arg(long)]
         show_unresolved: bool,
+        /// Group unresolved calls by cause (missing jar, unknown receiver, ...)
+        #[arg(long)]
+        causes: bool,
     },
 }
 
@@ -180,7 +183,12 @@ fn main() -> anyhow::Result<()> {
             }
             println!("resolved {} classes in {:?}; param types unknown {}/{}", names.len(), t.elapsed(), unknown, total);
         }
-        Cmd::TypeStats { root, show_unresolved } => type_stats(&root, show_unresolved)?,
+        Cmd::TypeStats { root, show_unresolved, causes } => {
+            type_stats(&root, show_unresolved)?;
+            if causes {
+                unresolved_causes(&root)?;
+            }
+        }
         Cmd::Check { paths, root, format, rules, min_severity, max, stats } => {
             let code = check(&root, &paths, &format, rules, min_severity, max, stats, style)?;
             std::process::exit(code);
@@ -499,6 +507,132 @@ fn type_stats(root: &std::path::Path, show: bool) -> anyhow::Result<()> {
     if show {
         for x in res.iter().flat_map(|x| x.4.iter()).take(60) {
             println!("  {x}");
+        }
+    }
+    Ok(())
+}
+
+/// Why calls stay unresolved: each unresolved call gets one cause, and the
+/// classes behind "missing" causes are grouped by package, so a missing jar
+/// (fixed by `grounds classpath`) stands apart from gaps in grounds itself.
+fn unresolved_causes(root: &std::path::Path) -> anyhow::Result<()> {
+    use grounds_syntax::NodeExt;
+    use rayon::prelude::*;
+    use std::collections::HashMap;
+    let p = grounds_engine::Project::load(root)?;
+    let files: Vec<_> = p.workspace.files.iter().filter(|f| f.kind != grounds_engine::workspace::SourceKind::Generated).collect();
+    let pkg = |fqn: &str| fqn.split('.').take_while(|s| s.chars().next().is_some_and(|c| c.is_lowercase())).take(3).collect::<Vec<_>>().join(".");
+    let per_file: Vec<(HashMap<String, usize>, HashMap<String, usize>, HashMap<String, usize>)> = files
+        .par_iter()
+        .map(|f| {
+            let (mut cause, mut missing, mut known) = (HashMap::new(), HashMap::new(), HashMap::new());
+            let Ok(text) = std::fs::read_to_string(&f.path) else { return (cause, missing, known) };
+            let pf = grounds_syntax::ParsedFile::parse(text);
+            let fm = grounds_semantic::FileModel::new(&pf, &p.index, grounds_engine::project::path_key(&f.path));
+            // a simple type name as this file sees it: imported, or unknown
+            let fqn_of = |simple: &str| -> Option<String> {
+                fm.stub.imports.iter().find(|i| !i.is_static && !i.on_demand && i.path.rsplit('.').next() == Some(simple)).map(|i| i.path.to_string())
+            };
+            let missing_type = |simple: &str, cause: &mut HashMap<String, usize>, missing: &mut HashMap<String, usize>| match fqn_of(simple) {
+                Some(fqn) if p.index.class(&fqn).is_none() => {
+                    *cause.entry("receiver type: imported class not on classpath".into()).or_default() += 1;
+                    *missing.entry(pkg(&fqn)).or_default() += 1;
+                }
+                Some(_) => *cause.entry("receiver type: class known, local not typed".into()).or_default() += 1,
+                None => *cause.entry("receiver type: not imported (same package / wildcard / nested)".into()).or_default() += 1,
+            };
+            for n in pf.root().descendants().filter(|n| n.kind() == "method_invocation") {
+                if fm.resolve_call(n).is_some() {
+                    continue;
+                }
+                let name = n.child_by_field_name("name").map(|x| fm.text(x)).unwrap_or("");
+                let Some(o) = n.child_by_field_name("object").map(|o| o.unparen()) else {
+                    *cause.entry("unqualified call (inherited / static import)".into()).or_default() += 1;
+                    continue;
+                };
+                let t = fm.type_of(o);
+                if let Some(c) = t.class_name() {
+                    if p.index.class(c).is_none() {
+                        *cause.entry("receiver type: class not on classpath".into()).or_default() += 1;
+                        *missing.entry(pkg(c)).or_default() += 1;
+                    } else {
+                        *cause.entry("receiver class known, method not matched".into()).or_default() += 1;
+                        *known.entry(format!("{c}.{name}")).or_default() += 1;
+                    }
+                    continue;
+                }
+                if t.is_known() {
+                    *cause.entry(format!("receiver is {}", match t { grounds_index::Ty::TypeVar(_) => "a type variable", grounds_index::Ty::Array(_) => "an array", _ => "other" })).or_default() += 1;
+                    continue;
+                }
+                match o.kind() {
+                    "method_invocation" if fm.resolve_call(o).is_none() => *cause.entry("receiver is an unresolved call (cascade)".into()).or_default() += 1,
+                    "method_invocation" => {
+                        let r = fm.resolve_call(o).unwrap();
+                        let m = format!("{}.{}", r.owner, r.method.name);
+                        if r.ambiguous {
+                            let unknown_arg = fm.args_of(o).iter().any(|a| fm.type_of(*a).is_unknown());
+                            *cause.entry(format!("receiver call is an ambiguous overload ({})", if unknown_arg { "an argument type unknown" } else { "argument types known" })).or_default() += 1;
+                            if !unknown_arg {
+                                *known.entry(format!("ambiguous: {m}({})", fm.args_of(o).iter().map(|a| fm.type_of(*a).to_string()).collect::<Vec<_>>().join(", "))).or_default() += 1;
+                            }
+                            continue;
+                        }
+                        match &r.method.ret {
+                            grounds_index::Ty::Unknown => {
+                                *cause.entry("receiver call resolved, declared return type unknown".into()).or_default() += 1;
+                                *missing.entry(format!("(return of) {}", pkg(&r.owner))).or_default() += 1;
+                            }
+                            grounds_index::Ty::Class { name: c, .. } if p.index.class(c).is_none() => {
+                                *cause.entry("receiver call resolved, returns class not on classpath".into()).or_default() += 1;
+                                *missing.entry(pkg(c)).or_default() += 1;
+                            }
+                            grounds_index::Ty::TypeVar(_) => {
+                                *cause.entry("receiver call resolved, generic return not inferred".into()).or_default() += 1;
+                                *known.entry(format!("generic: {m}({})", fm.args_of(o).iter().map(|a| fm.type_of(*a).to_string()).collect::<Vec<_>>().join(", "))).or_default() += 1;
+                            }
+                            _ => {
+                                *cause.entry("receiver call resolved, return type lost".into()).or_default() += 1;
+                                *known.entry(format!("lost: {m} -> {}", r.method.ret)).or_default() += 1;
+                            }
+                        }
+                    }
+                    "identifier" if fm.text(o).chars().next().is_some_and(|c| c.is_uppercase()) && !fm.is_type_name(o) => missing_type(fm.text(o), &mut cause, &mut missing),
+                    "identifier" => match fm.local_decl(o) {
+                        Some(d) => match d.type_node {
+                            Some(tn) => {
+                                let simple = fm.text(tn).split(['<', '[']).next().unwrap_or("").rsplit('.').next().unwrap_or("").trim().to_string();
+                                if simple == "var" {
+                                    *cause.entry("receiver local: var, initializer untyped".into()).or_default() += 1;
+                                } else {
+                                    missing_type(&simple, &mut cause, &mut missing);
+                                }
+                            }
+                            None => *cause.entry("receiver local: lambda parameter, untyped".into()).or_default() += 1,
+                        },
+                        None => *cause.entry("receiver identifier: field or unknown".into()).or_default() += 1,
+                    },
+                    k => *cause.entry(format!("receiver expression untyped: {k}")).or_default() += 1,
+                }
+            }
+            (cause, missing, known)
+        })
+        .collect();
+    let mut sum = [HashMap::<String, usize>::new(), HashMap::new(), HashMap::new()];
+    for (a, b, c) in per_file {
+        for (i, m) in [a, b, c].into_iter().enumerate() {
+            for (k, v) in m {
+                *sum[i].entry(k).or_default() += v;
+            }
+        }
+    }
+    let total: usize = sum[0].values().sum();
+    for (title, i, n) in [("unresolved calls by cause", 0, 20), ("missing classes by package", 1, 20), ("grounds gaps by method", 2, 40)] {
+        let mut v: Vec<_> = sum[i].iter().collect();
+        v.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        println!("\n{title}{}:", if i == 0 { format!(" ({total})") } else { String::new() });
+        for (k, c) in v.into_iter().take(n) {
+            println!("  {c:>7}  {k}");
         }
     }
     Ok(())

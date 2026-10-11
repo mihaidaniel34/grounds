@@ -48,3 +48,9 @@ class EpochConversion {
         events.contains(java.time.Instant.ofEpochMilli(millis)); // expect
     }
 }
+class AssertJNavigation {
+    void t(java.util.List<String> l) {
+        org.assertj.core.api.Assertions.assertThat(l).singleElement();
+        org.assertj.core.api.Assertions.assertThat(l).hasSize(1).withFailMessage("never shown"); // expect
+    }
+}
