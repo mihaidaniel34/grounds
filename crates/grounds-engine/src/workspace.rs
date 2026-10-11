@@ -155,9 +155,12 @@ impl Workspace {
                     _ => {}
                 }
                 if name.ends_with(".java") && name != "module-info.java" && name != "package-info.java" {
-                    let s = p.to_string_lossy();
-                    // skip non-generated build outputs
-                    if (s.contains("/build/") || s.contains("/target/")) && classify(p) != SourceKind::Generated {
+                    // skip non-generated build outputs: a `build`/`target` directory
+                    // inside the project and above `src` (not the folders the
+                    // project sits in, nor a package named `build`)
+                    let rel = p.strip_prefix(&root).unwrap_or(p);
+                    let output = rel.components().map(|c| c.as_os_str()).take_while(|c| *c != "src").any(|c| c == "build" || c == "target");
+                    if output && classify(p) != SourceKind::Generated {
                         continue;
                     }
                     if let Ok(rel) = p.strip_prefix(&root) {

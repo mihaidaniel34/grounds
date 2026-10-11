@@ -167,3 +167,24 @@ fn spring_factories_with_crlf_line_endings() {
     let found = findings(&dir, DI);
     assert!(found.is_empty(), "{found:?}");
 }
+
+#[test]
+fn build_output_is_judged_inside_the_project() {
+    // the checkout sits in a folder named `build` (a Nix sandbox, CI agents),
+    // and a package is named `build`: both are sources. The project's own
+    // build/ and target/ outputs are not, except generated sources.
+    let dir = std::env::temp_dir().join(format!("grounds-projects-outputs-{}", std::process::id())).join("build").join("app");
+    let _ = std::fs::remove_dir_all(&dir);
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, "src/main/java/a/A.java", "package a;\npublic class A {}\n");
+    write(&dir, "src/main/java/com/acme/build/B.java", "package com.acme.build;\npublic class B {}\n");
+    write(&dir, "build/tmp/copied/C.java", "package c;\npublic class C {}\n");
+    write(&dir, "sub/target/classes/D.java", "package d;\npublic class D {}\n");
+    write(&dir, "build/generated/sources/annotationProcessor/java/main/g/G.java", "package g;\npublic class G {}\n");
+    let project = Project::load(&dir).unwrap();
+    let root = dir.canonicalize().unwrap();
+    let mut files: Vec<String> = project.workspace.files.iter().map(|f| f.path.strip_prefix(&root).unwrap().to_string_lossy().to_string()).collect();
+    files.sort();
+    let _ = std::fs::remove_dir_all(dir.parent().unwrap().parent().unwrap());
+    assert_eq!(files, vec!["build/generated/sources/annotationProcessor/java/main/g/G.java", "src/main/java/a/A.java", "src/main/java/com/acme/build/B.java"]);
+}
