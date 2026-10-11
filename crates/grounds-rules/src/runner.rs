@@ -68,8 +68,10 @@ impl RuleSet {
         let mut out: Vec<Diagnostic> = Vec::new();
         let flow = FlowCache::default();
         let applies = |m: &RuleMeta| match m.scope {
-            // tests are there to run: style rules do not apply to them
-            Scope::All => !(info.is_test && m.category == Category::Style),
+            // tests are there to run: style rules do not apply to them, and
+            // security rules would flag the self-signed certificates, weak
+            // ciphers and test credentials they use on purpose
+            Scope::All => !(info.is_test && matches!(m.category, Category::Style | Category::Security)),
             Scope::Main => !info.is_test,
             Scope::Test => info.is_test,
         };
