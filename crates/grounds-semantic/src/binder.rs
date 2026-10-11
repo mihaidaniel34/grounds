@@ -201,7 +201,8 @@ where
                 }
             }
             "record_pattern_component" => {
-                let ty = p.kids().into_iter().find(|k| k.kind() != "identifier");
+                // `final var cause`: the modifiers are not the type
+                let ty = p.kids().into_iter().find(|k| !matches!(k.kind(), "identifier" | "modifiers"));
                 if let Some(id) = p.kids().into_iter().rev().find(|k| k.kind() == "identifier") {
                     self.declare(id, p, LocalKind::Pattern, ty, 0, false);
                 } else {
