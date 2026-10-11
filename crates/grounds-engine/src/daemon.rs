@@ -26,6 +26,11 @@ pub enum Request {
         /// ANSI colors (humans at a terminal only, never hooks)
         #[serde(default)]
         color: bool,
+        /// Compare with the merge base of this revision and HEAD (CI).
+        #[serde(default)]
+        base: Option<String>,
+        #[serde(default)]
+        sarif: bool,
     },
     Baseline { files: Vec<PathBuf>, merge: bool },
     ImpactedTests { files: Vec<PathBuf> },
@@ -90,12 +95,28 @@ pub fn execute(session: &mut Session, req: &Request) -> Response {
     match req {
         Request::Ping => Response { code: 0, stdout: format!("ok {}\n", session.root().display()), stderr: build_id() },
         Request::Shutdown => Response { code: 0, stdout: "bye\n".into(), stderr: String::new() },
-        Request::Check { mode, files, all_lines, baseline, max, min_severity, json, color } => {
+        Request::Check { mode, files, all_lines, baseline, max, min_severity, json, color, base, sarif } => {
             let min = Severity::parse(min_severity).unwrap_or(Severity::Warning);
-            let opts = CheckOptions { mode: *mode, files: files.clone(), all_lines: *all_lines, use_baseline: *baseline, min_severity: min };
+            let base = match base {
+                None => None,
+                Some(rev) => match crate::git::merge_base(session.root(), rev) {
+                    Some(mb) => Some(mb),
+                    None => {
+                        let msg = format!("grounds: no merge base of `{rev}` and HEAD; fetch enough history (actions/checkout: `fetch-depth: 0`, or `--base HEAD^1` on a pull request's merge commit with `fetch-depth: 2`)\n");
+                        return Response { code: 1, stdout: String::new(), stderr: msg };
+                    }
+                },
+            };
+            let opts = CheckOptions { mode: *mode, files: files.clone(), all_lines: *all_lines, use_baseline: *baseline, min_severity: min, base };
             let report = session.check(&opts);
             let problems = !report.findings.is_empty() || !report.pending.is_empty();
-            let text = if *json { serde_json::to_string_pretty(&report).unwrap_or_default() } else { render(&report, *max, crate::report::Style { color: *color }) };
+            let text = if *sarif {
+                crate::report::sarif_report(&report, session.root())
+            } else if *json {
+                serde_json::to_string_pretty(&report).unwrap_or_default()
+            } else {
+                render(&report, *max, crate::report::Style { color: *color })
+            };
             Response { code: if problems { 2 } else { 0 }, stdout: text, stderr: String::new() }
         }
         Request::Baseline { files, merge } => match session.write_baseline(files, *merge) {

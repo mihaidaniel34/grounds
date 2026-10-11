@@ -62,6 +62,14 @@ enum Cmd {
         min_severity: String,
         #[arg(long)]
         json: bool,
+        /// text | json | sarif (`--json` is `--format json`).
+        #[arg(long, default_value = "text")]
+        format: String,
+        /// Compare with the merge base of this revision and HEAD instead of
+        /// with HEAD: the lines a branch or pull request changed, and places
+        /// in unchanged files that its changes broke (for CI).
+        #[arg(long)]
+        base: Option<String>,
         /// Do not use or start the background daemon.
         #[arg(long)]
         no_daemon: bool,
@@ -193,8 +201,13 @@ fn main() -> anyhow::Result<()> {
             let code = check(&root, &paths, &format, rules, min_severity, max, stats, style)?;
             std::process::exit(code);
         }
-        Cmd::Changed { files, root, edit, all_lines, no_baseline, max, min_severity, json, no_daemon } => {
+        Cmd::Changed { files, root, edit, all_lines, no_baseline, max, min_severity, json, format, base, no_daemon } => {
             let root = find_root(root);
+            if !matches!(format.as_str(), "text" | "json" | "sarif") {
+                anyhow::bail!("unknown --format {format} (text, json or sarif)");
+            }
+            let sarif = format == "sarif";
+            let json = json || format == "json";
             let req = grounds_engine::daemon::Request::Check {
                 mode: if edit { grounds_engine::session::Mode::Edit } else { grounds_engine::session::Mode::Checkpoint },
                 files: abs(&files),
@@ -203,12 +216,14 @@ fn main() -> anyhow::Result<()> {
                 max,
                 min_severity,
                 json,
-                color: style.color && !json,
+                color: style.color && !json && !sarif,
+                base,
+                sarif,
             };
             let resp = if no_daemon { grounds_engine::daemon::execute(&mut grounds_engine::session::Session::open(&root)?, &req) } else { grounds_engine::daemon::run(&root, &req, true)? };
             print!("{}", resp.stdout);
             eprint!("{}", resp.stderr);
-            if resp.stdout.is_empty() && resp.code == 0 && !json {
+            if resp.stdout.is_empty() && resp.code == 0 && !json && !sarif {
                 eprintln!("grounds: no new problems in changed code");
             }
             std::process::exit(resp.code);
@@ -359,7 +374,7 @@ fn hook(event: &str) -> anyhow::Result<i32> {
             if !file.ends_with(".java") {
                 return Ok(0);
             }
-            let req = Request::Check { mode: Mode::Edit, files: vec![PathBuf::from(file)], all_lines: false, baseline: true, max: 10, min_severity: "warning".into(), json: false, color: false };
+            let req = Request::Check { mode: Mode::Edit, files: vec![PathBuf::from(file)], all_lines: false, baseline: true, max: 10, min_severity: "warning".into(), json: false, color: false, base: None, sarif: false };
             let resp = run(&root, &req, true)?;
             if resp.code == 2 {
                 eprint!("{}", resp.stdout);
@@ -372,7 +387,7 @@ fn hook(event: &str) -> anyhow::Result<i32> {
             if v.get("stop_hook_active").and_then(|b| b.as_bool()) == Some(true) {
                 return Ok(0);
             }
-            let req = Request::Check { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, baseline: true, max: 15, min_severity: "warning".into(), json: false, color: false };
+            let req = Request::Check { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, baseline: true, max: 15, min_severity: "warning".into(), json: false, color: false, base: None, sarif: false };
             let resp = run(&root, &req, true)?;
             if resp.code == 2 {
                 eprint!("{}", resp.stdout);
@@ -439,7 +454,7 @@ fn check(root: &std::path::Path, paths: &[PathBuf], format: &str, rules: Option<
     } else {
         match format {
             "json" => println!("{}", report::json(&findings)),
-            "sarif" => println!("{}", report::sarif(&findings)),
+            "sarif" => println!("{}", report::sarif(&findings, &project.workspace.root)),
             _ => print!("{}", report::text(&findings, max, style)),
         }
     }
