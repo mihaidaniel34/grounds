@@ -27,6 +27,7 @@
 !/corpus/projects.tsv
 !/corpus/planted/*.patch
 !/corpus/planted/*.expected
+!/corpus/ci/*.txt
 
 # never descend into build output
 /target/
