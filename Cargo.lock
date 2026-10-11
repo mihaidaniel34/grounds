@@ -250,7 +250,7 @@ dependencies = [
 
 [[package]]
 name = "grounds-classfile"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "anyhow",
  "memmap2",
@@ -260,7 +260,7 @@ dependencies = [
 
 [[package]]
 name = "grounds-cli"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "anyhow",
  "clap",
@@ -276,7 +276,7 @@ dependencies = [
 
 [[package]]
 name = "grounds-di"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "grounds-classfile",
  "grounds-index",
@@ -287,7 +287,7 @@ dependencies = [
 
 [[package]]
 name = "grounds-engine"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "anyhow",
  "glob",
@@ -312,7 +312,7 @@ dependencies = [
 
 [[package]]
 name = "grounds-flow"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "grounds-classfile",
  "grounds-index",
@@ -323,7 +323,7 @@ dependencies = [
 
 [[package]]
 name = "grounds-index"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "anyhow",
  "dashmap",
@@ -337,7 +337,7 @@ dependencies = [
 
 [[package]]
 name = "grounds-rules"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "grounds-classfile",
  "grounds-di",
@@ -352,7 +352,7 @@ dependencies = [
 
 [[package]]
 name = "grounds-semantic"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "grounds-classfile",
  "grounds-index",
@@ -362,7 +362,7 @@ dependencies = [
 
 [[package]]
 name = "grounds-syntax"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "tree-sitter",
  "tree-sitter-java",
