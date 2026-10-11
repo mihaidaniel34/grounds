@@ -29,3 +29,22 @@ class A {
         }
     }
 }
+class ValidatesThroughArgument {
+    void freeze(java.time.OffsetDateTime now, String zone) {
+        now.atZoneSameInstant(java.time.ZoneId.of(zone));
+        now.plusDays(1); // expect
+    }
+}
+class ConvertsThroughArgument {
+    void check(java.util.List<Integer> list, String s, int x, java.time.OffsetDateTime now, String zone) {
+        list.contains(Integer.valueOf(x)); // expect
+        s.equals(String.valueOf(x)); // expect
+        list.contains(Integer.parseInt(s));
+        now.atZoneSameInstant(java.time.ZoneId.of(zone));
+    }
+}
+class EpochConversion {
+    void check(java.util.List<java.time.Instant> events, long millis) {
+        events.contains(java.time.Instant.ofEpochMilli(millis)); // expect
+    }
+}

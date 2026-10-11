@@ -434,7 +434,12 @@ impl Rule for IncompleteAssertJ {
         let single_arg = cx.fm.args_of(entry).len() == 1;
         let other_owner = cx.fm.select_method(entry).is_some_and(|c| !(c.owner.contains("assertj") || c.owner.contains("Truth")));
         if incomplete && single_arg && !other_owner && (cx.fm.select_method(e).is_some_and(|c| c.owner.contains("assertj") || c.owner.contains("Truth")) || cx.fm.stub.imports.iter().any(|i| i.path.contains("assertj"))) {
-            cx.report(e, "AssertJ assertion has no check (e.g. `.isEqualTo(...)`); it verifies nothing");
+            let boolean = cx.fm.call_name(entry) == Some("assertThat") && cx.fm.args_of(entry).first().is_some_and(|a| matches!(cx.type_of(*a).prim(), Some(Prim::Boolean)) || cx.type_of(*a).is_class("java.lang.Boolean"));
+            if boolean {
+                cx.report(e, "`assertThat(condition)` has no check; it verifies nothing (add `.isTrue()`)");
+            } else {
+                cx.report(e, "AssertJ assertion has no check (e.g. `.isEqualTo(...)`); it verifies nothing");
+            }
         }
     }
 }

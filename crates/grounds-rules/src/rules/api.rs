@@ -110,9 +110,28 @@ impl Rule for IgnoredReturnValue {
         // still an effect: validating by throwing (`LocalDate.parse(s);`,
         // `UUID.fromString(id);`, often inside try/catch) or running a callback
         // (`optional.map(x -> counter++)`)
-        let name = &*c.method.name;
-        let validates = name.starts_with("parse") || matches!(name, "of" | "ofPattern" | "from" | "fromString" | "valueOf" | "decode" | "compile" | "ofEpochSecond" | "ofEpochMilli");
-        let callback = cx.fm.args_of(e).iter().any(|a| matches!(a.unparen().kind(), "lambda_expression" | "method_reference"));
+        let is_validator = |name: &str| name.starts_with("parse") || matches!(name, "of" | "ofPattern" | "from" | "fromString" | "valueOf" | "decode" | "compile" | "ofEpochSecond" | "ofEpochMilli");
+        let args = cx.fm.args_of(e);
+        // also through an argument: `date.atZone(ZoneId.of(id));` checks `id`.
+        // Only JDK parsers that throw on bad input, evaluated with the call (not
+        // in a lambda); `list.contains(Integer.valueOf(x))` converts, it checks nothing
+        let parses = |d: Node<'t>| {
+            d.kind() == "method_invocation"
+                && !d.ancestors().take_while(|x| *x != e).any(|x| matches!(x.kind(), "lambda_expression" | "class_body"))
+                && cx.fm.select_method(d).is_some_and(|m| {
+                    let name = &*m.method.name;
+                    match &*m.owner {
+                        o if o.starts_with("java.time.") => name.starts_with("parse") || matches!(name, "of" | "ofPattern" | "from"),
+                        "java.util.UUID" => name == "fromString",
+                        "java.util.regex.Pattern" => name == "compile",
+                        "java.net.URI" => name == "create",
+                        "java.lang.Integer" | "java.lang.Long" | "java.lang.Short" | "java.lang.Byte" | "java.lang.Double" | "java.lang.Float" => name.starts_with("parse") || name == "decode",
+                        _ => false,
+                    }
+                })
+        };
+        let validates = is_validator(&c.method.name) || args.iter().any(|a| std::iter::once(*a).chain(a.descendants()).any(parses));
+        let callback = args.iter().any(|a| matches!(a.unparen().kind(), "lambda_expression" | "method_reference"));
         if validates || callback {
             return;
         }

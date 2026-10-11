@@ -558,6 +558,10 @@ impl Rule for NullPassedToNonNull {
         if !args.iter().any(|a| is_null_literal(*a)) {
             return;
         }
+        // a test checking that the null is rejected
+        if in_expected_exception(n, cx.fm) {
+            return;
+        }
         let Some(c) = cx.fm.select_method(n) else { return };
         if c.ambiguous {
             return;

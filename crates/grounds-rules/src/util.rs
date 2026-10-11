@@ -533,3 +533,48 @@ pub fn block_has_own_line_comment(b: Node) -> bool {
     let r = b.children(&mut c).any(|k| grounds_syntax::is_comment(k.kind()) && k.start_position().row > start_row);
     r
 }
+
+/// `n` runs where a test expects an exception: in the executable lambda of
+/// `assertThrows(..)`/`assertThatThrownBy(..)`/`isThrownBy(..)`, or in the body
+/// of a `try` that ends in `fail(..)` and catches something. Any other lambda
+/// or class body on the way out may run later, so it ends the search.
+pub fn in_expected_exception<'t>(n: Node<'t>, fm: &FileModel<'t>) -> bool {
+    let mut child = n;
+    for a in n.ancestors() {
+        match a.kind() {
+            "lambda_expression" => {
+                // through parentheses and casts: `assertThrows(X.class, (Executable) () -> ..)`
+                let mut arg = a;
+                while let Some(p) = arg.parent().filter(|p| matches!(p.kind(), "parenthesized_expression" | "cast_expression")) {
+                    arg = p;
+                }
+                let Some(call) = arg.parent().filter(|p| p.kind() == "argument_list").and_then(|p| p.parent()) else { return false };
+                // the executable's position; assertThrows' third argument is a message supplier
+                let at = match fm.call_name(call) {
+                    // JUnit 4's `assertThrows(message, X.class, () -> ..)` leads with the message
+                    Some("assertThrows" | "assertThrowsExactly" | "expectThrows") => {
+                        let args = fm.args_of(call);
+                        if args.len() == 3 && fm.type_of(args[0]).is_string() { 2 } else { 1 }
+                    }
+                    Some("assertThatThrownBy" | "isThrownBy" | "catchThrowable" | "catchException") => 0,
+                    Some("catchThrowableOfType") => usize::from(fm.args_of(call).first() != Some(&arg)),
+                    _ => return false,
+                };
+                return fm.args_of(call).get(at) == Some(&arg);
+            }
+            "try_statement" => {
+                let body = a.field("body");
+                let fails = body.and_then(|b| b.kids().last().copied()).is_some_and(|last| {
+                    last.kind() == "expression_statement" && last.first_kid().is_some_and(|c| c.kind() == "method_invocation" && fm.call_name(c) == Some("fail"))
+                });
+                if body == Some(child) && fails && a.kids().iter().any(|k| k.kind() == "catch_clause") {
+                    return true;
+                }
+            }
+            "method_declaration" | "constructor_declaration" | "class_body" => return false,
+            _ => {}
+        }
+        child = a;
+    }
+    false
+}

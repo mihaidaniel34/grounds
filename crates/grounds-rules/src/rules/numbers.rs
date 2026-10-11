@@ -713,9 +713,37 @@ impl Rule for IntCastToFloatingForRounding {
         let Some(a) = cx.fm.args_of(n).first().map(|a| a.unparen()) else { return };
         let inner = if a.kind() == "cast_expression" { a.field("value").map(|v| v.unparen()) } else { Some(a) };
         let Some(inner) = inner else { return };
-        if is_integral_ty(&cx.type_of(inner)) {
+        // `Math.round((double) count)` is redundant but harmless; a truncating
+        // division inside, or an integer that is not cast to floating point (a
+        // `long` goes through `round(float)`), is not
+        let float_cast = a.kind() == "cast_expression" && is_floating_ty(&cx.type_of(a));
+        if is_integral_ty(&cx.type_of(inner)) && (!float_cast || has_int_division(inner, cx)) {
             cx.report(n, format!("`Math.{}()` of an integer value does nothing; the integer arithmetic already truncated", cx.fm.call_name(n).unwrap_or("")));
         }
+    }
+}
+
+/// An integer `/` in the arithmetic that produces `n` (through `+ - *`, unary
+/// operators, `%`, integer casts, `?:`, switch arms and parentheses).
+fn has_int_division<'t>(n: Node<'t>, cx: &mut Ctx<'_, 't>) -> bool {
+    let n = n.unparen();
+    if !is_integral_ty(&cx.type_of(n)) {
+        return false;
+    }
+    match n.kind() {
+        "binary_expression" => match op(n) {
+            "/" => true,
+            "+" | "-" | "*" | "%" => lr(n).is_some_and(|(l, r)| has_int_division(l, cx) || has_int_division(r, cx)),
+            _ => false,
+        },
+        // any arm's value; nested lambdas and classes are not evaluated here
+        "switch_expression" => n
+            .field("body")
+            .is_some_and(|b| b.descendants().filter(|d| !d.ancestors().take_while(|x| *x != b).any(|x| matches!(x.kind(), "lambda_expression" | "class_body"))).any(|d| d.kind() == "binary_expression" && op(d) == "/" && is_integral_ty(&cx.type_of(d)))),
+        "unary_expression" => n.field("operand").is_some_and(|o| has_int_division(o, cx)),
+        "cast_expression" => n.field("value").is_some_and(|v| has_int_division(v, cx)),
+        "ternary_expression" => [n.field("consequence"), n.field("alternative")].into_iter().flatten().any(|b| has_int_division(b, cx)),
+        _ => false,
     }
 }
 

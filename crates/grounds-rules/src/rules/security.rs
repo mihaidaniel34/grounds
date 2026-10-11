@@ -226,7 +226,8 @@ impl Rule for WeakTls {
                 cx.fm.string_value(a).into_iter().collect()
             };
             for v in vals {
-                if matches!(v.as_str(), "SSL" | "SSLv2" | "SSLv3" | "TLSv1" | "TLSv1.1" | "SSLv2Hello") {
+                // plain "SSL" is a context alias that negotiates TLS 1.2/1.3, like "TLS"
+                if matches!(v.as_str(), "SSLv2" | "SSLv3" | "TLSv1" | "TLSv1.1" | "SSLv2Hello") {
                     cx.report(a, format!("`{v}` is an insecure protocol; use TLSv1.2+"));
                     return;
                 }
