@@ -11,6 +11,11 @@
 #
 # CORPUS_DIR (default ~/grounds-testbed) holds the checkouts; GROUNDS points at
 # the binary (default target/release/grounds, built if missing).
+# CORPUS_ONLY=a,b limits fetch/check to those projects (one CI job each).
+# CORPUS_BASELINE=dir compares with dir/<project>.txt instead of the local
+# target/corpus/baseline (CI keeps its own baseline in corpus/ci: runners
+# have no Maven/Gradle caches, so fewer calls resolve than on a dev machine).
+# CORPUS_SHALLOW=1 fetches just the pinned commit (CI).
 set -euo pipefail
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -29,10 +34,18 @@ findings() {
 for f in json.load(sys.stdin): print("%s:%s %s" % (f["path"], f["line"], f["rule"]))' | LC_ALL=C sort
 }
 
+selected() { [ -z "${CORPUS_ONLY:-}" ] || [[ ",$CORPUS_ONLY," == *",$1,"* ]]; }
+
 fetch() {
   mkdir -p "$corpus_dir"
   while IFS=$'\t' read -r name url commit <&3; do
+    selected "$name" || continue
     dir=$corpus_dir/$name
+    if [ ! -d "$dir/.git" ] && [ -n "${CORPUS_SHALLOW:-}" ]; then
+      echo "fetch $name"
+      git init -q "$dir" && git -C "$dir" fetch -q --depth 1 "$url" "$commit" && git -C "$dir" checkout -q --detach FETCH_HEAD
+      continue
+    fi
     if [ ! -d "$dir/.git" ]; then
       echo "clone $name"
       git clone --quiet --filter=blob:none "$url" "$dir"
@@ -47,12 +60,13 @@ fetch() {
 
 check() {
   [ -x "$grounds" ] || cargo build --release --quiet --manifest-path "$repo/Cargo.toml" -p grounds-cli
-  cargo build --release --quiet --manifest-path "$repo/Cargo.toml" -p grounds-syntax --example errors
-  errors=$repo/target/release/examples/errors
+  errors=${ERRORS:-$repo/target/release/examples/errors}
+  [ -n "${ERRORS:-}" ] || cargo build --release --quiet --manifest-path "$repo/Cargo.toml" -p grounds-syntax --example errors
   rm -rf "$out/current" && mkdir -p "$out/current"
   failed=0
 
   while IFS=$'\t' read -r name _ commit <&3; do
+    selected "$name" || continue
     dir=$corpus_dir/$name
     if [ ! -d "$dir" ]; then echo "$name: missing (run fetch)"; failed=1; continue; fi
     head=$(git -C "$dir" rev-parse HEAD)
@@ -74,6 +88,7 @@ check() {
   # Planted bugs: apply the patch to a copy and expect exactly the listed findings.
   for patch in "$repo"/corpus/planted/*.patch; do
     name=$(basename "$patch" .patch)
+    selected "$name" || continue
     tmp=$(mktemp -d)
     git -C "$corpus_dir/$name" archive HEAD | tar -x -C "$tmp"
     git -C "$tmp" apply "$patch" 2>/dev/null || (cd "$tmp" && patch -p1 --quiet < "$patch")
@@ -85,7 +100,19 @@ check() {
     rm -rf "$tmp"
   done
 
-  if [ -d "$out/baseline" ]; then
+  if [ -n "${CORPUS_BASELINE:-}" ]; then
+    : > "$out/snapshot.diff"
+    for f in "$out"/current/*.txt; do
+      b=$CORPUS_BASELINE/$(basename "$f")
+      [ -f "$b" ] || { echo "snapshot: no baseline for $(basename "$f" .txt) in $CORPUS_BASELINE"; b=/dev/null; }
+      diff -u "$b" "$f" --label "baseline/$(basename "$f")" --label "current/$(basename "$f")" >> "$out/snapshot.diff" || true
+    done
+    if [ -s "$out/snapshot.diff" ]; then
+      echo "snapshot: $(command grep -c '^-[^-]' "$out/snapshot.diff") removed, $(command grep -c '^+[^+]' "$out/snapshot.diff") added (target/corpus/snapshot.diff)"
+    else
+      echo "snapshot: unchanged"
+    fi
+  elif [ -d "$out/baseline" ]; then
     if diff -r -u "$out/baseline" "$out/current" > "$out/snapshot.diff"; then
       echo "snapshot: unchanged"
     else

@@ -211,8 +211,8 @@ Prebuilt binary for Apple Silicon macOS (11+) from the
 [releases page](https://github.com/mihaidaniel34/grounds/releases):
 
 ```bash
-curl -fsSL https://github.com/mihaidaniel34/grounds/releases/download/v0.0.6/grounds-0.0.6-aarch64-apple-darwin.tar.gz | tar -xz
-sudo mv grounds-0.0.6-aarch64-apple-darwin/grounds /usr/local/bin/
+curl -fsSL https://github.com/mihaidaniel34/grounds/releases/download/v0.0.7/grounds-0.0.7-aarch64-apple-darwin.tar.gz | tar -xz
+sudo mv grounds-0.0.7-aarch64-apple-darwin/grounds /usr/local/bin/
 ```
 
 The binary is not notarized: if you download it with a browser, macOS
@@ -263,7 +263,7 @@ renamed a method and added a bug:
 ```
 grounds: 1 new problem(s) in changed code (1 errors, 0 warnings, 0 info)
 src/main/java/.../Owner.java:102:31: error [null-dereference] `label` is always null here
-grounds: API changes in src/main/java/.../Owner.java broke 15 call site(s) in 6 other file(s) not yet updated:
+grounds: API changes in src/main/java/.../Owner.java broke 15 place(s) in 6 other file(s) not yet updated:
 src/main/java/.../PetController.java:103:9: `Owner` has no method `addPet`
 ...
 ```
@@ -272,6 +272,56 @@ The daemon keeps one warm index per project over a Unix socket, re-reads
 files whose modification time changed before every request, and exits
 after 30 minutes idle. It is started on demand and replaced automatically
 when the `grounds` binary changes.
+
+### CI
+
+`grounds changed --base <ref>` checks what a branch or pull request changed
+since it forked from `<ref>` (the merge base), committed or not:
+
+- findings on the changed lines only, so existing code adds no noise;
+- places in **unchanged** files that the change broke: calls to removed or
+  renamed members, implementations of a changed interface, `@Override`s of a
+  changed supertype, and injection points whose bean was deleted or became
+  ambiguous. grounds analyzes the other files against both versions of the
+  changed ones and keeps what is new (about 1 s for spring-petclinic-rest,
+  17 s for camunda's 15,700 files);
+- for each changed line that broke something, a `breaks-other-files`
+  finding on that line listing the broken places, so the break shows in the
+  diff view even though the broken files are not part of it.
+
+`--format sarif` writes SARIF 2.1.0 with paths from the repository root
+(also when `--root` is a subdirectory). Exit codes: 0 nothing found, 2
+findings, 1 failure (for example no merge base in a shallow clone);
+`--exit-zero` turns "findings" into 0 so a job that only uploads them does
+not fail, while a real failure still does.
+
+GitHub Actions, as a non-blocking job uploading to code scanning:
+
+```yaml
+on: pull_request
+jobs:
+  grounds:
+    runs-on: ubuntu-latest
+    permissions: { contents: read, security-events: write }
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }          # --base needs the history to the merge base
+      - uses: actions/setup-java@v4       # grounds reads the JDK's API signatures
+        with: { distribution: temurin, java-version: 21 }
+      - run: ./gradlew compileJava -q     # dependency jars into the Gradle cache (or: grounds classpath)
+      - run: cargo install --locked --git https://github.com/mihaidaniel34/grounds --tag v0.0.8 grounds-cli
+      - run: grounds changed --base "origin/$BASE_REF" --no-daemon --format sarif --exit-zero > grounds.sarif
+        env: { BASE_REF: "${{ github.base_ref }}" }   # never interpolate a branch name into the script
+      - uses: github/codeql-action/upload-sarif@v3
+        with: { sarif_file: grounds.sarif, category: grounds }
+```
+
+With reviewdog instead, keep grounds' scope rather than reviewdog's diff
+filter, which would drop the breaks in unchanged files:
+`grounds changed --base origin/main --no-daemon --format sarif --exit-zero | reviewdog -f=sarif -reporter=github-pr-check -filter-mode=nofilter`.
+
+There is no Linux release binary yet; `cargo install` builds one in a few
+minutes (cache `~/.cargo` between runs).
 
 ### Suppressing findings
 

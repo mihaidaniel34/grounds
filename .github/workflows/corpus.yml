@@ -1,0 +1,122 @@
+name: corpus
+
+# The regression corpus (corpus/projects.tsv), one parallel job per project:
+# zero parse errors, zero findings from rules that claim the code would not
+# compile or start, the planted bugs still reported, and a findings snapshot
+# diffed against corpus/ci/<project>.txt. Runners have no Maven/Gradle
+# caches, so this baseline differs from a dev machine's (fewer resolved calls).
+# To accept new results, run with `update-baseline` and commit the artifact.
+on:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "corpus/**"
+      - "scripts/corpus.sh"
+      - "Cargo.lock"
+      - ".github/workflows/corpus.yml"
+  workflow_dispatch:
+    inputs:
+      update-baseline:
+        description: "Upload the current findings as a corpus-baseline artifact"
+        type: boolean
+        default: false
+
+concurrency:
+  group: corpus-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      projects: ${{ steps.projects.outputs.names }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked -p grounds-cli && cargo build --release --locked -p grounds-syntax --example errors
+      - uses: actions/upload-artifact@v5
+        with:
+          name: binaries
+          path: |
+            target/release/grounds
+            target/release/examples/errors
+      - id: projects
+        run: echo "names=$(cut -f1 corpus/projects.tsv | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
+
+  check:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        project: ${{ fromJson(needs.build.outputs.projects) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # the same JDK API signatures as the baseline was made with
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 25
+      - uses: actions/download-artifact@v5
+        with:
+          name: binaries
+          path: bin
+      - run: chmod +x bin/grounds bin/examples/errors
+      - name: fetch the pinned commit
+        run: scripts/corpus.sh fetch
+        env:
+          CORPUS_ONLY: ${{ matrix.project }}
+          CORPUS_DIR: ${{ runner.temp }}/corpus
+          CORPUS_SHALLOW: "1"
+      # the planted bugs need Spring's jars to be judged at all
+      - if: hashFiles(format('corpus/planted/{0}.patch', matrix.project)) != ''
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: m2-${{ matrix.project }}-${{ hashFiles('corpus/projects.tsv') }}
+      - if: hashFiles(format('corpus/planted/{0}.patch', matrix.project)) != ''
+        working-directory: ${{ runner.temp }}/corpus/${{ matrix.project }}
+        run: ./mvnw -q -B dependency:go-offline || mvn -q -B dependency:go-offline
+      - name: check
+        run: scripts/corpus.sh check
+        env:
+          CORPUS_ONLY: ${{ matrix.project }}
+          CORPUS_DIR: ${{ runner.temp }}/corpus
+          CORPUS_BASELINE: corpus/ci
+          GROUNDS: bin/grounds
+          ERRORS: ${{ github.workspace }}/bin/examples/errors
+      - name: summary
+        if: always()
+        run: |
+          {
+            echo "### ${{ matrix.project }}"
+            if [ -s target/corpus/snapshot.diff ]; then
+              echo "<details><summary>snapshot diff</summary>"; echo; echo '```diff'; head -200 target/corpus/snapshot.diff; echo '```'; echo "</details>"
+            else
+              echo "snapshot unchanged"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: corpus-${{ matrix.project }}
+          path: |
+            target/corpus/current/*.txt
+            target/corpus/snapshot.diff
+            target/corpus/planted-*.diff
+
+  baseline:
+    needs: check
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.update-baseline
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: corpus-*
+          path: results
+      - run: mkdir -p corpus/ci && cp results/*/current/*.txt corpus/ci/ && ls corpus/ci
+      - uses: actions/upload-artifact@v5
+        with:
+          name: corpus-baseline
+          path: corpus/ci/*.txt

@@ -10,7 +10,26 @@ fn write(dir: &Path, rel: &str, text: &str) {
     std::fs::write(p, text).unwrap();
 }
 
+/// The Spring annotations the tests use, as sources in the project, and no
+/// jars from the machine's Maven/Gradle caches: the result must not depend
+/// on what happens to be cached (a sandboxed Nix build has nothing).
+fn spring_stubs(dir: &Path) {
+    write(dir, "grounds.toml", "[classpath]\nscan_caches = false\n");
+    for (pkg, name, target) in [
+        ("org.springframework.boot.autoconfigure", "SpringBootApplication", "TYPE"),
+        ("org.springframework.context.annotation", "Import", "TYPE"),
+        ("org.springframework.context.annotation", "Configuration", "TYPE"),
+        ("org.springframework.context.annotation", "Bean", "METHOD"),
+        ("org.springframework.stereotype", "Service", "TYPE"),
+    ] {
+        let value = if name == "Import" { "    Class<?>[] value();\n" } else { "" };
+        let text = format!("package {pkg};\n@java.lang.annotation.Target(java.lang.annotation.ElementType.{target})\npublic @interface {name} {{\n{value}}}\n");
+        write(dir, &format!("src/main/java/{}/{name}.java", pkg.replace('.', "/")), &text);
+    }
+}
+
 fn di_findings(dir: &Path) -> Vec<String> {
+    spring_stubs(dir);
     let mut project = Project::load(dir).unwrap();
     project.config.rules.enable = ["bean-not-found", "ambiguous-bean", "qualifier-not-found", "bean-name-conflict"].iter().map(|s| s.to_string()).collect();
     let (rules, options) = build_ruleset(&project);
