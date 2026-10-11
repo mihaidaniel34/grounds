@@ -18,3 +18,22 @@ class A {
     }
     int compute() { return 1; }
 }
+class ContractAsserts {
+    @org.jetbrains.annotations.Contract("false -> fail")
+    static void check(boolean b) { if (!b) throw new AssertionError(); }
+    int m(int x) {
+        int y = x + 1;
+        check(x > 0);
+        return y;
+    }
+}
+interface CleanupService { default void deleteByTenant(String t) { throw new UnsupportedOperationException(); } }
+class Overridden {
+    CleanupService svc;
+    Object find(String t) { return t; }
+    void delete(String t) {
+        Object tenant = find(t);
+        svc.deleteByTenant(t);
+        System.out.println(tenant);
+    }
+}

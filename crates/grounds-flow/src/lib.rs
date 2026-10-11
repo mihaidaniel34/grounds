@@ -5,7 +5,7 @@ pub mod analyses;
 pub mod cfg;
 pub mod dataflow;
 
-pub use cfg::{build, Block, BlockId, Cfg, EdgeKind};
+pub use cfg::{build, build_with, Block, BlockId, Cfg, EdgeKind};
 pub use dataflow::{solve, Analysis, Results};
 
 #[cfg(test)]

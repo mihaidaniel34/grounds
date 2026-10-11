@@ -56,3 +56,46 @@ class StaleAlias {
         s.length(); // expect
     }
 }
+class MoreGuards {
+    static class Asserts { static void fail(String m) { throw new IllegalStateException(m); } }
+    static void bail() { throw new IllegalArgumentException(); }
+    @org.jetbrains.annotations.Contract("-> fail")
+    static void failClaim() { }
+    void throwingHelper(String order) {
+        if (order == null) { Asserts.fail("no order"); }
+        order.trim();
+    }
+    void sameClassThrower(String s) {
+        if (s == null) bail();
+        s.trim();
+    }
+    void contract(String upstream) {
+        if (upstream == null) { failClaim(); }
+        upstream.trim();
+    }
+    void state(String options) {
+        if (options == null) { }
+        org.springframework.util.Assert.state(options != null, "options");
+        options.trim();
+    }
+    void guava(String p) {
+        if (p == null) { }
+        com.google.common.base.Preconditions.checkArgument(p != null && !p.isEmpty(), "p");
+        p.trim();
+    }
+    void described(String cacheRead) {
+        if (cacheRead == null) { }
+        org.assertj.core.api.Assertions.assertThat(cacheRead).as("cache read").isNotNull();
+        cacheRead.trim();
+    }
+    Object copy(@javax.annotation.Nullable Object node) {
+        String ref = (String) node;
+        if (node == null) return null;
+        return ref.trim();
+    }
+    void notAThrower(String s) {
+        if (s == null) log("missing");
+        s.trim(); // expect
+    }
+    void log(String m) { }
+}

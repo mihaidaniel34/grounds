@@ -30,6 +30,8 @@ declare_rule!(NullDereference {
     category: Bug,
     severity: Error,
     tier: Edit,
+    // a null dereference in a test just fails that test
+    scope: Main,
     sources: ["sonar:S2259", "spotbugs:NP_ALWAYS_NULL", "spotbugs:NP_NULL_ON_SOME_PATH", "spotbugs:NP_GUARANTEED_DEREF", "errorprone:NullAway", "intellij:DataFlowIssue"],
     kinds: ["<file>"],
     description: "A local variable that is null on some path is dereferenced (method call, field access, array access, unboxing). Typical causes: a null check that guards the wrong branch, a variable initialized to null and assigned only conditionally, or a @Nullable value used unchecked.",

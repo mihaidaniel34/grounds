@@ -226,6 +226,37 @@ impl<'a, 't> NullnessAnalysis<'a, 't> {
         }
     }
 
+    /// Effectively-final locals initialized as a plain copy (or cast) of local `i`.
+    fn copies_of(&self, i: usize) -> Vec<usize> {
+        let fm = self.fm;
+        fm.binder.uses[i]
+            .iter()
+            .filter_map(|u| {
+                // u is the initializer `x` (or `(T) x`) of a declarator
+                let mut top = *u;
+                while let Some(p) = top.parent().filter(|p| matches!(p.kind(), "cast_expression" | "parenthesized_expression")) {
+                    top = p;
+                }
+                let d = top.parent().filter(|p| p.kind() == "variable_declarator" && p.field("value") == Some(top))?;
+                let (j, _) = local_def(fm, d)?;
+                is_effectively_final(fm, j).then_some(j)
+            })
+            .collect()
+    }
+
+    /// Facts implied when a boolean expression is true (`a != null && b != null`).
+    fn true_effects(&self, e: Node<'t>) -> Vec<(usize, Nullness)> {
+        let e = e.unparen();
+        if e.kind() == "binary_expression" && e.field("operator").is_some_and(|o| o.kind() == "&&") {
+            let mut out = Vec::new();
+            for side in [e.field("left"), e.field("right")].into_iter().flatten() {
+                out.extend(self.true_effects(side));
+            }
+            return out;
+        }
+        self.cond_effect(e).into_iter().filter(|x| x.2).map(|(i, s, _)| (i, s)).collect()
+    }
+
     /// For a condition, which local becomes null / non-null on the true edge.
     fn cond_effect(&self, c: Node<'t>) -> Vec<(usize, Nullness, bool)> {
         // returns (local, state, on_true)
@@ -247,12 +278,20 @@ impl<'a, 't> NullnessAnalysis<'a, 't> {
                     return out;
                 };
                 let Some(i) = (if var.kind() == "identifier" { self.fm.binder.decl_index_of_ref(var) } else { None }) else { return out };
-                if op == "==" {
-                    out.push((i, Nullness::Null, true));
-                    out.push((i, Nullness::NonNull, false));
-                } else {
-                    out.push((i, Nullness::NonNull, true));
-                    out.push((i, Nullness::Null, false));
+                // `ref = (T) node; if (node == null) return;`: copies of an
+                // effectively-final local share its nullness
+                let mut vars = vec![i];
+                if is_effectively_final(self.fm, i) {
+                    vars.extend(self.copies_of(i));
+                }
+                for v in vars {
+                    if op == "==" {
+                        out.push((v, Nullness::Null, true));
+                        out.push((v, Nullness::NonNull, false));
+                    } else {
+                        out.push((v, Nullness::NonNull, true));
+                        out.push((v, Nullness::Null, false));
+                    }
                 }
             }
             // `boolean both = a != null && b != null; if (both) ...`
@@ -449,9 +488,23 @@ impl<'a, 't> Analysis<'t> for NullnessAnalysis<'a, 't> {
                 }
             }
             "method_invocation" => {
+                // throw-on-false checks used as statements: `Assert.state(x != null, ..)`,
+                // `checkArgument(x != null)`, `assertTrue(x != null)`, `checkArguments(ok, ..)`
+                if let Some(name) = self.fm.call_name(e) {
+                    let checker = matches!(name, "state" | "isTrue" | "assertTrue" | "checkArgument" | "checkState" | "validState")
+                        || ["check", "require", "ensure"].iter().any(|p| name.starts_with(p));
+                    let statement = e.parent().is_some_and(|p| p.kind() == "expression_statement");
+                    if checker && statement {
+                        if let Some(a) = self.fm.args_of(e).first().copied().filter(|a| self.fm.type_of(*a).unboxed() == Some(Prim::Boolean)) {
+                            for (i, s) in self.true_effects(a) {
+                                f.insert(i, s);
+                            }
+                        }
+                    }
+                }
                 // AssertJ: `assertThat(x).isNotNull()` aborts when x is null
                 if matches!(self.fm.call_name(e), Some("isNotNull" | "isNotEmpty" | "isNotBlank" | "isInstanceOf")) {
-                    let subject = e.field("object").map(|o| o.unparen()).filter(|o| is_static_assert_that(self.fm, *o));
+                    let subject = assert_that_root(self.fm, e.field("object"));
                     if let Some(a) = subject.and_then(|o| self.fm.args_of(o).first().map(|a| a.unparen())).filter(|a| a.kind() == "identifier") {
                         if let Some(i) = self.fm.binder.decl_index_of_ref(a) {
                             f.insert(i, Nullness::NonNull);
@@ -854,7 +907,7 @@ impl<'a, 't> Analysis<'t> for OptionalPresence<'a, 't> {
                 // assertions abort the test when empty: assertThat(opt).isPresent(),
                 // assertTrue(opt.isPresent()), assertFalse(opt.isEmpty())
                 if matches!(name, "isPresent" | "isNotEmpty" | "hasValue" | "contains" | "hasValueSatisfying") {
-                    let subject = e.field("object").map(|o| o.unparen()).filter(|o| is_static_assert_that(self.fm, *o));
+                    let subject = assert_that_root(self.fm, e.field("object"));
                     if let Some(i) = subject.and_then(|o| self.optional_local(self.fm.args_of(o).first().copied())) {
                         f.insert(i);
                     }
@@ -898,6 +951,16 @@ impl<'a, 't> Analysis<'t> for OptionalPresence<'a, 't> {
 
 /// `assertThat(x)` / `Assertions.assertThat(x)`, which throws on failure;
 /// not `softly.assertThat(x)` (SoftAssertions collect failures and go on).
+/// The `assertThat(...)` call at the root of an AssertJ chain, skipping
+/// description calls: `assertThat(x).as("...").isNotNull()`.
+pub fn assert_that_root<'t>(fm: &FileModel<'t>, receiver: Option<Node<'t>>) -> Option<Node<'t>> {
+    let mut cur = receiver?.unparen();
+    while cur.kind() == "method_invocation" && matches!(fm.call_name(cur), Some("as" | "describedAs" | "withFailMessage" | "overridingErrorMessage")) {
+        cur = cur.field("object")?.unparen();
+    }
+    is_static_assert_that(fm, cur).then_some(cur)
+}
+
 pub fn is_static_assert_that<'t>(fm: &FileModel<'t>, call: Node<'t>) -> bool {
     // a class qualifier (`Truth.assertThat`, possibly unresolved), not a
     // `softly` instance

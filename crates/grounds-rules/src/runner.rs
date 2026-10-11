@@ -68,7 +68,8 @@ impl RuleSet {
         let mut out: Vec<Diagnostic> = Vec::new();
         let flow = FlowCache::default();
         let applies = |m: &RuleMeta| match m.scope {
-            Scope::All => true,
+            // tests are there to run: style rules do not apply to them
+            Scope::All => !(info.is_test && m.category == Category::Style),
             Scope::Main => !info.is_test,
             Scope::Test => info.is_test,
         };

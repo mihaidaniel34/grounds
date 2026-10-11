@@ -978,6 +978,9 @@ impl<'s> Extractor<'s> {
                     if varargs {
                         ff.set(Flags::VARARGS);
                     }
+                    if m.field("body").is_some_and(always_throws) {
+                        ff.set(Flags::ALWAYS_THROWS);
+                    }
                     let mut ret = m.field("type").map(|t| type_syntax(t, src)).unwrap_or(TypeSyntax::Unknown);
                     if let Some(d) = m.field("dimensions") {
                         ret = wrap_array(ret, d.text(src).matches('[').count());
@@ -1091,6 +1094,22 @@ impl<'s> Extractor<'s> {
         c.inners = inners;
         Some(name)
     }
+}
+
+/// A method body that can only end by throwing: its last statement is a
+/// `throw` and nothing returns early (lambdas and nested classes aside).
+fn always_throws(body: Node) -> bool {
+    if !body.kids().last().is_some_and(|l| l.kind() == "throw_statement") {
+        return false;
+    }
+    fn returns(n: Node) -> bool {
+        n.kids().into_iter().any(|k| match k.kind() {
+            "return_statement" => true,
+            "lambda_expression" | "class_body" => false,
+            _ => returns(k),
+        })
+    }
+    !returns(body)
 }
 
 pub fn implicit_method(name: &str, flags: Flags, params: Vec<RawParam>, ret: TypeSyntax) -> RawMethod {

@@ -413,6 +413,8 @@ impl Flags {
     pub const RECORD_COMPONENT: u32 = 1 << 21;
     pub const ANON: u32 = 1 << 22;
     pub const LOCAL: u32 = 1 << 23;
+    /// A source method whose body always ends by throwing (`void fail(String m) { throw ...; }`).
+    pub const ALWAYS_THROWS: u32 = 1 << 24;
 
     pub fn has(self, f: u32) -> bool {
         self.0 & f != 0

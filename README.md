@@ -25,7 +25,9 @@ leaves tests for the end of the task.
   Error Prone and IntelliJ inspections. Each rule lists the equivalent IDs
   in those tools. By category: 109 bug, 58 style, 38 bad practice,
   23 performance, 23 concurrency, 22 security, 20 framework, 14 testing,
-  5 complexity. Full list: [docs/RULES.md](docs/RULES.md).
+  5 complexity. Full list: [docs/RULES.md](docs/RULES.md). Style rules
+  and the null-dereference check do not run on test sources: tests are
+  there to run, and a null pointer in a test just fails it.
 - **Dataflow:** null dereferences (with `@Nullable` and null checks), unclosed
   resources, unchecked `Optional.get()`, dead stores. The control flow graph
   works at expression level and models `finally` and exceptions.

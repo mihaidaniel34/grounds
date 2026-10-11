@@ -68,6 +68,8 @@ struct TryCtx<'t> {
 
 struct Builder<'t, 's> {
     src: &'s str,
+    /// Calls known never to return normally (helpers that always throw).
+    never_returns: Option<&'s dyn Fn(Node<'t>) -> bool>,
     blocks: Vec<Block<'t>>,
     cur: BlockId,
     exit: BlockId,
@@ -383,6 +385,12 @@ impl<'t, 's> Builder<'t, 's> {
             "expression_statement" => {
                 if let Some(e) = n.first_kid() {
                     self.expr(e);
+                    // `Asserts.fail("...")`: the path ends here, like a throw
+                    if e.kind() == "method_invocation" && self.never_returns.is_some_and(|f| f(e)) {
+                        let c = self.cur;
+                        self.exceptional_edges(c);
+                        self.dead();
+                    }
                 }
             }
             "local_variable_declaration" => {
@@ -812,7 +820,12 @@ fn may_throw(n: Node) -> bool {
 /// Build the CFG for a callable: method/constructor/lambda declaration or an
 /// initializer block.
 pub fn build<'t>(owner: Node<'t>, src: &str) -> Cfg<'t> {
-    let mut b = Builder { src, blocks: Vec::new(), cur: 0, exit: 0, exc_exit: 0, jumps: Vec::new(), tries: Vec::new(), pending_label: None };
+    build_with(owner, src, None)
+}
+
+/// Like [`build`], with a predicate for calls that never return normally.
+pub fn build_with<'t, 's>(owner: Node<'t>, src: &'s str, never_returns: Option<&'s dyn Fn(Node<'t>) -> bool>) -> Cfg<'t> {
+    let mut b = Builder { src, never_returns, blocks: Vec::new(), cur: 0, exit: 0, exc_exit: 0, jumps: Vec::new(), tries: Vec::new(), pending_label: None };
     let entry = b.new_block();
     b.exit = b.new_block();
     b.exc_exit = b.new_block();

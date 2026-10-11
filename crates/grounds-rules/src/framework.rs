@@ -214,7 +214,32 @@ impl<'a, 't> Ctx<'a, 't> {
         if let Some(c) = self.flow.cfgs.borrow().get(&callable.id()) {
             return c.clone();
         }
-        let c = Rc::new(grounds_flow::build(callable, self.src));
+        let fm = self.fm;
+        // helpers that always throw end the path: a source method ending in
+        // `throw`, `@Contract("-> fail")`, JUnit/TestNG/AssertJ `fail(...)`
+        let never_returns = |e: Node<'t>| -> bool {
+            let Some(c) = fm.select_method(e) else { return false };
+            let contract_fails = c.method.annotations.iter().any(|a| {
+                a.simple_name() == "Contract" && a.arg("value").is_some_and(|v| {
+                    let s = v.strings().join(";");
+                    // only unconditional clauses (`-> fail`, `_, _ -> fail`); `false -> fail`
+                    // (JUnit's assertTrue) fails just for some arguments
+                    !s.trim().is_empty()
+                        && s.split(';').all(|clause| {
+                            let (lhs, rhs) = clause.rsplit_once("->").unwrap_or(("", clause));
+                            rhs.trim() == "fail" && lhs.split(',').all(|a| matches!(a.trim(), "" | "_"))
+                        })
+                })
+            });
+            let test_fail = &*c.method.name == "fail" && ["org.junit", "junit.", "org.testng", "org.assertj"].iter().any(|p| c.owner.starts_with(p));
+            // an overridable method (an interface default throwing
+            // UnsupportedOperationException) may be replaced at runtime
+            use grounds_index::Flags;
+            let mf = c.method.flags;
+            let not_overridable = mf.has(Flags::STATIC) || mf.has(Flags::PRIVATE) || mf.has(Flags::FINAL) || fm.class(&c.owner).is_some_and(|o| o.flags.has(Flags::FINAL) || o.is_enum() || o.is_record());
+            (mf.has(Flags::ALWAYS_THROWS) && not_overridable) || contract_fails || test_fail
+        };
+        let c = Rc::new(grounds_flow::build_with(callable, self.src, Some(&never_returns)));
         self.flow.cfgs.borrow_mut().insert(callable.id(), c.clone());
         c
     }
