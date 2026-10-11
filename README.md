@@ -61,27 +61,27 @@ grounds configuration:
 
 | project | Java files | lines | modules | full check | calls resolved | errors / warnings / info |
 |---|---:|---:|---:|---:|---:|---|
-| spring-petclinic | 50 | 4,297 | 1 | 0.22 s | 95.9% | 0 / 3 / 8 |
-| spring-petclinic-rest | 109 | 8,675 | 1 | 0.25 s | 91.3% | 0 / 26 / 24 |
-| piggymetrics | 97 | 4,472 | 10 | 0.22 s | 87.4% | 0 / 14 / 63 |
-| jhipster-sample-app | 136 | 11,980 | 1 | 0.28 s | 82.4% | 0 / 3 / 21 |
-| micronaut-core | 6,371 | 697,519 | 85 | 2.91 s | 94.9% | 12 / 481 / 3,165 |
-| buckpal | 46 | 1,992 | 1 | 0.20 s | 87.8% | 0 / 3 / 5 |
-| realworld-springboot-java | 89 | 4,638 | 1 | 0.22 s | 93.7% | 3 / 0 / 15 |
-| eladmin | 274 | 23,195 | 6 | 0.28 s | 88.3% | 12 / 48 / 101 |
+| spring-petclinic | 50 | 4,297 | 1 | 0.24 s | 95.9% | 0 / 3 / 5 |
+| spring-petclinic-rest | 109 | 8,675 | 1 | 0.27 s | 91.3% | 0 / 26 / 11 |
+| piggymetrics | 97 | 4,472 | 10 | 0.24 s | 87.4% | 0 / 14 / 56 |
+| jhipster-sample-app | 136 | 11,980 | 1 | 0.29 s | 82.4% | 0 / 3 / 11 |
+| micronaut-core | 6,371 | 697,519 | 85 | 3.40 s | 94.9% | 12 / 456 / 2,673 |
+| buckpal | 46 | 1,992 | 1 | 0.22 s | 87.8% | 0 / 3 / 2 |
+| realworld-springboot-java | 89 | 4,638 | 1 | 0.22 s | 93.7% | 3 / 0 / 10 |
+| eladmin | 274 | 23,195 | 6 | 0.29 s | 88.3% | 12 / 48 / 101 |
 | start.spring.io | 377 | 23,857 | 5 | 0.28 s | 53.4% | 0 / 1 / 15 |
-| mall | 524 | 85,204 | 8 | 0.55 s | 96.3% | 0 / 39 / 802 |
-| halo | 1,381 | 134,807 | 7 | 0.89 s | 88.8% | 2 / 280 / 559 |
-| dolphinscheduler | 2,560 | 251,783 | 145 | 1.20 s | 91.1% | 10 / 568 / 2,126 |
-| thingsboard | 6,884 | 776,052 | 111 | 4.76 s | 86.5% | 8 / 1,155 / 9,371 |
-| apollo | 756 | 98,135 | 15 | 0.62 s | 87.4% | 1 / 131 / 313 |
-| camunda | 15,743 | 2,299,131 | 149 | 9.85 s | 83.1% | 14 / 1,478 / 7,722 |
-| helidon | 6,325 | 1,037,072 | 522 | 4.38 s | 91.9% | 22 / 1,585 / 5,340 |
-| langchain4j | 3,632 | 516,267 | 120 | 2.54 s | 84.7% | 15 / 594 / 3,622 |
-| nacos | 5,293 | 813,767 | 63 | 3.56 s | 98.8% | 16 / 1,262 / 4,977 |
-| rewrite | 3,764 | 899,832 | 36 | 3.85 s | 94.3% | 11 / 1,013 / 5,369 |
-| spring-ai | 2,309 | 403,772 | 169 | 2.13 s | 76.2% | 2 / 480 / 1,724 |
-| spring-modulith | 704 | 67,972 | 49 | 0.43 s | 81.7% | 5 / 47 / 477 |
+| mall | 524 | 85,204 | 8 | 0.52 s | 96.3% | 0 / 36 / 801 |
+| halo | 1,381 | 134,807 | 7 | 0.93 s | 88.8% | 2 / 273 / 500 |
+| dolphinscheduler | 2,560 | 251,783 | 145 | 1.22 s | 91.1% | 10 / 437 / 1,795 |
+| thingsboard | 6,884 | 776,052 | 111 | 4.95 s | 86.5% | 8 / 1,151 / 8,157 |
+| apollo | 756 | 98,135 | 15 | 0.63 s | 87.4% | 1 / 130 / 267 |
+| camunda | 15,743 | 2,299,131 | 149 | 10.22 s | 83.1% | 14 / 1,373 / 6,339 |
+| helidon | 6,325 | 1,037,072 | 522 | 4.67 s | 91.9% | 22 / 1,583 / 4,472 |
+| langchain4j | 3,632 | 516,267 | 120 | 2.66 s | 84.7% | 15 / 554 / 2,856 |
+| nacos | 5,293 | 813,767 | 63 | 3.87 s | 98.8% | 16 / 1,253 / 4,624 |
+| rewrite | 3,764 | 899,832 | 36 | 4.04 s | 94.3% | 11 / 880 / 5,119 |
+| spring-ai | 2,309 | 403,772 | 169 | 2.17 s | 76.2% | 2 / 269 / 1,542 |
+| spring-modulith | 704 | 67,972 | 49 | 0.46 s | 81.7% | 5 / 47 / 418 |
 
 "Calls resolved" is the share of method calls for which grounds found the
 exact target method. For the rest, any rule that needs the target says
@@ -331,7 +331,7 @@ With an exact classpath and `scan_caches = false`, those are checked too.
   from the directory layout and the local caches, or from the one-off dump.
 
 ```
-grounds-syntax     tree-sitter Java parser, node helpers
+grounds-syntax     Java parser (tree-sitter-java-orchard), node helpers
 grounds-classfile  jar/zip reader, class file and generic signature parser, JDK ct.sym
 grounds-index      declaration stubs, Lombok model, project-wide index, hierarchy lookup
 grounds-semantic   per-file model: name binding, expression types, overload resolution
