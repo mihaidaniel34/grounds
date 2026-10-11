@@ -208,8 +208,8 @@ Prebuilt binary for Apple Silicon macOS (11+) from the
 [releases page](https://github.com/mihaidaniel34/grounds/releases):
 
 ```bash
-curl -fsSL https://github.com/mihaidaniel34/grounds/releases/download/v0.0.4/grounds-0.0.4-aarch64-apple-darwin.tar.gz | tar -xz
-sudo mv grounds-0.0.4-aarch64-apple-darwin/grounds /usr/local/bin/
+curl -fsSL https://github.com/mihaidaniel34/grounds/releases/download/v0.0.5/grounds-0.0.5-aarch64-apple-darwin.tar.gz | tar -xz
+sudo mv grounds-0.0.5-aarch64-apple-darwin/grounds /usr/local/bin/
 ```
 
 The binary is not notarized: if you download it with a browser, macOS
