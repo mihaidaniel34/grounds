@@ -14,7 +14,7 @@ mod line_index;
 pub use line_index::{LineCol, LineIndex};
 
 pub fn language() -> tree_sitter::Language {
-    tree_sitter_java::LANGUAGE.into()
+    tree_sitter_java_orchard::LANGUAGE.into()
 }
 
 thread_local! {
@@ -489,6 +489,18 @@ pub trait NodeExt<'t>: Sized {
     fn descendants(&self) -> Descendants<'t>;
 }
 
+/// The keyword of a child of `modifiers`: a bare token (`public`), or the
+/// token inside a `visibility` / `modifier` node, as the grammar wraps them.
+pub fn modifier_keyword<'t>(k: Node<'t>) -> Option<&'t str> {
+    if !k.is_named() {
+        return Some(k.kind());
+    }
+    if matches!(k.kind(), "visibility" | "modifier") {
+        return k.child(0).filter(|t| !t.is_named()).map(|t| t.kind());
+    }
+    None
+}
+
 impl<'t> NodeExt<'t> for Node<'t> {
     fn field(&self, name: &str) -> Option<Node<'t>> {
         self.child_by_field_name(name)
@@ -548,7 +560,7 @@ impl<'t> NodeExt<'t> for Node<'t> {
         match self.modifiers() {
             Some(m) => {
                 let mut c = m.walk();
-                let r = m.children(&mut c).any(|k| !k.is_named() && k.kind() == keyword);
+                let r = m.children(&mut c).any(|k| modifier_keyword(k) == Some(keyword));
                 r
             }
             None => false,

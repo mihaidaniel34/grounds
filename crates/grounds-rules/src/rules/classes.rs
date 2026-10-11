@@ -1277,9 +1277,10 @@ impl Rule for RedundantModifier {
         };
         let mut c = mods.walk();
         for k in mods.children(&mut c) {
-            if !k.is_named() && redundant.contains(&k.kind()) {
+            let Some(kw) = grounds_syntax::modifier_keyword(k) else { continue };
+            if redundant.contains(&kw) {
                 // abstract on an interface method with a body is an error; public on default is fine to drop
-                cx.report_fix(k, format!("Redundant `{}` modifier", k.kind()), Fix::delete("Remove modifier", k.start_byte() as u32, (k.end_byte() + 1).min(cx.src.len()) as u32));
+                cx.report_fix(k, format!("Redundant `{kw}` modifier"), Fix::delete("Remove modifier", k.start_byte() as u32, (k.end_byte() + 1).min(cx.src.len()) as u32));
             }
         }
     }

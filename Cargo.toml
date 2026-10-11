@@ -9,7 +9,7 @@ license = "Apache-2.0"
 
 [workspace.dependencies]
 tree-sitter = "0.27"
-tree-sitter-java = "0.23.5"
+tree-sitter-java-orchard = "0.5.22"
 memmap2 = "0.9"
 miniz_oxide = "0.9"
 rayon = "1.10"

@@ -344,10 +344,8 @@ pub fn modifier_flags(node: Node) -> Flags {
     if let Some(m) = node.modifiers() {
         let mut c = m.walk();
         for k in m.children(&mut c) {
-            if k.is_named() {
-                continue;
-            }
-            f.set(match k.kind() {
+            let Some(kw) = grounds_syntax::modifier_keyword(k) else { continue };
+            f.set(match kw {
                 "public" => Flags::PUBLIC,
                 "private" => Flags::PRIVATE,
                 "protected" => Flags::PROTECTED,
