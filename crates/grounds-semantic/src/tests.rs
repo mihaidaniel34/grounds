@@ -380,8 +380,9 @@ fn generic_overloads_never_claim_a_pick_javac_would_not_make() {
              Object f = /*T*/ P6.pick(new D());
            } }",
     );
+    // P1: Bad is no `Comparable<? super Bad>`; P2: T is lub(A, B); P3: Integer is no String.
     // P4: javac picks the generic one, but proving it needs the bound: unknown
-    assert_eq!(t, vec!["?unknown", "?unknown", "?unknown", "?unknown", "java.lang.String", "?unknown"]);
+    assert_eq!(t, vec!["java.lang.String", "Base", "java.lang.String", "?unknown", "java.lang.String", "?unknown"]);
 }
 
 #[test]
@@ -406,7 +407,9 @@ fn generic_overloads_stay_unknown_where_inference_decides() {
              Object g = /*T*/ Q7.get(String.class);
            } }",
     );
-    assert_eq!(t, vec!["?unknown", "?unknown", "?unknown", "?unknown", "?unknown", "?unknown", "java.lang.String"]);
+    // Q1, Q2: `List<Integer>` is no `List<String>`, String violates `E extends Number`;
+    // Q5: lub(A, B) is Base, no Number
+    assert_eq!(t, vec!["java.lang.String", "java.lang.String", "?unknown", "?unknown", "Base", "?unknown", "java.lang.String"]);
 }
 
 #[test]
@@ -429,7 +432,8 @@ fn generic_overloads_check_fixed_type_arguments_and_wildcards() {
              Object g = /*T*/ R7.wrap(plain);
            } }",
     );
-    assert_eq!(t, vec!["?unknown", "?unknown", "?unknown", "?unknown", "?unknown", "java.util.List<java.lang.String>"]);
+    // R4: T is the capture of `? super Integer`, whose upper bound is Object
+    assert_eq!(t, vec!["java.lang.String", "java.lang.String", "java.lang.String", "java.lang.Object", "?unknown", "java.util.List<java.lang.String>"]);
 }
 
 #[test]
@@ -448,7 +452,8 @@ fn generic_overloads_stay_unknown_with_lambdas_and_wildcards() {
              Object d = /*T*/ S4.pick(\"\", l);
            } }",
     );
-    assert_eq!(t, vec!["?unknown", "?unknown", "?unknown", "?unknown"]);
+    // S1: a `List<? super Integer>` is no `Collection<Integer>`; S3: `() -> 1` is no `Supplier<String>`
+    assert_eq!(t, vec!["java.lang.String", "?unknown", "java.lang.String", "?unknown"]);
 }
 
 #[test]
@@ -466,4 +471,111 @@ fn generic_overloads_through_raw_or_reshaped_supertypes() {
            } }",
     );
     assert_eq!(t, vec!["?unknown", "java.lang.String"]);
+}
+
+#[test]
+fn overloads_check_type_arguments_and_inferred_bounds() {
+    // a differential fuzz against javac found these picked by erasure
+    let t = types_of(
+        "import java.util.*;
+         class P1 { static String pick(Object o) { return null; } static Integer pick(List<Integer> l) { return null; } }
+         class P2 { static <T extends Number> Integer pick(Collection<T> c) { return null; } static String pick(Object o) { return null; } }
+         class Poly { static Integer take(Map.Entry<String, Object> e) { return null; } static Integer take(List<String> l) { return null; } }
+         class Box { static <T extends Comparable<? super T>> String f(T t) { return null; } static Integer f(double d) { return null; } }
+         class T {
+           void m(List<String> ls, Collection<String> cs) {
+             Object a = /*T*/ P1.pick(ls);
+             Object b = /*T*/ P2.pick(cs);
+             Object c = /*T*/ Poly.take(Map.entry(\"a\", \"b\"));
+             Object d = /*T*/ Box.f(1.5);
+           } }",
+    );
+    // `List<String>` is no `List<Integer>`; String violates `T extends Number`;
+    // a generic call as argument takes its type arguments from the parameter
+    // (`MapEntry<String, String>` is not ruled out for `Entry<String, Object>`);
+    // boxing for the generic one makes it phase 2
+    assert_eq!(t, vec!["java.lang.String", "java.lang.String", "java.lang.Integer", "java.lang.Integer"]);
+}
+
+#[test]
+fn unchecked_conversion_erases_the_result() {
+    let t = types_of(
+        "import java.util.*;
+         class P3 { static Set<String> pick(Set<String> s) { return null; } static List<String> any(List<?> l) { return null; } }
+         class T { void m(Set raw, List rawList) { Object a = /*T*/ P3.pick(raw); Object b = /*T*/ P3.any(rawList); } }",
+    );
+    // a raw argument for `List<?>` needs no unchecked conversion
+    assert_eq!(t, vec!["java.util.Set", "java.util.List<java.lang.String>"]);
+}
+
+#[test]
+fn captured_wildcards_stay_wildcards() {
+    let t = types_of(
+        "import java.util.*;
+         class P4 { static <T> List<T> same(List<T> l) { return null; } static <T> T first(List<T> l) { return null; }
+                    static <T> Iterable<T> wrap(Collection<? extends T> c) { return null; } }
+         class T {
+           void m(List<? super Integer> lsu, List<? extends Number> le, Collection<? extends Number> ce) {
+             Object a = /*T*/ P4.same(lsu);
+             Object b = /*T*/ P4.same(le);
+             Object c = /*T*/ P4.first(le);
+             Object d = /*T*/ P4.first(lsu);
+             Object e = /*T*/ P4.wrap(ce);
+           } }",
+    );
+    assert_eq!(
+        t,
+        vec![
+            "java.util.List<? super java.lang.Integer>",
+            "java.util.List<? extends java.lang.Number>",
+            "java.lang.Number",
+            "java.lang.Object",
+            "java.lang.Iterable<? extends java.lang.Number>"
+        ]
+    );
+}
+
+#[test]
+fn inference_follows_javac_resolution() {
+    let t = types_of(
+        "import java.util.*;
+         class A implements Comparable<A> { public int compareTo(A o) { return 0; } } class B extends A {}
+         class Base {} class X extends Base {} class Y extends Base {}
+         class F { static <T extends Comparable<T>> T max(T a, T b) { return a; } static <T> T id(T t) { return t; }
+                   static <T> T either(T a, T b) { return a; } }
+         class T {
+           void m(B b1, B b2) {
+             Object a = /*T*/ F.max(b1, b2);
+             Object b = /*T*/ F.<Number>id(1);
+             Object c = /*T*/ Collections.<Number>singletonList(1);
+             Object d = /*T*/ F.either(new X(), new Y());
+             Object e = /*T*/ F.either(1, \"s\");
+           } }",
+    );
+    // `T extends Comparable<T>` over a B makes T the A that B compares as;
+    // explicit type arguments win; T is the lub, unknown where that is an intersection
+    assert_eq!(t, vec!["A", "java.lang.Number", "java.util.List<java.lang.Number>", "Base", "?unknown"]);
+}
+
+#[test]
+fn calls_javac_rejects_have_no_certain_type() {
+    let t = types_of(
+        "import java.util.*;
+         class P5 { static Integer pick(List<Integer> l) { return null; } }
+         class P6 { static Object pick(Iterable<String> a) { return null; } static Object pick(List<? extends Number> b) { return null; } }
+         class P7 { static <T extends Number> Integer pick(List<T> l) { return null; } }
+         class P8 { static <T> Integer pick(Iterable<T> a, Comparable<T> b) { return null; } }
+         class P9 { static long pick(java.util.function.Supplier<String> s) { return 0L; } }
+         class T {
+           void m(List<String> ls, List<?> lw, Iterable<String> it, Comparable<?> cmp) {
+             Object a = /*T*/ P5.pick(ls);
+             Object b = /*T*/ P6.pick(null);
+             Object c = /*T*/ P7.pick(lw);
+             Object d = /*T*/ P8.pick(it, cmp);
+             Object e = /*T*/ P9.pick(() -> 1);
+           } }",
+    );
+    // the only candidate does not fit; ambiguous with null; the capture of `?`
+    // is no Number; a capture equals no String; `() -> 1` supplies no String
+    assert_eq!(t, vec!["?unknown"; 5]);
 }
