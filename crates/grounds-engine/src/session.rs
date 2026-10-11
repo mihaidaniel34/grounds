@@ -272,7 +272,7 @@ impl Session {
         let baseline = if opts.use_baseline { Baseline::load(self.root()) } else { Baseline::default() };
         let base: FxHashSet<&str> = baseline.fingerprints.iter().map(|s| s.as_str()).collect();
         let before = findings.len();
-        findings.retain(|f| !base.contains(f.fingerprint.as_str()));
+        findings.retain(|f| !f.in_baseline(&base));
         report.suppressed_by_baseline = before - findings.len();
         findings.retain(|f| f.severity <= opts.min_severity);
         findings.sort_by(|a, b| (a.severity, &a.path, a.line).cmp(&(b.severity, &b.path, b.line)));
@@ -286,7 +286,7 @@ impl Session {
             let deps = self.dependents(&names, &exclude);
             if !deps.is_empty() {
                 let mut pending = self.analyze(&self.resolution_rules, &deps);
-                pending.retain(|f| !base.contains(f.fingerprint.as_str()));
+                pending.retain(|f| !f.in_baseline(&base));
                 pending.sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
                 report.pending = pending;
             }

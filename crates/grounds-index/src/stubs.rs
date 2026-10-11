@@ -246,7 +246,7 @@ pub fn extract_with(file: &ParsedFile, lombok: &crate::lombok::LombokConfig) -> 
                         // `import module java.base;` imports the module's exported
                         // packages on demand; added after the file's own imports,
                         // which shadow them (JEP 511)
-                        module_imports.extend(module_packages(&path).iter().map(|p| Import { path: Arc::from(*p), is_static: false, on_demand: true }));
+                        module_imports.extend(module_packages(&path).into_iter().map(|p| Import { path: Arc::from(p), is_static: false, on_demand: true }));
                     } else {
                         stub.imports.push(Import { path: Arc::from(path.as_str()), is_static, on_demand });
                     }
@@ -1108,31 +1108,23 @@ impl<'s> Extractor<'s> {
     }
 }
 
-/// Exported packages of the JDK modules a module import commonly names
-/// (unknown modules import nothing, so their types stay unresolved).
-fn module_packages(module: &str) -> &'static [&'static str] {
-    match module {
-        "java.base" => &[
-            "java.io", "java.lang", "java.lang.annotation", "java.lang.classfile", "java.lang.classfile.attribute",
-            "java.lang.classfile.constantpool", "java.lang.classfile.instruction", "java.lang.constant", "java.lang.foreign",
-            "java.lang.invoke", "java.lang.module", "java.lang.ref", "java.lang.reflect", "java.lang.runtime", "java.math",
-            "java.net", "java.net.spi", "java.nio", "java.nio.channels", "java.nio.channels.spi", "java.nio.charset",
-            "java.nio.charset.spi", "java.nio.file", "java.nio.file.attribute", "java.nio.file.spi", "java.security",
-            "java.security.cert", "java.security.interfaces", "java.security.spec", "java.text", "java.text.spi", "java.time",
-            "java.time.chrono", "java.time.format", "java.time.temporal", "java.time.zone", "java.util", "java.util.concurrent",
-            "java.util.concurrent.atomic", "java.util.concurrent.locks", "java.util.function", "java.util.jar",
-            "java.util.random", "java.util.regex", "java.util.spi", "java.util.stream", "java.util.zip", "javax.crypto",
-            "javax.crypto.interfaces", "javax.crypto.spec", "javax.net", "javax.net.ssl", "javax.security.auth",
-            "javax.security.auth.callback", "javax.security.auth.login", "javax.security.auth.spi", "javax.security.auth.x500",
-            "javax.security.cert",
-        ],
-        "java.sql" => &["java.sql", "javax.sql"],
-        "java.net.http" => &["java.net.http"],
-        "java.logging" => &["java.util.logging"],
-        "java.desktop" => &["java.awt", "java.awt.event", "java.awt.image", "java.beans", "javax.swing", "javax.imageio"],
-        "java.xml" => &["javax.xml", "javax.xml.parsers", "javax.xml.transform", "javax.xml.xpath", "javax.xml.stream", "org.w3c.dom", "org.xml.sax"],
-        _ => &[],
+/// Packages imported by `import module X;`: X's exported packages and those
+/// of the modules it requires transitively (JEP 511). Unknown (non-JDK)
+/// modules import nothing, so their types stay unresolved.
+fn module_packages(module: &str) -> Vec<&'static str> {
+    let mut out = Vec::new();
+    let mut seen: Vec<&str> = Vec::new();
+    let mut stack = vec![module.to_string()];
+    while let Some(m) = stack.pop() {
+        let Some((name, exports, transitive)) = crate::jdk_modules::JDK_MODULES.iter().find(|(n, _, _)| *n == m) else { continue };
+        if seen.contains(name) {
+            continue;
+        }
+        seen.push(name);
+        out.extend(exports.iter().copied());
+        stack.extend(transitive.iter().map(|t| t.to_string()));
     }
+    out
 }
 
 /// A method body that can only end by throwing: its last statement is a

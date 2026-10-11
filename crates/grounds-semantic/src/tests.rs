@@ -294,3 +294,12 @@ fn module_imports_resolve_types() {
     );
     assert_eq!(t, vec!["java.util.ArrayList<java.lang.String>", "java.nio.file.Path"]);
 }
+
+#[test]
+fn module_imports_include_transitive_exports() {
+    let t = types_of(
+        "import module java.sql;
+         class T { void m() { Object a = /*T*/ java.util.logging.Logger.getLogger(\"x\"); Object b = /*T*/ Logger.getLogger(\"x\"); } }",
+    );
+    assert_eq!(t, vec!["java.util.logging.Logger", "java.util.logging.Logger"]);
+}

@@ -24,6 +24,11 @@ pub struct Finding {
     pub message: String,
     /// Stable identity across unrelated edits (line shifts).
     pub fingerprint: String,
+    /// The fingerprint 0.0.5 and earlier computed, when it differs (member
+    /// paths of methods with qualified-type varargs parameters): baselines
+    /// written by those versions still match.
+    #[serde(skip)]
+    pub legacy_fingerprint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fix: Option<Fix>,
     /// Byte range, for fix application.
@@ -101,11 +106,16 @@ fn to_finding(project: &Project, pf: &ParsedFile, fm: &FileModel, rel: &str, d: 
     // the member with its parameter types (`Outer.Inner.f(String,int)`), so
     // the same statement in another class or overload is a different finding
     let node = pf.root().descendant_for_byte_range(d.range.start as usize, d.range.start as usize);
-    let member = node.map(|n| member_path(n, fm.src)).unwrap_or_default();
+    let member = node.map(|n| member_path(n, fm.src, false)).unwrap_or_default();
     let base = format!("{}|{}|{}|{}", d.rule, rel, member, line_text);
     let n = seen.entry(base.clone()).or_insert(0);
     *n += 1;
     let fp = format!("{:016x}", xxhash_rust::xxh3::xxh3_64(format!("{base}|{n}").as_bytes()));
+    let legacy_member = node.map(|n| member_path(n, fm.src, true)).unwrap_or_default();
+    let legacy_fingerprint = (legacy_member != member).then(|| {
+        let legacy_base = format!("{}|{}|{}|{}", d.rule, rel, legacy_member, line_text);
+        format!("{:016x}", xxhash_rust::xxh3::xxh3_64(format!("{legacy_base}|{n}").as_bytes()))
+    });
     let category = grounds_rules::meta_of(d.rule).map(|m| m.category.as_str()).unwrap_or("bug");
     Finding {
         path: rel.to_string(),
@@ -118,6 +128,7 @@ fn to_finding(project: &Project, pf: &ParsedFile, fm: &FileModel, rel: &str, d: 
         category,
         message: d.message,
         fingerprint: fp,
+        legacy_fingerprint,
         fix: d.fix,
         start: d.range.start,
         end: d.range.end,
@@ -162,11 +173,20 @@ pub fn expand_paths(project: &Project, paths: &[PathBuf]) -> Vec<PathBuf> {
     out
 }
 
+impl Finding {
+    /// Whether a baseline entry (current or legacy fingerprint) covers it.
+    pub fn in_baseline(&self, base: &rustc_hash::FxHashSet<&str>) -> bool {
+        base.contains(self.fingerprint.as_str()) || self.legacy_fingerprint.as_deref().is_some_and(|l| base.contains(l))
+    }
+}
+
 pub fn shared_key(p: &Path) -> Arc<str> {
     path_key(p)
 }
 
-fn member_path(n: grounds_syntax::Node, src: &str) -> String {
+/// `legacy`: the member path of 0.0.5 and earlier, whose varargs parameter
+/// type came from a child-kind search that missed qualified types.
+fn member_path(n: grounds_syntax::Node, src: &str, legacy: bool) -> String {
     let mut parts: Vec<String> = Vec::new();
     let mut cur = Some(n);
     while let Some(a) = cur {
@@ -183,7 +203,8 @@ fn member_path(n: grounds_syntax::Node, src: &str) -> String {
                             .filter(|k| matches!(k.kind(), "formal_parameter" | "spread_parameter"))
                             .map(|k| {
                                 // the type node is not a field of spread parameters
-                                let ty = k.field("type").or_else(|| k.kids().into_iter().find(|t| t.kind().ends_with("type") || t.kind() == "type_identifier"));
+                                let fallback = || k.kids().into_iter().find(|t| t.kind().ends_with("type") || t.kind() == "type_identifier");
+                                let ty = if legacy && k.kind() == "spread_parameter" { fallback() } else { k.field("type").or_else(fallback) };
                                 let mut t: String = ty.map(|t| t.text(src).split_whitespace().collect()).unwrap_or_default();
                                 // `Object p[]`: dimensions after the name
                                 if let Some(d) = k.field("dimensions").or_else(|| k.kid_of_kind("variable_declarator").and_then(|v| v.field("dimensions"))) {
@@ -206,4 +227,19 @@ fn member_path(n: grounds_syntax::Node, src: &str) -> String {
     }
     parts.reverse();
     parts.join(".")
+}
+
+#[cfg(test)]
+mod fingerprint_tests {
+    use super::member_path;
+    use grounds_syntax::{NodeExt, ParsedFile};
+
+    #[test]
+    fn legacy_member_path_drops_qualified_varargs_type() {
+        let src = "class T { boolean same(java.lang.String... xs) { return xs[0] == \"x\"; } }";
+        let pf = ParsedFile::parse(src);
+        let ret = pf.root().descendants().find(|n| n.kind() == "return_statement").unwrap();
+        assert_eq!(member_path(ret, src, false), "T.same(java.lang.String...)");
+        assert_eq!(member_path(ret, src, true), "T.same(...)");
+    }
 }

@@ -4,6 +4,7 @@
 pub mod binary;
 pub mod hierarchy;
 pub mod index;
+pub mod jdk_modules;
 pub mod lombok;
 pub mod model;
 pub mod stubs;
