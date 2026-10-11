@@ -1,0 +1,74 @@
+name: release
+
+# Push a tag `vX.Y.Z`: builds the binaries, checksums them and attaches them
+# to the GitHub release of that tag (created as a draft if it does not exist;
+# release notes are written separately).
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-14, target: aarch64-apple-darwin }
+          - { os: macos-14, target: x86_64-apple-darwin }
+          - { os: ubuntu-latest, target: x86_64-unknown-linux-musl }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-musl }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      # static Linux binaries: the C parts (tree-sitter) built against musl too
+      - if: contains(matrix.target, 'linux-musl')
+        run: sudo apt-get update -q && sudo apt-get install -yq musl-tools
+      - name: build
+        run: cargo build --release --locked -p grounds-cli --target ${{ matrix.target }}
+        env:
+          CC_x86_64_unknown_linux_musl: musl-gcc
+          CC_aarch64_unknown_linux_musl: musl-gcc
+          CARGO_PROFILE_RELEASE_STRIP: debuginfo
+      - name: check the version
+        if: matrix.target != 'x86_64-apple-darwin'
+        shell: bash
+        run: |
+          got=$(target/${{ matrix.target }}/release/grounds --version)
+          [ "$got" = "grounds ${GITHUB_REF_NAME#v}" ] || { echo "binary says '$got', tag is $GITHUB_REF_NAME"; exit 1; }
+      - name: package
+        shell: bash
+        run: |
+          name=grounds-${GITHUB_REF_NAME#v}-${{ matrix.target }}
+          mkdir -p dist/$name
+          cp target/${{ matrix.target }}/release/grounds LICENSE README.md dist/$name/
+          cd dist
+          tar -czf $name.tar.gz $name
+          shasum -a 256 $name.tar.gz > $name.tar.gz.sha256
+          rm -rf $name
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh release view "$TAG" -R "$REPO" > /dev/null 2>&1 ||
+            gh release create "$TAG" -R "$REPO" --draft --title "grounds ${TAG#v}" --notes "Release notes follow."
+          gh release upload "$TAG" -R "$REPO" --clobber dist/*
