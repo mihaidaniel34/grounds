@@ -129,6 +129,20 @@ struct SarifDoc {
     prefix: String,
 }
 
+/// A relative path as a URI reference: everything but unreserved
+/// characters and `/` percent-encoded (`my app/A.java` -> `my%20app/A.java`).
+fn uri_encode(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for b in path.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~' | b'/') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
 fn level(s: Severity) -> &'static str {
     match s {
         Severity::Error => "error",
@@ -182,7 +196,7 @@ impl SarifDoc {
     fn location(&self, f: &Finding) -> serde_json::Value {
         serde_json::json!({
             "physicalLocation": {
-                "artifactLocation": { "uri": format!("{}{}", self.prefix, f.path), "uriBaseId": "%SRCROOT%" },
+                "artifactLocation": { "uri": uri_encode(&format!("{}{}", self.prefix, f.path)), "uriBaseId": "%SRCROOT%" },
                 "region": { "startLine": f.line, "startColumn": f.col.max(1), "endLine": f.end_line.max(f.line), "endColumn": f.end_col.max(1) }
             }
         })

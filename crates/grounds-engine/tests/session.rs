@@ -200,3 +200,58 @@ fn base_mode_finds_breaks_in_unchanged_files_and_writes_sarif() {
     }
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+#[test]
+fn base_mode_edge_cases() {
+    let repo = std::env::temp_dir().join(format!("grounds-base-edge-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&repo);
+    std::fs::create_dir_all(&repo).unwrap();
+    let dir = repo.join("my app");
+    write(&dir, "settings.gradle", "rootProject.name = 'demo'\n");
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    let j = |f: &str| format!("src/main/java/{f}");
+    // the same class in two files: resolution must not depend on load or swap order
+    write(&dir, &j("demo/Api.java"), "package demo;\npublic interface Api {}\n");
+    write(&dir, &j("zz/Api.java"), "package demo;\npublic interface Api { void required(); }\n");
+    write(&dir, &j("demo/C.java"), "package demo;\npublic class C implements Api {}\n");
+    // two calls on one line: one already broken at the base
+    write(&dir, &j("demo/Two.java"), "package demo;\npublic interface Two {\n    void foo();\n}\n");
+    write(&dir, &j("demo/UseTwo.java"), "package demo;\nclass UseTwo {\n    void t(Two a) { a.foo(); a.bar(); }\n}\n");
+    // same method name in two classes; only B's is called
+    write(&dir, &j("demo/A.java"), "package demo;\npublic class A {\n    public void foo() {}\n}\n");
+    write(&dir, &j("demo/B.java"), "package demo;\npublic class B {\n    public void foo() {}\n}\n");
+    write(&dir, &j("demo/UseB.java"), "package demo;\nclass UseB {\n    void t(B b) { b.foo(); }\n}\n");
+    write(&dir, &j("demo/I.java"), "package demo;\npublic interface I {\n}\n");
+    write(&dir, &j("demo/Impl.java"), "package demo;\npublic class Impl implements I {}\n");
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["config", "diff.relative", "true"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "init"]);
+    git(&repo, &["checkout", "-qb", "feature"]);
+    write(&dir, &j("demo/Api.java"), "package demo;\n// a comment\npublic interface Api {}\n");
+    write(&dir, &j("demo/Two.java"), "package demo;\npublic interface Two {\n    void bar();\n}\n");
+    write(&dir, &j("demo/A.java"), "package demo;\npublic class A {\n    public void foo2() {}\n}\n");
+    write(&dir, &j("demo/B.java"), "package demo;\npublic class B {\n    public void foo2() {}\n}\n");
+    write(&dir, &j("demo/I.java"), "package demo;\npublic interface I {\n    void required();\n}\n");
+    git(&repo, &["commit", "-qam", "feature"]);
+
+    let mut s = Session::open(&dir).unwrap();
+    let mb = grounds_engine::git::merge_base(&dir, "main").unwrap();
+    let opts = CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: Some(mb) };
+    let r = s.check(&opts);
+    let mut pending: Vec<(&str, u32, &str)> = r.pending.iter().map(|f| (f.path.rsplit('/').next().unwrap(), f.line, f.rule)).collect();
+    pending.sort();
+    assert_eq!(pending, vec![("Impl.java", 2, "unimplemented-abstract-method"), ("UseB.java", 3, "unresolved-method"), ("UseTwo.java", 3, "unresolved-method")], "{:?}", r.pending);
+    let mut breaks: Vec<(&str, u32)> = r.breaks.iter().map(|b| (b.finding.path.rsplit('/').next().unwrap(), b.finding.line)).collect();
+    breaks.sort();
+    assert_eq!(breaks, vec![("B.java", 3), ("I.java", 3), ("Two.java", 3)], "{:?}", r.breaks);
+
+    // the swap left duplicate-class resolution as it was
+    let c = CheckOptions { mode: Mode::Checkpoint, files: vec![dir.join(j("demo/C.java"))], all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None };
+    assert!(s.check(&c).findings.iter().all(|f| f.rule != "unimplemented-abstract-method"));
+
+    let sarif: serde_json::Value = serde_json::from_str(&grounds_engine::report::sarif_report(&r, &dir)).unwrap();
+    let uris: Vec<&str> = sarif["runs"][0]["results"].as_array().unwrap().iter().map(|x| x["locations"][0]["physicalLocation"]["artifactLocation"]["uri"].as_str().unwrap()).collect();
+    assert!(uris.contains(&"my%20app/src/main/java/demo/UseB.java"), "{uris:?}");
+    let _ = std::fs::remove_dir_all(&repo);
+}

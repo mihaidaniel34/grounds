@@ -291,7 +291,9 @@ since it forked from `<ref>` (the merge base), committed or not:
 
 `--format sarif` writes SARIF 2.1.0 with paths from the repository root
 (also when `--root` is a subdirectory). Exit codes: 0 nothing found, 2
-findings, 1 failure (for example no merge base in a shallow clone).
+findings, 1 failure (for example no merge base in a shallow clone);
+`--exit-zero` turns "findings" into 0 so a job that only uploads them does
+not fail, while a real failure still does.
 
 GitHub Actions, as a non-blocking job uploading to code scanning:
 
@@ -307,15 +309,16 @@ jobs:
       - uses: actions/setup-java@v4       # grounds reads the JDK's API signatures
         with: { distribution: temurin, java-version: 21 }
       - run: ./gradlew compileJava -q     # dependency jars into the Gradle cache (or: grounds classpath)
-      - run: cargo install --locked --git https://github.com/mihaidaniel34/grounds --tag v0.0.7 grounds-cli
-      - run: grounds changed --base origin/${{ github.base_ref }} --no-daemon --format sarif > grounds.sarif || [ $? -eq 2 ]
+      - run: cargo install --locked --git https://github.com/mihaidaniel34/grounds --tag v0.0.8 grounds-cli
+      - run: grounds changed --base "origin/$BASE_REF" --no-daemon --format sarif --exit-zero > grounds.sarif
+        env: { BASE_REF: "${{ github.base_ref }}" }   # never interpolate a branch name into the script
       - uses: github/codeql-action/upload-sarif@v3
         with: { sarif_file: grounds.sarif, category: grounds }
 ```
 
 With reviewdog instead, keep grounds' scope rather than reviewdog's diff
 filter, which would drop the breaks in unchanged files:
-`grounds changed --base origin/main --no-daemon --format sarif | reviewdog -f=sarif -reporter=github-pr-check -filter-mode=nofilter`.
+`grounds changed --base origin/main --no-daemon --format sarif --exit-zero | reviewdog -f=sarif -reporter=github-pr-check -filter-mode=nofilter`.
 
 There is no Linux release binary yet; `cargo install` builds one in a few
 minutes (cache `~/.cargo` between runs).

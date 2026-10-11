@@ -35,7 +35,7 @@ pub fn merge_base(root: &Path, rev: &str) -> Option<String> {
 pub fn changed_files_since(root: &Path, rev: &str) -> (Vec<PathBuf>, Vec<PathBuf>) {
     let Some(top) = toplevel(root) else { return (Vec::new(), Vec::new()) };
     let (mut changed, mut deleted) = (Vec::new(), Vec::new());
-    if let Some(out) = git(root, &["diff", "--name-status", "--no-renames", "-z", rev]) {
+    if let Some(out) = git(root, &["diff", "--name-status", "--no-renames", "--no-relative", "-z", rev]) {
         let mut parts = out.split('\0').filter(|p| !p.is_empty());
         while let (Some(status), Some(path)) = (parts.next(), parts.next()) {
             if status.starts_with('D') {
@@ -122,7 +122,7 @@ pub fn hunks_since(root: &Path, files: &[PathBuf], rev: &str) -> BTreeMap<PathBu
             out.insert(f.clone(), None);
             continue;
         }
-        let Some(diff) = git(root, &["diff", "-U0", "--no-color", "--no-ext-diff", rev, "--", &f.to_string_lossy()]) else {
+        let Some(diff) = git(root, &["diff", "-U0", "--no-color", "--no-ext-diff", "--no-relative", rev, "--", &f.to_string_lossy()]) else {
             out.insert(f.clone(), None);
             continue;
         };

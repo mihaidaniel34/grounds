@@ -168,7 +168,14 @@ impl Index {
     pub fn set_file(&mut self, path: Arc<str>, stub: Arc<FileStub>) {
         self.remove_file_inner(&path);
         for (i, c) in stub.classes.iter().enumerate() {
-            self.classes.entry(c.name.clone()).or_insert((path.clone(), i as u32));
+            // a class defined in several files resolves to the smallest path,
+            // whatever order files were loaded, refreshed or swapped in
+            match self.classes.get(&c.name) {
+                Some((p, _)) if **p <= *path => {}
+                _ => {
+                    self.classes.insert(c.name.clone(), (path.clone(), i as u32));
+                }
+            }
             *self.defs.entry(c.name.clone()).or_insert(0) += 1;
         }
         let mut p: &str = &stub.package;
@@ -201,12 +208,10 @@ impl Index {
                 }
                 if self.classes.get(&c.name).is_some_and(|(p, _)| &**p == path) {
                     self.classes.remove(&c.name);
-                    // another file may define the same class name
-                    for (fp, st) in &self.files {
-                        if let Some(i) = st.classes.iter().position(|x| x.name == c.name) {
-                            self.classes.insert(c.name.clone(), (fp.clone(), i as u32));
-                            break;
-                        }
+                    // another file may define the same class name: the smallest path
+                    let next = self.files.iter().filter_map(|(fp, st)| st.classes.iter().position(|x| x.name == c.name).map(|i| (fp, i))).min_by(|a, b| a.0.cmp(b.0));
+                    if let Some((fp, i)) = next {
+                        self.classes.insert(c.name.clone(), (fp.clone(), i as u32));
                     }
                 }
             }

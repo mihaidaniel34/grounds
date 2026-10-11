@@ -70,6 +70,10 @@ enum Cmd {
         /// in unchanged files that its changes broke (for CI).
         #[arg(long)]
         base: Option<String>,
+        /// Exit 0 when findings were reported (CI uploading them elsewhere);
+        /// failures still exit non-zero.
+        #[arg(long)]
+        exit_zero: bool,
         /// Do not use or start the background daemon.
         #[arg(long)]
         no_daemon: bool,
@@ -201,7 +205,7 @@ fn main() -> anyhow::Result<()> {
             let code = check(&root, &paths, &format, rules, min_severity, max, stats, style)?;
             std::process::exit(code);
         }
-        Cmd::Changed { files, root, edit, all_lines, no_baseline, max, min_severity, json, format, base, no_daemon } => {
+        Cmd::Changed { files, root, edit, all_lines, no_baseline, max, min_severity, json, format, base, exit_zero, no_daemon } => {
             let root = find_root(root);
             if !matches!(format.as_str(), "text" | "json" | "sarif") {
                 anyhow::bail!("unknown --format {format} (text, json or sarif)");
@@ -226,7 +230,7 @@ fn main() -> anyhow::Result<()> {
             if resp.stdout.is_empty() && resp.code == 0 && !json && !sarif {
                 eprintln!("grounds: no new problems in changed code");
             }
-            std::process::exit(resp.code);
+            std::process::exit(if exit_zero && resp.code == 2 { 0 } else { resp.code });
         }
         Cmd::Baseline { files, root, merge } => {
             let root = find_root(root);

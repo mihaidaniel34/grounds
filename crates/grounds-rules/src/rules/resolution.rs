@@ -440,7 +440,7 @@ impl Rule for UnimplementedAbstractMethod {
             // implemented by this class, a superclass, or an interface default method?
             let implemented = implements(cx, &cls, &m.method.name, m.method.params.len());
             if !implemented {
-                missing.push(format!("{}.{}", simple_name_of(&m.owner), m.method.signature_string()));
+                missing.push(format!("`{}.{}`", simple_name_of(&m.owner), m.method.signature_string()));
             }
         }
         if !missing.is_empty() {

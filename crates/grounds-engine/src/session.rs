@@ -372,13 +372,15 @@ impl Session {
             install(self, f, old);
         }
         self.project.rebuild_di();
-        let before: FxHashSet<String> = self.analyze(&rules, &others).into_iter().map(|f| f.fingerprint).collect();
+        // the fingerprint names the line, not the call on it: `a.foo(); a.bar();`
+        // breaking foo while fixing bar keeps the fingerprint, not the column
+        let before: FxHashSet<(String, u32)> = self.analyze(&rules, &others).into_iter().map(|f| (f.fingerprint, f.col)).collect();
         for f in &touched {
             let cur = std::fs::read_to_string(f).ok();
             install(self, f, cur);
         }
         self.project.rebuild_di();
-        now.into_iter().filter(|f| !before.contains(&f.fingerprint)).collect()
+        now.into_iter().filter(|f| !before.contains(&(f.fingerprint.clone(), f.col))).collect()
     }
 
     /// Anchor each broken place in `pending` on the changed line that caused
@@ -391,28 +393,23 @@ impl Session {
             return Vec::new();
         }
         let hunks = git::hunks_since(self.root(), changed, rev);
-        // (file, simple name, is member, line in the current version)
-        let mut removed: Vec<(&PathBuf, String, bool, u32)> = Vec::new();
-        let mut added: Vec<(&PathBuf, String, bool, u32)> = Vec::new();
+        // (file, simple name, declaring class for members, line in the current version)
+        let mut removed: Vec<(&PathBuf, String, Option<String>, u32)> = Vec::new();
+        let mut added: Vec<(&PathBuf, String, Option<String>, u32)> = Vec::new();
         let mut first: FxHashMap<&PathBuf, u32> = FxHashMap::default();
         let mut classes: Vec<(&PathBuf, String)> = Vec::new();
-        let decls = |stub: &FileStub, pf: &ParsedFile| -> Vec<(String, bool, u32)> {
-            let line = |(a, _): (u32, u32)| Some(pf.lines.line_of(a) as u32 + 1);
+        let decls = |stub: &FileStub, pf: &ParsedFile| -> Vec<(String, Option<String>, u32)> {
+            let line = |(a, _): (u32, u32)| pf.lines.line_of(a) as u32 + 1;
             let mut out = Vec::new();
             for c in &stub.classes {
-                if let Some(l) = line(c.range) {
-                    out.push((simple_name_of(&c.name).to_string(), false, l));
-                }
+                let owner = simple_name_of(&c.name).to_string();
+                out.push((owner.clone(), None, line(c.range)));
                 for m in &c.methods {
-                    if let Some(l) = line(m.range) {
-                        let n = if &*m.name == "<init>" { simple_name_of(&c.name).to_string() } else { m.name.to_string() };
-                        out.push((n, true, l));
-                    }
+                    let n = if &*m.name == "<init>" { owner.clone() } else { m.name.to_string() };
+                    out.push((n, Some(owner.clone()), line(m.range)));
                 }
                 for fl in &c.fields {
-                    if let Some(l) = line(fl.range) {
-                        out.push((fl.name.to_string(), true, l));
-                    }
+                    out.push((fl.name.to_string(), Some(owner.clone()), line(fl.range)));
                 }
             }
             out
@@ -424,23 +421,23 @@ impl Session {
             if let Some(text) = git::version_at(self.root(), rev, f) {
                 let pf = ParsedFile::parse(text);
                 let stub = self.project.extract(f, &pf);
-                for (n, member, l) in decls(&stub, &pf) {
-                    if !member {
+                for (n, owner, l) in decls(&stub, &pf) {
+                    if owner.is_none() {
                         classes.push((f, n.clone()));
                     }
                     if let Some(now) = git::Hunk::new_line_for(h, l) {
-                        removed.push((f, n, member, now));
+                        removed.push((f, n, owner, now));
                     }
                 }
             }
             if let (Some(stub), Ok(text)) = (self.project.index.file(&path_key(f)), std::fs::read_to_string(f)) {
                 let pf = ParsedFile::parse(text);
-                for (n, member, l) in decls(stub, &pf) {
-                    if !member {
+                for (n, owner, l) in decls(stub, &pf) {
+                    if owner.is_none() {
                         classes.push((f, n.clone()));
                     }
                     if h.iter().any(|x| x.new_count > 0 && l >= x.new_start && l < x.new_start + x.new_count) {
-                        added.push((f, n, member, l));
+                        added.push((f, n, owner, l));
                     }
                 }
             }
@@ -452,11 +449,20 @@ impl Session {
         let mut groups: std::collections::BTreeMap<(String, u32), Vec<usize>> = Default::default();
         for (i, p) in pending.iter().enumerate() {
             let names = names_of(&p.message);
-            let pick = |v: &[(&PathBuf, String, bool, u32)], member: bool| v.iter().find(|(_, n, m, _)| *m == member && names.contains(n)).map(|(f, _, _, l)| ((*f).clone(), *l));
-            let anchor = pick(&removed, true)
-                .or_else(|| pick(&added, true))
-                .or_else(|| pick(&removed, false))
-                .or_else(|| pick(&added, false))
+            // a member of a class the message names (`B` has no method `foo`) before
+            // a same-named member elsewhere, then classes
+            let pick = |v: &[(&PathBuf, String, Option<String>, u32)], want: fn(&Option<String>, &FxHashSet<String>) -> bool| {
+                v.iter().find(|(_, n, o, _)| names.contains(n) && want(o, &names)).map(|(f, _, _, l)| ((*f).clone(), *l))
+            };
+            let owned: fn(&Option<String>, &FxHashSet<String>) -> bool = |o, names| o.as_ref().is_some_and(|o| names.contains(o));
+            let member: fn(&Option<String>, &FxHashSet<String>) -> bool = |o, _| o.is_some();
+            let class: fn(&Option<String>, &FxHashSet<String>) -> bool = |o, _| o.is_none();
+            let anchor = pick(&removed, owned)
+                .or_else(|| pick(&added, owned))
+                .or_else(|| pick(&removed, member))
+                .or_else(|| pick(&added, member))
+                .or_else(|| pick(&removed, class))
+                .or_else(|| pick(&added, class))
                 .or_else(|| classes.iter().find(|(_, n)| names.contains(n)).and_then(|(f, _)| first.get(f).map(|l| ((*f).clone(), *l))));
             if let Some((f, l)) = anchor {
                 let rel = f.strip_prefix(self.root()).unwrap_or(&f).to_string_lossy().to_string();
