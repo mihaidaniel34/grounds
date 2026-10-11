@@ -9,3 +9,8 @@ class A {
         boolean ok = f.mkdir();
     }
 }
+class MockSetup {
+    void t(java.util.concurrent.BlockingQueue<String> queue) {
+        org.mockito.Mockito.verify(queue).offer("x");
+    }
+}

@@ -18,8 +18,9 @@ pub enum EdgeKind<'t> {
     /// Taken when the condition evaluated to true.
     True(Node<'t>),
     False(Node<'t>),
-    /// Exceptional control flow (to a catch, finally or exceptional exit).
-    Exception,
+    /// Exceptional control flow (to a catch, finally or exceptional exit),
+    /// with the element that throws when it is a single one.
+    Exception(Option<Node<'t>>),
 }
 
 #[derive(Clone, Debug, Default)]
@@ -92,7 +93,7 @@ impl<'t, 's> Builder<'t, 's> {
             // here so the solver does not apply `n` or anything after it
             // (`x = f()` where f throws never assigns x)
             let before = self.cur;
-            self.exceptional_edges(before);
+            self.exceptional_edges_from(before, Some(n));
             let next = self.new_block();
             self.edge(before, next, EdgeKind::Normal);
             self.cur = next;
@@ -101,7 +102,12 @@ impl<'t, 's> Builder<'t, 's> {
         self.blocks[c].elems.push(n);
     }
     fn exceptional_edges(&mut self, from: BlockId) {
-        let targets: Vec<BlockId> = match self.tries.last() {
+        self.exceptional_edges_from(from, None)
+    }
+    fn exceptional_edges_from(&mut self, from: BlockId, thrower: Option<Node<'t>>) {
+        // a try-with-resources without catch/finally handles nothing itself:
+        // the exception goes on to the enclosing handlers
+        let targets: Vec<BlockId> = match self.tries.iter().rev().find(|t| !t.catches.is_empty() || t.finally.is_some()) {
             Some(t) if !t.catches.is_empty() => {
                 let mut v = t.catches.clone();
                 if let Some(f) = t.finally {
@@ -113,7 +119,7 @@ impl<'t, 's> Builder<'t, 's> {
             _ => vec![self.exc_exit],
         };
         for t in targets {
-            self.edge(from, t, EdgeKind::Exception);
+            self.edge(from, t, EdgeKind::Exception(thrower));
         }
     }
     /// Start a fresh (unreachable) block after an abrupt completion.

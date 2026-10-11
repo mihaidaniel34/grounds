@@ -23,3 +23,36 @@ class A {
         q.trim();
     }
 }
+class Guards {
+    void ternary(java.util.Map<String, String> configs) {
+        java.util.Map<String, String> t = configs == null ? new java.util.HashMap<>() : configs;
+        t.size();
+    }
+    void alias(Integer pathId, Integer bodyId) {
+        boolean both = pathId != null && bodyId != null;
+        if (both && !pathId.equals(bodyId)) { }
+    }
+    void aliasNotEnough(Integer a, Integer b) {
+        boolean either = a != null || b != null;
+        if (a == null) { }
+        if (either) a.intValue(); // expect
+    }
+    void assertj(String s) {
+        if (s == null) { }
+        org.assertj.core.api.Assertions.assertThat(s).isNotNull();
+        s.trim();
+    }
+}
+class StaleAlias {
+    void m() {
+        String x = "ok";
+        boolean present = x != null;
+        x = null;
+        if (present) x.length(); // expect
+    }
+    void soft(org.assertj.core.api.SoftAssertions softly) {
+        String s = null;
+        softly.assertThat(s).isNotNull();
+        s.length(); // expect
+    }
+}

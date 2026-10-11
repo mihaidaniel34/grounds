@@ -250,6 +250,30 @@ declare_rule!(OptionalGetWithoutCheck {
     description: "`get()` throws NoSuchElementException on an empty Optional. Check `isPresent()` first, or better use `orElse`, `orElseThrow` with a meaningful exception, `map` or `ifPresent`.",
 });
 
+/// Inside a lambda, a captured effectively-final Optional known to be
+/// present where the lambda is created (`if (!o.isPresent()) return; run(() -> o.get())`).
+fn checked_before_lambda<'t>(cx: &Ctx<'_, 't>, callable: Node<'t>, local: usize) -> bool {
+    if callable.kind() != "lambda_expression" || !grounds_flow::analyses::is_effectively_final(cx.fm, local) {
+        return false;
+    }
+    let d = &cx.fm.binder.decls[local];
+    if callable.byte_range().contains(&d.decl_node.start_byte()) {
+        return false; // declared inside the lambda
+    }
+    let Some(outer) = callable.parent().and_then(|p| cx.owning_callable(p)) else { return false };
+    let cfg = cx.cfg(outer);
+    let res = cx.optional_presence(outer);
+    let oa = OptionalPresence { fm: cx.fm };
+    let mut present = false;
+    res.for_each_before(&cfg, &oa, |e, f| {
+        if e == callable && f.contains(&local) {
+            present = true;
+        }
+    });
+    // nested lambdas: known present where the enclosing lambda is created
+    present || (outer.kind() == "lambda_expression" && checked_before_lambda(cx, outer, local))
+}
+
 impl Rule for OptionalGetWithoutCheck {
     rule_meta!();
     fn check_file<'t>(&self, cx: &mut Ctx<'_, 't>) {
@@ -263,7 +287,7 @@ impl Rule for OptionalGetWithoutCheck {
                     return;
                 }
                 if let Some(i) = oa.optional_local(e.field("object")) {
-                    if !f.contains(&i) {
+                    if !f.contains(&i) && !checked_before_lambda(cx, c, i) {
                         found.push(e);
                     }
                 }
@@ -362,7 +386,7 @@ impl Rule for InfiniteRecursion {
                 }
             }
             for (s, k) in &cfg.blocks[b].succs {
-                if matches!(k, EdgeKind::Exception) {
+                if matches!(k, EdgeKind::Exception(_)) {
                     continue;
                 }
                 stack.push(*s);

@@ -26,3 +26,20 @@ class ComputeTest extends Computing {
     @Test void own() { helper(); } // expect
     void helper() { String assertionMessage = "unused"; }
 }
+class OverloadTest {
+    @Test void test() { exercise(); } // expect
+    void exercise() { inspect(1); }
+    void inspect(int x) { }
+    void inspect() { assertTrue(true); }
+}
+class FirstHopTest {
+    @Test void test() { exercise(1); } // expect
+    void exercise(int x) { System.out.println(x); }
+    void exercise() { inspect(); }
+    void inspect() { assert true; }
+}
+class VarargsHelperTest {
+    @Test void none() { expectFailure("msg"); }
+    @Test void many() { expectFailure("msg", "a", "b"); }
+    private static void expectFailure(String message, String... hosts) { assertEquals(message, String.join(",", hosts)); }
+}

@@ -27,3 +27,25 @@ class A {
         return r;
     }
 }
+class NestedSwitch {
+    int m(int x, int op) {
+        switch (x) {
+            case 2:
+                switch (op) { case 1: return 1; default: return 2; }
+            default:
+                return 0;
+        }
+    }
+}
+class NestedDefault {
+    void m(int x, int y) {
+        switch (x) {
+            case 0:
+                switch (y) { case 0: switch (x) { default: throw new RuntimeException(); } }
+            case 1: // expect
+                work();
+                break;
+        }
+    }
+    void work() {}
+}

@@ -375,15 +375,24 @@ impl Rule for LockWithoutUnlock {
             return;
         }
         let Some(o) = n.field("object") else { return };
-        let lock_text = normalized(o, cx.src);
+        // `this.lock` and `lock` are the same field
+        let key = |x: Node<'t>| {
+            let t: String = cx.text(x).chars().filter(|c| !c.is_whitespace()).collect();
+            t.strip_prefix("this.").map(str::to_string).unwrap_or(t)
+        };
+        let lock_text = key(o);
         let Some(m) = cx.owning_callable(n) else { return };
-        // unlock in any finally block of the method
+        // unlock in any finally block of the method, or in a catch that rethrows
+        // (the lock is deliberately kept on success: check-then-hold)
         let mut finals = Vec::new();
         find_kind(m, "finally_clause", &mut finals);
+        let mut catches = Vec::new();
+        find_kind(m, "catch_clause", &mut catches);
+        finals.extend(catches.into_iter().filter(|c| c.field("body").is_some_and(|b| b.kids().last().is_some_and(|l| l.kind() == "throw_statement"))));
         let released = finals.iter().any(|f| {
             let mut calls = Vec::new();
             find_kind(*f, "method_invocation", &mut calls);
-            calls.iter().any(|c| cx.fm.call_name(*c) == Some("unlock") && c.field("object").is_some_and(|x| normalized(x, cx.src) == lock_text))
+            calls.iter().any(|c| cx.fm.call_name(*c) == Some("unlock") && c.field("object").is_some_and(|x| key(x) == lock_text))
         });
         if released {
             return;
@@ -462,7 +471,19 @@ impl Rule for VolatileIncrement {
         };
         let Some(t) = target else { return };
         if let Some(f) = cx.fm.field_ref(t.unparen()) {
-            if f.field.flags.has(Flags::VOLATILE) && !in_synchronized(n) {
+            // an explicit lock held around the update (`lock.lock(); try { x++; } finally { lock.unlock(); }`)
+            let under_lock = cx.owning_callable(n).is_some_and(|m| {
+                let mut calls = Vec::new();
+                find_kind(m, "method_invocation", &mut calls);
+                let last_before = calls.iter().filter(|c| c.start_byte() < n.start_byte() && matches!(cx.fm.call_name(**c), Some("lock" | "unlock"))).max_by_key(|c| c.start_byte());
+                // an unconditional `lock();` statement of a block enclosing the update
+                last_before.is_some_and(|c| {
+                    cx.fm.call_name(*c) == Some("lock")
+                        && c.parent().filter(|p| p.kind() == "expression_statement").and_then(|st| st.parent()).is_some_and(|b| b.kind() == "block" && b.byte_range().contains(&n.start_byte()))
+                })
+                    && calls.iter().any(|c| c.start_byte() > n.start_byte() && cx.fm.call_name(*c) == Some("unlock"))
+            });
+            if f.field.flags.has(Flags::VOLATILE) && !in_synchronized(n) && !under_lock {
                 cx.report(n, format!("`{}` is volatile but this update is not atomic", f.field.name));
             }
         }

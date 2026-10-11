@@ -13,3 +13,9 @@ class A {
     void acquire() { lock.lock(); }
     void work() {}
 }
+class LockAliases {
+    private final java.util.concurrent.locks.ReentrantLock lock = new java.util.concurrent.locks.ReentrantLock();
+    void a() { this.lock.lock(); try { work(); } finally { lock.unlock(); } }
+    void b() { lock.lock(); try { work(); } catch (RuntimeException e) { lock.unlock(); throw e; } }
+    void work() {}
+}

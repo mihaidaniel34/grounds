@@ -8,3 +8,7 @@ class B implements Cloneable {
 final class C implements Cloneable {
     @Override public C clone() { return new C(); }
 }
+class PlainPoint {
+    int x;
+    public PlainPoint clone() { PlainPoint p = new PlainPoint(); p.x = x; return p; }
+}

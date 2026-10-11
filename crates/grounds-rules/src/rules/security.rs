@@ -49,8 +49,18 @@ fn looks_like_secret_value(v: &str) -> bool {
     if ["password", "secret", "changeme", "xxx", "***", "token", "redacted", "n/a", "none", "null", "dummy"].iter().any(|p| l == *p) {
         return false;
     }
-    // looks like a key name rather than a value (e.g. "db.password", "X-Api-Token")
-    if v.contains('.') && v.chars().all(|c| c.is_ascii_lowercase() || c == '.' || c == '-' || c == '_') {
+    // looks like a key name rather than a value: "db.password", "X-Api-Token",
+    // "AccessKey.Create", ".certPrivateKeyPassword", "provisionDeviceSecret"
+    let word_chars = v.chars().all(|c| c.is_ascii_alphabetic() || c == '.' || c == '-' || c == '_');
+    if word_chars && (v.contains('.') || v.contains('-')) {
+        return false;
+    }
+    let humps = v.chars().zip(v.chars().skip(1)).filter(|(a, b)| a.is_ascii_lowercase() && b.is_ascii_uppercase()).count();
+    if word_chars && humps >= 2 {
+        return false;
+    }
+    // HTTP header names used as constants
+    if ["authorization", "proxy-authorization", "cookie", "set-cookie", "www-authenticate"].contains(&l.as_str()) {
         return false;
     }
     true
@@ -99,7 +109,7 @@ declare_rule!(WeakHash {
     id: "weak-hash-algorithm",
     name: "Weak hashing algorithm",
     category: Security,
-    severity: Warning,
+    severity: Info,
     sources: ["sonar:S4790", "sonar:S2070", "spotbugs:WEAK_MESSAGE_DIGEST_MD5", "spotbugs:WEAK_MESSAGE_DIGEST_SHA1"],
     kinds: ["method_invocation"],
     description: "MD2, MD4, MD5 and SHA-1 have practical collision attacks. Use SHA-256 or better (and a dedicated algorithm like bcrypt/scrypt/Argon2/PBKDF2 for passwords).",
@@ -335,14 +345,62 @@ fn dynamically_built<'t>(e: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
     match e.kind() {
         "binary_expression" => op(e) == "+" && cx.fm.constant_value(e).is_none(),
         "method_invocation" => {
-            matches!(cx.fm.call_name(e), Some("format" | "formatted" | "concat")) && cx.fm.constant_value(e).is_none()
-                || (cx.fm.call_name(e) == Some("toString") && e.field("object").is_some_and(|o| cx.type_of(o).class_name().is_some_and(|c| c.ends_with("StringBuilder") || c.ends_with("StringBuffer"))))
+            let constant = |a: &Node<'t>| a.unparen().kind() == "string_literal" || cx.fm.constant_value(*a).is_some();
+            match cx.fm.call_name(e) {
+                // String.format("...", constants...) and "...".formatted(constants...)
+                Some("format" | "formatted" | "concat") => {
+                    // `user.concat(";")`: the receiver is part of the result
+                    let receiver_constant = e.field("object").is_none_or(|o| cx.fm.is_type_name(o) || constant(&o));
+                    cx.fm.constant_value(e).is_none() && !(receiver_constant && cx.fm.args_of(e).iter().all(constant))
+                }
+                Some("toString") => {
+                    let Some(o) = e.field("object").map(|o| o.unparen()) else { return false };
+                    if !cx.type_of(o).class_name().is_some_and(|c| c.ends_with("StringBuilder") || c.ends_with("StringBuffer")) {
+                        return false;
+                    }
+                    // a builder fed only constants builds a constant
+                    let Some(i) = cx.fm.local_ref(o) else { return true };
+                    let d = &cx.fm.binder.decls[i];
+                    let init_dynamic = d.decl_node.field("value").is_some_and(|v| cx.fm.args_of(v.unparen()).iter().any(|a| !constant(a)));
+                    let appends_dynamic = cx.fm.binder.uses[i].iter().any(|u| {
+                        let mut cur = *u;
+                        while let Some(p) = cur.parent().filter(|p| p.kind() == "method_invocation" && p.field("object") == Some(cur)) {
+                            if matches!(cx.fm.call_name(p), Some("append" | "insert")) && cx.fm.args_of(p).iter().any(|a| !constant(a)) {
+                                return true;
+                            }
+                            cur = p;
+                        }
+                        false
+                    });
+                    init_dynamic || appends_dynamic
+                }
+                _ => false,
+            }
         }
         "identifier" => {
-            // local built by concatenation
+            // local built by concatenation: the last assignment before this use
             if let Some(i) = cx.fm.local_ref(e) {
                 let d = &cx.fm.binder.decls[i];
-                return d.decl_node.field("value").is_some_and(|v| dynamically_built(v, cx));
+                let last_assign = cx.fm.binder.uses[i]
+                    .iter()
+                    .filter(|u| u.start_byte() < e.start_byte())
+                    .filter_map(|u| u.parent().filter(|p| p.kind() == "assignment_expression" && p.field("left").map(|l| l.unparen()) == Some(*u)))
+                    .last();
+                // the last assignment decides only if it surely runs before the use
+                // (a statement of a block that encloses the use); otherwise any
+                // dynamic value may reach it
+                // `q += ";"` keeps the old value: never decisive on its own
+                let unconditional = last_assign.is_some_and(|a| {
+                    a.field("operator").is_some_and(|o| o.kind() == "=") && a.parent().filter(|p| p.kind() == "expression_statement").and_then(|st| st.parent()).is_some_and(|b| b.kind() == "block" && b.byte_range().contains(&e.start_byte()))
+                });
+                if let (true, Some(a)) = (unconditional, last_assign) {
+                    return a.field("right").is_some_and(|v| dynamically_built(v, cx));
+                }
+                let init_dynamic = d.decl_node.field("value").is_some_and(|v| dynamically_built(v, cx));
+                let any_assign_dynamic = cx.fm.binder.uses[i].iter().filter(|u| u.start_byte() < e.start_byte()).any(|u| {
+                    u.parent().filter(|p| p.kind() == "assignment_expression" && p.field("left").map(|l| l.unparen()) == Some(*u)).and_then(|p| p.field("right")).is_some_and(|v| dynamically_built(v, cx))
+                });
+                return init_dynamic || any_assign_dynamic;
             }
             false
         }
@@ -440,7 +498,7 @@ declare_rule!(CsrfDisabled {
     id: "csrf-protection-disabled",
     name: "CSRF protection disabled",
     category: Security,
-    severity: Warning,
+    severity: Info,
     sources: ["sonar:S4502", "spotbugs:SPRING_CSRF_PROTECTION_DISABLED"],
     kinds: ["method_invocation"],
     description: "Disabling CSRF protection lets other sites submit authenticated requests on behalf of your users. Only disable it for stateless, token-authenticated APIs that never use cookies.",
@@ -460,7 +518,7 @@ impl Rule for CsrfDisabled {
         if name == "csrf" {
             if let Some(a) = cx.fm.args_of(n).first() {
                 let t = cx.text(*a);
-                if t.contains("disable") {
+                if t.contains(".disable()") || t.contains("::disable") {
                     cx.report(n, "CSRF protection is disabled");
                 }
             }
@@ -503,7 +561,15 @@ impl Rule for PermissiveCors {
             }
             return;
         }
-        if args.iter().any(|a| cx.text(*a).contains("\"*\"")) {
+        // "*" passed directly, or as an element of List.of / Arrays.asList / an array
+        let star = |a: Node<'t>| cx.fm.string_value(a).as_deref() == Some("*");
+        let any_star = args.iter().any(|a| {
+            let a = a.unparen();
+            star(a)
+                || (a.kind() == "method_invocation" && matches!(cx.fm.call_name(a), Some("of" | "asList" | "singletonList")) && cx.fm.args_of(a).iter().any(|x| star(*x)))
+                || (a.kind() == "array_creation_expression" && a.descendants().any(|x| x.kind() == "string_literal" && star(x)))
+        });
+        if any_star {
             cx.report(n, "CORS configuration allows every origin");
         }
     }
@@ -560,7 +626,13 @@ impl Rule for InsecureCookie {
         }
         let Some(m) = enclosing_method_decl(n) else { return };
         let body = cx.text(m);
-        if !body.contains("setSecure(true)") || !body.contains("setHttpOnly(true)") {
+        // a cookie sent by a (test) client request, not set on a response
+        if (body.contains("setCookies(") || body.contains(".cookie(")) && !body.contains("addCookie(") {
+            return;
+        }
+        // `setSecure(https)`: decided at runtime, not forgotten
+        let set = |what: &str| body.contains(&format!("{what}(")) && !body.contains(&format!("{what}(false)"));
+        if !set("setSecure") || !set("setHttpOnly") {
             cx.report(n, "Cookie is created without both setSecure(true) and setHttpOnly(true)");
         }
     }

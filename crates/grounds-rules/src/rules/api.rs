@@ -159,13 +159,18 @@ impl Rule for IgnoredFileResult {
         if e.kind() != "method_invocation" {
             return;
         }
+        // `verify(mock).offer(x)`, `doReturn(false).when(file).delete()`: mock setup
+        let mock_setup = e.field("object").map(|o| o.unparen()).is_some_and(|o| o.kind() == "method_invocation" && matches!(cx.fm.call_name(o), Some("verify" | "when" | "given" | "then")));
+        if mock_setup {
+            return;
+        }
         if cx.fm.call_matches_any(e, &[FILE_OPS, LOCK_TRY, QUEUE_OFFER, LATCH_AWAIT, EXECUTOR_AWAIT]) {
             cx.report(e, format!("The boolean result of `{}()` is ignored; failures go unnoticed", cx.fm.call_name(e).unwrap_or("")));
         }
     }
 }
 
-const READ_METHODS: MethodMatcher = MethodMatcher::any().named(&["read", "skip", "readNBytes"]);
+const READ_METHODS: MethodMatcher = MethodMatcher::any().named(&["read", "skip"]);
 
 declare_rule!(IgnoredReadResult {
     id: "ignored-read-result",
@@ -190,7 +195,13 @@ impl Rule for IgnoredReadResult {
         }
         let Some(c) = cx.fm.select_method(e) else { return };
         let owner_ok = ["java.io.InputStream", "java.io.Reader"].iter().any(|o| cx.fm.is_subclass(&c.owner, o).is_yes());
-        if owner_ok && c.method.ret.is_prim() {
+        // the stream signatures: read(byte[]|char[]|CharBuffer[, int, int]), skip(long)
+        let first = c.method.params.first().map(|p| p.ty.clone());
+        let stream_sig = match &*c.method.name {
+            "skip" => c.method.params.len() == 1,
+            _ => first.is_some_and(|t| matches!(&t, Ty::Array(e) if matches!(**e, Ty::Prim(Prim::Byte) | Ty::Prim(Prim::Char))) || t.class_name() == Some("java.nio.CharBuffer")),
+        };
+        if owner_ok && stream_sig && c.method.ret.is_prim() {
             cx.report(e, format!("The number of bytes actually processed by `{}()` is ignored", c.method.name));
         }
     }
@@ -239,7 +250,7 @@ declare_rule!(BooleanReturnsNull {
     id: "boolean-method-returns-null",
     name: "Boolean method returns null",
     category: Bug,
-    severity: Warning,
+    severity: Info,
     sources: ["sonar:S2447", "spotbugs:NP_BOOLEAN_RETURN_NULL"],
     kinds: ["return_statement"],
     description: "A method returning `Boolean` that returns null forces callers to handle three states and throws NullPointerException when auto-unboxed in a condition.",
@@ -286,6 +297,23 @@ impl Rule for CollectionReturnsNull {
         }
         let Some(m) = enclosing_method_decl(n) else { return };
         if m.kind() != "method_declaration" || annotation_names(m, cx.src).iter().any(|a| matches!(*a, "Nullable" | "CheckForNull")) {
+            return;
+        }
+        // type-use position: `byte @Nullable []`
+        let header = &cx.src[m.start_byte()..m.field("name").map_or(m.start_byte(), |x| x.start_byte())];
+        if header.contains("Nullable") || header.contains("CheckForNull") {
+            return;
+        }
+        // unreachable after a call to a helper that always throws
+        let after_throwing_call = n.prev_named_sibling().is_some_and(|p| {
+            p.kind() == "expression_statement"
+                && p.first_kid().filter(|c| c.kind() == "method_invocation" && c.field("object").is_none()).and_then(|c| cx.fm.call_name(c)).is_some_and(|name| {
+                    owning_type_decl(m).is_some_and(|d| {
+                        methods_of(d).iter().any(|h| method_name(*h, cx.src) == name && h.field("body").is_some_and(|b| b.kids().len() == 1 && b.kids()[0].kind() == "throw_statement"))
+                    })
+                })
+        });
+        if after_throwing_call {
             return;
         }
         let rt = cx.fm.return_type_at(n);
@@ -680,7 +708,7 @@ declare_rule!(SystemExit {
     id: "system-exit",
     name: "System.exit() outside main",
     category: BadPractice,
-    severity: Warning,
+    severity: Info,
     scope: Main,
     sources: ["sonar:S1147", "spotbugs:DM_EXIT", "pmd:DoNotTerminateVM"],
     kinds: ["method_invocation"],

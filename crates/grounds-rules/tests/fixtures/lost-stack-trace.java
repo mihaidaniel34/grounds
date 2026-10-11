@@ -26,3 +26,16 @@ class A {
     boolean debug;
 }
 class UncheckedIOException2 extends RuntimeException { UncheckedIOException2(Throwable t) { super(t); } }
+class LocalStore {
+    void m() {
+        try { work(); } catch (java.io.IOException e) { Throwable last = null; last = e; throw new RuntimeException("failed"); } // expect
+    }
+    void work() throws java.io.IOException {}
+}
+class AliasCleared {
+    void m() {
+        Throwable last = null;
+        try { work(); } catch (java.io.IOException e) { last = e; last = null; throw new RuntimeException("failed", last); } // expect
+    }
+    void work() throws java.io.IOException {}
+}

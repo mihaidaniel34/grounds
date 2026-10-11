@@ -164,6 +164,57 @@ declare_rule!(IntOverflowInLongContext {
     description: "`long millis = days * 24 * 3600 * 1000;` multiplies in `int` and overflows before the result is widened. Make the first operand long: `days * 24L * 3600 * 1000`.",
 });
 
+/// Upper bound on the bits needed for the magnitude of an int expression
+/// (32 when unknown).
+fn magnitude_bits<'t>(e: Node<'t>, cx: &Ctx<'_, 't>) -> u32 {
+    let e = e.unparen();
+    // a folded compound value may already have wrapped (65536 * 65536 == 0)
+    if e.kind() != "binary_expression" {
+        if let Some(v) = cx.fm.int_value(e) {
+            return 64 - v.unsigned_abs().leading_zeros();
+        }
+    }
+    match cx.type_of(e) {
+        Ty::Prim(Prim::Byte) => return 8,
+        Ty::Prim(Prim::Short) | Ty::Prim(Prim::Char) => return 16,
+        _ => {}
+    }
+    if e.kind() == "cast_expression" {
+        return e.field("value").map_or(32, |v| magnitude_bits(v, cx));
+    }
+    if e.kind() != "binary_expression" {
+        return 32;
+    }
+    let Some((l, r)) = lr(e) else { return 32 };
+    let (bl, br) = (magnitude_bits(l, cx), magnitude_bits(r, cx));
+    let shift = || cx.fm.int_value(r).filter(|k| (0..32).contains(k)).map(|k| k as u32);
+    // bit operations bound the value only for non-negative operands
+    let nonneg_const = |x: Node<'t>| cx.fm.int_value(x.unparen()).is_some_and(|v| v >= 0);
+    let nonneg = |x: Node<'t>| {
+        let x = x.unparen();
+        nonneg_const(x) || cx.type_of(x) == Ty::Prim(Prim::Char) || (x.kind() == "binary_expression" && op(x) == "&" && lr(x).is_some_and(|(a, b)| nonneg_const(a) || nonneg_const(b)))
+    };
+    match op(e) {
+        // `x & 0x7F` keeps at most the mask's bits; a negative mask keeps all
+        "&" => match (nonneg_const(l), nonneg_const(r)) {
+            (true, _) => bl,
+            (_, true) => br,
+            _ if nonneg(l) && nonneg(r) => bl.min(br),
+            _ => 32,
+        },
+        "|" | "^" if nonneg(l) && nonneg(r) => bl.max(br),
+        "|" | "^" => 32,
+        // a negative value shifted right (sign-extended) stays large
+        ">>" | ">>>" if !nonneg(l) => 32,
+        "+" | "-" => (bl.max(br) + 1).min(32),
+        "*" => (bl + br).min(32),
+        "<<" => shift().map_or(32, |k| (bl + k).min(32)),
+        ">>" | ">>>" => shift().map_or(32, |k| bl.saturating_sub(k)),
+        "/" | "%" => bl,
+        _ => 32,
+    }
+}
+
 impl Rule for IntOverflowInLongContext {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
@@ -193,6 +244,10 @@ impl Rule for IntOverflowInLongContext {
         let Some((l, r)) = lr(n) else { return };
         // at least one non-constant operand, or a constant that overflows
         if cx.fm.constant_value(l).is_some() && cx.fm.constant_value(r).is_some() && !overflows_i32(n, cx) {
+            return;
+        }
+        // provably small operands (`(b & 0x7F) << 14`, `byteA * byteB`) cannot overflow
+        if magnitude_bits(n, cx) <= 31 {
             return;
         }
         // small multipliers (x * 2) rarely overflow in practice; require a large constant factor or two variables
@@ -330,7 +385,7 @@ declare_rule!(RandomUsedOnce {
     id: "random-used-once",
     name: "Random object created and used only once",
     category: Performance,
-    severity: Warning,
+    severity: Info,
     sources: ["sonar:S2119", "spotbugs:DMI_RANDOM_USED_ONLY_ONCE"],
     kinds: ["method_invocation"],
     description: "Creating a `new Random()` for every value is wasteful and, for some seeds/JVMs, produces poorly distributed results. Keep one instance (or use `ThreadLocalRandom.current()`).",
@@ -386,7 +441,7 @@ declare_rule!(OddCheckWithRemainder {
     id: "odd-check-remainder",
     name: "Odd check with % 2 == 1",
     category: Bug,
-    severity: Warning,
+    severity: Info,
     tier: Edit,
     sources: ["sonar:S2197", "spotbugs:IM_BAD_CHECK_FOR_ODD"],
     kinds: ["binary_expression"],
@@ -610,7 +665,7 @@ declare_rule!(OctalLiteral {
     id: "octal-literal",
     name: "Octal literal",
     category: Bug,
-    severity: Warning,
+    severity: Info,
     sources: ["sonar:S1314", "pmd:AvoidUsingOctalValues"],
     kinds: ["octal_integer_literal", "decimal_integer_literal"],
     description: "A leading zero makes an integer literal octal: `010` is 8. If a decimal number was intended (e.g. zero-padded), remove the leading zero.",

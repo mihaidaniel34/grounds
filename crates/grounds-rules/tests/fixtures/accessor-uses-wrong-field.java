@@ -6,3 +6,10 @@ class A {
     String getTitle() { return title; }
     void setTitle(String t) { this.title = t; }
 }
+class Elem {
+    private Compensation compensation;
+    private boolean isCompensation;
+    public boolean isCompensation() { return isCompensation; }
+    public void setCompensation(boolean isCompensation) { this.isCompensation = isCompensation; }
+    static class Compensation {}
+}

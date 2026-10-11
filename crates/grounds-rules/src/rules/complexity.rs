@@ -255,7 +255,10 @@ impl Rule for FixmeComment {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
         let t = cx.text(n);
-        if comment_task(t, "FIXME") || comment_task(t, "XXX") {
+        // XXX only as a leading tag: "XXX-XXXX" or "C:\Users\xxx" are placeholders
+        let lead = t.trim_start_matches(['/', '*', ' ', '\t']);
+        let xxx = lead.starts_with("XXX") && lead.as_bytes().get(3).is_none_or(|c| !c.is_ascii_alphanumeric() && *c != b'-' && *c != b'.');
+        if comment_task(t, "FIXME") || xxx {
             cx.report(n, "FIXME left in code");
         }
     }

@@ -5,3 +5,7 @@ class A {
     public int instance;
 }
 interface I { int X = 1; }
+class ContainerTest {
+    @org.junit.ClassRule
+    public static Object container = new Object();
+}

@@ -59,27 +59,27 @@ grounds configuration:
 
 | project | Java files | lines | modules | full check | calls resolved | errors / warnings / info |
 |---|---:|---:|---:|---:|---:|---|
-| spring-petclinic | 50 | 4,297 | 1 | 0.22 s | 95.9% | 0 / 16 / 8 |
-| spring-petclinic-rest | 109 | 8,675 | 1 | 0.25 s | 91.3% | 0 / 29 / 22 |
-| piggymetrics | 97 | 4,472 | 10 | 0.21 s | 87.4% | 0 / 17 / 61 |
-| jhipster-sample-app | 136 | 11,980 | 1 | 0.27 s | 82.4% | 0 / 4 / 20 |
-| micronaut-core | 6,371 | 697,519 | 85 | 3.00 s | 94.9% | 12 / 774 / 3,068 |
+| spring-petclinic | 50 | 4,297 | 1 | 0.22 s | 95.9% | 0 / 3 / 8 |
+| spring-petclinic-rest | 109 | 8,675 | 1 | 0.25 s | 91.3% | 0 / 26 / 24 |
+| piggymetrics | 97 | 4,472 | 10 | 0.22 s | 87.4% | 0 / 14 / 63 |
+| jhipster-sample-app | 136 | 11,980 | 1 | 0.28 s | 82.4% | 0 / 3 / 21 |
+| micronaut-core | 6,371 | 697,519 | 85 | 2.91 s | 94.9% | 12 / 481 / 3,165 |
 | buckpal | 46 | 1,992 | 1 | 0.20 s | 87.8% | 0 / 3 / 5 |
-| realworld-springboot-java | 89 | 4,638 | 1 | 0.22 s | 93.7% | 3 / 2 / 13 |
-| eladmin | 274 | 23,195 | 6 | 0.28 s | 88.3% | 12 / 54 / 97 |
+| realworld-springboot-java | 89 | 4,638 | 1 | 0.22 s | 93.7% | 3 / 0 / 15 |
+| eladmin | 274 | 23,195 | 6 | 0.28 s | 88.3% | 12 / 48 / 101 |
 | start.spring.io | 377 | 23,857 | 5 | 0.28 s | 53.4% | 0 / 1 / 15 |
-| mall | 524 | 85,204 | 8 | 0.53 s | 96.3% | 0 / 42 / 799 |
-| halo | 1,381 | 134,807 | 7 | 0.89 s | 88.8% | 2 / 337 / 520 |
-| dolphinscheduler | 2,560 | 251,783 | 145 | 1.22 s | 91.1% | 10 / 707 / 2,003 |
-| thingsboard | 6,884 | 776,052 | 111 | 4.69 s | 86.5% | 8 / 1,902 / 8,983 |
-| apollo | 756 | 98,135 | 15 | 0.61 s | 87.4% | 1 / 164 / 296 |
-| camunda | 15,743 | 2,299,131 | 149 | 9.65 s | 83.1% | 14 / 2,284 / 7,367 |
-| helidon | 6,325 | 1,037,072 | 522 | 4.33 s | 91.9% | 22 / 2,119 / 4,850 |
-| langchain4j | 3,632 | 516,267 | 120 | 2.49 s | 84.7% | 15 / 746 / 3,495 |
-| nacos | 5,293 | 813,767 | 63 | 3.57 s | 98.8% | 16 / 1,427 / 4,852 |
-| rewrite | 3,764 | 899,832 | 36 | 3.91 s | 94.3% | 11 / 1,335 / 5,267 |
-| spring-ai | 2,309 | 403,772 | 169 | 2.11 s | 76.2% | 2 / 646 / 1,667 |
-| spring-modulith | 704 | 67,972 | 49 | 0.45 s | 81.7% | 5 / 60 / 465 |
+| mall | 524 | 85,204 | 8 | 0.55 s | 96.3% | 0 / 39 / 802 |
+| halo | 1,381 | 134,807 | 7 | 0.89 s | 88.8% | 2 / 280 / 559 |
+| dolphinscheduler | 2,560 | 251,783 | 145 | 1.20 s | 91.1% | 10 / 568 / 2,126 |
+| thingsboard | 6,884 | 776,052 | 111 | 4.76 s | 86.5% | 8 / 1,155 / 9,371 |
+| apollo | 756 | 98,135 | 15 | 0.62 s | 87.4% | 1 / 131 / 313 |
+| camunda | 15,743 | 2,299,131 | 149 | 9.85 s | 83.1% | 14 / 1,478 / 7,722 |
+| helidon | 6,325 | 1,037,072 | 522 | 4.38 s | 91.9% | 22 / 1,585 / 5,340 |
+| langchain4j | 3,632 | 516,267 | 120 | 2.54 s | 84.7% | 15 / 594 / 3,622 |
+| nacos | 5,293 | 813,767 | 63 | 3.56 s | 98.8% | 16 / 1,262 / 4,977 |
+| rewrite | 3,764 | 899,832 | 36 | 3.85 s | 94.3% | 11 / 1,013 / 5,369 |
+| spring-ai | 2,309 | 403,772 | 169 | 2.13 s | 76.2% | 2 / 480 / 1,724 |
+| spring-modulith | 704 | 67,972 | 49 | 0.43 s | 81.7% | 5 / 47 / 477 |
 
 "Calls resolved" is the share of method calls for which grounds found the
 exact target method. For the rest, any rule that needs the target says
@@ -137,7 +137,18 @@ on-disk cache.
 
   The remaining error-level findings are trust-all `TrustManager`s and
   similar in test code.
-  Warnings were sampled, not reviewed one by one.
+- **Warnings:** not reviewed one by one. Six findings per rule were triaged
+  for the 62 warning rules with at least ten findings on the corpus.
+  - Rules that were usually right but rarely worth acting on moved to info
+    (15, for example `float-equality`, `system-exit`, `octal-literal`).
+  - The false-positive patterns found were fixed. The biggest were in the
+    null and resource dataflow:
+    - ternary guards;
+    - null checks stored in a boolean;
+    - `close()` inside its own try/catch;
+    - exceptions from a try-with-resources skipping an outer `finally`.
+  - This removed about 1,500 warnings, among them 600 unchecked
+    `Optional.get()` reports behind assertion guards.
 - **Planted bugs:** in a copy of spring-petclinic-rest
   ([the patch](corpus/planted/spring-petclinic-rest.patch)), all of these are
   reported: an ambiguous bean (9 injection sites), a misspelled qualifier, a

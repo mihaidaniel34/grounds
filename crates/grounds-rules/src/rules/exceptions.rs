@@ -53,7 +53,7 @@ declare_rule!(EmptyCatchBlock {
     id: "empty-catch-block",
     name: "Empty catch block",
     category: BadPractice,
-    severity: Warning,
+    severity: Info,
     sources: ["sonar:S108", "sonar:S2486", "pmd:EmptyCatchBlock", "spotbugs:DE_MIGHT_IGNORE", "intellij:EmptyCatchBlock"],
     kinds: ["catch_clause"],
     description: "Silently swallowing an exception hides failures and makes debugging painful. Handle it, log it, or at least explain with a comment (or name the variable `ignored`) why it is safe to ignore.",
@@ -246,6 +246,18 @@ impl Rule for LostStackTrace {
                 }
             }
         }
+        // `lastFailure = e;` into a Throwable local, if that is its last
+        // assignment before the throw
+        let assigns: Vec<Node<'t>> = body.descendants().filter(|d| d.kind() == "assignment_expression" && d.start_byte() < n.start_byte()).collect();
+        for d in &assigns {
+            if let (Some(l), Some(r)) = (d.field("left").map(|x| x.unparen()), d.field("right")) {
+                let Some(li) = cx.fm.local_ref(l) else { continue };
+                let last = assigns.iter().filter(|a| a.field("left").and_then(|x| cx.fm.local_ref(x.unparen())) == Some(li)).max_by_key(|a| a.start_byte());
+                if last == Some(d) && throwable_or_unknown(cx.type_of(l)) && r.descendants().chain(std::iter::once(r)).any(|x| keeps(x, &[v])) {
+                    names.push(l.text(cx.src));
+                }
+            }
+        }
         // `e.getCause() instanceof SocketException se`
         for d in body.descendants().filter(|d| d.kind() == "instanceof_expression") {
             if let (Some(left), Some(name)) = (d.field("left"), d.field("name")) {
@@ -264,10 +276,19 @@ impl Rule for LostStackTrace {
         let hands_off = |st: Node<'t>| {
             st.kind() == "expression_statement"
                 && st.first_kid().is_some_and(|d| {
-                    d.kind() == "method_invocation"
-                        && !matches!(cx.fm.call_name(d), Some("println" | "print" | "printf"))
-                        && cx.fm.args_of(d).iter().any(|a| names.contains(&cx.text(*a)))
-                        && (is_log_like(d, cx) || cx.fm.select_method(d).is_none_or(|m| m.method.ret == Ty::Void))
+                    // kept for later: `lastError = e;`, `failures.add(e);`
+                    let stored = d.kind() == "assignment_expression"
+                        && d.field("right").is_some_and(|r| names.contains(&cx.text(r.unparen())))
+                        && d.field("left").is_some_and(|l| cx.fm.local_ref(l.unparen()).is_none());
+                    let collected = d.kind() == "method_invocation"
+                        && matches!(cx.fm.call_name(d), Some("add" | "addSuppressed" | "offer" | "put" | "set" | "complete" | "completeExceptionally" | "onError"))
+                        && cx.fm.args_of(d).iter().any(|a| names.contains(&cx.text(*a)));
+                    stored
+                        || collected
+                        || (d.kind() == "method_invocation"
+                            && !matches!(cx.fm.call_name(d), Some("println" | "print" | "printf"))
+                            && cx.fm.args_of(d).iter().any(|a| names.contains(&cx.text(*a)))
+                            && (is_log_like(d, cx) || cx.fm.select_method(d).is_none_or(|m| m.method.ret == Ty::Void)))
                 })
         };
         let mut handed_off = false;
@@ -365,6 +386,14 @@ impl Rule for InterruptedSwallowed {
         let Some(body) = n.field("body") else { return };
         let text = cx.text(body);
         if text.contains("interrupt()") || text.contains("throw ") || text.contains("System.exit") {
+            return;
+        }
+        // helpers that always throw: JUnit fail(e), Guava propagate, rethrow utilities
+        let rethrows = body.kids().iter().any(|st| {
+            st.kind() == "expression_statement"
+                && st.first_kid().is_some_and(|d| d.kind() == "method_invocation" && matches!(cx.fm.call_name(d), Some("fail" | "propagate" | "rethrow" | "sneakyThrow" | "throwException" | "throwUnchecked" | "rethrowUnchecked")))
+        });
+        if rethrows {
             return;
         }
         if let Some(p) = catch_param(n) {

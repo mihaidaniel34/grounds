@@ -13,3 +13,18 @@ class A {
         assert p != null;
     }
 }
+class NestedTwr {
+    static Object make(Object f) throws Exception { return f; }
+    static void close(Object o) {}
+    static void f(Object factory) throws Exception {
+        Object primary = null;
+        try {
+            try (AutoCloseable ctx = () -> {}) {
+                primary = make(factory);
+                primary.hashCode();
+            }
+        } finally {
+            if (primary != null) close(primary);
+        }
+    }
+}

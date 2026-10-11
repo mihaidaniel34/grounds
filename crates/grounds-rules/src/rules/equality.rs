@@ -313,7 +313,7 @@ declare_rule!(IdenticalOperands {
     id: "identical-operands",
     name: "Identical expressions on both sides of an operator",
     category: Bug,
-    severity: Warning,
+    severity: Info,
     tier: Edit,
     sources: ["sonar:S1764", "spotbugs:SA_FIELD_SELF_COMPARISON", "spotbugs:SA_LOCAL_SELF_COMPARISON", "errorprone:SelfEquals", "intellij:EqualsWithItself"],
     kinds: ["binary_expression", "method_invocation"],
@@ -393,7 +393,7 @@ declare_rule!(FloatEquality {
     id: "float-equality",
     name: "Floating point values compared with == or !=",
     category: Bug,
-    severity: Warning,
+    severity: Info,
     sources: ["sonar:S1244", "spotbugs:FE_FLOATING_POINT_EQUALITY", "intellij:FloatingPointEquality"],
     kinds: ["binary_expression"],
     description: "Floating point arithmetic is inexact: `0.1 + 0.2 == 0.3` is false. Compare with a tolerance (`Math.abs(a - b) < EPS`) or use `BigDecimal` for exact decimal values.",
@@ -678,7 +678,7 @@ declare_rule!(ClassNameComparison {
     id: "class-name-comparison",
     name: "Classes compared by name",
     category: Bug,
-    severity: Warning,
+    severity: Info,
     sources: ["sonar:S1872", "spotbugs:EQ_COMPARING_CLASS_NAMES"],
     kinds: ["method_invocation"],
     description: "Comparing `getClass().getName()` or `getSimpleName()` with a string is fragile: different class loaders and same-named classes in other packages match too. Use `instanceof` or compare `Class` objects.",
@@ -874,9 +874,20 @@ impl Rule for OptionalNullComparison {
                 if cx.fm.field_ref(other.unparen()).is_some() {
                     return;
                 }
+                // a map of Optionals: `cache.get(k) == null` means "not cached yet"
+                let from_map = |v: Node<'t>| v.kind() == "method_invocation" && matches!(cx.fm.call_name(v), Some("get" | "remove" | "put" | "putIfAbsent")) && v.field("object").is_some_and(|o| is_subtype_any(cx.fm, &cx.type_of(o), &["java.util.Map"]));
+                // read from a field, directly or through a ternary branch
+                let from_field = |v: Node<'t>| {
+                    let v = v.unparen();
+                    let branches: Vec<Node<'t>> = if v.kind() == "ternary_expression" { ["consequence", "alternative"].iter().filter_map(|k| v.field(k)).collect() } else { vec![v] };
+                    branches.iter().any(|b| cx.fm.field_ref(b.unparen()).is_some() || from_map(b.unparen()))
+                };
+                if from_map(other.unparen()) {
+                    return;
+                }
                 if let Some(i) = cx.fm.local_ref(other.unparen()) {
                     let d = &cx.fm.binder.decls[i];
-                    if d.decl_node.field("value").is_some_and(|v| cx.fm.field_ref(v.unparen()).is_some()) {
+                    if d.decl_node.field("value").is_some_and(from_field) {
                         return;
                     }
                 }

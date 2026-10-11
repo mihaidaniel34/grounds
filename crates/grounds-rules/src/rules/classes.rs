@@ -168,8 +168,9 @@ fn is_mutable_type<'t>(cx: &Ctx<'_, 't>, ty: &Ty, init: Option<Node<'t>>) -> boo
     if ty.is_array() {
         // zero-length arrays are immutable
         if let Some(i) = init {
-            let t = cx.text(i).replace(' ', "");
-            if t.ends_with("[0]") || t == "{}" {
+            // `new T[0]`, `{}`, `new T[] {}` (any whitespace)
+            let t: String = cx.text(i).chars().filter(|c| !c.is_whitespace()).collect();
+            if t.ends_with("[0]") || t == "{}" || t.ends_with("[]{}") {
                 return false;
             }
         }
@@ -198,6 +199,10 @@ impl Rule for PublicStaticMutableField {
         if n.has_modifier("public") && n.has_modifier("static") && !n.has_modifier("final") {
             // fields in interfaces are implicitly final
             if n.parent().is_some_and(|p| p.kind() == "interface_body") {
+                return;
+            }
+            // framework-managed: JUnit @ClassRule / @RegisterExtension, injection
+            if n.modifiers().is_some_and(|m| m.kids().iter().any(|k| matches!(k.kind(), "annotation" | "marker_annotation"))) {
                 return;
             }
             for d in n.fields("declarator") {
@@ -273,7 +278,7 @@ declare_rule!(ConstructorCallsOverridable {
     id: "constructor-calls-overridable-method",
     name: "Constructor calls an overridable method",
     category: Bug,
-    severity: Warning,
+    severity: Info,
     sources: ["sonar:S1699", "pmd:ConstructorCallsOverridableMethod", "spotbugs:MC_OVERRIDABLE_METHOD_CALL_IN_CONSTRUCTOR"],
     kinds: ["method_invocation"],
     description: "A subclass override runs before the subclass constructor has initialized its fields, so it sees nulls and zeros. Make the called method private or final, or make the class final.",
@@ -476,7 +481,7 @@ declare_rule!(ClassShadowsSupertypeName {
     id: "class-shadows-supertype-name",
     name: "Class has the same simple name as its supertype",
     category: BadPractice,
-    severity: Warning,
+    severity: Info,
     sources: ["sonar:S2176", "spotbugs:NM_SAME_SIMPLE_NAME_AS_SUPERCLASS", "spotbugs:NM_SAME_SIMPLE_NAME_AS_INTERFACE"],
     kinds: ["class_declaration", "interface_declaration"],
     description: "`class Service extends other.Service` makes every reference ambiguous to readers and forces fully qualified names.",
@@ -803,6 +808,10 @@ impl Rule for NonSerializableField {
         let Some(t) = n.field("type") else { return };
         let ty = cx.fm.resolve_type_node(t);
         let Some(tn) = ty.class_name() else { return };
+        // `Object` holds whatever is assigned, usually something serializable
+        if tn == "java.lang.Object" {
+            return;
+        }
         let Some(tc) = cx.fm.class(tn) else { return };
         // interfaces and non-final classes may have serializable implementations
         if tc.is_interface() || (!tc.flags.is_final() && !tc.is_enum() && !tc.is_record() && tc.is_abstract()) {
@@ -882,6 +891,10 @@ impl Rule for CloneWithoutSuper {
         }
         let Some(decl) = owning_type_decl(n) else { return };
         if decl.has_modifier("final") || decl.kind() != "class_declaration" {
+            return;
+        }
+        // without Cloneable, super.clone() throws: a copy-style clone is the only option
+        if !cx.fm.class_of_decl(decl).is_some_and(|c| cx.fm.is_subclass(&c.name, "java.lang.Cloneable").is_yes()) {
             return;
         }
         let Some(body) = n.field("body") else { return };
@@ -1001,6 +1014,13 @@ impl Rule for AccessorWrongField {
             stmts[0].first_kid().and_then(|v| cx.fm.field_ref(v.unparen()).map(|f| (f, v)))
         };
         let Some((f, node)) = accessed else { return };
+        // `isCompensation()` returning `isCompensation`, or a field of another
+        // type than the look-alike one: not a typo
+        let matches_prop = f.field.name.eq_ignore_ascii_case(prop) || f.field.name.eq_ignore_ascii_case(&format!("is{prop}"));
+        let other_type = cls.fields.iter().find(|x| x.name == expected).is_some_and(|x| x.ty.erasure() != f.field.ty.erasure());
+        if matches_prop || other_type {
+            return;
+        }
         if f.owner == cls.name && f.field.name != expected {
             cx.report(node, format!("`{name}` accesses `{}` but field `{expected}` exists", f.field.name));
         }
@@ -1350,7 +1370,7 @@ declare_rule!(RecordArrayComponent {
     id: "record-array-component",
     name: "Record with an array component uses default equals/hashCode",
     category: Bug,
-    severity: Warning,
+    severity: Info,
     sources: ["sonar:S6218"],
     kinds: ["record_declaration"],
     description: "Records compare array components by reference, so two records with equal array contents are not equal. Override `equals`, `hashCode` and `toString` using `Arrays` methods.",

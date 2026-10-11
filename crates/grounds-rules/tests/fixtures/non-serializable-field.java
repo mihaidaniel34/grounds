@@ -8,3 +8,6 @@ class A implements Serializable {
     private String s;
     private Thread thread; // expect
 }
+class Holder implements java.io.Serializable {
+    private Object payload;
+}

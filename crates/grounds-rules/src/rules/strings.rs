@@ -182,7 +182,7 @@ declare_rule!(IndexOfPositive {
     id: "indexof-positive-check",
     name: "indexOf() result compared with > 0",
     category: Bug,
-    severity: Warning,
+    severity: Info,
     sources: ["sonar:S2692"],
     kinds: ["binary_expression"],
     description: "`indexOf` returns 0 when the match is at the start; `> 0` ignores that case. Use `>= 0` (or `contains()`) unless skipping the first position is intended.",

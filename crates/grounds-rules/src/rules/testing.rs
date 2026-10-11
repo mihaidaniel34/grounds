@@ -61,6 +61,10 @@ impl Rule for AssertionArgumentOrder {
         if args.len() < 2 {
             return;
         }
+        // a project helper named assertEquals may take (actual, expected)
+        if assertion_owner(cx, n).is_some_and(|o| !(o.starts_with("org.junit") || o.starts_with("junit.") || o.starts_with("org.testng") || o.starts_with("kotlin.test"))) {
+            return;
+        }
         // JUnit 4 has an optional leading message String
         let (first, second) = if args.len() >= 3 && cx.type_of(args[0]).is_string() && assertion_owner(cx, n).is_some_and(|o| &*o == "org.junit.Assert") { (args[1], args[2]) } else { (args[0], args[1]) };
         let testng = is_testng(cx, n);
@@ -121,9 +125,10 @@ impl Rule for TestWithoutAssertion {
             // helper in the same class that asserts
             if c.field("object").is_none() {
                 if let Some(cls_decl) = owning_type_decl(n) {
-                    let own: Vec<Node<'t>> = methods_of(cls_decl).into_iter().filter(|m| method_name(*m, cx.src) == name).collect();
+                    let arity = cx.fm.args_of(*c).len();
+                    let own: Vec<Node<'t>> = methods_of(cls_decl).into_iter().filter(|m| method_name(*m, cx.src) == name && takes_args(*m, arity)).collect();
                     if !own.is_empty() {
-                        return own.iter().any(|m| m.field("body").is_some_and(|b| asserts_in(b, cx)));
+                        return own.iter().any(|m| m.field("body").is_some_and(|b| asserts_in(b, cls_decl, cx, 3)));
                     }
                     // inherited from a test base class or interface (`rewriteRun(...)`
                     // from OpenRewrite's RewriteTest): the harness asserts
@@ -154,11 +159,31 @@ impl Rule for TestWithoutAssertion {
     }
 }
 
+/// Whether a method declaration accepts `n` arguments (varargs included).
+fn takes_args(m: Node<'_>, n: usize) -> bool {
+    let pc = param_count(m);
+    let varargs = m.field("parameters").is_some_and(|p| p.kid_of_kind("spread_parameter").is_some());
+    if varargs {
+        n + 1 >= pc
+    } else {
+        n == pc
+    }
+}
+
 /// Whether a helper body asserts: an assertion-style call, `assert`, or a
 /// thrown `AssertionError`.
-fn asserts_in<'t>(body: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+fn asserts_in<'t>(body: Node<'t>, cls: Node<'t>, cx: &Ctx<'_, 't>, depth: u32) -> bool {
     body.descendants().any(|d| match d.kind() {
-        "method_invocation" => cx.fm.call_name(d).is_some_and(is_assertion_call),
+        "method_invocation" => {
+            let Some(name) = cx.fm.call_name(d) else { return false };
+            if is_assertion_call(name) {
+                return true;
+            }
+            // a further helper of the same class (`searchAndAssert` -> `assertResults`)
+            depth > 0
+                && d.field("object").is_none_or(|o| o.kind() == "this")
+                && methods_of(cls).iter().any(|m| method_name(*m, cx.src) == name && takes_args(*m, cx.fm.args_of(d).len()) && m.field("body").is_some_and(|b| b != body && asserts_in(b, cls, cx, depth - 1)))
+        }
         "assert_statement" => true,
         "throw_statement" => cx.text(d).contains("AssertionError"),
         _ => false,
@@ -549,7 +574,10 @@ impl Rule for ConstantAssertion {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
         let Some(name) = cx.fm.call_name(n) else { return };
-        let args = cx.fm.args_of(n);
+        let all = cx.fm.args_of(n);
+        // JUnit 4 overloads take a leading message: assertEquals("msg", 0, failures)
+        let base = if name == "assertEquals" { 2 } else { 1 };
+        let args: &[Node<'t>] = if all.len() > base && all[0].unparen().kind() == "string_literal" { &all[1..] } else { &all[..] };
         let Some(first) = args.first().map(|a| a.unparen()) else { return };
         let constant = match name {
             "assertTrue" | "assertFalse" => matches!(first.kind(), "true" | "false"),
@@ -559,8 +587,13 @@ impl Rule for ConstantAssertion {
             _ => false,
         };
         if constant {
-            // assertTrue(false) as a "should not reach" marker
-            if name == "assertTrue" && first.kind() == "false" || name == "assertFalse" && first.kind() == "true" {
+            let fails = match name {
+                "assertTrue" => first.kind() == "false",
+                "assertFalse" => first.kind() == "true",
+                "assertEquals" => cx.fm.constant_value(args[0]).zip(cx.fm.constant_value(args[1])).is_some_and(|(a, b)| a != b),
+                _ => false,
+            };
+            if fails {
                 cx.report(n, "Use `fail()` instead of an assertion that always fails");
             } else {
                 cx.report(n, "This assertion always passes");

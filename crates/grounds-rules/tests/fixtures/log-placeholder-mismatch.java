@@ -12,3 +12,9 @@ class A {
         log.info("literal \\{} {}", user);
     }
 }
+class Callbacks {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(Callbacks.class);
+    void run(String name, missing.Client client) {
+        client.call(name).doOnError(t -> log.error("failed for {} with cause", name, t));
+    }
+}

@@ -7,3 +7,5 @@ import jakarta.inject.Singleton;
 @Component abstract class WithLookup { @org.springframework.beans.factory.annotation.Lookup abstract Object create(); }
 @Singleton interface MicronautScoped {}
 @Singleton abstract class MicronautIntroduction { abstract String test(String name); }
+@com.acme.Component
+abstract class OwnAnnotationBase {}

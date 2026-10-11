@@ -388,7 +388,24 @@ pub fn can_complete_normally(n: Node, src: &str) -> bool {
             let t = n.text(src);
             !(t.starts_with("System.exit(") || t.starts_with("Runtime.getRuntime().halt("))
         }
-        "switch_expression" => true,
+        // a switch with a default whose cases all end abruptly (and no break
+        // leaves it) does not complete normally either
+        "switch_expression" | "switch_statement" => {
+            let Some(body) = n.field("body") else { return true };
+            let groups = body.kids();
+            let has_default = groups.iter().flat_map(|g| g.kids()).any(|d| d.kind() == "switch_label" && d.text(src).trim_start().starts_with("default"));
+            if !has_default || contains_break_for(n) || groups.is_empty() {
+                return true;
+            }
+            let rules = groups.iter().all(|g| g.kind() == "switch_rule");
+            if rules {
+                // `case X -> { return 1; }` / `case Y -> throw ...`
+                groups.iter().any(|g| g.kids().last().is_none_or(|b| b.kind() != "throw_statement" && (b.kind() != "block" || can_complete_normally(*b, src))))
+            } else {
+                // statements fall through to the next group; only the last group can leave
+                groups.last().and_then(|g| g.kids().last().copied()).is_none_or(|s| s.kind() == "switch_label" || can_complete_normally(s, src))
+            }
+        }
         _ => true,
     }
 }
@@ -477,7 +494,10 @@ pub fn is_throwable_expr<'t>(fm: &FileModel<'t>, n: Node<'t>) -> bool {
         return true;
     }
     if let Some(i) = fm.local_ref(n) {
-        return fm.binder.decls[i].kind == grounds_semantic::LocalKind::CatchParam;
+        let d = &fm.binder.decls[i];
+        // untyped lambda parameter of an error callback: `doOnError(t -> log.error("..", x, t))`
+        let error_name = matches!(d.name, "t" | "e" | "ex" | "err" | "error" | "throwable" | "cause" | "exception" | "failure");
+        return d.kind == grounds_semantic::LocalKind::CatchParam || (d.kind == grounds_semantic::LocalKind::LambdaParam && error_name && fm.type_of(n).is_unknown());
     }
     false
 }

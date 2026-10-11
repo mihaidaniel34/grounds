@@ -105,7 +105,7 @@ fn top_level_decl<'t>(n: Node<'t>) -> Option<Node<'t>> {
 }
 
 const REFLECTIVE_CLASS_ANNOTATIONS: &[&str] = &[
-    "Entity", "Embeddable", "MappedSuperclass", "Document", "Table", "Data", "Value", "Getter", "Setter", "JsonAutoDetect", "Introspected", "Serdeable", "ConfigurationProperties", "XmlRootElement", "XmlAccessorType", "Builder", "AllArgsConstructor", "RequiredArgsConstructor", "Jacksonized", "EachProperty", "FieldNameConstants",
+    "Entity", "Embeddable", "MappedSuperclass", "Document", "Table", "Data", "Value", "Getter", "Setter", "JsonAutoDetect", "Introspected", "Serdeable", "ConfigurationProperties", "XmlRootElement", "XmlAccessorType", "Builder", "AllArgsConstructor", "RequiredArgsConstructor", "Jacksonized", "EachProperty", "FieldNameConstants", "EqualsAndHashCode", "ToString",
 ];
 
 declare_rule!(UnusedPrivateField {
@@ -218,6 +218,12 @@ impl Rule for UnusedPrivateMethod {
         // referenced by name in strings (@MethodSource, reflection) or method references
         if top_text.contains(&format!("\"{name}\"")) || top_text.contains(&format!("::{name}")) || top_text.contains(&format!("#{name}")) {
             return;
+        }
+        // a bare @MethodSource uses the provider named like the test method
+        if let Some(decl) = owning_type_decl(n) {
+            if methods_of(decl).iter().any(|m| method_name(*m, cx.src) == name && *m != n && m.modifiers().is_some_and(|ms| cx.text(ms).contains("@MethodSource") && !cx.text(ms).contains("@MethodSource("))) {
+                return;
+            }
         }
         let Some(name_node) = n.field("name") else { return };
         let decl_range = (name_node.start_byte() as u32, name_node.end_byte() as u32);

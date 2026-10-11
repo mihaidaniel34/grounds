@@ -10,7 +10,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 |---|---|---|---|
 | `default-charset` | info | checkpoint | spotbugs:DM_DEFAULT_ENCODING, errorprone:DefaultCharset, sonar:S1943 |
 | `case-conversion-without-locale` *off* | info | checkpoint | spotbugs:DM_CONVERT_CASE, errorprone:StringCaseLocaleUsage, sonar:S1449 |
-| `empty-catch-block` | warning | checkpoint | sonar:S108, sonar:S2486, pmd:EmptyCatchBlock, spotbugs:DE_MIGHT_IGNORE, intellij:EmptyCatchBlock |
+| `empty-catch-block` | info | checkpoint | sonar:S108, sonar:S2486, pmd:EmptyCatchBlock, spotbugs:DE_MIGHT_IGNORE, intellij:EmptyCatchBlock |
 | `catch-throwable` | warning | checkpoint | sonar:S1181, pmd:AvoidCatchingThrowable, intellij:CatchGenericClass |
 | `catch-null-pointer` | warning | checkpoint | sonar:S1696, pmd:AvoidCatchingNPE |
 | `catch-generic-exception` *off* | info | checkpoint | pmd:AvoidCatchingGenericException, sonar:S2221 |
@@ -24,7 +24,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `catch-return-null` | info | checkpoint | sonar:S1166 |
 | `ignored-status-result` | warning | checkpoint | sonar:S899, spotbugs:RV_RETURN_VALUE_IGNORED_BAD_PRACTICE |
 | `collection-method-returns-null` | warning | checkpoint | sonar:S1168, spotbugs:PZLA_PREFER_ZERO_LENGTH_ARRAYS, pmd:ReturnEmptyCollectionRatherThanNull |
-| `system-exit` | warning | checkpoint | sonar:S1147, spotbugs:DM_EXIT, pmd:DoNotTerminateVM |
+| `system-exit` | info | checkpoint | sonar:S1147, spotbugs:DM_EXIT, pmd:DoNotTerminateVM |
 | `system-out-println` | info | checkpoint | sonar:S106, pmd:SystemPrintln, intellij:UseOfSystemOutOrSystemErr |
 | `deprecated-api-usage` | info | checkpoint | sonar:S1874, sonar:S5738, intellij:Deprecation |
 | `optional-as-parameter-or-field` | info | checkpoint | sonar:S3553, intellij:OptionalUsedAsFieldOrParameterType |
@@ -33,7 +33,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `public-static-mutable-container` | warning | checkpoint | sonar:S2386, spotbugs:MS_MUTABLE_ARRAY, spotbugs:MS_MUTABLE_COLLECTION, spotbugs:MS_MUTABLE_COLLECTION_PKGPROTECT |
 | `static-field-written-from-instance-method` | warning | checkpoint | sonar:S2696, spotbugs:ST_WRITE_TO_STATIC_FROM_INSTANCE_METHOD |
 | `field-hides-superclass-field` | info | checkpoint | sonar:S2387, spotbugs:MF_CLASS_MASKS_FIELD, intellij:FieldNameHidesFieldInSuperclass |
-| `class-shadows-supertype-name` | warning | checkpoint | sonar:S2176, spotbugs:NM_SAME_SIMPLE_NAME_AS_SUPERCLASS, spotbugs:NM_SAME_SIMPLE_NAME_AS_INTERFACE |
+| `class-shadows-supertype-name` | info | checkpoint | sonar:S2176, spotbugs:NM_SAME_SIMPLE_NAME_AS_SUPERCLASS, spotbugs:NM_SAME_SIMPLE_NAME_AS_INTERFACE |
 | `missing-serial-version-uid` *off* | info | checkpoint | sonar:S2057, spotbugs:SE_NO_SERIALVERSIONID, pmd:MissingSerialVersionUID |
 | `cloneable-without-clone` | info | checkpoint | sonar:S2157, spotbugs:CN_IDIOM |
 | `compareto-without-equals` | info | checkpoint | sonar:S1210, spotbugs:EQ_COMPARETO_USE_OBJECT_EQUALS |
@@ -57,16 +57,16 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `array-equals` | error | edit | spotbugs:EC_BAD_ARRAY_COMPARE, errorprone:ArrayEquals, sonar:S2159 |
 | `array-tostring-hashcode` | warning | edit | sonar:S2116, spotbugs:DMI_INVOKING_TOSTRING_ON_ARRAY, spotbugs:DMI_INVOKING_HASHCODE_ON_ARRAY, errorprone:ArrayToString, errorprone:ArrayHashCode |
 | `collection-incompatible-type` | error | edit | sonar:S2175, spotbugs:GC_UNRELATED_TYPES, errorprone:CollectionIncompatibleType, intellij:SuspiciousMethodCalls |
-| `identical-operands` | warning | edit | sonar:S1764, spotbugs:SA_FIELD_SELF_COMPARISON, spotbugs:SA_LOCAL_SELF_COMPARISON, errorprone:SelfEquals, intellij:EqualsWithItself |
+| `identical-operands` | info | edit | sonar:S1764, spotbugs:SA_FIELD_SELF_COMPARISON, spotbugs:SA_LOCAL_SELF_COMPARISON, errorprone:SelfEquals, intellij:EqualsWithItself |
 | `self-assignment` | error | edit | sonar:S1656, spotbugs:SA_LOCAL_SELF_ASSIGNMENT, spotbugs:SA_FIELD_SELF_ASSIGNMENT, errorprone:SelfAssignment, intellij:SillyAssignment |
-| `float-equality` | warning | checkpoint | sonar:S1244, spotbugs:FE_FLOATING_POINT_EQUALITY, intellij:FloatingPointEquality |
+| `float-equality` | info | checkpoint | sonar:S1244, spotbugs:FE_FLOATING_POINT_EQUALITY, intellij:FloatingPointEquality |
 | `nan-comparison` | error | edit | spotbugs:FE_TEST_IF_EQUAL_TO_NOT_A_NUMBER, errorprone:EqualsNaN |
 | `equals-null` | error | edit | spotbugs:EC_NULL_ARG, pmd:EqualsNull |
 | `compareto-specific-value` | error | edit | sonar:S2200, spotbugs:RV_CHECK_COMPARETO_FOR_SPECIFIC_RETURN_VALUE |
 | `negated-compareto` | warning | checkpoint | spotbugs:RV_NEGATING_RESULT_OF_COMPARETO |
 | `equals-without-hashcode` | error | edit | sonar:S1206, spotbugs:HE_EQUALS_NO_HASHCODE, spotbugs:HE_HASHCODE_NO_EQUALS, pmd:OverrideBothEqualsAndHashcode, intellij:EqualsAndHashcode |
 | `equals-overload` | error | edit | sonar:S1201, spotbugs:EQ_SELF_NO_OBJECT, errorprone:NonOverridingEquals, intellij:CovariantEquals |
-| `class-name-comparison` | warning | checkpoint | sonar:S1872, spotbugs:EQ_COMPARING_CLASS_NAMES |
+| `class-name-comparison` | info | checkpoint | sonar:S1872, spotbugs:EQ_COMPARING_CLASS_NAMES |
 | `getclass-on-class` | error | edit | errorprone:GetClassOnClass |
 | `bigdecimal-equals` | warning | checkpoint | errorprone:BigDecimalEquals, sonar:S2111 |
 | `optional-null-comparison` | warning | edit | sonar:S2789, spotbugs:NP_OPTIONAL_RETURN_NULL, errorprone:OptionalEquality |
@@ -80,12 +80,12 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `abs-of-hashcode-or-random` | warning | checkpoint | sonar:S2676, spotbugs:RV_ABSOLUTE_VALUE_OF_HASHCODE, spotbugs:RV_ABSOLUTE_VALUE_OF_RANDOM_INT, errorprone:MathAbsoluteNegative |
 | `random-cast-to-int` | error | edit | spotbugs:RV_01_TO_INT |
 | `bigdecimal-from-double` | warning | edit | sonar:S2111, spotbugs:DMI_BIGDECIMAL_CONSTRUCTED_FROM_DOUBLE, pmd:AvoidDecimalLiteralsInBigDecimalConstructor |
-| `odd-check-remainder` | warning | edit | sonar:S2197, spotbugs:IM_BAD_CHECK_FOR_ODD |
+| `odd-check-remainder` | info | edit | sonar:S2197, spotbugs:IM_BAD_CHECK_FOR_ODD |
 | `comparison-out-of-range` | error | edit | spotbugs:INT_BAD_COMPARISON_WITH_SIGNED_BYTE, spotbugs:INT_BAD_COMPARISON_WITH_INT_VALUE, errorprone:ComparisonOutOfRange |
 | `narrowing-compound-assignment` | warning | checkpoint | errorprone:NarrowingCompoundAssignment, sonar:S2164 |
 | `overwritten-increment` | error | edit | spotbugs:DLS_OVERWRITTEN_INCREMENT, sonar:S2123 |
 | `reversed-assignment-operator` | warning | edit | sonar:S2757 |
-| `octal-literal` | warning | checkpoint | sonar:S1314, pmd:AvoidUsingOctalValues |
+| `octal-literal` | info | checkpoint | sonar:S1314, pmd:AvoidUsingOctalValues |
 | `rounding-of-integer-division` | error | edit | spotbugs:ICAST_INT_CAST_TO_DOUBLE_PASSED_TO_CEIL, spotbugs:ICAST_INT_CAST_TO_FLOAT_PASSED_TO_ROUND, sonar:S2184 |
 | `char-addition-in-concat` | warning | checkpoint | errorprone:CharacterGetNumericValue, sonar:S2185 |
 | `remainder-by-one` | error | checkpoint | spotbugs:INT_BAD_REM_BY_1 |
@@ -93,7 +93,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `min-max-clamp-swapped` | error | checkpoint | errorprone:BadMinMax, sonar:S3518 |
 | `useless-sign-check` | error | checkpoint | sonar:S3981, spotbugs:INT_VACUOUS_COMPARISON, errorprone:ComparisonOutOfRange |
 | `floating-cast-in-integer-division` | warning | checkpoint | errorprone:FloatCast, spotbugs:ICAST_INT_2_LONG_AS_INSTANT |
-| `indexof-positive-check` | warning | checkpoint | sonar:S2692 |
+| `indexof-positive-check` | info | checkpoint | sonar:S2692 |
 | `regex-metachar-literal` | error | edit | spotbugs:RE_POSSIBLE_UNINTENDED_PATTERN, errorprone:StringSplitter |
 | `invalid-regex` | error | edit | sonar:S5856, errorprone:InvalidPatternSyntax |
 | `file-separator-as-regex` | error | checkpoint | spotbugs:RE_CANT_USE_FILE_SEPARATOR_AS_REGULAR_EXPRESSION |
@@ -108,7 +108,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `ignored-return-value` | error | edit | sonar:S2201, spotbugs:RV_RETURN_VALUE_IGNORED, errorprone:ReturnValueIgnored, errorprone:CheckReturnValue, intellij:ResultOfMethodCallIgnored |
 | `ignored-read-result` | warning | checkpoint | sonar:S2674, spotbugs:RR_NOT_CHECKED, spotbugs:SR_NOT_CHECKED |
 | `stream-not-consumed` | error | edit | sonar:S3958, errorprone:StreamResourceLeak |
-| `boolean-method-returns-null` | warning | checkpoint | sonar:S2447, spotbugs:NP_BOOLEAN_RETURN_NULL |
+| `boolean-method-returns-null` | info | checkpoint | sonar:S2447, spotbugs:NP_BOOLEAN_RETURN_NULL |
 | `tostring-returns-null` | error | checkpoint | sonar:S2225, spotbugs:NP_TOSTRING_COULD_RETURN_NULL, spotbugs:NP_CLONE_COULD_RETURN_NULL |
 | `collection-contains-itself` | error | checkpoint | sonar:S2114, spotbugs:DMI_COLLECTIONS_SHOULD_NOT_CONTAIN_THEMSELVES, spotbugs:DMI_USING_REMOVEALL_TO_CLEAR_COLLECTION |
 | `arrays-aslist-primitive-array` | error | edit | errorprone:ArraysAsListPrimitiveArray, sonar:S3878 |
@@ -129,7 +129,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `assert-with-side-effect` | warning | checkpoint | sonar:S3346, spotbugs:SA_LOCAL_SELF_COMPARISON, intellij:AssertWithSideEffects |
 | `constant-boolean-condition` | warning | checkpoint | sonar:S2583, sonar:S2589, intellij:ConstantConditions |
 | `for-loop-updates-wrong-variable` | error | edit | sonar:S1994, intellij:ForLoopThatDoesntUseLoopVariable |
-| `constructor-calls-overridable-method` | warning | checkpoint | sonar:S1699, pmd:ConstructorCallsOverridableMethod, spotbugs:MC_OVERRIDABLE_METHOD_CALL_IN_CONSTRUCTOR |
+| `constructor-calls-overridable-method` | info | checkpoint | sonar:S1699, pmd:ConstructorCallsOverridableMethod, spotbugs:MC_OVERRIDABLE_METHOD_CALL_IN_CONSTRUCTOR |
 | `method-named-like-class` | warning | checkpoint | sonar:S1223, spotbugs:NM_METHOD_CONSTRUCTOR_CONFUSION, pmd:MethodWithSameNameAsEnclosingClass |
 | `object-method-name-typo` | error | edit | sonar:S1221, spotbugs:NM_LCASE_HASHCODE, spotbugs:NM_LCASE_TOSTRING, spotbugs:NM_BAD_EQUAL, pmd:SuspiciousHashcodeMethodName |
 | `serial-version-uid-modifiers` | warning | checkpoint | sonar:S2057, spotbugs:SE_NONSTATIC_SERIALVERSIONID, spotbugs:SE_NONFINAL_SERIALVERSIONID, spotbugs:SE_NONLONG_SERIALVERSIONID |
@@ -137,7 +137,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `serialization-method-signature` | error | checkpoint | sonar:S2061, spotbugs:SE_METHOD_MUST_BE_PRIVATE, spotbugs:SE_READ_RESOLVE_IS_STATIC, spotbugs:SE_READ_RESOLVE_MUST_RETURN_OBJECT |
 | `clone-without-super-clone` | warning | checkpoint | sonar:S1182, spotbugs:CN_IDIOM_NO_SUPER_CALL, pmd:ProperCloneImplementation |
 | `accessor-uses-wrong-field` | warning | edit | sonar:S4275 |
-| `record-array-component` | warning | checkpoint | sonar:S6218 |
+| `record-array-component` | info | checkpoint | sonar:S6218 |
 | `equals-without-type-check` | warning | checkpoint | sonar:S2097, spotbugs:BC_EQUALS_METHOD_SHOULD_WORK_FOR_ALL_OBJECTS |
 | `null-dereference` | error | edit | sonar:S2259, spotbugs:NP_ALWAYS_NULL, spotbugs:NP_NULL_ON_SOME_PATH, spotbugs:NP_GUARANTEED_DEREF, errorprone:NullAway, intellij:DataFlowIssue |
 | `redundant-null-check` | warning | checkpoint | sonar:S2583, sonar:S2589, spotbugs:RCN_REDUNDANT_NULLCHECK_OF_NONNULL_VALUE, spotbugs:RCN_REDUNDANT_NULLCHECK_WOULD_HAVE_BEEN_A_NPE, spotbugs:RCN_REDUNDANT_NULLCHECK_OF_NULL_VALUE, intellij:ConstantConditions |
@@ -229,7 +229,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | id | severity | tier | origin |
 |---|---|---|---|
 | `url-equals-hashcode` | warning | checkpoint | sonar:S2112, spotbugs:DMI_BLOCKING_METHODS_ON_URL, spotbugs:DMI_COLLECTION_OF_URLS, errorprone:URLEqualsHashCode |
-| `random-used-once` | warning | checkpoint | sonar:S2119, spotbugs:DMI_RANDOM_USED_ONLY_ONCE |
+| `random-used-once` | info | checkpoint | sonar:S2119, spotbugs:DMI_RANDOM_USED_ONLY_ONCE |
 | `string-constructor` | info | checkpoint | sonar:S2129, spotbugs:DM_STRING_CTOR, spotbugs:DM_STRING_VOID_CTOR, pmd:StringInstantiation |
 | `boxed-primitive-constructor` | warning | checkpoint | sonar:S2129, spotbugs:DM_NUMBER_CTOR, spotbugs:DM_BOOLEAN_CTOR, pmd:PrimitiveWrapperInstantiation |
 | `replaceall-with-literal` | info | checkpoint | sonar:S5361 |
@@ -258,7 +258,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 |---|---|---|---|
 | `reflection-set-accessible` *off* | info | checkpoint | sonar:S3011 |
 | `hardcoded-credentials` | warning | checkpoint | sonar:S2068, sonar:S6418, spotbugs:DMI_CONSTANT_DB_PASSWORD, spotbugs:HARD_CODE_PASSWORD |
-| `weak-hash-algorithm` | warning | checkpoint | sonar:S4790, sonar:S2070, spotbugs:WEAK_MESSAGE_DIGEST_MD5, spotbugs:WEAK_MESSAGE_DIGEST_SHA1 |
+| `weak-hash-algorithm` | info | checkpoint | sonar:S4790, sonar:S2070, spotbugs:WEAK_MESSAGE_DIGEST_MD5, spotbugs:WEAK_MESSAGE_DIGEST_SHA1 |
 | `weak-cipher-algorithm` | error | checkpoint | sonar:S5547, spotbugs:DES_USAGE, spotbugs:TDES_USAGE, spotbugs:CIPHER_INTEGRITY |
 | `insecure-cipher-mode` | error | checkpoint | sonar:S5542, spotbugs:ECB_MODE, spotbugs:PADDING_ORACLE, spotbugs:RSA_NO_PADDING |
 | `weak-tls-protocol` | error | checkpoint | sonar:S4423, spotbugs:SSL_CONTEXT |
@@ -268,7 +268,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `sql-injection` | warning | checkpoint | sonar:S2077, sonar:S3649, spotbugs:SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE, spotbugs:SQL_PREPARED_STATEMENT_GENERATED_FROM_NONCONSTANT_STRING, spotbugs:SQL_INJECTION_JDBC |
 | `command-injection` | warning | checkpoint | sonar:S2076, sonar:S4721, spotbugs:COMMAND_INJECTION |
 | `xml-external-entities` | warning | checkpoint | sonar:S2755, spotbugs:XXE_DOCUMENT, spotbugs:XXE_SAXPARSER, spotbugs:XXE_XMLSTREAMREADER |
-| `csrf-protection-disabled` | warning | checkpoint | sonar:S4502, spotbugs:SPRING_CSRF_PROTECTION_DISABLED |
+| `csrf-protection-disabled` | info | checkpoint | sonar:S4502, spotbugs:SPRING_CSRF_PROTECTION_DISABLED |
 | `permissive-cors` | warning | checkpoint | sonar:S5122, spotbugs:PERMISSIVE_CORS |
 | `weak-key-size` | error | checkpoint | sonar:S4426, spotbugs:RSA_KEY_SIZE, spotbugs:BLOWFISH_KEY_SIZE |
 | `insecure-cookie` | warning | checkpoint | sonar:S2092, sonar:S3330, spotbugs:INSECURE_COOKIE, spotbugs:HTTPONLY_COOKIE |

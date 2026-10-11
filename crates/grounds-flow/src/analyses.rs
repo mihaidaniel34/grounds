@@ -177,8 +177,19 @@ impl<'a, 't> NullnessAnalysis<'a, 't> {
             }
             "cast_expression" => self.eval(v.field("value")?, f),
             "ternary_expression" => {
-                let a = self.eval(v.field("consequence")?, f);
-                let b = self.eval(v.field("alternative")?, f);
+                // each arm under its edge of the condition: `m == null ? new HashMap<>() : m`
+                let effects = v.field("condition").map(|c| self.cond_effect(c)).unwrap_or_default();
+                let refined = |on_true: bool| {
+                    let mut g = f.clone();
+                    for (i, s, t) in &effects {
+                        if *t == on_true {
+                            g.insert(*i, *s);
+                        }
+                    }
+                    g
+                };
+                let a = self.eval(v.field("consequence")?, &refined(true));
+                let b = self.eval(v.field("alternative")?, &refined(false));
                 match (a, b) {
                     (Some(x), Some(y)) if x == y => Some(x),
                     // `c ? null : v` is usually correlated with later checks of `c`
@@ -243,6 +254,36 @@ impl<'a, 't> NullnessAnalysis<'a, 't> {
                     out.push((i, Nullness::NonNull, true));
                     out.push((i, Nullness::Null, false));
                 }
+            }
+            // `boolean both = a != null && b != null; if (both) ...`
+            "identifier" => {
+                let Some(i) = self.fm.binder.decl_index_of_ref(c) else { return out };
+                let d = &self.fm.binder.decls[i];
+                if d.kind != LocalKind::Local || !is_effectively_final(self.fm, i) {
+                    return out;
+                }
+                let Some(init) = d.decl_node.field("value").map(|v| v.unparen()) else { return out };
+                if init.kind() == "identifier" {
+                    return out; // no alias chains
+                }
+                let is_and = |n: Node<'t>| n.kind() == "binary_expression" && n.field("operator").is_some_and(|o| o.kind() == "&&");
+                if is_and(init) {
+                    // the true edge implies every conjunct
+                    let mut stack = vec![init];
+                    while let Some(n) = stack.pop() {
+                        let n = n.unparen();
+                        if is_and(n) {
+                            stack.extend(n.field("left"));
+                            stack.extend(n.field("right"));
+                        } else if n.kind() != "identifier" {
+                            out.extend(self.cond_effect(n).into_iter().filter(|e| e.2));
+                        }
+                    }
+                } else {
+                    out = self.cond_effect(init);
+                }
+                // the checked locals must still hold the checked values
+                out.retain(|(j, _, _)| is_effectively_final(self.fm, *j));
             }
             "instanceof_expression" => {
                 if let Some(l) = c.field("left") {
@@ -408,6 +449,15 @@ impl<'a, 't> Analysis<'t> for NullnessAnalysis<'a, 't> {
                 }
             }
             "method_invocation" => {
+                // AssertJ: `assertThat(x).isNotNull()` aborts when x is null
+                if matches!(self.fm.call_name(e), Some("isNotNull" | "isNotEmpty" | "isNotBlank" | "isInstanceOf")) {
+                    let subject = e.field("object").map(|o| o.unparen()).filter(|o| is_static_assert_that(self.fm, *o));
+                    if let Some(a) = subject.and_then(|o| self.fm.args_of(o).first().map(|a| a.unparen())).filter(|a| a.kind() == "identifier") {
+                        if let Some(i) = self.fm.binder.decl_index_of_ref(a) {
+                            f.insert(i, Nullness::NonNull);
+                        }
+                    }
+                }
                 if self.fm.call_matches_any(e, REQUIRE_NON_NULL) {
                     // the checked value is the first argument (`requireNonNull(x, msg)`)
                     if let Some(a) = self.fm.args_of(e).first().map(|a| a.unparen()) {
@@ -427,7 +477,7 @@ impl<'a, 't> Analysis<'t> for NullnessAnalysis<'a, 't> {
         let (c, truth) = match kind {
             EdgeKind::True(c) => (*c, true),
             EdgeKind::False(c) => (*c, false),
-            EdgeKind::Exception => return Some(fact.clone()),
+            EdgeKind::Exception(_) => return Some(fact.clone()),
             EdgeKind::Normal => return Some(fact.clone()),
         };
         // constant conditions: prune impossible edges
@@ -539,7 +589,26 @@ impl<'a, 't> ResourceAnalysis<'a, 't> {
                 }
                 RESOURCE_TYPES.iter().any(|r| self.fm.is_subclass(n, r).is_yes())
             }
-            "method_invocation" => self.fm.call_matches_any(v, RESOURCE_FACTORIES),
+            "method_invocation" => self.fm.call_matches_any(v, RESOURCE_FACTORIES) && !self.owned_by_resource(v, 3),
+            _ => false,
+        }
+    }
+
+    /// A JDBC statement or result set obtained (directly or through such
+    /// objects) from a try-with-resources variable is closed with it.
+    fn owned_by_resource(&self, call: Node<'t>, depth: u32) -> bool {
+        if depth == 0 {
+            return false;
+        }
+        let Some(o) = call.field("object").map(|o| o.unparen()) else { return false };
+        if o.kind() == "method_invocation" {
+            return self.owned_by_resource(o, depth - 1);
+        }
+        let Some(i) = (if o.kind() == "identifier" { self.fm.binder.decl_index_of_ref(o) } else { None }) else { return false };
+        let d = &self.fm.binder.decls[i];
+        match d.kind {
+            LocalKind::Resource => true,
+            LocalKind::Local => is_effectively_final(self.fm, i) && d.decl_node.field("value").map(|v| v.unparen()).is_some_and(|v| v.kind() == "method_invocation" && self.owned_by_resource(v, depth - 1)),
             _ => false,
         }
     }
@@ -600,6 +669,49 @@ impl<'a, 't> Analysis<'t> for ResourceAnalysis<'a, 't> {
             }
         }
         out
+    }
+    /// `x.close()` that throws: nothing more can be done with `x`, so the
+    /// exception path does not leak it (`try { x.close(); } catch (...) {}`).
+    fn edge(&self, kind: &EdgeKind<'t>, fact: &ResFact) -> Option<ResFact> {
+        if let EdgeKind::Exception(Some(n)) = kind {
+            let mut f = fact.clone();
+            let mut closes = Vec::new();
+            for d in std::iter::once(*n).chain(n.descendants()) {
+                if d.kind() == "method_invocation" && self.fm.call_name(d) == Some("close") {
+                    closes.push(d);
+                }
+            }
+            for c in closes {
+                if let Some(i) = c.field("object").map(|o| o.unparen()).filter(|o| o.kind() == "identifier").and_then(|o| self.fm.binder.decl_index_of_ref(o)) {
+                    if f.contains_key(&i) {
+                        f.insert(i, ResState::Closed);
+                    }
+                }
+            }
+            return Some(f);
+        }
+        // `if (x != null) x.close();`: on the null edge there is nothing to close
+        let (c, truth) = match kind {
+            EdgeKind::True(c) => (*c, true),
+            EdgeKind::False(c) => (*c, false),
+            _ => return Some(fact.clone()),
+        };
+        let c = c.unparen();
+        if c.kind() == "binary_expression" {
+            let op = c.field("operator").map(|o| o.kind()).unwrap_or("");
+            if let (Some(l), Some(r)) = (c.field("left").map(|x| x.unparen()), c.field("right").map(|x| x.unparen())) {
+                let var = if r.kind() == "null_literal" { Some(l) } else if l.kind() == "null_literal" { Some(r) } else { None };
+                let null_edge = (op == "==" && truth) || (op == "!=" && !truth);
+                if let Some(i) = var.filter(|v| v.kind() == "identifier").and_then(|v| self.fm.binder.decl_index_of_ref(v)) {
+                    if null_edge && fact.contains_key(&i) {
+                        let mut f = fact.clone();
+                        f.insert(i, ResState::Closed);
+                        return Some(f);
+                    }
+                }
+            }
+        }
+        Some(fact.clone())
     }
     fn transfer(&self, e: Node<'t>, f: &mut ResFact) {
         match e.kind() {
@@ -739,6 +851,25 @@ impl<'a, 't> Analysis<'t> for OptionalPresence<'a, 't> {
                         f.insert(i);
                     }
                 }
+                // assertions abort the test when empty: assertThat(opt).isPresent(),
+                // assertTrue(opt.isPresent()), assertFalse(opt.isEmpty())
+                if matches!(name, "isPresent" | "isNotEmpty" | "hasValue" | "contains" | "hasValueSatisfying") {
+                    let subject = e.field("object").map(|o| o.unparen()).filter(|o| is_static_assert_that(self.fm, *o));
+                    if let Some(i) = subject.and_then(|o| self.optional_local(self.fm.args_of(o).first().copied())) {
+                        f.insert(i);
+                    }
+                }
+                if matches!(name, "assertTrue" | "assertFalse") {
+                    let want = if name == "assertTrue" { "isPresent" } else { "isEmpty" };
+                    for a in self.fm.args_of(e) {
+                        let a = a.unparen();
+                        if a.kind() == "method_invocation" && self.fm.call_name(a) == Some(want) {
+                            if let Some(i) = self.optional_local(a.field("object")) {
+                                f.insert(i);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -763,6 +894,15 @@ impl<'a, 't> Analysis<'t> for OptionalPresence<'a, 't> {
         }
         Some(fact.clone())
     }
+}
+
+/// `assertThat(x)` / `Assertions.assertThat(x)`, which throws on failure;
+/// not `softly.assertThat(x)` (SoftAssertions collect failures and go on).
+pub fn is_static_assert_that<'t>(fm: &FileModel<'t>, call: Node<'t>) -> bool {
+    // a class qualifier (`Truth.assertThat`, possibly unresolved), not a
+    // `softly` instance
+    let class_like = |o: Node<'t>| fm.is_type_name(o) || fm.text(o).rsplit('.').next().is_some_and(|s| s.starts_with(|c: char| c.is_ascii_uppercase()));
+    call.kind() == "method_invocation" && fm.call_name(call) == Some("assertThat") && call.field("object").is_none_or(class_like)
 }
 
 /// Is this local a parameter or effectively-final variable never reassigned?

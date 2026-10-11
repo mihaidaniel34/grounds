@@ -8,3 +8,8 @@ class A {
         in.read();
     }
 }
+class Frames extends java.io.InputStream {
+    public int read() { return -1; }
+    boolean read(String frame) { return frame.isEmpty(); }
+    void go() { read("hello"); }
+}

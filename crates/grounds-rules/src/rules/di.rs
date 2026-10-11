@@ -288,7 +288,7 @@ impl Rule for MultipleInjectConstructors {
     }
 }
 
-const PROXY_ANNOTATIONS: &[&str] = &["Transactional", "Async", "Cacheable", "CacheEvict", "CachePut", "Retryable", "PreAuthorize", "PostAuthorize", "Secured", "RolesAllowed", "Timed", "Counted", "Lock", "TransactionalEventListener"];
+const PROXY_ANNOTATIONS: &[&str] = &["Transactional", "Async", "Cacheable", "CacheEvict", "CachePut", "Retryable", "PreAuthorize", "PostAuthorize", "Secured", "RolesAllowed", "Timed", "Counted", "Lock"];
 
 declare_rule!(ProxyAnnotationOnPrivate {
     id: "proxy-annotation-on-non-proxyable-method",
@@ -443,6 +443,14 @@ impl Rule for ComponentOnAbstract {
             return;
         }
         let names = annotation_names(n, cx.src);
+        let foreign = cx.fm.annotations_of(n).iter().any(|a| {
+            matches!(a.simple_name(), "Component" | "Service" | "Controller" | "RestController")
+                && !a.name.starts_with("org.springframework.")
+                && (a.name.contains('.') || cx.fm.class(&a.name).is_some())
+        });
+        if foreign {
+            return;
+        }
         if let Some(a) = names.iter().find(|a| matches!(**a, "Component" | "Service" | "Controller" | "RestController")) {
             // Spring Data / Micronaut Data interfaces annotated @Repository are fine
             if n.kind() == "interface_declaration" && names.iter().any(|x| matches!(*x, "Repository" | "Client" | "FeignClient" | "Mapper" | "JdbcRepository")) {
@@ -527,7 +535,7 @@ impl Rule for SingletonMutableState {
         for d in n.fields("declarator") {
             let Some(name) = d.field("name").map(|x| x.text(cx.src)) else { continue };
             // written outside constructors / init methods?
-            let written_in_method = methods_of(decl).iter().filter(|m| !annotation_names(**m, cx.src).iter().any(|a| matches!(*a, "PostConstruct" | "Autowired" | "Inject"))).any(|m| {
+            let written_in_method = methods_of(decl).iter().filter(|m| !annotation_names(**m, cx.src).iter().any(|a| matches!(*a, "PostConstruct" | "Autowired" | "Inject" | "Value" | "Resource"))).any(|m| {
                 let mut assigns = Vec::new();
                 if let Some(b) = m.field("body") {
                     find_kind(b, "assignment_expression", &mut assigns);

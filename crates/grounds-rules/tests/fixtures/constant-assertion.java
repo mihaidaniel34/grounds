@@ -8,3 +8,9 @@ class ATest {
         assertNotNull(o);
     }
 }
+class MessageFirst {
+    void t(int failures, Object list) {
+        org.junit.Assert.assertEquals("Value B should not be lost", 0, failures);
+        org.junit.Assert.assertNotNull("list must not be null", list);
+    }
+}
