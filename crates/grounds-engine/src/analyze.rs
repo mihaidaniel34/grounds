@@ -111,11 +111,18 @@ fn to_finding(project: &Project, pf: &ParsedFile, fm: &FileModel, rel: &str, d: 
     let n = seen.entry(base.clone()).or_insert(0);
     *n += 1;
     let fp = format!("{:016x}", xxhash_rust::xxh3::xxh3_64(format!("{base}|{n}").as_bytes()));
+    // the legacy fingerprint numbers repeated findings by its own key, as
+    // 0.0.5 did (two overloads that differ only in a qualified varargs type
+    // shared one legacy member path)
     let legacy_member = node.map(|n| member_path(n, fm.src, true)).unwrap_or_default();
-    let legacy_fingerprint = (legacy_member != member).then(|| {
-        let legacy_base = format!("{}|{}|{}|{}", d.rule, rel, legacy_member, line_text);
-        format!("{:016x}", xxhash_rust::xxh3::xxh3_64(format!("{legacy_base}|{n}").as_bytes()))
-    });
+    let legacy_base = format!("{}|{}|{}|{}", d.rule, rel, legacy_member, line_text);
+    let ln = {
+        let e = seen.entry(format!("legacy|{legacy_base}")).or_insert(0);
+        *e += 1;
+        *e
+    };
+    let legacy_fp = format!("{:016x}", xxhash_rust::xxh3::xxh3_64(format!("{legacy_base}|{ln}").as_bytes()));
+    let legacy_fingerprint = (legacy_fp != fp).then_some(legacy_fp);
     let category = grounds_rules::meta_of(d.rule).map(|m| m.category.as_str()).unwrap_or("bug");
     Finding {
         path: rel.to_string(),

@@ -762,20 +762,28 @@ impl Index {
     }
 
     fn resolve_on_demand(&self, simple: &str, scope: &Scope) -> Option<Name> {
-        for imp in scope.imports.iter().filter(|i| i.on_demand) {
+        let lookup = |imp: &Import| -> Option<Name> {
             if self.package_exists(&imp.path) && !imp.is_static {
                 let c = format!("{}.{}", imp.path, simple);
                 if self.class_exists(&c) {
                     return Some(Arc::from(c.as_str()));
                 }
             }
-            if let Some(b) = self.binary_name_for_dotted(&imp.path) {
-                if let Some(n) = self.member_type(&b, simple) {
-                    return Some(n);
-                }
+            self.binary_name_for_dotted(&imp.path).and_then(|b| self.member_type(&b, simple))
+        };
+        // the file's own on-demand imports shadow module imports (JEP 511)
+        if let Some(n) = scope.imports.iter().filter(|i| i.on_demand && !i.from_module).find_map(lookup) {
+            return Some(n);
+        }
+        // module imports: a name exported by two packages is ambiguous
+        let mut found: Option<Name> = None;
+        for n in scope.imports.iter().filter(|i| i.on_demand && i.from_module).filter_map(lookup) {
+            match &found {
+                Some(f) if *f != n => return None,
+                _ => found = Some(n),
             }
         }
-        None
+        found
     }
 
     /// All source classes whose direct supertypes include `name`.

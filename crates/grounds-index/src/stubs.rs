@@ -192,6 +192,10 @@ pub struct Import {
     pub path: Name,
     pub is_static: bool,
     pub on_demand: bool,
+    /// Expanded from `import module X;`: a name found in two of its
+    /// packages is ambiguous, not the first one's.
+    #[serde(default)]
+    pub from_module: bool,
 }
 
 impl Import {
@@ -246,9 +250,9 @@ pub fn extract_with(file: &ParsedFile, lombok: &crate::lombok::LombokConfig) -> 
                         // `import module java.base;` imports the module's exported
                         // packages on demand; added after the file's own imports,
                         // which shadow them (JEP 511)
-                        module_imports.extend(module_packages(&path).into_iter().map(|p| Import { path: Arc::from(p), is_static: false, on_demand: true }));
+                        module_imports.extend(module_packages(&path).into_iter().map(|p| Import { path: Arc::from(p), is_static: false, on_demand: true, from_module: true }));
                     } else {
-                        stub.imports.push(Import { path: Arc::from(path.as_str()), is_static, on_demand });
+                        stub.imports.push(Import { path: Arc::from(path.as_str()), is_static, on_demand, from_module: false });
                     }
                 }
             }

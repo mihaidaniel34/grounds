@@ -303,3 +303,17 @@ fn module_imports_include_transitive_exports() {
     );
     assert_eq!(t, vec!["java.util.logging.Logger", "java.util.logging.Logger"]);
 }
+
+#[test]
+fn ambiguous_module_imported_types_stay_unresolved() {
+    let t = types_of(
+        "import module java.desktop;
+         import java.util.*;
+         class T { void m(Element e, List<String> l) { Object a = /*T*/ e; Object b = /*T*/ l; } }",
+    );
+    // Element is exported by javax.swing.text and javax.swing.text.html.parser
+    // (and others): javac rejects it as ambiguous; the file's own java.util.*
+    // shadows java.awt.List
+    assert_ne!(t[0], "javax.swing.text.Element");
+    assert_eq!(t[1], "java.util.List<java.lang.String>");
+}
