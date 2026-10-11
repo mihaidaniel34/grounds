@@ -29,10 +29,21 @@ pub enum ArgShape {
     Ty(Ty),
     /// arity, whether the body fits a void / a value-returning
     /// functional method (JLS 15.27.2), whether it is explicitly typed (typed
-    /// parameters, or none at all), and the type of an expression body
-    /// without parameters
-    Lambda(usize, LambdaCompat, bool, Option<Ty>),
+    /// parameters, or none at all), and the expression body without
+    /// parameters
+    Lambda(usize, LambdaCompat, bool, Option<LambdaBody>),
     MethodRef,
+}
+
+/// An expression body of a lambda without parameters.
+#[derive(Clone, Debug)]
+pub struct LambdaBody {
+    /// its type alone
+    ty: Ty,
+    /// a generic call (`() -> List.of("x")`): its declared result, the
+    /// method's type variables and their bindings from its own arguments;
+    /// javac infers it with the functional result as target
+    poly: Option<(Ty, Vec<Name>, Vec<(Name, Ty)>)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -160,6 +171,8 @@ struct Inference {
     no: bool,
     /// a poly argument bounds a variable
     soft: bool,
+    /// the variables a poly argument bounds
+    soft_vars: Vec<Name>,
     /// incomplete for a reason other than an unknown type
     guess: bool,
 }
@@ -202,7 +215,15 @@ impl<'t> FileModel<'t> {
                 };
                 let compat = a.field("body").map(lambda_compat).unwrap_or(LambdaCompat { void_ok: true, value_ok: true });
                 let typed = a.field("parameters").is_none_or(|p| p.kind() == "formal_parameters");
-                let body = a.field("body").filter(|b| n == 0 && b.kind() != "block").map(|b| self.arg_type(b.unparen(), Target::None)).filter(|t| t.is_known());
+                let body = a.field("body").filter(|b| n == 0 && b.kind() != "block").and_then(|b| {
+                    let b = b.unparen();
+                    let ty = self.arg_type(b, Target::None);
+                    let poly = (b.kind() == "method_invocation" && self.is_poly(b)).then(|| self.select_method(b)).flatten().map(|c| {
+                        let vars = c.method.type_params.iter().map(|tp| tp.name.clone()).collect();
+                        (c.method.ret.clone(), vars, self.partial_inference(b, &c.method).bindings)
+                    });
+                    ty.is_known().then_some(LambdaBody { ty, poly })
+                });
                 ArgShape::Lambda(n, compat, typed, body)
             }
             "method_reference" => ArgShape::MethodRef,
@@ -334,16 +355,16 @@ impl<'t> FileModel<'t> {
                                     // (JLS 15.12.2.2); an int constant also narrows to byte, short, char
                                     // `() -> 1` is no `Iterator<T>` whatever T is
                                     Some(bt) if !void && m.method.ret.mentions_type_var() => {
-                                        let bc = bt.boxed();
+                                        let bc = bt.ty.boxed();
                                         match (bc.class_name(), m.method.ret.class_name()) {
                                             (Some(x), Some(y)) if self.is_subclass(x, y).is_no() => Fit::No,
                                             _ => Fit::Strict,
                                         }
                                     }
                                     Some(bt) if !void => {
-                                        let narrows = matches!(bt, Ty::Prim(Prim::Int))
+                                        let narrows = matches!(bt.ty, Ty::Prim(Prim::Int))
                                             && matches!(m.method.ret.unboxed(), Some(Prim::Byte | Prim::Short | Prim::Char));
-                                        match self.conv(bt, &m.method.ret) {
+                                        match self.body_fits(bt, &m.method.ret) {
                                             Conv::No if !narrows => Fit::No,
                                             Conv::Yes | Conv::Unchecked => Fit::Strict,
                                             _ => Fit::Maybe,
@@ -534,7 +555,7 @@ impl<'t> FileModel<'t> {
                             sam.is_some_and(|sam| match (&sam.method.ret, body) {
                                 (Ty::Void, _) => true,
                                 (Ty::TypeVar(v), Some(_)) => free(v),
-                                (r, Some(bt)) => !r.mentions_type_var() && self.conv(bt, r) == Conv::Yes,
+                                (r, Some(bt)) => !r.mentions_type_var() && self.body_fits(bt, r) == Conv::Yes,
                                 _ => false,
                             })
                         }
@@ -563,6 +584,24 @@ impl<'t> FileModel<'t> {
             return in_phase(params).map(|(_, inf)| (3, inf));
         }
         None
+    }
+
+    /// A lambda body against the functional result `r`. A generic call
+    /// there takes its type variables from `r` (JLS 18.5.2): it fits when
+    /// that instantiation fits and is above what its arguments say.
+    fn body_fits(&self, b: &LambdaBody, r: &Ty) -> Conv {
+        let Some((ret, vars, own)) = &b.poly else { return self.conv(&b.ty, r) };
+        let erased = self.conv(&b.ty.erasure(), &r.erasure());
+        let mut bind = Vec::new();
+        unify(self, ret, r, vars, &mut bind);
+        let fits = !vars.iter().any(|v| mentions(ret, v) && !bind.iter().any(|(k, _)| k == v))
+            && bind.iter().all(|(v, x)| own.iter().find(|(k, _)| k == v).is_none_or(|(_, b)| self.conv(b, x) == Conv::Yes))
+            && self.conv(&apply_subst(ret, &bind), r) == Conv::Yes;
+        match erased {
+            Conv::No => Conv::No,
+            _ if fits => Conv::Yes,
+            _ => Conv::Unknown,
+        }
     }
 
     /// `t` viewed as its supertype `target` with `t`'s own type arguments,
@@ -763,6 +802,15 @@ impl<'t> FileModel<'t> {
         if inf.no && inf.soft {
             inf.no = false;
             inf.incomplete = true;
+            // and a binding that conflicts with it is no answer either
+            let soft = std::mem::take(&mut inf.soft_vars);
+            inf.bindings.retain(|(k, _)| !soft.contains(k));
+            inf.captures.retain(|c| !soft.contains(&c.var));
+            for v in soft {
+                if !inf.poisoned.contains(&v) {
+                    inf.poisoned.push(v);
+                }
+            }
         }
         inf
     }
@@ -777,6 +825,15 @@ impl<'t> FileModel<'t> {
                 self.gather(p, a, Rel::Lower, true, &vars, &mut cs, &mut inf);
                 if poly.get(i).copied().unwrap_or(false) && (cs.len(), inf.captures.len()) != before {
                     inf.soft = true;
+                    // javac infers `List.of("x")` against `List<T>`: what the
+                    // argument says alone only bounds T from below
+                    for c in &mut cs[before.0..] {
+                        if c.1 == Rel::Eq {
+                            c.1 = Rel::Lower;
+                        }
+                        inf.soft_vars.push(c.0.clone());
+                    }
+                    inf.soft_vars.extend(inf.captures[before.1..].iter().map(|c| c.var.clone()));
                 }
             }
         }
@@ -838,6 +895,24 @@ impl<'t> FileModel<'t> {
                     if !inf.poisoned.contains(v) {
                         inf.bindings.push((v.clone(), b));
                     }
+                }
+                continue;
+            }
+            // above several captures, or a capture and other types
+            // (`concat(Stream<? extends T>, Stream<? extends T>)`), T is their lub:
+            // a proper type when the upper bounds have one
+            if caps.len() + lowers.len() > 1 && eqs.is_empty() && uppers.is_empty() && caps.iter().all(|c| c.rel == Rel::Lower) {
+                let bounds: Option<Vec<Ty>> = caps.iter().map(|c| c.bound.clone()).collect();
+                let lub = bounds.and_then(|bs| {
+                    let tys: Vec<Ty> = lowers.iter().cloned().chain(bs).collect();
+                    tys.iter().find(|t| tys.iter().all(|o| self.conv(o, t) == Conv::Yes)).cloned().or_else(|| self.lub(&tys))
+                });
+                match lub {
+                    Some(l) => {
+                        inf.captures.retain(|c| c.var != *v);
+                        inf.bindings.push((v.clone(), l));
+                    }
+                    None => fail(&mut inf, false),
                 }
                 continue;
             }
