@@ -21,3 +21,6 @@ class NotIdentity {
 class Everything {
     @Override public boolean equals(Object other) { return this == this; } // expect
 }
+class StaticEquals {
+    static boolean equals(Object o) { return o == null; }
+}

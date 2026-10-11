@@ -574,10 +574,11 @@ impl Rule for EqualsWithoutHashCode {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
         let ms = class_methods(n, cx.src);
-        let eq = ms.iter().find(|(m, name, pc)| name == "equals" && *pc == 1 && m.field("parameters").is_some_and(|p| {
+        // a static `equals(Object)` overrides nothing
+        let eq = ms.iter().find(|(m, name, pc)| name == "equals" && *pc == 1 && !m.has_modifier("static") && m.field("parameters").is_some_and(|p| {
             p.kids().first().and_then(|fp| fp.field("type")).is_some_and(|t| matches!(type_simple_name(t, cx.src), "Object"))
         }));
-        let hc = ms.iter().find(|(_, name, pc)| name == "hashCode" && *pc == 0);
+        let hc = ms.iter().find(|(m, name, pc)| name == "hashCode" && *pc == 0 && !m.has_modifier("static"));
         // Lombok @EqualsAndHashCode/@Data/@Value generate both
         if cx.fm.class_of_decl(n).is_some_and(|c| c.methods.iter().any(|m| m.generated_by.is_some() && matches!(&*m.name, "equals" | "hashCode"))) {
             return;

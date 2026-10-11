@@ -13,3 +13,7 @@ class Outer {
     static class AlreadyStatic { }
     void work() {}
 }
+class OuterTest {
+    @org.junit.jupiter.api.Nested
+    class InnerTests { int x; }
+}
