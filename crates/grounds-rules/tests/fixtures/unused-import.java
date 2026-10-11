@@ -1,3 +1,4 @@
+import module java.base;
 import java.util.List;
 import java.util.Map; // expect
 import java.util.Set;

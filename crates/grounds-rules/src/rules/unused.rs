@@ -360,6 +360,11 @@ impl Rule for UnusedImport {
             let mut c = imp.walk();
             let is_static = imp.children(&mut c).any(|k| !k.is_named() && k.kind() == "static");
             let on_demand = imp.kid_of_kind("asterisk").is_some();
+            // `import module java.base;`: not a type import, its use cannot be seen by name
+            let mut c2 = imp.walk();
+            if imp.children(&mut c2).any(|k| !k.is_named() && k.kind() == "module") {
+                continue;
+            }
             let Some(path_node) = imp.kids().into_iter().find(|k| matches!(k.kind(), "identifier" | "scoped_identifier")) else { continue };
             let path = path_node.text(cx.src).chars().filter(|c| !c.is_whitespace()).collect::<String>();
             let key = format!("{is_static}{on_demand}{path}");

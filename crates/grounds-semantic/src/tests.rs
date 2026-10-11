@@ -285,3 +285,12 @@ fn nested_generic_overloads_stay_polynomial() {
     }
     assert!(fm.work.get() < 20_000, "{} guarded computations", fm.work.get());
 }
+
+#[test]
+fn module_imports_resolve_types() {
+    let t = types_of(
+        "import module java.base;
+         class T { void m() { Object a = /*T*/ new ArrayList<String>(); Object b = /*T*/ Path.of(\"x\"); } }",
+    );
+    assert_eq!(t, vec!["java.util.ArrayList<java.lang.String>", "java.nio.file.Path"]);
+}

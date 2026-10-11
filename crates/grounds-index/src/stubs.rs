@@ -227,6 +227,7 @@ pub fn extract_with(file: &ParsedFile, lombok: &crate::lombok::LombokConfig) -> 
     let src = &*file.text;
     let root = file.root();
     let mut stub = FileStub { package: Arc::from(""), has_syntax_errors: file.has_errors(), ..Default::default() };
+    let mut module_imports: Vec<Import> = Vec::new();
     for ch in root.kids() {
         match ch.kind() {
             "package_declaration" => {
@@ -236,15 +237,25 @@ pub fn extract_with(file: &ParsedFile, lombok: &crate::lombok::LombokConfig) -> 
             }
             "import_declaration" => {
                 let mut c = ch.walk();
-                let is_static = ch.children(&mut c).any(|k| !k.is_named() && k.kind() == "static");
+                let tokens: Vec<&str> = ch.children(&mut c).filter(|k| !k.is_named()).map(|k| k.kind()).collect();
+                let is_static = tokens.contains(&"static");
                 let on_demand = ch.kid_of_kind("asterisk").is_some();
                 if let Some(n) = ch.kids().into_iter().find(|k| matches!(k.kind(), "identifier" | "scoped_identifier")) {
-                    stub.imports.push(Import { path: Arc::from(strip_ws(n.text(src)).as_str()), is_static, on_demand });
+                    let path = strip_ws(n.text(src));
+                    if tokens.contains(&"module") {
+                        // `import module java.base;` imports the module's exported
+                        // packages on demand; added after the file's own imports,
+                        // which shadow them (JEP 511)
+                        module_imports.extend(module_packages(&path).iter().map(|p| Import { path: Arc::from(*p), is_static: false, on_demand: true }));
+                    } else {
+                        stub.imports.push(Import { path: Arc::from(path.as_str()), is_static, on_demand });
+                    }
                 }
             }
             _ => {}
         }
     }
+    stub.imports.extend(module_imports);
     let pkg = stub.package.clone();
     let mut ex = Extractor { src, classes: Vec::new() };
     for ch in root.kids() {
@@ -1094,6 +1105,33 @@ impl<'s> Extractor<'s> {
         c.methods = methods;
         c.inners = inners;
         Some(name)
+    }
+}
+
+/// Exported packages of the JDK modules a module import commonly names
+/// (unknown modules import nothing, so their types stay unresolved).
+fn module_packages(module: &str) -> &'static [&'static str] {
+    match module {
+        "java.base" => &[
+            "java.io", "java.lang", "java.lang.annotation", "java.lang.classfile", "java.lang.classfile.attribute",
+            "java.lang.classfile.constantpool", "java.lang.classfile.instruction", "java.lang.constant", "java.lang.foreign",
+            "java.lang.invoke", "java.lang.module", "java.lang.ref", "java.lang.reflect", "java.lang.runtime", "java.math",
+            "java.net", "java.net.spi", "java.nio", "java.nio.channels", "java.nio.channels.spi", "java.nio.charset",
+            "java.nio.charset.spi", "java.nio.file", "java.nio.file.attribute", "java.nio.file.spi", "java.security",
+            "java.security.cert", "java.security.interfaces", "java.security.spec", "java.text", "java.text.spi", "java.time",
+            "java.time.chrono", "java.time.format", "java.time.temporal", "java.time.zone", "java.util", "java.util.concurrent",
+            "java.util.concurrent.atomic", "java.util.concurrent.locks", "java.util.function", "java.util.jar",
+            "java.util.random", "java.util.regex", "java.util.spi", "java.util.stream", "java.util.zip", "javax.crypto",
+            "javax.crypto.interfaces", "javax.crypto.spec", "javax.net", "javax.net.ssl", "javax.security.auth",
+            "javax.security.auth.callback", "javax.security.auth.login", "javax.security.auth.spi", "javax.security.auth.x500",
+            "javax.security.cert",
+        ],
+        "java.sql" => &["java.sql", "javax.sql"],
+        "java.net.http" => &["java.net.http"],
+        "java.logging" => &["java.util.logging"],
+        "java.desktop" => &["java.awt", "java.awt.event", "java.awt.image", "java.beans", "javax.swing", "javax.imageio"],
+        "java.xml" => &["javax.xml", "javax.xml.parsers", "javax.xml.transform", "javax.xml.xpath", "javax.xml.stream", "org.w3c.dom", "org.xml.sax"],
+        _ => &[],
     }
 }
 

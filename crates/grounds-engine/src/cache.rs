@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-const VERSION: u32 = 128; // orchard grammar: distinct from master while both are in use // bump whenever stub extraction changes
+const VERSION: u32 = 129; // orchard grammar: distinct from master while both are in use // bump whenever stub extraction changes
 
 #[derive(Default, Serialize, Deserialize)]
 pub struct StubCache {
