@@ -415,6 +415,9 @@ impl Flags {
     pub const LOCAL: u32 = 1 << 23;
     /// A source method whose body always ends by throwing (`void fail(String m) { throw ...; }`).
     pub const ALWAYS_THROWS: u32 = 1 << 24;
+    /// A source method that starts with `if (!flag) throw ...;` on its first
+    /// (boolean) parameter: a check that returns only when the flag is true.
+    pub const THROWS_ON_FALSE: u32 = 1 << 25;
 
     pub fn has(self, f: u32) -> bool {
         self.0 & f != 0

@@ -236,7 +236,7 @@ impl<'a, 't> Ctx<'a, 't> {
             // UnsupportedOperationException) may be replaced at runtime
             use grounds_index::Flags;
             let mf = c.method.flags;
-            let not_overridable = mf.has(Flags::STATIC) || mf.has(Flags::PRIVATE) || mf.has(Flags::FINAL) || fm.class(&c.owner).is_some_and(|o| o.flags.has(Flags::FINAL) || o.is_enum() || o.is_record());
+            let not_overridable = mf.has(Flags::STATIC) || mf.has(Flags::PRIVATE) || mf.has(Flags::FINAL) || fm.class(&c.owner).is_some_and(|o| o.flags.has(Flags::FINAL) || o.is_record());
             (mf.has(Flags::ALWAYS_THROWS) && not_overridable) || contract_fails || test_fail
         };
         let c = Rc::new(grounds_flow::build_with(callable, self.src, Some(&never_returns)));

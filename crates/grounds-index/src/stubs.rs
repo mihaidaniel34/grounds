@@ -979,6 +979,9 @@ impl<'s> Extractor<'s> {
                     if m.field("body").is_some_and(always_throws) {
                         ff.set(Flags::ALWAYS_THROWS);
                     }
+                    if throws_on_false(m, src) {
+                        ff.set(Flags::THROWS_ON_FALSE);
+                    }
                     let mut ret = m.field("type").map(|t| type_syntax(t, src)).unwrap_or(TypeSyntax::Unknown);
                     if let Some(d) = m.field("dimensions") {
                         ret = wrap_array(ret, d.text(src).matches('[').count());
@@ -1108,6 +1111,23 @@ fn always_throws(body: Node) -> bool {
         })
     }
     !returns(body)
+}
+
+/// `void check(boolean ok, ...) { if (!ok) throw ...; ... }`
+fn throws_on_false(m: Node, src: &str) -> bool {
+    let Some(first) = m.field("parameters").and_then(|p| p.kids().into_iter().find(|k| k.kind() == "formal_parameter")) else { return false };
+    if first.field("type").map(|t| t.text(src)) != Some("boolean") {
+        return false;
+    }
+    let Some(name) = first.field("name").map(|n| n.text(src)) else { return false };
+    let Some(stmt) = m.field("body").and_then(|b| b.kids().into_iter().next()) else { return false };
+    if stmt.kind() != "if_statement" || stmt.field("alternative").is_some() {
+        return false;
+    }
+    let cond = stmt.field("condition").map(|c| c.text(src).chars().filter(|c| !c.is_whitespace()).collect::<String>());
+    let negated = cond.is_some_and(|c| c == format!("(!{name})") || c == format!("({name}==false)") || c == format!("(false=={name})"));
+    let throws = stmt.field("consequence").is_some_and(|c| c.kind() == "throw_statement" || (c.kind() == "block" && c.kids().last().is_some_and(|l| l.kind() == "throw_statement")));
+    negated && throws
 }
 
 pub fn implicit_method(name: &str, flags: Flags, params: Vec<RawParam>, ret: TypeSyntax) -> RawMethod {

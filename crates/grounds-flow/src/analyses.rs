@@ -226,6 +226,36 @@ impl<'a, 't> NullnessAnalysis<'a, 't> {
         }
     }
 
+    /// A call that returns only when its first (boolean) argument is true:
+    /// Spring Assert.state/isTrue, Guava checkArgument/checkState, commons
+    /// Validate.isTrue/validState, JUnit assertTrue, `@Contract("false -> fail")`,
+    /// or a non-overridable project method starting with `if (!ok) throw`.
+    fn throws_on_false(&self, call: Node<'t>) -> bool {
+        let Some(c) = self.fm.select_method(call) else { return false };
+        let name = &*c.method.name;
+        let known = match &*c.owner {
+            "org.springframework.util.Assert" => matches!(name, "state" | "isTrue"),
+            "com.google.common.base.Preconditions" => matches!(name, "checkArgument" | "checkState"),
+            "org.apache.commons.lang3.Validate" => matches!(name, "isTrue" | "validState"),
+            o if o.starts_with("org.junit") || o.starts_with("junit.") => name == "assertTrue",
+            "org.testng.Assert" => name == "assertTrue",
+            _ => false,
+        };
+        let contract = c.method.annotations.iter().any(|a| {
+            a.simple_name() == "Contract"
+                && a.arg("value").is_some_and(|v| {
+                    v.strings().iter().flat_map(|s| s.split(';').map(str::to_string).collect::<Vec<_>>()).any(|clause| {
+                        let (lhs, rhs) = clause.rsplit_once("->").unwrap_or(("", &clause));
+                        let mut parts = lhs.split(',').map(str::trim);
+                        rhs.trim() == "fail" && parts.next() == Some("false") && parts.all(|p| p == "_")
+                    })
+                })
+        });
+        let mf = c.method.flags;
+        let own = mf.has(Flags::THROWS_ON_FALSE) && (mf.has(Flags::STATIC) || mf.has(Flags::PRIVATE) || mf.has(Flags::FINAL) || self.fm.class(&c.owner).is_some_and(|o| o.flags.has(Flags::FINAL)));
+        known || contract || own
+    }
+
     /// Effectively-final locals initialized as a plain copy (or cast) of local `i`.
     fn copies_of(&self, i: usize) -> Vec<usize> {
         let fm = self.fm;
@@ -490,13 +520,24 @@ impl<'a, 't> Analysis<'t> for NullnessAnalysis<'a, 't> {
             "method_invocation" => {
                 // throw-on-false checks used as statements: `Assert.state(x != null, ..)`,
                 // `checkArgument(x != null)`, `assertTrue(x != null)`, `checkArguments(ok, ..)`
-                if let Some(name) = self.fm.call_name(e) {
-                    let checker = matches!(name, "state" | "isTrue" | "assertTrue" | "checkArgument" | "checkState" | "validState")
-                        || ["check", "require", "ensure"].iter().any(|p| name.starts_with(p));
-                    let statement = e.parent().is_some_and(|p| p.kind() == "expression_statement");
-                    if checker && statement {
-                        if let Some(a) = self.fm.args_of(e).first().copied().filter(|a| self.fm.type_of(*a).unboxed() == Some(Prim::Boolean)) {
-                            for (i, s) in self.true_effects(a) {
+                let statement = e.parent().is_some_and(|p| p.kind() == "expression_statement");
+                if statement && self.throws_on_false(e) {
+                    let args = self.fm.args_of(e);
+                    if let Some(a) = args.first().copied().filter(|a| self.fm.type_of(*a).unboxed() == Some(Prim::Boolean)) {
+                        // `checkArgument(v != null, v = null)`: a local changed while
+                        // evaluating the arguments no longer holds the checked value
+                        let changed: Vec<usize> = args
+                            .iter()
+                            .flat_map(|x| x.descendants().chain(std::iter::once(*x)))
+                            .filter_map(|d| match d.kind() {
+                                "assignment_expression" => d.field("left").map(|l| l.unparen()),
+                                "update_expression" => d.first_kid().map(|l| l.unparen()),
+                                _ => None,
+                            })
+                            .filter_map(|l| if l.kind() == "identifier" { self.fm.binder.decl_index_of_ref(l) } else { None })
+                            .collect();
+                        for (i, s) in self.true_effects(a) {
+                            if !changed.contains(&i) {
                                 f.insert(i, s);
                             }
                         }

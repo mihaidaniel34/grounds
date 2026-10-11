@@ -99,3 +99,31 @@ class MoreGuards {
     }
     void log(String m) { }
 }
+class GuardEvidence {
+    static void checkMetrics(boolean present) { }
+    static void checkValid(boolean ok, Object message) { if (!ok) throw new IllegalArgumentException(String.valueOf(message)); }
+    void notThrowing() {
+        String value = null;
+        checkMetrics(value != null);
+        value.length(); // expect
+    }
+    void ownChecker(String value) {
+        if (value == null) { }
+        checkValid(value != null, "value");
+        value.length();
+    }
+    void reassignedInArgs() {
+        String value = "ok";
+        checkValid(value != null, value = null);
+        value.length(); // expect
+    }
+    enum Action {
+        OK { @Override void run() { } };
+        void run() { throw new UnsupportedOperationException(); }
+    }
+    void enumOverride(Action action) {
+        String value = null;
+        action.run();
+        value.length(); // expect
+    }
+}
