@@ -332,6 +332,10 @@ impl Rule for InnerClassCouldBeStatic {
         if p.kind() != "class_body" || n.has_modifier("static") {
             return;
         }
+        // JUnit 5 @Nested test classes must be inner (non-static) classes
+        if has_annotation_named(n, cx.src, "Nested") {
+            return;
+        }
         let Some(outer_decl) = p.parent() else { return };
         if outer_decl.kind() != "class_declaration" && outer_decl.kind() != "enum_declaration" && outer_decl.kind() != "record_declaration" {
             return;
