@@ -582,42 +582,73 @@ fn calls_javac_rejects_have_no_certain_type() {
 
 #[test]
 fn poly_arguments_never_leave_a_conflicting_binding() {
-    // `List.of("x")` alone says T = String; javac infers it with the target
-    // and gets T = Object
+    // javac infers a generic call as argument with the parameter as target;
+    // where that is needed to settle a variable, the result is unknown
     let t = types_of(
         "import java.util.*;
-         class R { static <T> T choose(T fallback, List<T> values) { return fallback; } static <T> T same(List<T> a, List<T> b) { return null; } }
-         class T { void m(Object obj, List<String> ls) { Object a = /*T*/ R.choose(obj, List.of(\"x\")); Object b = /*T*/ R.same(ls, List.of(1)); } }",
+         class R { static <T> T choose(T fallback, List<T> values) { return fallback; } static <T> T same(List<T> a, List<T> b) { return null; }
+                   static <X> List<X> identity(List<X> xs) { return xs; } }
+         class Q { static <X> String pick(X fallback, List<X> values) { return null; } static Integer pick(Object fallback, Collection<?> values, Object... rest) { return null; } }
+         class T {
+           void m(Object obj, List<String> ls) {
+             Object a = /*T*/ R.choose(obj, List.of(\"x\"));
+             Object b = /*T*/ R.same(ls, List.of(1));
+             Object c = /*T*/ Q.pick(obj, R.identity(ls));
+             Object d = /*T*/ R.choose(obj, R.identity(ls));
+           } }",
     );
-    // javac rejects the second: no certain type
-    assert_eq!(t, vec!["java.lang.Object", "?unknown"]);
+    // javac: Object, rejected, Integer (X = String cannot take the Object), rejected
+    assert_eq!(t, vec!["?unknown"; 4]);
 }
 
 #[test]
 fn lambda_bodies_are_typed_against_the_functional_result() {
-    // `() -> List.of("x")` is a `List<Object>` supplier: the generic call in
-    // the body is typed with the target
+    // a generic call in the body is inferred with the functional result as
+    // target, its own arguments and bounds: only its erasure rules anything out
     let t = types_of(
         "import java.util.*; import java.util.function.*;
          interface General { List<?> get(); }
          interface Specific extends General { List<Object> get(); }
          class R { static String pick(Specific s) { return null; } static Integer pick(General s) { return null; }
-                   static Integer one(Supplier<List<Object>> s) { return null; } }
-         class T { void m() { Object a = /*T*/ R.pick(() -> List.of(\"x\")); Object b = /*T*/ R.one(() -> List.of(\"x\")); } }",
+                   static Integer one(Supplier<List<Object>> s) { return null; }
+                   static <X> List<X> identity(List<X> xs) { return xs; } static <X extends Number> List<X> make() { return null; } }
+         class T {
+           void m(List<String> xs) {
+             Object a = /*T*/ R.pick(() -> List.of(\"x\"));
+             Object b = /*T*/ R.one(() -> List.of(\"x\"));
+             Object c = /*T*/ R.pick(() -> R.identity(xs));
+             Object d = /*T*/ R.pick(() -> R.make());
+           } }",
     );
-    assert_eq!(t, vec!["java.lang.String", "java.lang.Integer"]);
+    // javac: String, Integer, Integer, Integer
+    assert_eq!(t, vec!["?unknown", "java.lang.Integer", "?unknown", "?unknown"]);
 }
 
 #[test]
 fn captures_with_a_common_bound_infer_that_bound() {
     let t = types_of(
         "import java.util.*; import java.util.stream.*;
+         class Base {} class A extends Base {} class B extends Base {}
          class T {
            void m(Stream<? extends Number> a, Stream<? extends Number> b, Stream<?> c, Stream<?> d) {
              Object x = /*T*/ Stream.concat(a, b).toList();
              Object y = /*T*/ Stream.concat(c, d).toList();
              Object z = /*T*/ Stream.concat(a, b);
+             Stream<? extends Number> u = /*T*/ Stream.concat(a, b);
+             Stream<Object> v = /*T*/ Stream.concat(a, b);
+             Stream<Object> w = /*T*/ Stream.of(new A(), new B());
            } }",
     );
-    assert_eq!(t, vec!["java.util.List<java.lang.Number>", "java.util.List<java.lang.Object>", "java.util.stream.Stream<java.lang.Number>"]);
+    // the lub, unless the target forces another type (javac: Stream<Object>)
+    assert_eq!(
+        t,
+        vec![
+            "java.util.List<java.lang.Number>",
+            "java.util.List<java.lang.Object>",
+            "java.util.stream.Stream<java.lang.Number>",
+            "java.util.stream.Stream<java.lang.Number>",
+            "java.util.stream.Stream<?unknown>",
+            "java.util.stream.Stream<?unknown>"
+        ]
+    );
 }
