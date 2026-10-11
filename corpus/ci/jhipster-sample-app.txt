@@ -1,0 +1,13 @@
+src/main/java/io/github/jhipster/sample/config/SecurityConfiguration.java:46 csrf-protection-disabled
+src/main/java/io/github/jhipster/sample/config/SecurityJwtConfiguration.java:46 exception-message-only-logged
+src/main/java/io/github/jhipster/sample/domain/User.java:99 missing-override
+src/main/java/io/github/jhipster/sample/repository/OperationRepositoryWithBagRelationships.java:9 optional-as-parameter-or-field
+src/main/java/io/github/jhipster/sample/web/filter/SpaWebFilter.java:21 complex-boolean-expression
+src/main/java/io/github/jhipster/sample/web/rest/AccountResource.java:34 private-constructor-class-not-final
+src/main/java/io/github/jhipster/sample/web/rest/errors/ExceptionTranslator.java:176 optional-orelse-eager-call
+src/test/java/io/github/jhipster/sample/TechnicalStructureTest.java:13 test-class-without-tests
+src/test/java/io/github/jhipster/sample/config/SqlTestContainersSpringContextCustomizerFactory.java:47 throw-generic-exception
+src/test/java/io/github/jhipster/sample/domain/AssertUtils.java:10 public-static-non-final-field
+src/test/java/io/github/jhipster/sample/domain/AssertUtils.java:14 public-static-non-final-field
+src/test/java/io/github/jhipster/sample/security/jwt/JwtAuthenticationTestUtils.java:98 default-charset
+src/test/java/io/github/jhipster/sample/web/rest/errors/ExceptionTranslatorTestController.java:52 throw-generic-exception

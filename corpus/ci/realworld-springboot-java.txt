@@ -1,0 +1,12 @@
+src/main/java/io/github/raeperd/realworld/application/security/JWTAuthenticationFilter.java:39 private-constructor-class-not-final
+src/main/java/io/github/raeperd/realworld/application/security/SecurityConfiguration.java:40 csrf-protection-disabled
+src/main/java/io/github/raeperd/realworld/domain/article/ArticleUpdateRequest.java:7 private-constructor-class-not-final
+src/main/java/io/github/raeperd/realworld/domain/user/UserUpdateRequest.java:7 private-constructor-class-not-final
+src/main/java/io/github/raeperd/realworld/infrastructure/jwt/Base64URL.java:21 default-charset
+src/main/java/io/github/raeperd/realworld/infrastructure/jwt/Base64URL.java:6 private-constructor-class-not-final
+src/main/java/io/github/raeperd/realworld/infrastructure/jwt/HmacSHA256.java:7 private-constructor-class-not-final
+src/test/java/io/github/raeperd/realworld/domain/article/ArticleServiceTest.java:40 junit5-private-test-method
+src/test/java/io/github/raeperd/realworld/domain/article/comment/CommentServiceTest.java:36 junit5-private-test-method
+src/test/java/io/github/raeperd/realworld/domain/user/ProfileServiceTest.java:29 junit5-private-test-method
+src/test/java/io/github/raeperd/realworld/infrastructure/jwt/Base64URLTest.java:36 random-used-once
+src/test/java/io/github/raeperd/realworld/infrastructure/jwt/Base64URLTest.java:37 default-charset
