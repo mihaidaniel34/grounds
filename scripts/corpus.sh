@@ -72,7 +72,7 @@ classpath() {
     # through the reactor (an opt-in, it runs early-phase plugins)
     flags=()
     [ -f "$dir/pom.xml" ] && [ ! -f "$dir/gradlew" ] && "$grounds" classpath --help | command grep -q -- --maven-lifecycle && flags=(--maven-lifecycle)
-    if ! (cd "$dir" && "$grounds" classpath --root . --color never "${flags[@]}" < /dev/null); then
+    if ! (cd "$dir" && "$grounds" classpath --root . --color never ${flags[@]+"${flags[@]}"} < /dev/null); then
       echo "$name: grounds classpath FAILED"; failed=1; continue
     fi
     [ -e "$dir/grounds.toml" ] && { echo "$name: has its own grounds.toml"; failed=1; continue; }
