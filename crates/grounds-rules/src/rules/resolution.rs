@@ -238,16 +238,12 @@ fn accepts(cx: &Ctx<'_, '_>, at: &Ty, pt: &Ty) -> bool {
         return true;
     }
     // skew is only possible for jar classes, not between project classes
-    // (arrays of them too)
-    let base = |t: &Ty| -> Ty {
-        let mut t = t.clone();
-        while let Ty::Array(e) = t {
-            t = *e;
-        }
-        t
-    };
-    if let (Some(a), Some(p)) = (base(at).class_name().map(str::to_owned), base(pt).class_name().map(str::to_owned)) {
-        let (a, p) = (a.as_str(), p.as_str());
+    // (arrays of them too, with the same number of dimensions)
+    let (mut ab, mut pb) = (at, pt);
+    while let (Ty::Array(a), Ty::Array(p)) = (ab, pb) {
+        (ab, pb) = (&**a, &**p);
+    }
+    if let (Some(a), Some(p)) = (ab.class_name(), pb.class_name()) {
         let from_jar = |n: &str| cx.fm.class(n).is_some_and(|c| !c.is_source());
         if a != p && simple_name_of(a) == simple_name_of(p) && (from_jar(a) || from_jar(p)) {
             return true;

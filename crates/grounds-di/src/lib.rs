@@ -148,9 +148,10 @@ pub struct DiModel {
     /// of one repository, each its own application): the index keeps one of
     /// them, so wiring that involves such a class is not judged.
     pub duplicated: rustc_hash::FxHashSet<Name>,
-    /// Simple names mentioned in the files defining such classes: a copy the
-    /// index left out may provide one of these types.
-    pub duplicated_mentions: rustc_hash::FxHashSet<Name>,
+    /// Types a copy the index left out may provide: the supertypes of the
+    /// classes in files defining duplicated classes, and what their factory
+    /// methods return (resolved by simple name, with their supertypes).
+    pub duplicated_provides: rustc_hash::FxHashSet<Name>,
     /// Constructor-injection edges (owner, dependency class, point index),
     /// computed once at build time.
     pub ctor_edges: Vec<(Name, Name, usize)>,
@@ -897,7 +898,8 @@ pub fn unwrap_injected(ty: &Ty) -> (Ty, bool, bool, bool) {
             match &**name {
                 "java.util.Optional" => (a0(), true, false, false),
                 "org.springframework.beans.factory.ObjectProvider" | "io.micronaut.context.BeanProvider" => (a0(), true, false, true),
-                "jakarta.inject.Provider" | "javax.inject.Provider" | "org.springframework.beans.factory.ObjectFactory" | "java.util.function.Supplier" => (a0(), false, false, true),
+                // (a Supplier is an ordinary type: Spring wants a Supplier bean)
+                "jakarta.inject.Provider" | "javax.inject.Provider" | "org.springframework.beans.factory.ObjectFactory" => (a0(), false, false, true),
                 "java.util.List" | "java.util.Collection" | "java.util.Set" | "java.lang.Iterable" | "java.util.SortedSet" | "java.util.stream.Stream" => (a0(), true, true, false),
                 "java.util.Map" if args.first().is_some_and(|k| k.is_string()) => (args.get(1).map(|a| a.upper_bound()).unwrap_or(Ty::Unknown), true, true, false),
                 "jakarta.enterprise.inject.Instance" | "javax.enterprise.inject.Instance" => (a0(), true, true, true),
@@ -921,10 +923,25 @@ impl DiModel {
         let mut m = b.model;
         m.duplicated = index.source_class_names().filter(|n| index.is_duplicated(n)).cloned().collect();
         if !m.duplicated.is_empty() {
+            let mut names: rustc_hash::FxHashSet<&str> = rustc_hash::FxHashSet::default();
             for (_, stub) in index.files() {
-                if stub.classes.iter().any(|c| m.duplicated.contains(&c.name)) {
-                    m.duplicated_mentions.extend(stub.referenced_names.iter().cloned());
+                if !stub.classes.iter().any(|c| m.duplicated.contains(&c.name)) {
+                    continue;
                 }
+                for c in &stub.classes {
+                    names.extend(c.superclass.iter().chain(&c.interfaces).filter_map(|t| t.last_name()));
+                    let factory = |m: &&grounds_index::stubs::RawMethod| m.annotations.iter().any(|a| matches!(a.simple_name(), "Bean" | "Produces" | "Provides" | "Singleton"));
+                    names.extend(c.methods.iter().filter(factory).filter_map(|m| m.ret.last_name()));
+                }
+            }
+            let named: Vec<Name> = index.source_class_names().filter(|n| names.contains(simple_name_of(n))).cloned().collect();
+            for n in named {
+                for st in index.all_supertypes(&Ty::class(&n)) {
+                    if let Some(sn) = st.class_name() {
+                        m.duplicated_provides.insert(Arc::from(sn));
+                    }
+                }
+                m.duplicated_provides.insert(n);
             }
         }
         m.index_providers(index);
@@ -1003,7 +1020,7 @@ impl DiModel {
             return Resolution::Unknown;
         }
         if let Some(t) = p.ty.class_name() {
-            if self.duplicated.contains(t) || self.duplicated_mentions.contains(simple_name_of(t)) {
+            if self.duplicated.contains(t) || self.duplicated_provides.contains(t) {
                 return Resolution::Unknown;
             }
         }
@@ -1038,7 +1055,7 @@ impl DiModel {
             }
             if cands.is_empty() {
                 if before.is_empty() {
-                    return if maybe > 0 || self.opaque_imports || !self.provable_type(lk, &p.ty) || self.dynamically_registered(&p.ty) { Resolution::Unknown } else if p.optional { Resolution::Absent } else { Resolution::NotFound };
+                    return if maybe > 0 || self.opaque_imports || p.lazy || !self.provable_type(lk, &p.ty) || self.dynamically_registered(&p.ty) { Resolution::Unknown } else if p.optional { Resolution::Absent } else { Resolution::NotFound };
                 }
                 if maybe > 0 {
                     return Resolution::Unknown;
@@ -1060,7 +1077,7 @@ impl DiModel {
         }
         // ObjectProvider, Provider, ObjectFactory: the bean is looked up when
         // the code asks for it (often through orderedStream() or getIfUnique()),
-        // never at startup; a missing or ambiguous bean is not a startup failure
+        // which may or may not be during startup: not judged
         if p.lazy && cands.len() != 1 {
             return if cands.is_empty() && p.optional { Resolution::Absent } else { Resolution::Unknown };
         }
@@ -1300,6 +1317,29 @@ mod tests {
     }
 
     #[test]
+    fn duplicates_that_provide_nothing_suppress_nothing() {
+        let (idx, m) = model(&[
+            ("one/src/main/java/sample/Example.java", "package sample; import java.time.Clock; public class Example { Clock c; }"),
+            ("two/src/main/java/sample/Example.java", "package sample; import java.time.Clock; public class Example { Clock c; }"),
+            ("app/src/main/java/billing/Clock.java", "package billing; public interface Clock {}"),
+            ("app/src/main/java/billing/Uses.java", "package billing; @org.springframework.stereotype.Service class Uses { Uses(Clock clock) {} }"),
+        ]);
+        assert_eq!(resolution_of(&idx, &m, "app/src/main/java/billing/Uses.java", "clock"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn a_left_out_copy_provides_supertypes_too() {
+        let (idx, m) = model(&[
+            ("a/src/main/java/app/Impl.java", "package app; @org.springframework.stereotype.Service public class Impl {}"),
+            ("b/src/main/java/app/Impl.java", "package app; @org.springframework.stereotype.Service public class Impl implements SubRepo {}"),
+            ("b/src/main/java/app/SubRepo.java", "package app; public interface SubRepo extends Repo {}"),
+            ("b/src/main/java/app/Repo.java", "package app; public interface Repo {}"),
+            ("b/src/main/java/app/Consumer.java", "package app; @org.springframework.stereotype.Service class Consumer { Consumer(Repo repo) {} }"),
+        ]);
+        assert_eq!(resolution_of(&idx, &m, "b/src/main/java/app/Consumer.java", "repo"), Resolution::Unknown);
+    }
+
+    #[test]
     fn providers_do_not_fail_at_startup() {
         let (idx, m) = model(&[
             ("org/springframework/beans/factory/ObjectProvider.java", "package org.springframework.beans.factory; public interface ObjectProvider<T> {}"),
@@ -1307,12 +1347,14 @@ mod tests {
             ("app/A.java", "package app; import org.springframework.stereotype.Service; import org.springframework.beans.factory.ObjectProvider; import jakarta.inject.Provider;
              interface Configurer {} interface Missing {}
              @Service class One implements Configurer {} @Service class Two implements Configurer {}
-             @Service class Uses { Uses(ObjectProvider<Configurer> all, Provider<Configurer> one, Provider<Missing> missing, Configurer direct) {} }"),
+             @Service class Uses { Uses(ObjectProvider<Configurer> all, Provider<Configurer> one, Provider<Missing> missing, Configurer direct,
+                 @org.springframework.beans.factory.annotation.Qualifier(\"absent\") Provider<Missing> qualified) {} }"),
         ]);
         assert_eq!(resolution_of(&idx, &m, "app/A.java", "all"), Resolution::Unknown);
         assert_eq!(resolution_of(&idx, &m, "app/A.java", "one"), Resolution::Unknown);
         assert_eq!(resolution_of(&idx, &m, "app/A.java", "missing"), Resolution::Unknown);
         assert!(matches!(resolution_of(&idx, &m, "app/A.java", "direct"), Resolution::Ambiguous(_)));
+        assert_eq!(resolution_of(&idx, &m, "app/A.java", "qualified"), Resolution::Unknown);
     }
 
     #[test]

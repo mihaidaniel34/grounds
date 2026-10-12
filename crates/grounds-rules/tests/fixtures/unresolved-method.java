@@ -46,3 +46,12 @@ class VarargsArrays {
         VarargsArrays.of(ints); // expect
     }
 }
+class Date {}
+class SkewArrays {
+    static void consume(java.util.Date[] ds) {}
+    static void consume2(java.util.Date[][] ds) {}
+    void m(Date d, Date[] ds) {
+        SkewArrays.consume(d); // expect
+        SkewArrays.consume2(ds); // expect
+    }
+}
