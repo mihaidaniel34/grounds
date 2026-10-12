@@ -160,6 +160,23 @@ thread_local! {
     static RESOLVING: RefCell<FxHashSet<Name>> = RefCell::new(FxHashSet::default());
 }
 
+struct Resolving(Name);
+
+impl Resolving {
+    fn enter(name: &str) -> Option<Resolving> {
+        let name: Name = Arc::from(name);
+        RESOLVING.with(|r| r.borrow_mut().insert(name.clone())).then(|| Resolving(name))
+    }
+}
+
+impl Drop for Resolving {
+    fn drop(&mut self) {
+        RESOLVING.with(|r| {
+            r.borrow_mut().remove(&self.0);
+        });
+    }
+}
+
 impl Index {
     pub fn new(classpath: Arc<Classpath>) -> Index {
         Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), generation: 0 }
@@ -279,13 +296,8 @@ impl Index {
             if let Some(c) = self.cache.get(name) {
                 return c.clone();
             }
-            let in_progress = RESOLVING.with(|r| r.borrow().contains(name));
-            if in_progress {
-                return None;
-            }
-            RESOLVING.with(|r| r.borrow_mut().insert(Arc::from(name)));
+            let _resolving = Resolving::enter(name)?;
             let r = self.resolve_source_class(name).map(Arc::new);
-            RESOLVING.with(|r| r.borrow_mut().remove(name));
             self.cache.insert(Arc::from(name), r.clone());
             return r;
         }
