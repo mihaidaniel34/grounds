@@ -99,29 +99,38 @@ const MAVEN_CLASSPATH: [&str; 3] = ["dependency:build-classpath", "-Dmdep.output
 /// Through the lifecycle up to test-compile, compiling nothing: in a
 /// multi-module build never installed, a module's dependency on a sibling
 /// only resolves (to the sibling's output directory) once the reactor has run
-/// the phase. Code generators bound to earlier phases still run; frontend
-/// builds and checkers are skipped.
+/// the phase. Plugins bound to earlier phases still run (code generators, but
+/// also resource copies that may write into the source tree), so this only
+/// runs when asked for. `maven.test.skip` (the only switch for test
+/// compilation) also deactivates profiles activated by its absence.
 const MAVEN_REACTOR: &[&str] = &[
     "-Dmaven.main.skip=true", "-Dmaven.test.skip=true", "-Denforcer.skip=true", "-Dcheckstyle.skip=true", "-Dspotless.check.skip=true",
     "-Dspotless.apply.skip=true", "-Dlicense.skip=true", "-Drat.skip=true", "-Djacoco.skip=true", "-Dgpg.skip=true", "-Dskip.npm=true",
-    "-Dskip.yarn=true", "-Dskip.pnpm=true", "-Dskip.installnodenpm=true", "-Dskip.installyarn=true", "-Dpmd.skip=true", "-Dspotbugs.skip=true",
+    "-Dskip.yarn=true", "-Dskip.pnpm=true", "-Dskip.installnodenpm=true", "-Dskip.installyarn=true", "-Dskip.installnodepnpm=true", "-Dpmd.skip=true", "-Dspotbugs.skip=true",
     "-Dformatter.skip=true", "-Dimpsort.skip=true", "test-compile",
 ];
 
-pub fn maven(root: &Path) -> Result<usize> {
+pub fn maven(root: &Path, lifecycle: bool) -> Result<usize> {
     let mvn = || {
         let mvnw = root.join("mvnw");
         let mut cmd = if mvnw.exists() { Command::new(mvnw) } else { Command::new("mvn") };
         cmd.current_dir(root).args(["-q", "-B"]);
         cmd
     };
-    let status = mvn().args(MAVEN_CLASSPATH).status().context("running maven")?;
+    let status = if lifecycle {
+        mvn().args(MAVEN_REACTOR).args(MAVEN_CLASSPATH).status().context("running maven")?
+    } else {
+        mvn().args(MAVEN_CLASSPATH).status().context("running maven")?
+    };
     if !status.success() {
-        eprintln!("grounds: retrying through the build lifecycle, without compiling (modules depending on modules not installed)");
-        let status = mvn().args(MAVEN_REACTOR).args(MAVEN_CLASSPATH).status().context("running maven")?;
-        if !status.success() {
+        if lifecycle {
             bail!("maven failed");
         }
+        bail!(
+            "maven failed. If a module depends on a sibling module that is not installed (\"Could not resolve dependencies ... SNAPSHOT\"), \
+             either run `mvn install -DskipTests` once, or `grounds classpath --maven-lifecycle`: it runs the lifecycle up to test-compile \
+             without compiling, so plugins bound to early phases (code generators, resource copies) run too"
+        );
     }
     let mut files = Vec::new();
     // target/ is usually gitignored, so walk without ignore filters
