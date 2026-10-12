@@ -201,22 +201,38 @@ on-disk cache.
   concatenation, Micronaut introduction interfaces, MockMvc `andExpect` as
   an assertion, and Spring's empty `contextLoads()` test.
 
+- **Linux:** on NixOS (x86_64), the static release binary, a native Nix
+  build and the macOS binary report identical findings, fingerprints
+  included (6,511 findings over spring-petclinic-rest, halo and rewrite),
+  so baselines carry over between systems. The test suite runs on Linux
+  and macOS for every pull request.
+- **CI mode:** 107 pull-request-shaped changes over 8 corpus projects
+  (renames, deletions, signature changes, new and deleted beans, plus
+  changes that break nothing): no false reports. Known gaps: a deleted
+  class, a method made private, static imports, method references and
+  return types assigned to variables are not yet checked across files.
+
 Not tested: Windows (the daemon uses Unix sockets), Kotlin or mixed
 Kotlin/Java projects (Kotlin sources are ignored, so types defined in them
 are unknown), Android, Java modules (JPMS) beyond what the JDK uses.
 
 ## Install
 
-Prebuilt binary for Apple Silicon macOS (11+) from the
-[releases page](https://github.com/mihaidaniel34/grounds/releases):
+Prebuilt binaries on the
+[releases page](https://github.com/mihaidaniel34/grounds/releases): macOS
+(Apple Silicon and Intel, 11+) and Linux (x86_64 and arm64, statically
+linked, so any distribution works, Alpine and NixOS included). Pick the
+target for your machine:
 
 ```bash
-curl -fsSL https://github.com/mihaidaniel34/grounds/releases/download/v0.0.7/grounds-0.0.7-aarch64-apple-darwin.tar.gz | tar -xz
-sudo mv grounds-0.0.7-aarch64-apple-darwin/grounds /usr/local/bin/
+target=aarch64-apple-darwin   # x86_64-apple-darwin, x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
+curl -fsSL https://github.com/mihaidaniel34/grounds/releases/download/v0.0.8/grounds-0.0.8-$target.tar.gz | tar -xz
+sudo mv grounds-0.0.8-$target/grounds /usr/local/bin/
 ```
 
-The binary is not notarized: if you download it with a browser, macOS
-quarantines it; `xattr -d com.apple.quarantine grounds` clears that.
+Each archive has a `.sha256` next to it. The macOS binaries are not
+notarized: if you download one with a browser, macOS quarantines it;
+`xattr -d com.apple.quarantine grounds` clears that.
 
 From source:
 
@@ -309,7 +325,9 @@ jobs:
       - uses: actions/setup-java@v4       # grounds reads the JDK's API signatures
         with: { distribution: temurin, java-version: 21 }
       - run: ./gradlew compileJava -q     # dependency jars into the Gradle cache (or: grounds classpath)
-      - run: cargo install --locked --git https://github.com/mihaidaniel34/grounds --tag v0.0.8 grounds-cli
+      - run: |
+          curl -fsSL https://github.com/mihaidaniel34/grounds/releases/download/v0.0.8/grounds-0.0.8-x86_64-unknown-linux-musl.tar.gz | tar -xz
+          echo "$PWD/grounds-0.0.8-x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
       - run: grounds changed --base "origin/$BASE_REF" --no-daemon --format sarif --exit-zero > grounds.sarif
         env: { BASE_REF: "${{ github.base_ref }}" }   # never interpolate a branch name into the script
       - uses: github/codeql-action/upload-sarif@v3
@@ -319,9 +337,6 @@ jobs:
 With reviewdog instead, keep grounds' scope rather than reviewdog's diff
 filter, which would drop the breaks in unchanged files:
 `grounds changed --base origin/main --no-daemon --format sarif --exit-zero | reviewdog -f=sarif -reporter=github-pr-check -filter-mode=nofilter`.
-
-There is no Linux release binary yet; `cargo install` builds one in a few
-minutes (cache `~/.cargo` between runs).
 
 ### Suppressing findings
 

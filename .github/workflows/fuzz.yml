@@ -1,0 +1,46 @@
+name: fuzz
+
+# Overload resolution and generic inference against javac
+# (scripts/fuzz_overloads.py): fixed seeds, so results are reproducible. A
+# case grounds is certain of while javac gives another type, on valid Java,
+# fails the job unless scripts/fuzz_overloads.baseline.json already lists it.
+on:
+  pull_request:
+    paths:
+      - "crates/grounds-semantic/**"
+      - "crates/grounds-index/**"
+      - "scripts/fuzz_overloads.*"
+      - ".github/workflows/fuzz.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  overloads:
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [1, 2, 3, 4]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # the JDK the baseline was recorded with (javac 25, --release 21): javac
+      # versions infer differently; its ct.sym gives grounds the JDK 21 API
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 25
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: python3 -I scripts/fuzz_overloads.py --seed ${{ matrix.seed }} --cases 2000
+      - if: always()
+        run: |
+          r=target/fuzz-overloads/seed-${{ matrix.seed }}/report.json
+          [ -f "$r" ] && python3 -c "import json,sys; r=json.load(open('$r')); print('### seed', r['seed']); print(', '.join(f'{k} {v}' for k, v in sorted(r['counts'].items())))" >> "$GITHUB_STEP_SUMMARY" || true
+      - if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: fuzz-overloads-seed-${{ matrix.seed }}
+          path: target/fuzz-overloads/seed-${{ matrix.seed }}
