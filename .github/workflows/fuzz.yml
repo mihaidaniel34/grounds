@@ -1,15 +1,16 @@
 name: fuzz
 
-# Overload resolution and generic inference against javac
-# (scripts/fuzz_overloads.py): fixed seeds, so results are reproducible. A
-# case grounds is certain of while javac gives another type, on valid Java,
-# fails the job unless scripts/fuzz_overloads.baseline.json already lists it.
+# grounds against javac on generated Java, with fixed seeds, so results are
+# reproducible. overloads (scripts/fuzz_overloads.py): a type grounds is
+# certain of while javac gives another, on valid Java. access
+# (scripts/fuzz_access.py): a "won't compile" finding (unresolved-method,
+# override-matches-nothing, ...) on a file javac accepts. Either fails the job
+# unless the script's .baseline.json already lists the case.
 on:
   pull_request:
     paths:
-      - "crates/grounds-semantic/**"
-      - "crates/grounds-index/**"
-      - "scripts/fuzz_overloads.*"
+      - "crates/**"
+      - "scripts/fuzz_*"
       - ".github/workflows/fuzz.yml"
   workflow_dispatch:
 
@@ -44,3 +45,28 @@ jobs:
         with:
           name: fuzz-overloads-seed-${{ matrix.seed }}
           path: target/fuzz-overloads/seed-${{ matrix.seed }}
+
+  access:
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [1, 2, 3, 4]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 25
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: python3 -I scripts/fuzz_access.py --seed ${{ matrix.seed }} --cases 2000
+      - if: always()
+        run: |
+          r=target/fuzz-access/seed-${{ matrix.seed }}/report.json
+          [ -f "$r" ] && python3 -c "import json,sys; r=json.load(open('$r')); print('### access seed', r['seed']); print(', '.join(f'{k} {v}' for k, v in r['counts'].items()))" >> "$GITHUB_STEP_SUMMARY" || true
+      - if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: fuzz-access-seed-${{ matrix.seed }}
+          path: target/fuzz-access/seed-${{ matrix.seed }}/cases

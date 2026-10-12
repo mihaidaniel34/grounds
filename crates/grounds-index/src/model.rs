@@ -360,10 +360,15 @@ impl fmt::Display for Ty {
 }
 
 /// Last segment of a binary class name, with `$` nesting stripped:
-/// `java.util.Map$Entry` -> `Entry`.
+/// `java.util.Map$Entry` -> `Entry`. An anonymous class (`C$1`), which no
+/// source can name, is `anonymous class`.
 pub fn simple_name_of(binary: &str) -> &str {
     let after_dot = binary.rsplit('.').next().unwrap_or(binary);
-    after_dot.rsplit('$').next().unwrap_or(after_dot)
+    let last = after_dot.rsplit('$').next().unwrap_or(after_dot);
+    if !last.is_empty() && last.len() < after_dot.len() && last.bytes().all(|b| b.is_ascii_digit()) {
+        return "anonymous class";
+    }
+    last
 }
 
 pub fn package_of(binary: &str) -> &str {
@@ -716,5 +721,17 @@ impl ClassInfo {
     /// The declared type with its own type parameters as arguments.
     pub fn this_type(&self) -> Ty {
         Ty::Class { name: self.name.clone(), args: self.type_params.iter().map(|p| Ty::TypeVar(p.name.clone())).collect() }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::simple_name_of;
+
+    #[test]
+    fn simple_names() {
+        assert_eq!(simple_name_of("java.util.Map$Entry"), "Entry");
+        assert_eq!(simple_name_of("p.C$1"), "anonymous class");
+        assert_eq!(simple_name_of("C"), "C");
     }
 }
