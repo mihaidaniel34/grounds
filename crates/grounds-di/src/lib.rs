@@ -128,10 +128,12 @@ pub struct DiModel {
     by_class: FxHashMap<Name, Vec<usize>>,
     pub frameworks: Vec<Framework>,
     pub scan_roots: Vec<String>,
-    /// The main sources define a Spring application (`@SpringBootApplication`
-    /// or `@ComponentScan`). Without one the project is a library: the context
-    /// is assembled by an application we cannot see, which may provide any
-    /// bean, so wiring in main code is not judged.
+    /// The main sources define a Spring application: `@SpringBootApplication`
+    /// / `@SpringBootConfiguration`, or `@ComponentScan` on a class with a
+    /// `main` method. Without one the project is a library (auto-configurations
+    /// and configurations a consumer imports scan packages too): the context is
+    /// assembled by an application we cannot see, which may provide any bean,
+    /// so wiring in main code is not judged.
     pub spring_application: bool,
     /// (scan root, module declaring it)
     pub scan_root_modules: Vec<(String, String)>,
@@ -386,7 +388,8 @@ impl<'a> Builder<'a> {
                         .collect();
                     let declared: Vec<String> = if explicit.is_empty() && classes.is_empty() { vec![c.package().to_string()] } else { explicit.into_iter().chain(classes).collect() };
                     let cond = self.conditional_meta(&c.annotations);
-                    if c.source_file().is_some_and(|f| !is_test_path(f)) {
+                    let has_main = c.methods_named("main").any(|m| m.flags.is_static() && m.params.len() == 1);
+                    if c.source_file().is_some_and(|f| !is_test_path(f)) && (a.is("org.springframework.boot.autoconfigure.SpringBootApplication") || has_main) {
                         self.model.spring_application = true;
                     }
                     let module = c.source_file().map(module_of).unwrap_or("").to_string();
@@ -394,6 +397,13 @@ impl<'a> Builder<'a> {
                     roots.extend(declared);
                 }
             }
+        }
+        // `@SpringBootConfiguration` (what @SpringBootApplication is made of) marks
+        // an application too, scan or not
+        if !self.model.spring_application {
+            self.model.spring_application = names.iter().filter_map(|n| self.index.class(n)).any(|c| {
+                c.source_file().is_some_and(|f| !is_test_path(f)) && c.annotations.iter().any(|a| a.is("org.springframework.boot.SpringBootConfiguration"))
+            });
         }
         if spring {
             self.model.frameworks.push(Framework::Spring);
@@ -1194,8 +1204,9 @@ mod tests {
 
     #[test]
     fn a_library_leaves_wiring_to_its_application() {
-        // no @SpringBootApplication or @ComponentScan in main sources: the
-        // application using the library provides the missing beans
+        // no application class in main sources: the application using the
+        // library provides the missing beans. An auto-configuration scanning
+        // the library's packages does not make it an application.
         let (idx, m) = model(&[(
             "lib/A.java",
             "package lib; import org.springframework.stereotype.*;
@@ -1203,11 +1214,17 @@ mod tests {
              @Service class DbStore implements Store {}
              @Service class MemStore implements Store {}
              interface Missing {}
-             @Service class Uses { Uses(Store s, Missing m) {} }",
+             @Service class Uses { Uses(Store s, Missing m) {} }
+             @org.springframework.boot.autoconfigure.AutoConfiguration
+             @org.springframework.context.annotation.ComponentScan(\"lib\")
+             class LibAutoConfiguration {}",
         )]);
         assert!(!m.spring_application);
         assert!(m.points.iter().all(|p| m.resolve(&idx, p, false) == Resolution::Unknown));
         assert!(m.name_conflicts().is_empty());
+        // a plain Spring application: @ComponentScan next to `main`
+        let (_, app) = model(&[("app/Main.java", "package app; @org.springframework.context.annotation.ComponentScan class Main { public static void main(String[] args) {} }")]);
+        assert!(app.spring_application);
     }
 
     #[test]
