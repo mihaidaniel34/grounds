@@ -7,6 +7,8 @@ the call's exact type (`var`: no target type); an error on the `pick` line means
 javac rejects the call. grounds' answer comes from the `call_types` example of
 grounds-semantic. grounds may say unknown (`?unknown`, possibly nested) at any
 time; it must not be certain of a type javac disagrees with, on valid Java.
+And on a case javac accepts, the rules that claim code does not compile
+(unresolved-method, override-matches-nothing, ...) must report nothing.
 
 Deterministic: a seed fixes the cases.
 
@@ -218,7 +220,7 @@ def render(case, pkg):
 
 # ---------------------------------------------------------------- javac (one run for all cases)
 
-ERR_RE = re.compile(r"^(.+?\.java):(\d+):(\d+): (compiler\.err\.[\w.]+)(?::\s(.*))?$")
+ERR_RE = re.compile(r"^(.+?\.java):(\d+):(\d+): (compiler\.err\.[\w.-]+)(?::\s(.*))?$")
 LOC_RE = re.compile(r"compiler\.misc\.location\.1: kindname\.variable, r, (.*)\)$")
 
 
@@ -307,6 +309,35 @@ def grounds_all(paths, out):
     return res
 
 
+# Rules that claim the code does not compile: on a case javac accepts they must
+# say nothing (but on the probe line, which calls a method that does not exist).
+COMPILE_RULES = ["unresolved-method", "unresolved-constructor", "unresolved-field", "unresolved-static-import",
+                 "override-matches-nothing", "unimplemented-abstract-method", "incompatible-assignment"]
+
+
+def grounds_check(cases_dir):
+    """Findings of the compile-break rules over all cases (one project, JDK only):
+    {file name: [(line, rule, message)]}."""
+    subprocess.run(["cargo", "build", "-q", "--release", "-p", "grounds-cli"], cwd=REPO, check=True)
+    exe = os.path.join(os.environ.get("CARGO_TARGET_DIR") or os.path.join(REPO, "target"), "release", "grounds")
+    # its own git root, or the ignore files of a repo above it (grounds' own
+    # `target/`) hide every case
+    if not os.path.exists(os.path.join(cases_dir, ".git")):
+        subprocess.run(["git", "init", "-q", cases_dir], check=True)
+    with open(os.path.join(cases_dir, "grounds.toml"), "w") as fh:
+        fh.write("[classpath]\nscan_caches = false\nbuild_outputs = false\n")
+    known = subprocess.run([exe, "rules", "--json"], capture_output=True, text=True, check=True).stdout
+    rules = [r for r in COMPILE_RULES if f'"{r}"' in known]
+    p = subprocess.run([exe, "check", "--root", cases_dir, "--rules", ",".join(rules), "--format", "json"],
+                       capture_output=True, text=True)
+    if p.returncode not in (0, 1, 2) or not p.stdout.strip():
+        sys.exit(f"grounds check failed ({p.returncode}): {p.stderr[-2000:]}")
+    res = {}
+    for f in json.loads(p.stdout or "[]"):
+        res.setdefault(os.path.basename(f["path"]), []).append((f["line"], f["rule"], f["message"]))
+    return res
+
+
 # ---------------------------------------------------------------- main
 
 def norm(t):
@@ -355,12 +386,19 @@ def main():
 
     jv = javac_all(items, out)
     gr = grounds_all(list(items), out)
+    findings = grounds_check(os.path.join(out, "cases"))
     counts, bad = {}, []
     for path in items:
         verdict = judge(gr.get(path), jv[path])
         counts[verdict] = counts.get(verdict, 0) + 1
         if verdict in ("wrong", "rejected"):
             bad.append({"case": cases[path], "verdict": verdict, "grounds": gr.get(path), "javac": jv[path]})
+        # valid Java: a compile-break finding is a false positive
+        if jv[path]["outcome"] == "type":
+            fs = [f for f in findings.get(os.path.basename(path), []) if f[0] != items[path][1]]
+            if fs:
+                counts["false-error"] = counts.get("false-error", 0) + 1
+                bad.append({"case": cases[path], "verdict": "false-error", "grounds": [f"{r}: {m}" for _, r, m in fs], "javac": jv[path]})
 
     with open(os.path.join(out, "report.json"), "w") as fh:
         json.dump({"seed": a.seed, "cases": a.cases, "counts": counts, "bad": bad}, fh, indent=1)
@@ -372,22 +410,25 @@ def main():
         with open(a.baseline) as fh:
             base = json.load(fh)
     key = f"{a.seed}:{a.cases}"
-    known = set(base.get(key, {}).get("wrong", []))
+    known = set(base.get(key, {}).get("wrong", [])) | set(base.get(key, {}).get("false_errors", []))
     wrong = sorted(b["case"] for b in bad if b["verdict"] == "wrong")
+    false_errors = sorted(b["case"] for b in bad if b["verdict"] == "false-error")
     if a.update_baseline:
-        base[key] = {"wrong": wrong, "rejected": sum(1 for b in bad if b["verdict"] == "rejected")}
+        base[key] = {"wrong": wrong, "false_errors": false_errors, "rejected": sum(1 for b in bad if b["verdict"] == "rejected")}
         with open(a.baseline, "w") as fh:
             json.dump(base, fh, indent=1, sort_keys=True)
             fh.write("\n")
         print(f"baseline {key}: {len(wrong)} wrong recorded")
         return 0
-    new = [w for w in wrong if w not in known]
-    fixed = [w for w in known if w not in wrong]
+    new = [w for w in wrong + false_errors if w not in known]
+    fixed = [w for w in known if w not in wrong and w not in false_errors]
     if fixed:
         print(f"fixed since the baseline: {len(fixed)} (run with --update-baseline)")
     for b in bad:
-        if b["case"] in new:
+        if b["case"] in new and b["verdict"] == "wrong":
             print(f"WRONG {b['case']}: grounds {b['grounds'][0]}, javac {b['javac'].get('type')}  ({out}/cases/{b['case']}.java)")
+        elif b["case"] in new and b["verdict"] == "false-error":
+            print(f"FALSE ERROR {b['case']} (javac accepts it): {'; '.join(b['grounds'])}  ({out}/cases/{b['case']}.java)")
     return 1 if new else 0
 
 
