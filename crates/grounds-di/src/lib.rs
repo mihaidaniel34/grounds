@@ -129,12 +129,18 @@ pub struct DiModel {
     pub frameworks: Vec<Framework>,
     pub scan_roots: Vec<String>,
     /// The main sources define a Spring application: `@SpringBootApplication`
-    /// / `@SpringBootConfiguration`, or `@ComponentScan` on a class with a
-    /// `main` method. Without one the project is a library (auto-configurations
-    /// and configurations a consumer imports scan packages too): the context is
-    /// assembled by an application we cannot see, which may provide any bean,
-    /// so wiring in main code is not judged.
+    /// / `@SpringBootConfiguration`, `@ComponentScan` on a class with a `main`
+    /// method, a `main` starting a context (SpringApplication(Builder),
+    /// AnnotationConfigApplicationContext, ...), or a servlet initializer.
+    /// Wiring is judged in the modules holding one and in the packages they
+    /// scan; elsewhere the code is a library (auto-configurations and
+    /// configurations a consumer imports scan packages too): its context is
+    /// assembled by an application we cannot see, which may provide any bean.
     pub spring_application: bool,
+    /// Modules (`module_of`) holding such an application.
+    pub app_modules: rustc_hash::FxHashSet<String>,
+    /// Packages the applications scan (roots declared in their modules).
+    pub app_roots: Vec<String>,
     /// (scan root, module declaring it)
     pub scan_root_modules: Vec<(String, String)>,
     /// simple names referenced by classes that register beans
@@ -224,8 +230,11 @@ pub fn decapitalize(s: &str) -> String {
     a.to_lowercase().collect::<String>() + &s[a.len_utf8()..]
 }
 
-fn is_test_path(p: &str) -> bool {
-    p.contains("/src/test/") || p.contains("/src/it/") || p.contains("/src/integrationTest/") || p.contains("/src/testFixtures/")
+use grounds_index::sources::is_test_path;
+
+/// `public static void main(String[])`, the entry point of an application.
+fn has_main(c: &ClassInfo) -> bool {
+    c.methods_named("main").any(|m| m.flags.is_static() && m.flags.is_public() && m.ret == Ty::Void && matches!(m.params.as_slice(), [p] if matches!(&p.ty, Ty::Array(e) if e.is_string())))
 }
 
 fn first_string(a: &AnnotationInfo, keys: &[&str]) -> Option<String> {
@@ -388,9 +397,8 @@ impl<'a> Builder<'a> {
                         .collect();
                     let declared: Vec<String> = if explicit.is_empty() && classes.is_empty() { vec![c.package().to_string()] } else { explicit.into_iter().chain(classes).collect() };
                     let cond = self.conditional_meta(&c.annotations);
-                    let has_main = c.methods_named("main").any(|m| m.flags.is_static() && m.params.len() == 1);
-                    if c.source_file().is_some_and(|f| !is_test_path(f)) && (a.is("org.springframework.boot.autoconfigure.SpringBootApplication") || has_main) {
-                        self.model.spring_application = true;
+                    if c.source_file().is_some_and(|f| !is_test_path(f)) && (a.is("org.springframework.boot.autoconfigure.SpringBootApplication") || has_main(&c)) {
+                        self.model.app_modules.insert(c.source_file().map(module_of).unwrap_or("").to_string());
                     }
                     let module = c.source_file().map(module_of).unwrap_or("").to_string();
                     root_conditions.extend(declared.iter().map(|r| (r.clone(), cond, module.clone())));
@@ -398,13 +406,25 @@ impl<'a> Builder<'a> {
                 }
             }
         }
-        // `@SpringBootConfiguration` (what @SpringBootApplication is made of) marks
-        // an application too, scan or not
-        if !self.model.spring_application {
-            self.model.spring_application = names.iter().filter_map(|n| self.index.class(n)).any(|c| {
-                c.source_file().is_some_and(|f| !is_test_path(f)) && c.annotations.iter().any(|a| a.is("org.springframework.boot.SpringBootConfiguration"))
-            });
+        // other marks of an application: `@SpringBootConfiguration` (what
+        // @SpringBootApplication is made of), a main method starting a context
+        // (its configuration classes may be elsewhere), a servlet initializer
+        const STARTERS: &[&str] = &["SpringApplication", "SpringApplicationBuilder", "AnnotationConfigApplicationContext", "AnnotationConfigWebApplicationContext", "ClassPathXmlApplicationContext", "GenericApplicationContext"];
+        const INITIALIZERS: &[&str] = &["org.springframework.boot.web.servlet.support.SpringBootServletInitializer", "org.springframework.web.WebApplicationInitializer"];
+        for c in names.iter().filter_map(|n| self.index.class(n)) {
+            let Some(f) = c.source_file() else { continue };
+            if is_test_path(f) {
+                continue;
+            }
+            let starts = has_main(&c) && self.index.file(f).is_some_and(|stub| STARTERS.iter().any(|s| stub.referenced_names.binary_search_by(|n| (**n).cmp(*s)).is_ok()));
+            let config = c.annotations.iter().any(|a| a.is("org.springframework.boot.SpringBootConfiguration"));
+            let initializer = INITIALIZERS.iter().any(|i| self.index.is_subclass(&c.name, i).is_yes());
+            if starts || config || initializer {
+                self.model.app_modules.insert(module_of(f).to_string());
+            }
         }
+        self.model.spring_application = !self.model.app_modules.is_empty();
+        self.model.app_roots = root_conditions.iter().filter(|(_, _, m)| self.model.app_modules.contains(m)).map(|(r, _, _)| r.clone()).collect();
         if spring {
             self.model.frameworks.push(Framework::Spring);
         }
@@ -994,7 +1014,7 @@ impl DiModel {
             return Resolution::Unknown;
         }
         // a library's beans are wired by the application using it
-        if p.framework == Framework::Spring && !self.spring_application && !p.file.as_deref().is_some_and(is_test_path) {
+        if p.framework == Framework::Spring && !p.file.as_deref().is_some_and(is_test_path) && !self.in_application(p.file.as_deref(), &p.owner) {
             return Resolution::Unknown;
         }
         let (mut cands, mut maybe) = self.candidates(lk, &p.ty, include_test);
@@ -1154,13 +1174,22 @@ impl DiModel {
         self.scan_root_modules.iter().filter(|(_, m)| !local || m == module).any(|(r, _)| covers(r, &pa) && covers(r, &pb))
     }
 
+    /// Code in a module holding an application, or in a package one scans.
+    pub fn in_application(&self, file: Option<&str>, class: &str) -> bool {
+        if file.is_some_and(|f| self.app_modules.contains(module_of(f))) {
+            return true;
+        }
+        let pkg = package_of(class);
+        self.app_roots.iter().any(|r| r.is_empty() || pkg == r || pkg.strip_prefix(r.as_str()).is_some_and(|rest| rest.starts_with('.')))
+    }
+
     pub fn name_conflicts(&self) -> Vec<(usize, usize)> {
         // names only clash inside one application (module)
         let mut seen: FxHashMap<(&str, &str), usize> = FxHashMap::default();
         let mut out = Vec::new();
         for (i, b) in self.beans.iter().enumerate() {
             // in a library, which beans end up in one context is the user's choice
-            if b.framework != Framework::Spring || b.conditional || b.is_test || !self.spring_application {
+            if b.framework != Framework::Spring || b.conditional || b.is_test || !self.in_application(b.file.as_deref(), &b.declaring_class) {
                 continue;
             }
             let key = (b.file.as_deref().map(module_of).unwrap_or(""), b.name.as_str());
@@ -1252,5 +1281,49 @@ mod tests {
         assert!(matches!(get("Broken.t"), Resolution::QualifierNotFound { .. }));
         assert_eq!(get("Broken.m"), Resolution::NotFound);
         assert!(matches!(get("NeedsClock.c"), Resolution::Unique(_)));
+    }
+
+    fn resolution_of(idx: &Index, m: &DiModel, owner_file: &str, name: &str) -> Resolution {
+        let p = m.points.iter().find(|p| p.name == name && p.file.as_deref() == Some(owner_file)).expect("injection point");
+        m.resolve(idx, p, false)
+    }
+
+    #[test]
+    fn a_builder_application_is_an_application() {
+        // main starts the context; @ComponentScan is on another class
+        let (idx, m) = model(&[
+            ("app/src/main/java/demo/Main.java", "package demo; import org.springframework.boot.builder.SpringApplicationBuilder;
+             public class Main { public static void main(String[] args) { new SpringApplicationBuilder(Config.class).run(args); } }"),
+            ("app/src/main/java/demo/Config.java", "package demo; @org.springframework.context.annotation.Configuration @org.springframework.context.annotation.ComponentScan(\"demo\") class Config {}"),
+            ("app/src/main/java/demo/Uses.java", "package demo; interface Missing {} @org.springframework.stereotype.Service class Uses { Uses(Missing m) {} }"),
+        ]);
+        assert_eq!(resolution_of(&idx, &m, "app/src/main/java/demo/Uses.java", "m"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn an_unrelated_application_leaves_a_library_alone() {
+        let (idx, m) = model(&[
+            ("app/src/main/java/other/App.java", "package other; @org.springframework.boot.autoconfigure.SpringBootApplication public class App {}"),
+            ("lib/src/main/java/demo/Config.java", "package demo; @org.springframework.context.annotation.ComponentScan(\"demo\") class Config {}"),
+            ("lib/src/main/java/demo/Uses.java", "package demo; interface Supplied {} @org.springframework.stereotype.Service class Uses { Uses(Supplied s) {} }"),
+            // a library the application scans is judged
+            ("core/src/main/java/other/core/Svc.java", "package other.core; interface Missing {} @org.springframework.stereotype.Service class Svc { Svc(Missing m) {} }"),
+        ]);
+        assert_eq!(resolution_of(&idx, &m, "lib/src/main/java/demo/Uses.java", "s"), Resolution::Unknown);
+        assert_eq!(resolution_of(&idx, &m, "core/src/main/java/other/core/Svc.java", "m"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn test_sets_are_classified_like_the_workspace() {
+        // a functionalTest application does not make the library's main code an application
+        let (idx, m) = model(&[
+            ("src/functionalTest/java/demo/TestApp.java", "package demo; @org.springframework.boot.autoconfigure.SpringBootApplication public class TestApp {}"),
+            ("src/main/java/demo/Uses.java", "package demo; interface Supplied {} @org.springframework.stereotype.Service class Uses { Uses(Supplied s) {} }"),
+            ("src/e2e/java/demo/E2e.java", "package demo; interface Missing2 {} @org.springframework.stereotype.Service class E2e { E2e(Missing2 m) {} }"),
+        ]);
+        assert!(!m.spring_application);
+        assert_eq!(resolution_of(&idx, &m, "src/main/java/demo/Uses.java", "s"), Resolution::Unknown);
+        // test code is judged as before
+        assert_eq!(m.resolve(&idx, m.points.iter().find(|p| p.name == "m").unwrap(), true), Resolution::NotFound);
     }
 }
