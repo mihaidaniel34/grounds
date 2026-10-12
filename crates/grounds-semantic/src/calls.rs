@@ -258,20 +258,37 @@ impl<'t> FileModel<'t> {
     /// bounded from below or exactly by plain arguments (`Arrays.copyOf(xs,
     /// 2)`, `requireNonNull(x)`) has that type, the least any target allows.
     fn poly_untyped(&self, a: Node<'t>) -> bool {
+        self.poly_target(a).is_some()
+    }
+
+    /// For a target-typed call ([`Self::poly_untyped`]): whether it only
+    /// adapts to its target and bounds nothing itself. One whose variable a
+    /// lambda also bounds (`apply(i, x -> 1)`) adds a lower bound.
+    fn poly_adapts(&self, a: Node<'t>) -> bool {
+        self.poly_target(a) == Some(true)
+    }
+
+    /// Whether the argument is a poly argument as the enclosing inference
+    /// sees it: one only typed by a lambda counts as an unknown type.
+    fn poly_arg(&self, a: Node<'t>) -> bool {
+        self.is_poly(a) && (!self.poly_untyped(a) || self.poly_adapts(a))
+    }
+
+    fn poly_target(&self, a: Node<'t>) -> Option<bool> {
         let a = a.unparen();
         match a.kind() {
             "method_invocation" => {
                 if a.child_by_field_name("type_arguments").is_some() {
-                    return false;
+                    return None;
                 }
-                let Some(c) = self.select_method(a) else { return false };
+                let c = self.select_method(a)?;
                 let mut r = &c.method.ret;
                 while let Ty::Array(e) = r {
                     r = e;
                 }
-                let Ty::TypeVar(v) = r else { return false };
+                let Ty::TypeVar(v) = r else { return None };
                 if !c.method.type_params.iter().any(|tp| tp.name == *v) {
-                    return false;
+                    return None;
                 }
                 // a lambda or method reference may add a lower bound once checked
                 // (`requireNonNullElseGet("x", () -> 1)` is no String)
@@ -280,19 +297,20 @@ impl<'t> FileModel<'t> {
                     matches!(x.unparen().kind(), "lambda_expression" | "method_reference") && param_type_for_arg(&c.method, i, args.len()).is_some_and(|p| mentions(&p, v))
                 });
                 if functional {
-                    return true;
+                    return Some(false);
                 }
                 let inf = self.partial_inference(a, &c.method);
-                let fixed = inf.bindings.iter().any(|(k, _)| k == v)
-                    && !inf.upper_only.contains(v)
-                    && !inf.soft_vars.contains(v)
-                    && !inf.poisoned.contains(v)
-                    && !inf.captures.iter().any(|c| c.var == *v);
-                !fixed
+                let bound = inf.bindings.iter().any(|(k, _)| k == v);
+                let fixed = bound && !inf.upper_only.contains(v) && !inf.soft_vars.contains(v) && !inf.poisoned.contains(v) && !inf.captures.iter().any(|c| c.var == *v);
+                if fixed {
+                    return None;
+                }
+                // unbound, or bounded from above only: it adapts
+                Some(!bound || inf.upper_only.contains(v) && !inf.soft_vars.contains(v))
             }
-            "ternary_expression" => a.kids().iter().skip(1).any(|k| self.poly_untyped(*k)),
-            "switch_expression" => true,
-            _ => false,
+            "ternary_expression" => a.kids().iter().skip(1).any(|k| self.poly_untyped(*k)).then_some(false),
+            "switch_expression" => Some(false),
+            _ => None,
         }
     }
 
@@ -924,6 +942,11 @@ impl<'t> FileModel<'t> {
                 lub
             } else if !uppers.is_empty() {
                 inf.upper_only.push(v.clone());
+                // a poly argument adapts its type arguments to the parameter
+                if inf.soft_vars.contains(v) {
+                    fail(&mut inf, false);
+                    continue;
+                }
                 let glb = uppers.iter().find(|u| uppers.iter().all(|o| self.conv(u, o) == Conv::Yes)).cloned();
                 if glb.is_none() {
                     fail(&mut inf, false);
@@ -1541,7 +1564,7 @@ impl<'t> FileModel<'t> {
             first.is_none() || cands.iter().any(|m| ret_key(&m.method) != first)
         };
         let same_rets = cands.iter().all(|m| m.method.ret == cands[0].method.ret && !m.method.type_params.iter().any(|tp| mentions(&m.method.ret, &tp.name)));
-        let poly: Vec<bool> = arg_nodes.iter().map(|a| self.is_poly(*a)).collect();
+        let poly: Vec<bool> = arg_nodes.iter().map(|a| self.poly_arg(*a)).collect();
         let args: Vec<ArgShape> = arg_nodes.into_iter().map(|a| self.arg_shape(a)).collect();
         let args = &args[..];
         let fits: Vec<(MethodRef, (u8, Inference))> = cands.into_iter().filter_map(|m| self.candidate_fit(&m.method, args, &poly).map(|f| (m, f))).collect();
@@ -1758,8 +1781,8 @@ impl<'t> FileModel<'t> {
                         poisoned.extend(wide);
                     }
                 }
-                // a variable left unbound for good stays unknown
-                let open: Vec<Name> = tvars.iter().filter(|v| !poisoned.contains(v)).cloned().collect();
+                let exp = target_type();
+                let captured = |v: &Name| inf.captures.iter().any(|c| c.var == *v);
                 // lambdas and method references
                 let args = self.args_of(call);
                 for (i, a) in args.iter().enumerate() {
@@ -1767,30 +1790,66 @@ impl<'t> FileModel<'t> {
                     if !matches!(a.kind(), "lambda_expression" | "method_reference") {
                         continue;
                     }
-                    let Some(pt) = param_type_for_arg(&rc.method, i, args.len()) else { continue };
-                    let pt = apply_subst(&pt, &bindings);
+                    let Some(pt0) = param_type_for_arg(&rc.method, i, args.len()) else { continue };
+                    let pt = apply_subst(&pt0, &bindings);
                     let Some(sam) = self.functional_method(&pt) else { continue };
-                    if !sam.method.ret.mentions_type_var() {
+                    // its parameter types are its inputs: javac resolves their
+                    // variables before the body, from the target or else from
+                    // the bounds (`pick(x -> 1)` for `Function<? super T, ? extends T>`
+                    // with `T extends Number` is a T of Number); the body binds none
+                    let open: Vec<Name> = tvars.iter().filter(|v| !poisoned.contains(v)).cloned().collect();
+                    let inputs: Vec<Name> = open.iter().filter(|v| !bindings.iter().any(|(k, _)| k == *v) && sam.method.params.iter().any(|p| mentions(&p.ty, v))).cloned().collect();
+                    if !inputs.is_empty() {
+                        if exp.is_known() {
+                            let before = bindings.len();
+                            self.target_bind(&rc.method, &rc.method.ret, &exp, &inputs, &mut bindings);
+                            target_bound.extend(bindings[before..].iter().cloned());
+                        }
+                        for v in &inputs {
+                            if !bindings.iter().any(|(k, _)| k == v) {
+                                poisoned.push(v.clone());
+                            }
+                        }
+                    }
+                    // the result as declared, before what is bound so far
+                    let Some(sam0) = self.functional_method(&pt0) else { continue };
+                    if !sam0.method.ret.mentions_type_var() {
                         continue;
                     }
                     let body_ty = if a.kind() == "lambda_expression" { self.lambda_result_type(a) } else { self.method_ref_result_type(a, &sam.method) };
+                    // a body we cannot type may still be one more lower bound
+                    if body_ty.has_unknown() && !matches!(sam0.method.ret, Ty::Void) {
+                        for v in tvars.iter().filter(|v| mentions(&sam0.method.ret, v)) {
+                            if !poisoned.contains(v) {
+                                poisoned.push(v.clone());
+                                bindings.retain(|(k, _)| k != v);
+                            }
+                        }
+                        continue;
+                    }
                     if body_ty.is_known() && body_ty != Ty::Void {
-                        unify(self, &sam.method.ret, &body_ty, &open, &mut bindings);
+                        // the body is one more lower bound: a binding it does not
+                        // fit, or a capture, would need the lub
+                        let mut said = Vec::new();
+                        unify(self, &sam0.method.ret, &body_ty, &tvars, &mut said);
+                        for (v, x) in &said {
+                            let clash = captured(v) || bindings.iter().any(|(k, b)| k == v && self.conv(x, b) != Conv::Yes);
+                            if clash && !poisoned.contains(v) {
+                                poisoned.push(v.clone());
+                                bindings.retain(|(k, _)| k != v);
+                            }
+                        }
+                        let open: Vec<Name> = tvars.iter().filter(|v| !poisoned.contains(v)).cloned().collect();
+                        unify(self, &sam0.method.ret, &body_ty, &open, &mut bindings);
                     }
                 }
+                let open: Vec<Name> = tvars.iter().filter(|v| !poisoned.contains(v)).cloned().collect();
                 // target type
                 let ret_unbound = open.iter().any(|v| !bindings.iter().any(|(k, _)| k == v) && mentions(&rc.method.ret, v));
-                if ret_unbound {
-                    let exp = match target {
-                        Target::Full => self.expected_type(call),
-                        Target::Param => self.selected_param_type(call),
-                        Target::None => Ty::Unknown,
-                    };
-                    if exp.is_known() {
-                        let before = bindings.len();
-                        unify(self, &rc.method.ret, &exp, &open, &mut bindings);
-                        target_bound = bindings[before..].to_vec();
-                    }
+                if ret_unbound && exp.is_known() {
+                    let before = bindings.len();
+                    self.target_bind(&rc.method, &rc.method.ret, &exp, &open, &mut bindings);
+                    target_bound.extend(bindings[before..].iter().cloned());
                 }
                 for p in &mut rc.method.params {
                     p.ty = apply_subst(&p.ty, &bindings);
@@ -1800,6 +1859,7 @@ impl<'t> FileModel<'t> {
                 // (`List<Number> l = List.copyOf(xs)`) widens it in javac
                 bindings.retain(|(k, _)| !inf.captures.iter().any(|c| c.var == *k));
                 let mut captures = inf.captures.clone();
+                captures.retain(|c| !poisoned.contains(&c.var));
                 if captures.iter().any(|c| mentions(&rc.method.ret, &c.var)) {
                     let exp = target_type();
                     let projected = apply_subst(&self.project(&rc.method.ret, &captures), &bindings);
@@ -1887,6 +1947,55 @@ impl<'t> FileModel<'t> {
                 rc.ret = erasure_only(&rc.ret);
             }
             Some(Rc::new(rc))
+        }
+    }
+
+    /// Bindings for `vars` from the target type `exp` of a call returning
+    /// `ret`. The target bounds the result from above (JLS 18.5.2): a bare
+    /// `T` gets the glb of target and declared bound, an invariant type
+    /// argument fixes T, `? super X` is a lower bound X, a wildcard target
+    /// argument (`List<?>`) says nothing.
+    fn target_bind(&self, m: &MethodInfo, ret: &Ty, exp: &Ty, vars: &[Name], out: &mut Vec<(Name, Ty)>) {
+        let free = |v: &Name, out: &Vec<(Name, Ty)>| vars.contains(v) && !out.iter().any(|(k, _)| k == v);
+        match (ret, exp) {
+            (Ty::TypeVar(v), _) if free(v, out) => {
+                let x = exp.boxed();
+                if !matches!(x, Ty::Class { .. } | Ty::Array(_)) || x.has_unknown() {
+                    return;
+                }
+                let Some(tp) = m.type_params.iter().find(|tp| tp.name == *v) else { return };
+                let real: Vec<&Ty> = tp.bounds.iter().filter(|b| !b.is_class("java.lang.Object")).collect();
+                let t = match real[..] {
+                    [] => Some(x),
+                    [b] if !b.mentions_type_var() => match (self.conv(&x, b), self.conv(b, &x)) {
+                        (Conv::Yes, _) => Some(x),
+                        (_, Conv::Yes) => Some((*b).clone()),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                if let Some(t) = t {
+                    out.push((v.clone(), t));
+                }
+            }
+            (Ty::Class { name, args }, Ty::Class { name: en, args: eargs }) if name == en && args.len() == eargs.len() => {
+                for (ra, ea) in args.iter().zip(eargs) {
+                    match (ra, ea) {
+                        (_, Ty::Wildcard(None)) => {}
+                        (Ty::TypeVar(v), Ty::Wildcard(Some(w))) if free(v, out) => {
+                            if let WildcardBound::Super(x) = &**w {
+                                if !x.has_unknown() && !x.mentions_type_var() {
+                                    out.push((v.clone(), x.clone()));
+                                }
+                            }
+                        }
+                        (Ty::TypeVar(v), x) if free(v, out) && !matches!(x, Ty::Wildcard(_)) && !x.has_unknown() => out.push((v.clone(), x.clone())),
+                        (Ty::Class { .. }, Ty::Class { .. }) => self.target_bind(m, ra, ea, vars, out),
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1980,11 +2089,12 @@ impl<'t> FileModel<'t> {
             let args = self.args_of(call);
             let mut params = Vec::new();
             let mut tys = Vec::new();
-            let poly: Vec<bool> = args.iter().map(|a| self.is_poly(*a)).collect();
+            let poly: Vec<bool> = args.iter().map(|a| self.poly_arg(*a)).collect();
             for (i, a) in args.iter().enumerate() {
                 let a = a.unparen();
                 let lambda = matches!(a.kind(), "lambda_expression" | "method_reference");
-                let at = if lambda { Ty::Unknown } else { self.arg_type(a, Target::Param) };
+                // a call typed by its target alone adapts to the parameter
+                let at = if lambda || self.poly_untyped(a) { Ty::Unknown } else { self.arg_type(a, Target::Param) };
                 let Some(pt) = param_type_for_arg_typed(m, i, args.len(), &at) else { return Inference::unknown() };
                 params.push(pt);
                 tys.push((!lambda).then_some(at));
@@ -2064,6 +2174,12 @@ impl<'t> FileModel<'t> {
         let text = mref.text(self.src);
         if text.ends_with("::new") {
             let t = self.resolve_type_node(target);
+            // `ArrayList::new` infers its type arguments, it is no raw type
+            if let Ty::Class { name, args } = &t {
+                if args.is_empty() && self.class(name).is_some_and(|c| !c.type_params.is_empty()) {
+                    return Ty::Unknown;
+                }
+            }
             return t;
         }
         let (recv_ty, is_type) = match self.symbol(target) {

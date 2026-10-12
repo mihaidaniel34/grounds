@@ -811,3 +811,62 @@ fn unchecked_results_take_bounds_not_targets() {
     // javac: Number (glb of Object and the bound), CharSequence (U erased)
     assert_eq!(t, vec!["java.lang.Number", "java.lang.CharSequence"]);
 }
+
+#[test]
+fn lambda_inputs_are_resolved_before_the_body() {
+    // javac resolves a variable in an implicit lambda's parameter types from
+    // the target or its bounds before it looks at the body
+    let t = types_of(
+        "import java.util.*; import java.util.function.*;
+         class P { static <T extends Number> UnaryOperator<T> pick(Function<? super T, ? extends T> f) { return null; }
+                   static <T> Comparable<? super T> ref(Function<? super T, ? extends T> f) { return null; } }
+         class T { void m() { Object a = /*T*/ P.pick(x -> 1); Object b = /*T*/ P.ref(String::valueOf); } }",
+    );
+    // javac: UnaryOperator<Number>, Comparable<? super Object>
+    assert_eq!(t, vec!["java.util.function.UnaryOperator<?unknown>", "java.lang.Comparable<? super ?unknown>"]);
+}
+
+#[test]
+fn targets_bound_results_from_above() {
+    let t = types_of(
+        "import java.util.*;
+         class A {}
+         class P { static <T extends Number> List<? extends T> nums() { return null; } static <T extends A> T a() { return null; }
+                   static <T> T any() { return null; } }
+         class T { void m() { List<?> x = /*T*/ P.nums(); Object y = /*T*/ P.a(); String z = /*T*/ P.any(); } }",
+    );
+    // javac: List<? extends Number> (a wildcard target says nothing), A, String
+    assert_eq!(t, vec!["java.util.List<? extends ?unknown>", "A", "java.lang.String"]);
+}
+
+#[test]
+fn lambda_and_reference_bodies_are_lower_bounds_too() {
+    let t = types_of(
+        "import java.util.*; import java.util.function.*;
+         class A {}
+         class P { static <T> T[] pick(List<? extends T> l, Supplier<T> s) { return null; }
+                   static <T> List<T> make(Supplier<T> s) { return null; }
+                   static <K, V> List<V> two(BiFunction<K, K, V> f, UnaryOperator<K> g, V v) { return null; }
+                   static <T> Iterable<T> cap(Supplier<T> s, List<? extends T> l, Integer i) { return null; } }
+         class T { void m(List<String> ls, List<? super Integer> lsu, Integer i) {
+             Object a = /*T*/ P.pick(ls, A::new);
+             Object b = /*T*/ P.make(ArrayList::new);
+             Object c = /*T*/ P.two((x, y) -> x, x -> null, 1L);
+             Object d = /*T*/ P.cap(() -> 1, lsu, i);
+         } }",
+    );
+    // javac: lub(String, A)[], List<ArrayList<Object>>, List<Object>, Iterable<Object>
+    assert_eq!(t, vec!["?unknown[]", "java.util.List<?unknown>", "java.util.List<?unknown>", "java.lang.Iterable<?unknown>"]);
+}
+
+#[test]
+fn calls_typed_through_a_lambda_are_no_bound_free_arguments() {
+    let t = types_of(
+        "import java.util.*; import java.util.function.*;
+         class H { static <T, R> R apply(T x, Function<? super T, ? extends R> f) { return null; } }
+         class P { static <T> UnaryOperator<T> pick(List<T> l) { return null; } }
+         class T { void m(Function<String, Integer> fn, Integer i) { Object a = /*T*/ P.pick(Arrays.asList(fn, H.apply(i, x -> 1))); } }",
+    );
+    // javac: UnaryOperator<Object> (`apply` gives an Integer through its lambda)
+    assert_eq!(t, vec!["java.util.function.UnaryOperator<?unknown>"]);
+}
