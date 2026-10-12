@@ -120,8 +120,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      # 17 and 21 run the builds (Gradle 7 needs 17); 25, the default, gives
-      # grounds the JDK API the baselines were made with
+      # 17, 21 and 25 run the builds (Gradle 7 needs 17, the plugins of
+      # Gradle 9 builds often 25, Maven 21); 25, the default, gives grounds
+      # the JDK API the baselines were made with
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
@@ -150,7 +151,10 @@ jobs:
           key: deps-${{ matrix.project }}-${{ hashFiles('corpus/projects.tsv') }}
       - name: grounds classpath
         run: |
-          export JAVA_HOME=$([ "$PROJECT" = buckpal ] && echo "$JAVA_HOME_17_X64" || echo "$JAVA_HOME_21_X64")
+          dir=$CORPUS_DIR/$PROJECT
+          if [ "$PROJECT" = buckpal ]; then export JAVA_HOME=$JAVA_HOME_17_X64
+          elif [ -f "$dir/gradlew" ]; then export JAVA_HOME=$JAVA_HOME_25_X64
+          else export JAVA_HOME=$JAVA_HOME_21_X64; fi
           scripts/corpus.sh classpath
         env:
           PROJECT: ${{ matrix.project }}
