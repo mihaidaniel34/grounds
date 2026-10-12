@@ -341,11 +341,6 @@ pub trait ClassLookup {
             let Ty::Class { name: cn, args } = &st else { continue };
             let Some(c) = self.class(cn) else { continue };
             if let Some(f) = c.field(name) {
-                // a private field is not inherited: a subclass's `field` is
-                // an outer class's or nothing
-                if f.flags.is_private() && ty.class_name() != Some(&**cn) {
-                    continue;
-                }
                 let map = substitution(&c, args);
                 let mut f = f.clone();
                 f.ty = apply_subst(&f.ty, &map);

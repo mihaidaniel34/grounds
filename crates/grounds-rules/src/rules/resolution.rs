@@ -316,6 +316,13 @@ impl Rule for IncompatibleAssignment {
         // overload selection is approximate (type arguments, lambdas,
         // inaccessible overloads): judge only a method without rivals
         let nargs = cx.fm.args_of(value).len();
+        // rivals the lookup above does not see: the other bounds of a type
+        // variable (`T extends A & B`), methods a static import brings in
+        match value.field("object") {
+            Some(o) if matches!(cx.type_of(o), Ty::TypeVar(_)) => return,
+            None if cx.fm.stub.imports.iter().any(|i| i.is_static && (i.on_demand || i.last() == &*c.method.name)) => return,
+            _ => {}
+        }
         let rivals = match &c.receiver {
             Some(r) => cx.fm.methods_named(r, &c.method.name).iter().filter(|m| m.method.accepts_arity(nargs)).count(),
             None => cx.fm.class(&c.owner).map(|k| cx.fm.methods_named(&k.this_type(), &c.method.name).iter().filter(|m| m.method.accepts_arity(nargs)).count()).unwrap_or(2),

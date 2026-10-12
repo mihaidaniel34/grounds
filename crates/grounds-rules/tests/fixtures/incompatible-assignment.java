@@ -42,3 +42,11 @@ class FieldTarget {
         void f() { field = result(); }
     }
 }
+// the other bound of a type variable may hold the method javac picks
+interface IA { Object pick(java.util.List<Integer> xs); }
+interface IB { String pick(java.util.Collection<String> xs); }
+class Bounds {
+    <T extends IA & IB> void f(T t) {
+        String s = t.pick(java.util.List.of("x"));
+    }
+}

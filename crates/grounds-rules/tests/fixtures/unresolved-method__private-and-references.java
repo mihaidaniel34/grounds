@@ -33,3 +33,13 @@ class Holder {
         void f() { field.hashCode(); field.toString(); }
     }
 }
+// a superclass's private field hides the ones above it; the outer class's wins
+class HOther {}
+class HValue { void unique() {} }
+class HBase { public HOther x; }
+class HTest extends HBase {
+    private HValue x;
+    class Inner extends HTest {
+        void f() { x.unique(); }
+    }
+}
