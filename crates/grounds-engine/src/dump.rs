@@ -94,16 +94,34 @@ pub fn gradle(root: &Path) -> Result<usize> {
     merge(root, &files)
 }
 
+const MAVEN_CLASSPATH: [&str; 3] = ["dependency:build-classpath", "-Dmdep.outputFile=target/grounds-classpath.txt", "-Dmdep.includeScope=test"];
+
+/// Through the lifecycle up to test-compile, compiling nothing: in a
+/// multi-module build never installed, a module's dependency on a sibling
+/// only resolves (to the sibling's output directory) once the reactor has run
+/// the phase. Code generators bound to earlier phases still run; frontend
+/// builds and checkers are skipped.
+const MAVEN_REACTOR: &[&str] = &[
+    "-Dmaven.main.skip=true", "-Dmaven.test.skip=true", "-Denforcer.skip=true", "-Dcheckstyle.skip=true", "-Dspotless.check.skip=true",
+    "-Dspotless.apply.skip=true", "-Dlicense.skip=true", "-Drat.skip=true", "-Djacoco.skip=true", "-Dgpg.skip=true", "-Dskip.npm=true",
+    "-Dskip.yarn=true", "-Dskip.pnpm=true", "-Dskip.installnodenpm=true", "-Dskip.installyarn=true", "-Dpmd.skip=true", "-Dspotbugs.skip=true",
+    "-Dformatter.skip=true", "-Dimpsort.skip=true", "test-compile",
+];
+
 pub fn maven(root: &Path) -> Result<usize> {
-    let mvnw = root.join("mvnw");
-    let mut cmd = if mvnw.exists() { Command::new(mvnw) } else { Command::new("mvn") };
-    let status = cmd
-        .current_dir(root)
-        .args(["-q", "dependency:build-classpath", "-Dmdep.outputFile=target/grounds-classpath.txt", "-Dmdep.includeScope=test"])
-        .status()
-        .context("running maven")?;
+    let mvn = || {
+        let mvnw = root.join("mvnw");
+        let mut cmd = if mvnw.exists() { Command::new(mvnw) } else { Command::new("mvn") };
+        cmd.current_dir(root).args(["-q", "-B"]);
+        cmd
+    };
+    let status = mvn().args(MAVEN_CLASSPATH).status().context("running maven")?;
     if !status.success() {
-        bail!("maven failed");
+        eprintln!("grounds: retrying through the build lifecycle, without compiling (modules depending on modules not installed)");
+        let status = mvn().args(MAVEN_REACTOR).args(MAVEN_CLASSPATH).status().context("running maven")?;
+        if !status.success() {
+            bail!("maven failed");
+        }
     }
     let mut files = Vec::new();
     // target/ is usually gitignored, so walk without ignore filters
