@@ -178,7 +178,12 @@ impl Rule for UnresolvedMethod {
         let top = |c: &str| c.split('$').next().unwrap_or(c).to_string();
         let here = cx.fm.enclosing_class_name(n).map(|e| top(&e));
         let arity: Vec<&MethodRef> = ms.iter().filter(|m| m.method.accepts_arity(nargs)).collect();
-        if here.is_some() && arity.iter().all(|m| m.method.flags.is_private() && Some(top(&m.owner)) != here) {
+        // `methods_named` may hide a supertype's method (an interface default)
+        // behind a superclass's private one, which is not inherited
+        let visible_elsewhere = || {
+            cx.fm.all_supertypes(&cls.this_type()).iter().filter_map(|t| t.class_name().and_then(|n| cx.fm.class(n))).any(|c| c.methods_named(name).any(|m| m.accepts_arity(nargs) && !m.flags.is_private()))
+        };
+        if here.is_some() && arity.iter().all(|m| m.method.flags.is_private() && Some(top(&m.owner)) != here) && !visible_elsewhere() {
             let m = arity[0];
             cx.report(n.field("name").unwrap_or(n), format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)));
             return;
@@ -291,6 +296,10 @@ impl Rule for IncompatibleAssignment {
                 return;
             }
             let (Some(l), Some(r)) = (n.field("left"), n.field("right")) else { return };
+            // locals only: a field name may bind to an outer class's field
+            if l.kind() != "identifier" || cx.fm.local_decl(l).is_none() {
+                return;
+            }
             (cx.type_of(l), r.unparen())
         };
         if value.kind() != "method_invocation" {
@@ -302,6 +311,16 @@ impl Rule for IncompatibleAssignment {
         }
         let Some(c) = cx.fm.select_method(value) else { return };
         if c.ambiguous || !cx.fm.class(&c.owner).is_some_and(|k| k.is_source()) {
+            return;
+        }
+        // overload selection is approximate (type arguments, lambdas,
+        // inaccessible overloads): judge only a method without rivals
+        let nargs = cx.fm.args_of(value).len();
+        let rivals = match &c.receiver {
+            Some(r) => cx.fm.methods_named(r, &c.method.name).iter().filter(|m| m.method.accepts_arity(nargs)).count(),
+            None => cx.fm.class(&c.owner).map(|k| cx.fm.methods_named(&k.this_type(), &c.method.name).iter().filter(|m| m.method.accepts_arity(nargs)).count()).unwrap_or(2),
+        };
+        if rivals != 1 {
             return;
         }
         let Ty::Class { name: got, args: gargs } = &c.method.ret else { return };

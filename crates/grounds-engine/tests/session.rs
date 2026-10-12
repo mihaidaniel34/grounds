@@ -269,6 +269,15 @@ fn base_mode_removed_classes_and_new_beans() {
     // another class named Gone is imported explicitly: not the removed one
     write(&dir, "src/main/java/third/Gone.java", "package third;\npublic class Gone {}\n");
     write(&dir, "src/main/java/third/Shadowed.java", "package third;\nimport third.Gone;\nclass Shadowed { Gone g; }\n");
+    // same name, other bindings: a nested class, a field, a qualified name,
+    // and a same-package class winning over an on-demand import
+    write(&dir, "src/main/java/demo/Nested.java", "package demo;\nclass Nested {\n    static class Gone {}\n    Gone value;\n}\n");
+    write(&dir, "src/main/java/demo/Field.java", "package demo;\nclass Field {\n    int Gone;\n    int v() { return Gone; }\n}\n");
+    write(&dir, "src/main/java/other/Qualified.java", "package other;\nclass Qualified { third.Gone g; }\n");
+    write(&dir, "src/main/java/third/OnDemand.java", "package third;\nimport demo.*;\nclass OnDemand { Gone g; }\n");
+    // deleting a class named like a java.lang one: the name falls back to java.lang
+    write(&dir, "src/main/java/demo/String.java", "package demo;\npublic class String {}\n");
+    write(&dir, "src/main/java/demo/Text.java", "package demo;\nclass Text { String s; }\n");
     write(&dir, "src/main/java/demo/Api.java", "package demo;\npublic interface Api {}\n");
     write(&dir, "src/main/java/demo/ApiImpl.java", "package demo;\n@org.springframework.stereotype.Component\npublic class ApiImpl implements Api {}\n");
     write(&dir, "src/main/java/demo/Worker.java", "package demo;\n@org.springframework.stereotype.Component\npublic class Worker {\n    Worker(Api service) {}\n}\n");
@@ -277,6 +286,7 @@ fn base_mode_removed_classes_and_new_beans() {
     git(&repo, &["commit", "-qm", "init"]);
     git(&repo, &["checkout", "-qb", "feature"]);
     std::fs::remove_file(dir.join("src/main/java/demo/Gone.java")).unwrap();
+    std::fs::remove_file(dir.join("src/main/java/demo/String.java")).unwrap();
     write(&dir, "src/main/java/demo/ApiImpl2.java", "package demo;\n@org.springframework.stereotype.Component\npublic class ApiImpl2 implements Api {}\n");
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-qm", "feature"]);

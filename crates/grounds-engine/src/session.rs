@@ -422,14 +422,32 @@ impl Session {
         }
         let Ok(text) = std::fs::read_to_string(file) else { return Vec::new() };
         let pf = ParsedFile::parse(text);
+        let fm = grounds_semantic::FileModel::new(&pf, &self.project.index, path_key(file));
         let rel = file.strip_prefix(self.root()).unwrap_or(file).to_string_lossy().to_string();
         let mut out = Vec::new();
         for (c, import) in hits {
             let simple = simple_name_of(&c);
-            // the import line, or else the first use of the name as a type or receiver
+            // the import line (importing a class that exists nowhere does not
+            // compile), or else the first use of the bare name that resolves to
+            // nothing now: a nested class, a field or variable of that name, a
+            // qualified `q.Gone` or java.lang taking over is not the removed class
             let node = pf.root().descendants().find(|n| match &import {
                 Some(path) => n.kind() == "import_declaration" && pf.text[n.byte_range()].contains(path.as_str()),
-                None => matches!(n.kind(), "type_identifier" | "identifier") && &pf.text[n.byte_range()] == simple && !n.ancestors().any(|a| matches!(a.kind(), "import_declaration" | "package_declaration")),
+                None => {
+                    if &pf.text[n.byte_range()] != simple || n.ancestors().any(|a| matches!(a.kind(), "import_declaration" | "package_declaration")) {
+                        return false;
+                    }
+                    let qualified = n.parent().is_some_and(|p| matches!(p.kind(), "scoped_type_identifier" | "scoped_identifier") && p.kids().first() != Some(n));
+                    match n.kind() {
+                        "type_identifier" => !qualified && fm.resolve_type_node(*n).is_unknown(),
+                        // `Gone.value()` / `Gone.FIELD`: the receiver names no variable or type
+                        "identifier" => {
+                            let receiver = n.parent().is_some_and(|p| matches!(p.kind(), "method_invocation" | "field_access") && p.field("object") == Some(*n));
+                            receiver && fm.symbol(*n).is_none() && fm.type_of(*n).is_unknown()
+                        }
+                        _ => false,
+                    }
+                }
             });
             let Some(node) = node else { continue };
             let (s, e) = (pf.lines.line_col(&pf.text, node.start_byte() as u32), pf.lines.line_col(&pf.text, node.end_byte() as u32));

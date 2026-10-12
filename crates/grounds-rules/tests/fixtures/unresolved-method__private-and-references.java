@@ -22,3 +22,14 @@ class Caller {
         Function<String, Integer> len = String::length;
     }
 }
+interface Api { default void run() {} }
+class Base { private void run() {} private String field; }
+class ViaDefault extends Base implements Api {
+    void f(ViaDefault t) { t.run(); }
+}
+class Holder {
+    Object field;
+    class Inner extends Base {
+        void f() { field.hashCode(); field.toString(); }
+    }
+}

@@ -26,3 +26,19 @@ class Use {
         Runnable r = Util.text(); // expect
     }
 }
+class Overloads {
+    static Object pick(List<Integer> x) { return null; }
+    static String pick(Collection<String> x) { return ""; }
+    private static Object hidden(Object o) { return null; }
+    static String hidden(String s) { return ""; }
+    String s = pick(List.of("x"));
+    String t = hidden("x");
+}
+class FieldTarget {
+    static class Base { private String field; }
+    Object field;
+    static Object result() { return null; }
+    class Inner extends Base {
+        void f() { field = result(); }
+    }
+}
