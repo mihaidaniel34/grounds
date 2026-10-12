@@ -1595,7 +1595,6 @@ inject-groovy/src/main/groovy/io/micronaut/ast/groovy/visitor/AbstractGroovyElem
 inject-groovy/src/main/groovy/io/micronaut/ast/groovy/visitor/AbstractGroovyElement.java:457 literal-first-in-comparison
 inject-groovy/src/main/groovy/io/micronaut/ast/groovy/visitor/AbstractGroovyElement.java:457 null-dereference
 inject-groovy/src/main/groovy/io/micronaut/ast/groovy/visitor/AbstractGroovyElement.java:606 enum-keyed-hash-collection
-inject-groovy/src/main/groovy/io/micronaut/ast/groovy/visitor/GroovyBeanDefinitionBuilder.java:141 redundant-cast
 inject-groovy/src/main/groovy/io/micronaut/ast/groovy/visitor/GroovyBeanDefinitionBuilder.java:49 field-hides-superclass-field
 inject-groovy/src/main/groovy/io/micronaut/ast/groovy/visitor/GroovyClassElement.java:116 complex-boolean-expression
 inject-groovy/src/main/groovy/io/micronaut/ast/groovy/visitor/GroovyClassElement.java:120 literal-first-in-comparison
