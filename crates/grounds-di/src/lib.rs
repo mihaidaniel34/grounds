@@ -1049,7 +1049,7 @@ impl DiModel {
                 }
                 // a library type may get named beans from its own
                 // auto-configuration (clients configured by properties)
-                if !self.provable_type(lk, &p.ty) || self.dynamically_registered(&p.ty) {
+                if !self.provable_type(lk, &p.ty) || self.dynamically_registered(&p.ty) || p.lazy {
                     return Resolution::Unknown;
                 }
                 return Resolution::QualifierNotFound { qualifier: q.clone(), candidates: before };
@@ -1057,6 +1057,12 @@ impl DiModel {
         }
         if p.multiple {
             return Resolution::Multiple(cands);
+        }
+        // ObjectProvider, Provider, ObjectFactory: the bean is looked up when
+        // the code asks for it (often through orderedStream() or getIfUnique()),
+        // never at startup; a missing or ambiguous bean is not a startup failure
+        if p.lazy && cands.len() != 1 {
+            return if cands.is_empty() && p.optional { Resolution::Absent } else { Resolution::Unknown };
         }
         let jit_possible = || self.jit.iter().any(|j| p.ty.class_name().is_some_and(|t| lk.is_subclass(j, t).is_yes()));
         match cands.len() {
@@ -1291,6 +1297,22 @@ mod tests {
             ("b/src/main/java/app/Consumer.java", "package app; @org.springframework.stereotype.Service class Consumer { Consumer(Repo repo) {} }"),
         ]);
         assert_eq!(resolution_of(&idx, &m, "b/src/main/java/app/Consumer.java", "repo"), Resolution::Unknown);
+    }
+
+    #[test]
+    fn providers_do_not_fail_at_startup() {
+        let (idx, m) = model(&[
+            ("org/springframework/beans/factory/ObjectProvider.java", "package org.springframework.beans.factory; public interface ObjectProvider<T> {}"),
+            ("jakarta/inject/Provider.java", "package jakarta.inject; public interface Provider<T> { T get(); }"),
+            ("app/A.java", "package app; import org.springframework.stereotype.Service; import org.springframework.beans.factory.ObjectProvider; import jakarta.inject.Provider;
+             interface Configurer {} interface Missing {}
+             @Service class One implements Configurer {} @Service class Two implements Configurer {}
+             @Service class Uses { Uses(ObjectProvider<Configurer> all, Provider<Configurer> one, Provider<Missing> missing, Configurer direct) {} }"),
+        ]);
+        assert_eq!(resolution_of(&idx, &m, "app/A.java", "all"), Resolution::Unknown);
+        assert_eq!(resolution_of(&idx, &m, "app/A.java", "one"), Resolution::Unknown);
+        assert_eq!(resolution_of(&idx, &m, "app/A.java", "missing"), Resolution::Unknown);
+        assert!(matches!(resolution_of(&idx, &m, "app/A.java", "direct"), Resolution::Ambiguous(_)));
     }
 
     #[test]
