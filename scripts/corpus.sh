@@ -2,6 +2,8 @@
 # Regression corpus: real projects at pinned commits.
 #
 #   scripts/corpus.sh fetch      clone missing projects, check out the pinned commits
+#   scripts/corpus.sh classpath  `grounds classpath` in each project (Maven/Gradle
+#                                resolve the exact classpath) and scan_caches = false
 #   scripts/corpus.sh check      hard checks + findings snapshot (diffed against the baseline)
 #   scripts/corpus.sh baseline   accept the last snapshot as the new baseline
 #
@@ -58,6 +60,23 @@ fetch() {
   done 3< "$projects"
 }
 
+# the exact classpath through the build tool, and nothing else
+classpath() {
+  [ -x "$grounds" ] || cargo build --release --quiet --manifest-path "$repo/Cargo.toml" -p grounds-cli
+  failed=0
+  while IFS=$'\t' read -r name _ _ <&3; do
+    selected "$name" || continue
+    dir=$corpus_dir/$name
+    if ! (cd "$dir" && "$grounds" classpath --root . --color never < /dev/null); then
+      echo "$name: grounds classpath FAILED"; failed=1; continue
+    fi
+    [ -e "$dir/grounds.toml" ] && { echo "$name: has its own grounds.toml"; failed=1; continue; }
+    printf '[classpath]\nscan_caches = false\n' > "$dir/grounds.toml"
+    echo "$name: $(wc -l < "$dir/.grounds/classpath.txt" | tr -d ' ') jars"
+  done 3< "$projects"
+  exit $failed
+}
+
 check() {
   [ -x "$grounds" ] || cargo build --release --quiet --manifest-path "$repo/Cargo.toml" -p grounds-cli
   errors=${ERRORS:-$repo/target/release/examples/errors}
@@ -75,7 +94,9 @@ check() {
     findings "$dir" > "$out/current/$name.txt"
     hard=$(awk -v rules=",$hard_rules," 'index(rules, "," $2 ",")' "$out/current/$name.txt")
     parse=$(cd "$dir" && find . -name '*.java' -not -path '*/.grounds/*' -print0 | xargs -0 "$errors")
-    printf '%-28s %6d findings' "$name" "$(wc -l < "$out/current/$name.txt")"
+    calls=$("$grounds" type-stats "$dir" --color never 2>/dev/null < /dev/null | sed -n 's/^calls resolved //p')
+    echo "$name	$calls" >> "$out/current/stats.tsv"
+    printf '%-28s %6d findings, calls resolved %s' "$name" "$(wc -l < "$out/current/$name.txt")" "$calls"
     if [ -n "$hard" ] || [ -n "$parse" ]; then
       echo "  FAIL"; failed=1
       [ -n "$hard" ] && sed 's/^/    /' <<< "$hard" | head -20
@@ -126,6 +147,7 @@ check() {
 
 case ${1:-check} in
   fetch) fetch ;;
+  classpath) classpath ;;
   check) check ;;
   baseline) rm -rf "$out/baseline" && cp -R "$out/current" "$out/baseline" && echo "baseline updated" ;;
   *) echo "usage: $0 fetch|check|baseline" >&2; exit 2 ;;

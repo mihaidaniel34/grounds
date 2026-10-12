@@ -19,3 +19,8 @@ spring-petclinic	https://github.com/spring-projects/spring-petclinic.git	500158f
 start.spring.io	https://github.com/spring-io/start.spring.io.git	51bfbb4cc13f512c7c6f66754a8a92b961f0c714
 thingsboard	https://github.com/thingsboard/thingsboard.git	682333ee4ecf7a7a7df18579aaec6803f99374c7
 micronaut-core	https://github.com/micronaut-projects/micronaut-core.git	76ac7a75804cdda5f432eeaeff65ab4908b3f8e4
+mybatis-spring-boot-starter	https://github.com/mybatis/spring-boot-starter.git	87ce3bcb9a7305f6e9d104846242c941839ba153
+ruoyi-vue-pro	https://github.com/YunaiV/ruoyi-vue-pro.git	ac022b15a094cf9cf82903d429b9729e72309da5
+spring-framework	https://github.com/spring-projects/spring-framework.git	e1586e63edff4ebdcd22bca677bf302522ffa821
+commons-lang	https://github.com/apache/commons-lang.git	dd2c9e85784b288c7507c3736818040b3b457842
+quarkus-quickstarts	https://github.com/quarkusio/quarkus-quickstarts.git	e289a82f369c3e7e2f1f38b2e7e15ee5e7a233fe

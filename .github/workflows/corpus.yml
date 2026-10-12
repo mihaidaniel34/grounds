@@ -3,8 +3,12 @@ name: corpus
 # The regression corpus (corpus/projects.tsv), one parallel job per project:
 # zero parse errors, zero findings from rules that claim the code would not
 # compile or start, the planted bugs still reported, and a findings snapshot
-# diffed against corpus/ci/<project>.txt. Runners have no Maven/Gradle
-# caches, so this baseline differs from a dev machine's (fewer resolved calls).
+# diffed against a baseline. Two setups per project:
+# - check: a fresh checkout, no jars at all (baseline corpus/ci); most calls
+#   into libraries stay unknown, as for an agent in a repo never built;
+# - classpath: `grounds classpath` first (Maven/Gradle resolve the exact
+#   classpath) with scan_caches = false (baseline corpus/ci-classpath); the
+#   compile-break rules check the most here, against code that compiles.
 # To accept new results, run with `update-baseline` and commit the artifact.
 on:
   pull_request:
@@ -90,7 +94,7 @@ jobs:
         if: always()
         run: |
           {
-            echo "### ${{ matrix.project }}"
+            echo "### ${{ matrix.project }}: calls resolved $(cut -f2 target/corpus/current/stats.tsv 2>/dev/null)"
             if [ -s target/corpus/snapshot.diff ]; then
               echo "<details><summary>snapshot diff</summary>"; echo; echo '```diff'; head -200 target/corpus/snapshot.diff; echo '```'; echo "</details>"
             else
@@ -103,11 +107,87 @@ jobs:
           name: corpus-${{ matrix.project }}
           path: |
             target/corpus/current/*.txt
+            target/corpus/current/stats.tsv
             target/corpus/snapshot.diff
             target/corpus/planted-*.diff
 
+  classpath:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        project: ${{ fromJson(needs.build.outputs.projects) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # 17 and 21 run the builds (Gradle 7 needs 17); 25, the default, gives
+      # grounds the JDK API the baselines were made with
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: |
+            17
+            21
+            25
+      - uses: actions/download-artifact@v5
+        with:
+          name: binaries
+          path: bin
+      - run: chmod +x bin/grounds bin/examples/errors
+      - name: fetch the pinned commit
+        run: scripts/corpus.sh fetch
+        env:
+          CORPUS_ONLY: ${{ matrix.project }}
+          CORPUS_DIR: ${{ runner.temp }}/corpus
+          CORPUS_SHALLOW: "1"
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.m2/wrapper
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: deps-${{ matrix.project }}-${{ hashFiles('corpus/projects.tsv') }}
+      - name: grounds classpath
+        run: |
+          export JAVA_HOME=$([ "$PROJECT" = buckpal ] && echo "$JAVA_HOME_17_X64" || echo "$JAVA_HOME_21_X64")
+          scripts/corpus.sh classpath
+        env:
+          PROJECT: ${{ matrix.project }}
+          CORPUS_ONLY: ${{ matrix.project }}
+          CORPUS_DIR: ${{ runner.temp }}/corpus
+          GROUNDS: bin/grounds
+          MAVEN_ARGS: -B -ntp
+      - name: check
+        run: scripts/corpus.sh check
+        env:
+          CORPUS_ONLY: ${{ matrix.project }}
+          CORPUS_DIR: ${{ runner.temp }}/corpus
+          CORPUS_BASELINE: corpus/ci-classpath
+          GROUNDS: bin/grounds
+          ERRORS: ${{ github.workspace }}/bin/examples/errors
+      - name: summary
+        if: always()
+        run: |
+          {
+            echo "### ${{ matrix.project }} (classpath): calls resolved $(cut -f2 target/corpus/current/stats.tsv 2>/dev/null)"
+            if [ -s target/corpus/snapshot.diff ]; then
+              echo "<details><summary>snapshot diff</summary>"; echo; echo '```diff'; head -200 target/corpus/snapshot.diff; echo '```'; echo "</details>"
+            else
+              echo "snapshot unchanged"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: corpus-cp-${{ matrix.project }}
+          path: |
+            target/corpus/current/*.txt
+            target/corpus/current/stats.tsv
+            target/corpus/snapshot.diff
+
   baseline:
-    needs: check
+    needs: [check, classpath]
     if: always() && github.event_name == 'workflow_dispatch' && inputs.update-baseline
     runs-on: ubuntu-latest
     steps:
@@ -115,8 +195,18 @@ jobs:
         with:
           pattern: corpus-*
           path: results
-      - run: mkdir -p corpus/ci && cp results/*/current/*.txt corpus/ci/ && ls corpus/ci
+      - run: |
+          mkdir -p corpus/ci corpus/ci-classpath
+          for d in results/corpus-*; do
+            case $d in
+              results/corpus-cp-*) cp "$d"/current/*.txt corpus/ci-classpath/ ;;
+              *) cp "$d"/current/*.txt corpus/ci/ ;;
+            esac
+          done
+          ls corpus/ci corpus/ci-classpath
       - uses: actions/upload-artifact@v5
         with:
           name: corpus-baseline
-          path: corpus/ci/*.txt
+          path: |
+            corpus/ci/*.txt
+            corpus/ci-classpath/*.txt
