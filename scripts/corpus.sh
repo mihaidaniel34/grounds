@@ -23,6 +23,7 @@ set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
 corpus_dir=${CORPUS_DIR:-$HOME/grounds-testbed}
 grounds=${GROUNDS:-$repo/target/release/grounds}
+case $grounds in /*) ;; *) grounds=$PWD/$grounds ;; esac  # classpath runs it from each project
 out=$repo/target/corpus
 projects=$repo/corpus/projects.tsv
 
