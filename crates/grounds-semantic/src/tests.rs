@@ -870,3 +870,17 @@ fn calls_typed_through_a_lambda_are_no_bound_free_arguments() {
     // javac: UnaryOperator<Object> (`apply` gives an Integer through its lambda)
     assert_eq!(t, vec!["java.util.function.UnaryOperator<?unknown>"]);
 }
+
+#[test]
+fn a_panic_inside_a_guard_leaves_the_node() {
+    // the runner catches a rule's panic and keeps using the file's model
+    let pf = ParsedFile::parse("class T {}");
+    let mut idx = Index::new(jdk());
+    idx.set_file(Arc::from("T.java"), Arc::new(extract(&pf)));
+    let fm = FileModel::new(&pf, &idx, Arc::from("T.java"));
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fm.guard(7, 0, 0, || -> i32 { panic!("rule bug") })));
+    assert!(r.is_err());
+    assert_eq!(fm.guard(7, 0, 0, || 1), 1, "the node is not left marked in progress");
+    // a real cycle still returns the default
+    assert_eq!(fm.guard(8, 0, 0, || fm.guard(8, 0, -1, || 2)), -1);
+}
