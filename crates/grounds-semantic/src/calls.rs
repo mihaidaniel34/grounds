@@ -221,11 +221,13 @@ impl<'t> FileModel<'t> {
                     let b = b.unparen();
                     let ty = self.arg_type(b, Target::None);
                     let poly = self.is_poly(b);
-                    ty.is_known().then_some(LambdaBody { ty, poly })
+                    (ty.is_known() && !self.poly_untyped(b)).then_some(LambdaBody { ty, poly })
                 });
                 ArgShape::Lambda(n, compat, typed, body)
             }
             "method_reference" => ArgShape::MethodRef,
+            // its type alone is a provisional guess, erasure included
+            _ if self.poly_untyped(a) => ArgShape::Ty(Ty::Unknown),
             _ => ArgShape::Ty(self.arg_type(a, Target::None)),
         }
     }
@@ -241,6 +243,27 @@ impl<'t> FileModel<'t> {
             }
             "object_creation_expression" => a.field("type").is_some_and(|t| t.kind() == "generic_type" && t.kid_of_kind("type_arguments").is_some_and(|ta| ta.kids().is_empty())),
             "ternary_expression" => a.kids().iter().skip(1).any(|k| self.is_poly(*k)),
+            "switch_expression" => true,
+            _ => false,
+        }
+    }
+
+    /// A poly expression whose very class comes from the target: a generic
+    /// call returning a bare type variable of its own (`<X> X first(..)`).
+    fn poly_untyped(&self, a: Node<'t>) -> bool {
+        let a = a.unparen();
+        match a.kind() {
+            "method_invocation" => {
+                a.child_by_field_name("type_arguments").is_none()
+                    && self.select_method(a).is_some_and(|c| {
+                        let mut r = &c.method.ret;
+                        while let Ty::Array(e) = r {
+                            r = e;
+                        }
+                        matches!(r, Ty::TypeVar(v) if c.method.type_params.iter().any(|tp| tp.name == *v))
+                    })
+            }
+            "ternary_expression" => a.kids().iter().skip(1).any(|k| self.poly_untyped(*k)),
             "switch_expression" => true,
             _ => false,
         }
@@ -1090,7 +1113,8 @@ impl<'t> FileModel<'t> {
             match self.conv(a, &q) {
                 Conv::Yes => {}
                 Conv::Unchecked => inf.unchecked = true,
-                Conv::No if poly && self.conv(&a.erasure(), &q.erasure()) != Conv::No => inf.incomplete = true,
+                // javac may or may not infer it to fit: no proof either way
+                Conv::No if poly && self.conv(&a.erasure(), &q.erasure()) != Conv::No => inf.gap(),
                 Conv::No => inf.no = true,
                 Conv::Unknown => inf.incomplete = true,
             }
@@ -1633,12 +1657,13 @@ impl<'t> FileModel<'t> {
                 // a lub stands only where the target agrees (javac widens it to an
                 // invariant target); without a target it is what `var` gets
                 let wide: Vec<Name> = inf.widenable.iter().filter(|v| mentions(&rc.method.ret, v) && bindings.iter().any(|(k, _)| k == *v)).cloned().collect();
+                let target_type = || match target {
+                    Target::Full => self.expected_type(call),
+                    Target::Param => self.selected_param_type(call),
+                    Target::None => Ty::Unknown,
+                };
                 if !wide.is_empty() {
-                    let exp = match target {
-                        Target::Full => self.expected_type(call),
-                        Target::Param => self.selected_param_type(call),
-                        Target::None => Ty::Unknown,
-                    };
+                    let exp = target_type();
                     // the target bounds the lub from above, or forces another
                     // type (an invariant `Stream<Object>`): then it is no answer
                     let lub_ret = apply_subst(&rc.method.ret, &bindings);
@@ -1682,9 +1707,19 @@ impl<'t> FileModel<'t> {
                 for p in &mut rc.method.params {
                     p.ty = apply_subst(&p.ty, &bindings);
                 }
-                // a captured variable shows as its projection: the wildcard again
-                let ret = self.project(&rc.method.ret, &inf.captures);
+                // a captured variable shows as its projection: the wildcard
+                // again, where that fits the target; an invariant target
+                // (`List<Number> l = List.copyOf(xs)`) widens it in javac
                 bindings.retain(|(k, _)| !inf.captures.iter().any(|c| c.var == *k));
+                let mut captures = inf.captures.clone();
+                if captures.iter().any(|c| mentions(&rc.method.ret, &c.var)) {
+                    let exp = target_type();
+                    let projected = apply_subst(&self.project(&rc.method.ret, &captures), &bindings);
+                    if exp.is_known() && (projected.mentions_type_var() || self.conv(&projected, &exp) != Conv::Yes) {
+                        captures.retain(|c| !mentions(&rc.method.ret, &c.var));
+                    }
+                }
+                let ret = self.project(&rc.method.ret, &captures);
                 rc.ret = self.finish_type(&ret, &bindings, call);
             }
             // unchecked conversion of an argument erases the result (JLS 15.12.2.6)

@@ -652,3 +652,48 @@ fn captures_with_a_common_bound_infer_that_bound() {
         ]
     );
 }
+
+#[test]
+fn target_typed_results_rule_no_overload_in_or_out() {
+    // `first(xs)` returns its own X: alone it says Object, with a target
+    // anything below it; neither as lambda body nor as argument it decides
+    let t = types_of(
+        "import java.util.*; import java.util.function.*;
+         interface Specific extends Supplier<String> {}
+         class R { static <X> X first(List<? super X> xs) { return null; }
+                   static String pick(Specific s) { return null; } static <Y> Integer pick(Supplier<Y> s) { return null; }
+                   static Long take(String s) { return null; } static Double take(List<?> l) { return null; } }
+         class T { void m(List<Object> xs) { Object a = /*T*/ R.pick(() -> R.first(xs)); Object b = /*T*/ R.take(R.first(xs)); } }",
+    );
+    // javac: String, ambiguous
+    assert_eq!(t, vec!["?unknown", "?unknown"]);
+}
+
+#[test]
+fn poly_mismatch_with_a_fixed_parameter_is_no_proof() {
+    let t = types_of(
+        "import java.util.*;
+         class Q { static <X> List<X> identity(List<X> xs) { return xs; }
+                   static String pick(List<Object> xs) { return null; } static Integer pick(Object xs, Object... rest) { return null; } }
+         class T { void m(List<String> xs) { Object a = /*T*/ Q.pick(Q.identity(xs)); } }",
+    );
+    // javac: Integer (X = String cannot give a List<Object>)
+    assert_eq!(t, vec!["?unknown"]);
+}
+
+#[test]
+fn capture_projection_yields_to_an_invariant_target() {
+    let t = types_of(
+        "import java.util.*;
+         class T { void m(List<? extends Number> xs) {
+             List<Number> a = /*T*/ List.copyOf(xs);
+             Object b = /*T*/ List.copyOf(xs);
+             Collection<? extends Number> c = /*T*/ List.copyOf(xs);
+         } }",
+    );
+    // javac: List<Number> for the invariant target, the projection otherwise
+    assert_eq!(
+        t,
+        vec!["java.util.List<?unknown>", "java.util.List<? extends java.lang.Number>", "java.util.List<? extends java.lang.Number>"]
+    );
+}
