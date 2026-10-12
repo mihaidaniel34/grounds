@@ -12,3 +12,6 @@ class App {
     @Bean Object consumer(@Qualifier("demo-app.App$Props") Props props) { return new Object(); }
     @Bean Object wrong(@Qualifier("demo") Props props) { return new Object(); } // expect
 }
+
+// the project is an application: its context is complete
+@org.springframework.boot.autoconfigure.SpringBootApplication class FixtureApp {}

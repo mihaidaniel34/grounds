@@ -128,6 +128,11 @@ pub struct DiModel {
     by_class: FxHashMap<Name, Vec<usize>>,
     pub frameworks: Vec<Framework>,
     pub scan_roots: Vec<String>,
+    /// The main sources define a Spring application (`@SpringBootApplication`
+    /// or `@ComponentScan`). Without one the project is a library: the context
+    /// is assembled by an application we cannot see, which may provide any
+    /// bean, so wiring in main code is not judged.
+    pub spring_application: bool,
     /// (scan root, module declaring it)
     pub scan_root_modules: Vec<(String, String)>,
     /// simple names referenced by classes that register beans
@@ -381,6 +386,9 @@ impl<'a> Builder<'a> {
                         .collect();
                     let declared: Vec<String> = if explicit.is_empty() && classes.is_empty() { vec![c.package().to_string()] } else { explicit.into_iter().chain(classes).collect() };
                     let cond = self.conditional_meta(&c.annotations);
+                    if c.source_file().is_some_and(|f| !is_test_path(f)) {
+                        self.model.spring_application = true;
+                    }
                     let module = c.source_file().map(module_of).unwrap_or("").to_string();
                     root_conditions.extend(declared.iter().map(|r| (r.clone(), cond, module.clone())));
                     roots.extend(declared);
@@ -975,6 +983,10 @@ impl DiModel {
         if p.ty.is_unknown() || p.ty.mentions_type_var() {
             return Resolution::Unknown;
         }
+        // a library's beans are wired by the application using it
+        if p.framework == Framework::Spring && !self.spring_application && !p.file.as_deref().is_some_and(is_test_path) {
+            return Resolution::Unknown;
+        }
         let (mut cands, mut maybe) = self.candidates(lk, &p.ty, include_test);
         // library supertypes can never lead to a project type, so beans with an
         // incomplete (library) hierarchy cannot provide one
@@ -1137,7 +1149,8 @@ impl DiModel {
         let mut seen: FxHashMap<(&str, &str), usize> = FxHashMap::default();
         let mut out = Vec::new();
         for (i, b) in self.beans.iter().enumerate() {
-            if b.framework != Framework::Spring || b.conditional || b.is_test {
+            // in a library, which beans end up in one context is the user's choice
+            if b.framework != Framework::Spring || b.conditional || b.is_test || !self.spring_application {
                 continue;
             }
             let key = (b.file.as_deref().map(module_of).unwrap_or(""), b.name.as_str());
@@ -1180,6 +1193,24 @@ mod tests {
     }
 
     #[test]
+    fn a_library_leaves_wiring_to_its_application() {
+        // no @SpringBootApplication or @ComponentScan in main sources: the
+        // application using the library provides the missing beans
+        let (idx, m) = model(&[(
+            "lib/A.java",
+            "package lib; import org.springframework.stereotype.*;
+             interface Store {}
+             @Service class DbStore implements Store {}
+             @Service class MemStore implements Store {}
+             interface Missing {}
+             @Service class Uses { Uses(Store s, Missing m) {} }",
+        )]);
+        assert!(!m.spring_application);
+        assert!(m.points.iter().all(|p| m.resolve(&idx, p, false) == Resolution::Unknown));
+        assert!(m.name_conflicts().is_empty());
+    }
+
+    #[test]
     fn resolves_spring_beans() {
         let (idx, m) = model(&[(
             "app/A.java",
@@ -1192,9 +1223,10 @@ mod tests {
              interface Missing {}
              @Configuration class Cfg { @Bean @Primary Clock clock() { return null; } @Bean Clock other() { return null; } }
              interface Clock {}
-             @Service class NeedsClock { NeedsClock(Clock c) {} }",
+             @Service class NeedsClock { NeedsClock(Clock c) {} }
+             @org.springframework.boot.autoconfigure.SpringBootApplication class App {}",
         )]);
-        assert_eq!(m.beans.len(), 8);
+        assert_eq!(m.beans.len(), 9);
         let res: Vec<(String, Resolution)> = m.points.iter().map(|p| (format!("{}.{}", simple_name_of(&p.owner), p.name), m.resolve(&idx, p, false))).collect();
         let get = |k: &str| res.iter().find(|(n, _)| n == k).unwrap().1.clone();
         assert!(matches!(get("Uses.s"), Resolution::Unique(_)));

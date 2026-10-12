@@ -42,7 +42,9 @@ leaves tests for the end of the task.
   dropping `@Qualifier`, constructor cycles, bean name clashes. It knows
   `@Primary`, profiles and conditions (treated as unknown), generics,
   factory methods, Spring Data repositories, Feign clients, MapStruct mappers
-  and Micronaut's `@EachBean`, `@Replaces` and bean naming.
+  and Micronaut's `@EachBean`, `@Replaces` and bean naming. A Spring
+  library (no `@SpringBootApplication` or `@ComponentScan` in its main
+  sources) is not judged: the application using it wires its beans.
 - **Lombok:** generated constructors (including `staticName`/`staticConstructor`
   factories), getters, setters, `@With`, `@Builder` on classes, constructors
   and methods (with `@Builder.Default`), `@SuperBuilder` across files,
