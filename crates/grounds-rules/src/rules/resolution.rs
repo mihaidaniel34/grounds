@@ -206,33 +206,15 @@ fn definitely_incompatible<'t>(cx: &Ctx<'_, 't>, call: Node<'t>, ms: &[MethodRef
         any = true;
         let np = m.method.params.len();
         let ok = arg_tys.iter().enumerate().all(|(i, at)| {
-            let pt = if m.method.is_varargs() && i + 1 >= np {
-                match &m.method.params[np - 1].ty {
-                    Ty::Array(e) if !(args.len() == np && at.is_array()) => (**e).clone(),
-                    t => t.clone(),
-                }
-            } else {
-                m.method.params[i].ty.clone()
-            };
-            if pt.has_unknown() || pt.mentions_type_var() {
-                return true;
+            if m.method.is_varargs() && i + 1 >= np {
+                let last = &m.method.params[np - 1].ty;
+                let Ty::Array(e) = last else { return accepts(cx, at, last) };
+                // one argument in the varargs position: the array itself
+                // (`of(byte[][])`) or one element of it (`of(byte[])` for
+                // `of(byte[]...)`, `int[]` for `Object...`)
+                return (args.len() == np && accepts(cx, at, last)) || accepts(cx, at, e);
             }
-            // a type whose class is not on the classpath, or the same simple
-            // name from another package (javax vs jakarta when cached jars do
-            // not match the project's versions), proves nothing
-            if !fully_known(cx, &pt) || !fully_known(cx, at) {
-                return true;
-            }
-            // skew is only possible for jar classes, not between project classes
-            if let (Some(a), Some(p)) = (at.class_name(), pt.class_name()) {
-                let from_jar = |n: &str| cx.fm.class(n).is_some_and(|c| !c.is_source());
-                if a != p && simple_name_of(a) == simple_name_of(p) && (from_jar(a) || from_jar(p)) {
-                    return true;
-                }
-            }
-            // compile-time narrowing of int constants (byte b = 1 style) is not applied to calls,
-            // but keep constants permissive anyway
-            !cx.fm.is_assignable(at, &pt).is_no()
+            accepts(cx, at, &m.method.params[i].ty)
         });
         if ok {
             return None;
@@ -242,6 +224,29 @@ fn definitely_incompatible<'t>(cx: &Ctx<'_, 't>, call: Node<'t>, ms: &[MethodRef
         return None;
     }
     Some(arg_tys.iter().map(|t| t.display_simple()).collect::<Vec<_>>().join(", "))
+}
+
+/// The argument type may be passed for the parameter type: not provably wrong.
+fn accepts(cx: &Ctx<'_, '_>, at: &Ty, pt: &Ty) -> bool {
+    if pt.has_unknown() || pt.mentions_type_var() {
+        return true;
+    }
+    // a type whose class is not on the classpath, or the same simple
+    // name from another package (javax vs jakarta when cached jars do
+    // not match the project's versions), proves nothing
+    if !fully_known(cx, pt) || !fully_known(cx, at) {
+        return true;
+    }
+    // skew is only possible for jar classes, not between project classes
+    if let (Some(a), Some(p)) = (at.class_name(), pt.class_name()) {
+        let from_jar = |n: &str| cx.fm.class(n).is_some_and(|c| !c.is_source());
+        if a != p && simple_name_of(a) == simple_name_of(p) && (from_jar(a) || from_jar(p)) {
+            return true;
+        }
+    }
+    // compile-time narrowing of int constants (byte b = 1 style) is not applied to calls,
+    // but keep constants permissive anyway
+    !cx.fm.is_assignable(at, pt).is_no()
 }
 
 declare_rule!(UnresolvedConstructor {

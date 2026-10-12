@@ -144,6 +144,10 @@ pub struct DiModel {
     pub opaque_imports: bool,
     /// Classes that are components (by binary name), for quick lookup.
     pub component_classes: FxHashMap<Name, usize>,
+    /// Class names defined in more than one source file (independent modules
+    /// of one repository, each its own application): the index keeps one of
+    /// them, so wiring that involves such a class is not judged.
+    pub duplicated: rustc_hash::FxHashSet<Name>,
     /// Constructor-injection edges (owner, dependency class, point index),
     /// computed once at build time.
     pub ctor_edges: Vec<(Name, Name, usize)>,
@@ -493,12 +497,18 @@ impl<'a> Builder<'a> {
                         }
                     }
                 }
+                // an unresolved annotation keeps its simple name: judge by the imports
+                let imports_jakarta_data = self.index.raw_class(&c.name).is_some_and(|(stub, _)| {
+                    stub.imports.iter().any(|i| !i.is_static && (&*i.path == "jakarta.data.repository.Repository" || (i.on_demand && &*i.path == "jakarta.data.repository")))
+                });
                 for a in &c.annotations {
                     match a.simple_name() {
                         "ConfigurationProperties" | "EachProperty" | "ConfigurationReader" if a.name.starts_with("io.micronaut") || !a.resolved => source = Some((BeanSource::Component, Framework::Micronaut)),
                         "FeignClient" | "HttpExchange" => source = Some((BeanSource::Client, Framework::Spring)),
                         "Client" if a.name.starts_with("io.micronaut") || !a.resolved => source = Some((BeanSource::Client, Framework::Micronaut)),
                         "Repository" | "JdbcRepository" | "MongoRepository" | "R2dbcRepository" if a.name.starts_with("io.micronaut") => source = Some((BeanSource::Repository, Framework::Micronaut)),
+                        // Jakarta Data: the implementation is generated at build time (Hibernate, Quarkus, ...)
+                        "Repository" if a.name.starts_with("jakarta.data") || (!a.resolved && imports_jakarta_data) => source = Some((BeanSource::Repository, Framework::Jakarta)),
                         "Mapper" => {
                             // MapStruct (component model may come from a compiler option) or MyBatis
                             let model = first_string(a, &["componentModel"]).unwrap_or_default();
@@ -900,6 +910,7 @@ impl DiModel {
         let mut b = Builder { index, model: DiModel::default(), stereo: FxHashMap::default(), qualifier_ann: FxHashMap::default(), registered: registered.iter().cloned().collect() };
         b.scan();
         let mut m = b.model;
+        m.duplicated = index.source_class_names().filter(|n| index.is_duplicated(n)).cloned().collect();
         m.index_providers(index);
         m.ctor_edges = m.constructor_edges(index);
         m
@@ -972,10 +983,13 @@ impl DiModel {
     }
 
     pub fn resolve(&self, lk: &dyn ClassLookup, p: &InjectionPoint, include_test: bool) -> Resolution {
-        if p.ty.is_unknown() || p.ty.mentions_type_var() {
+        if p.ty.is_unknown() || p.ty.mentions_type_var() || self.duplicated.contains(&p.owner) || p.ty.class_name().is_some_and(|t| self.duplicated.contains(t)) {
             return Resolution::Unknown;
         }
         let (mut cands, mut maybe) = self.candidates(lk, &p.ty, include_test);
+        if cands.iter().any(|&i| self.duplicated.contains(&self.beans[i].declaring_class)) {
+            return Resolution::Unknown;
+        }
         // library supertypes can never lead to a project type, so beans with an
         // incomplete (library) hierarchy cannot provide one
         if self.provable_type(lk, &p.ty) {
@@ -1203,5 +1217,46 @@ mod tests {
         assert!(matches!(get("Broken.t"), Resolution::QualifierNotFound { .. }));
         assert_eq!(get("Broken.m"), Resolution::NotFound);
         assert!(matches!(get("NeedsClock.c"), Resolution::Unique(_)));
+    }
+
+    const CDI: [(&str, &str); 2] = [
+        ("jakarta/inject/Inject.java", "package jakarta.inject; public @interface Inject {}"),
+        ("jakarta/enterprise/context/ApplicationScoped.java", "package jakarta.enterprise.context; public @interface ApplicationScoped {}"),
+    ];
+
+    fn resolution_of(idx: &Index, m: &DiModel, owner_file: &str, name: &str) -> Resolution {
+        let p = m.points.iter().find(|p| p.name == name && p.file.as_deref() == Some(owner_file)).expect("injection point");
+        m.resolve(idx, p, false)
+    }
+
+    #[test]
+    fn jakarta_data_repositories_are_beans() {
+        // jakarta.data is not on the classpath: the annotation is judged by the import
+        let user = "package app; import jakarta.inject.Inject; import jakarta.enterprise.context.ApplicationScoped;
+             @ApplicationScoped class Resource { @Inject FruitRepository repository; @Inject Other other; }";
+        let (idx, m) = model(&[CDI[0], CDI[1],
+            ("app/FruitRepository.java", "package app; import jakarta.data.repository.Repository; @Repository public interface FruitRepository {}"),
+            ("app/Other.java", "package app; public interface Other {}"),
+            ("app/Resource.java", user)]);
+        assert!(matches!(resolution_of(&idx, &m, "app/Resource.java", "repository"), Resolution::Unique(_)));
+        assert_eq!(resolution_of(&idx, &m, "app/Resource.java", "other"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn classes_duplicated_across_modules_are_not_judged() {
+        // two independent applications in one repository, same class names;
+        // the index keeps one `app.Resource`, so neither is judged
+        let a = "package app; import jakarta.inject.Inject; import jakarta.enterprise.context.ApplicationScoped;
+             @ApplicationScoped class Resource { @Inject Store store; }";
+        let b = "package app; import jakarta.inject.Inject; import jakarta.enterprise.context.ApplicationScoped;
+             @ApplicationScoped class Resource { @Inject Cache cache; }";
+        let (idx, m) = model(&[CDI[0], CDI[1],
+            ("a/src/main/java/app/Resource.java", a),
+            ("a/src/main/java/app/Store.java", "package app; public interface Store {}"),
+            ("b/src/main/java/app/Resource.java", b),
+            ("b/src/main/java/app/Cache.java", "package app; public interface Cache {}")]);
+        for p in &m.points {
+            assert_eq!(m.resolve(&idx, p, false), Resolution::Unknown, "{}", p.name);
+        }
     }
 }
