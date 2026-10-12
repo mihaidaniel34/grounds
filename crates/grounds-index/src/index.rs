@@ -168,14 +168,8 @@ struct Resolving<'a>(&'a str);
 impl<'a> Resolving<'a> {
     /// `None` if the class is already being resolved further up (a cycle).
     fn enter(name: &'a str) -> Option<Resolving<'a>> {
-        RESOLVING.with(|r| {
-            let mut r = r.borrow_mut();
-            // allocate the key only when actually entering
-            (!r.contains(name)).then(|| {
-                r.insert(Arc::from(name));
-                Resolving(name)
-            })
-        })
+        // one lookup: entering is the common case, a cycle rare
+        RESOLVING.with(|r| r.borrow_mut().insert(Arc::from(name))).then(|| Resolving(name))
     }
 }
 
