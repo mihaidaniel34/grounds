@@ -697,3 +697,37 @@ fn capture_projection_yields_to_an_invariant_target() {
         vec!["java.util.List<?unknown>", "java.util.List<? extends java.lang.Number>", "java.util.List<? extends java.lang.Number>"]
     );
 }
+
+#[test]
+fn rivals_in_later_phases_keep_an_unproven_pick_uncertain() {
+    let t = types_of(
+        "import java.util.*;
+         class P { static <T> T id(T x) { return x; } static <T> T any() { return null; }
+                   static String pick(String x) { return null; } static Integer pick(Integer x, Object... rest) { return null; } }
+         class T { void m() { Object a = /*T*/ P.pick(P.id(1)); Object b = /*T*/ P.pick(P.any()); } }",
+    );
+    // `id(1)` is an Integer whatever the target, so only the varargs one fits;
+    // `any()` fits the fixed-arity one only through its target: javac Integer, String
+    assert_eq!(t, vec!["java.lang.Integer", "?unknown"]);
+}
+
+#[test]
+fn erasure_only_results_drop_type_arguments_inside_arrays() {
+    let t = types_of(
+        "import java.util.*;
+         class Q { static <X> List<X> identity(List<X> xs) { return xs; }
+                   static List<String>[] pick(List<String> xs) { return null; } static <Y> List<Y>[] pick(Collection<Y> xs) { return null; } }
+         class T { void m(List<Integer> xs) { Object a = /*T*/ Q.pick(Q.identity(xs)); } }",
+    );
+    // javac: List<Integer>[]
+    assert_eq!(t, vec!["java.util.List<?unknown>[]"]);
+}
+
+#[test]
+fn calls_fixed_by_their_own_arguments_keep_their_type() {
+    let t = types_of(
+        "import java.util.*;
+         class T { void m(String[] xs) { Object a = /*T*/ List.of(Arrays.copyOf(xs, 2)); Object b = /*T*/ List.of(Objects.requireNonNull(xs)); } }",
+    );
+    assert_eq!(t, vec!["java.util.List<java.lang.String>"; 2]);
+}

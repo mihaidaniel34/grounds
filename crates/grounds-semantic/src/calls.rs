@@ -172,6 +172,8 @@ struct Inference {
     soft: bool,
     /// the variables a poly argument bounds
     soft_vars: Vec<Name>,
+    /// variables bound from above only (`? super T`): the target picks them
+    upper_only: Vec<Name>,
     /// variables bound to a computed lub: a target type can widen them
     /// (`Stream<Object> s = Stream.concat(a, b)`)
     widenable: Vec<Name>,
@@ -249,19 +251,33 @@ impl<'t> FileModel<'t> {
     }
 
     /// A poly expression whose very class comes from the target: a generic
-    /// call returning a bare type variable of its own (`<X> X first(..)`).
+    /// call returning a bare type variable of its own that its arguments do
+    /// not fix (`<X> X first(List<? super X>)`, `<T> T empty()`). One
+    /// bounded from below or exactly by plain arguments (`Arrays.copyOf(xs,
+    /// 2)`, `requireNonNull(x)`) has that type, the least any target allows.
     fn poly_untyped(&self, a: Node<'t>) -> bool {
         let a = a.unparen();
         match a.kind() {
             "method_invocation" => {
-                a.child_by_field_name("type_arguments").is_none()
-                    && self.select_method(a).is_some_and(|c| {
-                        let mut r = &c.method.ret;
-                        while let Ty::Array(e) = r {
-                            r = e;
-                        }
-                        matches!(r, Ty::TypeVar(v) if c.method.type_params.iter().any(|tp| tp.name == *v))
-                    })
+                if a.child_by_field_name("type_arguments").is_some() {
+                    return false;
+                }
+                let Some(c) = self.select_method(a) else { return false };
+                let mut r = &c.method.ret;
+                while let Ty::Array(e) = r {
+                    r = e;
+                }
+                let Ty::TypeVar(v) = r else { return false };
+                if !c.method.type_params.iter().any(|tp| tp.name == *v) {
+                    return false;
+                }
+                let inf = self.partial_inference(a, &c.method);
+                let fixed = inf.bindings.iter().any(|(k, _)| k == v)
+                    && !inf.upper_only.contains(v)
+                    && !inf.soft_vars.contains(v)
+                    && !inf.poisoned.contains(v)
+                    && !inf.captures.iter().any(|c| c.var == *v);
+                !fixed
             }
             "ternary_expression" => a.kids().iter().skip(1).any(|k| self.poly_untyped(*k)),
             "switch_expression" => true,
@@ -888,6 +904,7 @@ impl<'t> FileModel<'t> {
                 }
                 lub
             } else if !uppers.is_empty() {
+                inf.upper_only.push(v.clone());
                 let glb = uppers.iter().find(|u| uppers.iter().all(|o| self.conv(u, o) == Conv::Yes)).cloned();
                 if glb.is_none() {
                     fail(&mut inf, false);
@@ -1472,6 +1489,8 @@ impl<'t> FileModel<'t> {
             return None;
         }
         let best_phase = fits.iter().map(|(_, f)| f.0).min().unwrap();
+        // candidates not proven inapplicable, in any phase
+        let rivals = fits.len() - 1;
         let mut pool: Vec<(MethodRef, Inference)> = fits.into_iter().filter(|(_, f)| f.0 == best_phase).map(|(m, f)| (m, f.1)).collect();
         // most specific
         let maximal: Vec<usize> = (0..pool.len())
@@ -1496,9 +1515,10 @@ impl<'t> FileModel<'t> {
             && pool.iter().enumerate().all(|(i, (m, _))| {
                 i == w || if generic(&m.method) { self.surely_more_specific(wm, &m.method, n) } else { self.more_specific(wm, &m.method, n, true) }
             });
-        // the only candidate left after proofs, short of proof only where a
-        // type is unknown: javac's pick in code that compiles
-        let only = pool.len() == 1 && !explicit && pool[w].1.only_blind();
+        // the only candidate left after proofs in every phase, short of proof
+        // only where a type is unknown: javac's pick in code that compiles.
+        // A rival in a later phase wins where the unproven fit fails.
+        let only = rivals == 0 && !explicit && pool[w].1.only_blind();
         let choice = if sure || only || pool.len() == 1 && !rets_differ {
             Choice::Sure
         } else if rets_differ {
@@ -1727,11 +1747,18 @@ impl<'t> FileModel<'t> {
                 rc.ret = self.finish_type(&erase_in(&rc.method, &sel.method.ret), &[], call);
             }
             if rc.erasure_only {
-                rc.ret = match &rc.ret {
-                    Ty::Class { name, args } => Ty::Class { name: name.clone(), args: args.iter().map(|_| Ty::Unknown).collect() },
-                    t if t.mentions_type_var() || t.has_unknown() => Ty::Unknown,
-                    t => t.clone(),
-                };
+                fn erasure_only(t: &Ty) -> Ty {
+                    match t {
+                        Ty::Class { name, args } => Ty::Class { name: name.clone(), args: args.iter().map(|_| Ty::Unknown).collect() },
+                        Ty::Array(e) => match erasure_only(e) {
+                            Ty::Unknown => Ty::Unknown,
+                            e => Ty::Array(Box::new(e)),
+                        },
+                        t if t.mentions_type_var() || t.has_unknown() => Ty::Unknown,
+                        t => t.clone(),
+                    }
+                }
+                rc.ret = erasure_only(&rc.ret);
             }
             Some(Rc::new(rc))
         }
