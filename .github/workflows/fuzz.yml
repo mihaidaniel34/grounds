@@ -26,11 +26,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      # javac judges, and its ct.sym gives grounds the same JDK 21 API
+      # the JDK the baseline was recorded with (javac 25, --release 21): javac
+      # versions infer differently; its ct.sym gives grounds the JDK 21 API
       - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: 21
+          java-version: 25
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: python3 -I scripts/fuzz_overloads.py --seed ${{ matrix.seed }} --cases 2000
