@@ -731,3 +731,37 @@ fn calls_fixed_by_their_own_arguments_keep_their_type() {
     );
     assert_eq!(t, vec!["java.util.List<java.lang.String>"; 2]);
 }
+
+#[test]
+fn unchecked_conversion_erases_the_instantiated_result() {
+    let t = types_of(
+        "import java.util.*; import java.util.function.*;
+         class Raw<X> extends ArrayList {}
+         class P { static <T extends CharSequence> T pick(Raw<String> r, Supplier<T> s, List<T> l) { return null; }
+                   static <T> List<T> list(Raw<String> r, List<T> l) { return null; } }
+         class T { void m(Raw rw, Supplier<String> sup, List<String> ls) { Object a = /*T*/ P.pick(rw, sup, ls); Object b = /*T*/ P.list(rw, ls); } }",
+    );
+    // javac: String (T inferred, then erased), List
+    assert_eq!(t, vec!["java.lang.String", "java.util.List"]);
+}
+
+#[test]
+fn bounds_between_variables_and_unknown_arguments_leave_lubs_open() {
+    let t = types_of(
+        "import java.util.*;
+         class Raw<X> extends ArrayList {}
+         class Bad implements Comparable<String> { public int compareTo(String o) { return 0; } }
+         class P2 { static <T> double pick(Iterable<T> p0) { return 0; } static <T, U extends T> List<? extends T> pick(List<? extends T> p0, long p1, List<U> p2) { return null; } }
+         class P3 { static <T> List<T>[] pick(Integer a, Collection<? extends T> b, T c) { return null; } static Byte pick() { return null; } }
+         class P4 { static <T, U extends T> List<T> pick(T a, U b) { return null; } }
+         class T {
+           void m(long l, List<?> lw, Integer i, Collection<? extends Number> ce, Bad bad, Raw rw) {
+             Object a = /*T*/ P2.pick(List.of(1, 2), l, lw);
+             Object b = /*T*/ P3.pick(i, ce, new ArrayList<>());
+             Object c = /*T*/ P4.pick(bad, rw);
+           } }",
+    );
+    // javac: List<?>, List<Serializable>[], List<Object>: U's type (or an
+    // argument we cannot type) is one more lower bound of T
+    assert_eq!(t, vec!["java.util.List<? extends ?unknown>", "java.util.List<?unknown>[]", "java.util.List<?unknown>"]);
+}

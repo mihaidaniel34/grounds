@@ -172,6 +172,8 @@ struct Inference {
     soft: bool,
     /// the variables a poly argument bounds
     soft_vars: Vec<Name>,
+    /// variables an argument of unknown type bounds too
+    unknown_vars: Vec<Name>,
     /// variables bound from above only (`? super T`): the target picks them
     upper_only: Vec<Name>,
     /// variables bound to a computed lub: a target type can widen them
@@ -857,7 +859,14 @@ impl<'t> FileModel<'t> {
         for (i, (p, a)) in params.iter().zip(args).enumerate() {
             if let Some(a) = a {
                 let before = (cs.len(), inf.captures.len());
+                let unknown_before = inf.unknown_vars.len();
                 self.gather(p, a, Rel::Lower, true, &vars, &mut cs, &mut inf);
+                // a poly argument adapts its type arguments to the parameter
+                // (`Collections.emptyList()` for `Collection<? extends K>`
+                // bounds nothing); for a bare `T` its class is one more bound
+                if poly.get(i).copied().unwrap_or(false) && !matches!(p, Ty::TypeVar(_)) {
+                    inf.unknown_vars.truncate(unknown_before);
+                }
                 if poly.get(i).copied().unwrap_or(false) && (cs.len(), inf.captures.len()) != before {
                     inf.soft = true;
                     for c in &cs[before.0..] {
@@ -1009,10 +1018,24 @@ impl<'t> FileModel<'t> {
         if inf.no {
             return inf;
         }
+        // an argument of unknown type may add a bound that changes the
+        // lub: only an exact bound fixes such a variable
+        let loose: Vec<Name> = inf.unknown_vars.iter().filter(|v| !exact.contains(v)).cloned().collect();
+        inf.bindings.retain(|(k, _)| !loose.contains(k));
+        inf.captures.retain(|c| !loose.contains(&c.var));
         let own = |t: &Ty| vars.iter().any(|v| mentions(t, v));
         // a variable of `m` in `t` with no binding (a binding may be the
         // caller's variable of the same name, so look before substituting)
         let open_in = |t: &Ty, inf: &Inference| vars.iter().any(|v| mentions(t, v) && !inf.bindings.iter().any(|(k, _)| k == v));
+        // `U extends T` makes U's type a lower bound of T: a bound check that
+        // settles nothing leaves T's lub open too
+        let others = |bound: &Ty, tp: &Name, inf: &mut Inference| {
+            for v in vars.iter().filter(|v| *v != tp && mentions(bound, v) && !exact.contains(v)) {
+                if !inf.poisoned.contains(v) {
+                    inf.poisoned.push(v.clone());
+                }
+            }
+        };
         // declared bounds
         for tp in &m.type_params {
             let real: Vec<&Ty> = tp.bounds.iter().filter(|b| !b.is_class("java.lang.Object")).collect();
@@ -1035,10 +1058,16 @@ impl<'t> FileModel<'t> {
                     match verdict {
                         Conv::Yes => {}
                         // above the capture (`? super T`), javac takes an intersection
-                        _ if c.rel == Rel::Upper => inf.poisoned.push(tp.name.clone()),
+                        _ if c.rel == Rel::Upper => {
+                            inf.poisoned.push(tp.name.clone());
+                            others(bound, &tp.name, &mut inf);
+                        }
                         // the capture, or a supertype of it: within the bound or not at all
                         Conv::No => inf.no = true,
-                        _ => inf.poisoned.push(tp.name.clone()),
+                        _ => {
+                            inf.poisoned.push(tp.name.clone());
+                            others(bound, &tp.name, &mut inf);
+                        }
                     }
                 }
                 continue;
@@ -1060,6 +1089,7 @@ impl<'t> FileModel<'t> {
                 let bb = apply_subst(bound, &inf.bindings);
                 if open_in(bound, &inf) || inf.captures.iter().any(|c| mentions(bound, &c.var)) {
                     inf.gap();
+                    others(bound, &tp.name, &mut inf);
                     continue;
                 }
                 // `T extends Comparable<T>` over a lower bound `B` that is a
@@ -1098,8 +1128,14 @@ impl<'t> FileModel<'t> {
                     // (`U extends T` makes U's type a lower bound of T;
                     // `T extends Comparable<T>` can make T a superclass of
                     // its lower bound): not a proof
-                    Conv::No => inf.poisoned.push(tp.name.clone()),
-                    Conv::Unchecked | Conv::Unknown => inf.gap(),
+                    Conv::No => {
+                        inf.poisoned.push(tp.name.clone());
+                        others(bound, &tp.name, &mut inf);
+                    }
+                    Conv::Unchecked | Conv::Unknown => {
+                        inf.gap();
+                        others(bound, &tp.name, &mut inf);
+                    }
                 }
             }
         }
@@ -1152,7 +1188,10 @@ impl<'t> FileModel<'t> {
             return;
         }
         match (p, a) {
-            (_, Ty::Unknown) => inf.incomplete = true,
+            (_, Ty::Unknown) => {
+                inf.incomplete = true;
+                inf.unknown_vars.extend(vars.iter().filter(|v| mentions(p, v)).cloned());
+            }
             // `null` bounds nothing
             (_, Ty::Null) if rel == Rel::Lower => {}
             (Ty::Class { .. }, Ty::Prim(pr)) if rel == Rel::Lower => self.gather(p, &Ty::class(pr.box_name()), rel, top, vars, cs, inf),
@@ -1163,7 +1202,10 @@ impl<'t> FileModel<'t> {
                     inf.captures.push(Capture { var: v.clone(), rel: Rel::Lower, wildcard: a.clone(), bound: Some(a.clone()), lower: None })
                 }
                 Ty::Class { .. } | Ty::Array(_) | Ty::TypeVar(_) if !a.has_unknown() => cs.push((v.clone(), rel, a.clone())),
-                _ if a.has_unknown() => inf.incomplete = true,
+                _ if a.has_unknown() => {
+                    inf.incomplete = true;
+                    inf.unknown_vars.push(v.clone());
+                }
                 _ => inf.gap(),
             },
             (Ty::Array(pe), Ty::Array(ae)) => match (&**pe, &**ae) {
@@ -1211,6 +1253,7 @@ impl<'t> FileModel<'t> {
         }
         if sa.has_unknown() {
             inf.incomplete = true;
+            inf.unknown_vars.extend(vars.iter().filter(|v| mentions(pa, v)).cloned());
             return;
         }
         // the argument's own wildcards are captured (JLS 5.1.10): a variable
@@ -1661,6 +1704,8 @@ impl<'t> FileModel<'t> {
             }
             let tvars: Vec<Name> = rc.method.type_params.iter().map(|t| t.name.clone()).collect();
             let inf = if rc.method.params.is_empty() { Inference::default() } else { self.partial_inference(call, &rc.method) };
+            // bindings the result was computed with
+            let mut final_bindings: Vec<(Name, Ty)> = Vec::new();
             if let Some(ta) = call.child_by_field_name("type_arguments") {
                 // `Collections.<String>emptyList()`: no inference
                 let given: Vec<Ty> = ta.kids().into_iter().map(|t| self.resolve_type_node(t)).collect();
@@ -1741,10 +1786,48 @@ impl<'t> FileModel<'t> {
                 }
                 let ret = self.project(&rc.method.ret, &captures);
                 rc.ret = self.finish_type(&ret, &bindings, call);
+                final_bindings = bindings;
             }
-            // unchecked conversion of an argument erases the result (JLS 15.12.2.6)
+            // unchecked conversion of an argument erases the result as
+            // instantiated (JLS 18.5.2): `<T> T` inferred String stays String
             if inf.unchecked {
-                rc.ret = self.finish_type(&erase_in(&rc.method, &sel.method.ret), &[], call);
+                // a variable no argument constrains is its bound in javac
+                let free = |v: &Name| {
+                    !final_bindings.iter().any(|(k, _)| k == v)
+                        && !inf.poisoned.contains(v)
+                        && !inf.unknown_vars.contains(v)
+                        && !inf.captures.iter().any(|c| c.var == *v)
+                        && !inf.upper_only.contains(v)
+                };
+                fn bound_of(m: &MethodInfo, v: &str, free: &dyn Fn(&Name) -> bool, depth: usize) -> Ty {
+                    let Some(tp) = m.type_params.iter().find(|tp| &*tp.name == v) else { return Ty::Unknown };
+                    let real: Vec<&Ty> = tp.bounds.iter().filter(|b| !b.is_class("java.lang.Object")).collect();
+                    match real[..] {
+                        [] => Ty::object(),
+                        [Ty::TypeVar(w)] if depth < 8 && free(w) => bound_of(m, w, free, depth + 1),
+                        [b] if !b.mentions_type_var() || matches!(b, Ty::Class { .. }) => b.erasure(),
+                        _ => Ty::Unknown,
+                    }
+                }
+                if let Some(tvars_free) = (!rc.method.type_params.is_empty()).then(|| rc.method.type_params.iter().filter(|tp| free(&tp.name)).map(|tp| tp.name.clone()).collect::<Vec<_>>()) {
+                    if !tvars_free.is_empty() && rc.ret.has_unknown() {
+                        let bounds: Vec<(Name, Ty)> = tvars_free.iter().map(|v| (v.clone(), bound_of(&rc.method, v, &free, 0))).collect();
+                        let t = apply_subst(&apply_subst(&sel.method.ret, &final_bindings), &bounds);
+                        rc.ret = self.finish_type(&t, &[], call);
+                    }
+                }
+                fn erased(t: &Ty) -> Ty {
+                    match t {
+                        Ty::Array(e) => match erased(e) {
+                            Ty::Unknown => Ty::Unknown,
+                            e => Ty::Array(Box::new(e)),
+                        },
+                        Ty::Class { .. } => t.erasure(),
+                        Ty::Unknown | Ty::Wildcard(_) => Ty::Unknown,
+                        t => t.clone(),
+                    }
+                }
+                rc.ret = erased(&rc.ret);
             }
             if rc.erasure_only {
                 fn erasure_only(t: &Ty) -> Ty {
