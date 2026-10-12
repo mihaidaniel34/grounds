@@ -467,3 +467,17 @@ fn generic_overloads_through_raw_or_reshaped_supertypes() {
     );
     assert_eq!(t, vec!["?unknown", "java.lang.String"]);
 }
+
+#[test]
+fn a_panic_inside_a_guard_leaves_the_node() {
+    // the runner catches a rule's panic and keeps using the file's model
+    let pf = ParsedFile::parse("class T {}");
+    let mut idx = Index::new(jdk());
+    idx.set_file(Arc::from("T.java"), Arc::new(extract(&pf)));
+    let fm = FileModel::new(&pf, &idx, Arc::from("T.java"));
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fm.guard(7, 0, 0, || -> i32 { panic!("rule bug") })));
+    assert!(r.is_err());
+    assert_eq!(fm.guard(7, 0, 0, || 1), 1, "the node is not left marked in progress");
+    // a real cycle still returns the default
+    assert_eq!(fm.guard(8, 0, 0, || fm.guard(8, 0, -1, || 2)), -1);
+}

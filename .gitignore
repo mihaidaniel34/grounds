@@ -24,6 +24,7 @@
 # regression corpus: pinned projects, planted bugs, and the scripts driving it
 !/scripts/*.sh
 !/scripts/*.py
+!/scripts/*.baseline.json
 !/corpus/projects.tsv
 !/corpus/planted/*.patch
 !/corpus/planted/*.expected

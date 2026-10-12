@@ -1,0 +1,99 @@
+name: fuzz
+
+# grounds against javac on generated Java, with fixed seeds, so results are
+# reproducible. overloads (scripts/fuzz_overloads.py): a type grounds is
+# certain of while javac gives another, on valid Java. access
+# (scripts/fuzz_access.py): a "won't compile" finding (unresolved-method,
+# override-matches-nothing, ...) on a file javac accepts. calls
+# (scripts/fuzz_calls.py): call types in context (targets, nested generic
+# calls, lambdas, generic callers, JDK methods), judged by javac's resolution
+# notes. Each fails the job unless the script's .baseline.json already lists
+# the case. fuzz-nightly.yml runs them on new seeds every night.
+on:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "scripts/fuzz_*"
+      - ".github/workflows/fuzz.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: fuzz-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  overloads:
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [1, 2, 3, 4]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # the JDK the baseline was recorded with (javac 25, --release 21): javac
+      # versions infer differently; its ct.sym gives grounds the JDK 21 API
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 25
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: python3 -I scripts/fuzz_overloads.py --seed ${{ matrix.seed }} --cases 2000
+      - if: always()
+        run: |
+          r=target/fuzz-overloads/seed-${{ matrix.seed }}/report.json
+          [ -f "$r" ] && python3 -c "import json,sys; r=json.load(open('$r')); print('### seed', r['seed']); print(', '.join(f'{k} {v}' for k, v in sorted(r['counts'].items())))" >> "$GITHUB_STEP_SUMMARY" || true
+      - if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: fuzz-overloads-seed-${{ matrix.seed }}
+          path: target/fuzz-overloads/seed-${{ matrix.seed }}
+
+  access:
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [1, 2, 3, 4]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 25
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: python3 -I scripts/fuzz_access.py --seed ${{ matrix.seed }} --cases 2000
+      - if: always()
+        run: |
+          r=target/fuzz-access/seed-${{ matrix.seed }}/report.json
+          [ -f "$r" ] && python3 -c "import json,sys; r=json.load(open('$r')); print('### access seed', r['seed']); print(', '.join(f'{k} {v}' for k, v in r['counts'].items()))" >> "$GITHUB_STEP_SUMMARY" || true
+      - if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: fuzz-access-seed-${{ matrix.seed }}
+          path: target/fuzz-access/seed-${{ matrix.seed }}/cases
+
+  calls:
+    strategy:
+      fail-fast: false
+      matrix:
+        seed: [1, 2, 3, 4]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 25
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: python3 -I scripts/fuzz_calls.py --seed ${{ matrix.seed }} --cases 2000 | tee calls.txt
+      - if: always()
+        run: |
+          [ -f calls.txt ] && { echo "### calls seed ${{ matrix.seed }}"; echo '```'; grep -v '^WRONG' calls.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY" || true
+      - if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: fuzz-calls-seed-${{ matrix.seed }}
+          path: target/fuzz-calls/seed-${{ matrix.seed }}
