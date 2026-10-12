@@ -399,9 +399,16 @@ impl<'t> FileModel<'t> {
             self.cycle_hits.set(self.cycle_hits.get() + 1);
             return default;
         }
-        let r = f();
-        self.in_progress.borrow_mut().remove(&(id, tag));
-        r
+        // leave the node even when `f` panics: the runner catches a rule's
+        // panic and runs the file's other rules on this same model
+        struct Leave<'a>(&'a RefCell<FxHashSet<(usize, u8)>>, (usize, u8));
+        impl Drop for Leave<'_> {
+            fn drop(&mut self) {
+                self.0.borrow_mut().remove(&self.1);
+            }
+        }
+        let _leave = Leave(&self.in_progress, (id, tag));
+        f()
     }
 
     /// Run `f` and report whether its result may be memoized: it completed
