@@ -148,6 +148,9 @@ pub struct DiModel {
     /// of one repository, each its own application): the index keeps one of
     /// them, so wiring that involves such a class is not judged.
     pub duplicated: rustc_hash::FxHashSet<Name>,
+    /// Simple names mentioned in the files defining such classes: a copy the
+    /// index left out may provide one of these types.
+    pub duplicated_mentions: rustc_hash::FxHashSet<Name>,
     /// Constructor-injection edges (owner, dependency class, point index),
     /// computed once at build time.
     pub ctor_edges: Vec<(Name, Name, usize)>,
@@ -498,8 +501,14 @@ impl<'a> Builder<'a> {
                     }
                 }
                 // an unresolved annotation keeps its simple name: judge by the imports
+                // (a single-type import of another `Repository` shadows the on-demand one)
                 let imports_jakarta_data = self.index.raw_class(&c.name).is_some_and(|(stub, _)| {
-                    stub.imports.iter().any(|i| !i.is_static && (&*i.path == "jakarta.data.repository.Repository" || (i.on_demand && &*i.path == "jakarta.data.repository")))
+                    let single = stub.imports.iter().filter(|i| !i.is_static && !i.on_demand && i.last() == "Repository").collect::<Vec<_>>();
+                    match single.as_slice() {
+                        [] => stub.imports.iter().any(|i| !i.is_static && i.on_demand && &*i.path == "jakarta.data.repository"),
+                        [i] => &*i.path == "jakarta.data.repository.Repository",
+                        _ => false,
+                    }
                 });
                 for a in &c.annotations {
                     match a.simple_name() {
@@ -508,7 +517,7 @@ impl<'a> Builder<'a> {
                         "Client" if a.name.starts_with("io.micronaut") || !a.resolved => source = Some((BeanSource::Client, Framework::Micronaut)),
                         "Repository" | "JdbcRepository" | "MongoRepository" | "R2dbcRepository" if a.name.starts_with("io.micronaut") => source = Some((BeanSource::Repository, Framework::Micronaut)),
                         // Jakarta Data: the implementation is generated at build time (Hibernate, Quarkus, ...)
-                        "Repository" if a.name.starts_with("jakarta.data") || (!a.resolved && imports_jakarta_data) => source = Some((BeanSource::Repository, Framework::Jakarta)),
+                        "Repository" if a.name.starts_with("jakarta.data") || (!a.resolved && &*a.name == "Repository" && imports_jakarta_data) => source = Some((BeanSource::Repository, Framework::Jakarta)),
                         "Mapper" => {
                             // MapStruct (component model may come from a compiler option) or MyBatis
                             let model = first_string(a, &["componentModel"]).unwrap_or_default();
@@ -911,6 +920,13 @@ impl DiModel {
         b.scan();
         let mut m = b.model;
         m.duplicated = index.source_class_names().filter(|n| index.is_duplicated(n)).cloned().collect();
+        if !m.duplicated.is_empty() {
+            for (_, stub) in index.files() {
+                if stub.classes.iter().any(|c| m.duplicated.contains(&c.name)) {
+                    m.duplicated_mentions.extend(stub.referenced_names.iter().cloned());
+                }
+            }
+        }
         m.index_providers(index);
         m.ctor_edges = m.constructor_edges(index);
         m
@@ -983,8 +999,13 @@ impl DiModel {
     }
 
     pub fn resolve(&self, lk: &dyn ClassLookup, p: &InjectionPoint, include_test: bool) -> Resolution {
-        if p.ty.is_unknown() || p.ty.mentions_type_var() || self.duplicated.contains(&p.owner) || p.ty.class_name().is_some_and(|t| self.duplicated.contains(t)) {
+        if p.ty.is_unknown() || p.ty.mentions_type_var() || self.duplicated.contains(&p.owner) {
             return Resolution::Unknown;
+        }
+        if let Some(t) = p.ty.class_name() {
+            if self.duplicated.contains(t) || self.duplicated_mentions.contains(simple_name_of(t)) {
+                return Resolution::Unknown;
+            }
         }
         let (mut cands, mut maybe) = self.candidates(lk, &p.ty, include_test);
         if cands.iter().any(|&i| self.duplicated.contains(&self.beans[i].declaring_class)) {
@@ -1258,5 +1279,27 @@ mod tests {
         for p in &m.points {
             assert_eq!(m.resolve(&idx, p, false), Resolution::Unknown, "{}", p.name);
         }
+    }
+
+    #[test]
+    fn a_left_out_copy_may_provide_the_bean() {
+        // the index keeps a's `app.Impl`; b's copy implements Repo
+        let (idx, m) = model(&[
+            ("a/src/main/java/app/Impl.java", "package app; @org.springframework.stereotype.Service public class Impl {}"),
+            ("b/src/main/java/app/Impl.java", "package app; @org.springframework.stereotype.Service public class Impl implements Repo {}"),
+            ("b/src/main/java/app/Repo.java", "package app; public interface Repo {}"),
+            ("b/src/main/java/app/Consumer.java", "package app; @org.springframework.stereotype.Service class Consumer { Consumer(Repo repo) {} }"),
+        ]);
+        assert_eq!(resolution_of(&idx, &m, "b/src/main/java/app/Consumer.java", "repo"), Resolution::Unknown);
+    }
+
+    #[test]
+    fn a_spring_repository_import_shadows_jakarta_data() {
+        // neither jar is on the classpath: the single-type import wins
+        let (idx, m) = model(&[
+            ("app/Store.java", "package app; import org.springframework.stereotype.Repository; import jakarta.data.repository.*; @Repository public interface Store {}"),
+        ]);
+        assert!(m.beans.iter().all(|b| !(b.framework == Framework::Jakarta && simple_name_of(&b.declaring_class) == "Store")));
+        let _ = idx;
     }
 }
