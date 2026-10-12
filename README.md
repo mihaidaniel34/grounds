@@ -159,15 +159,19 @@ on-disk cache.
   Renaming a method in petclinic listed all 15 broken callers. Changing
   `getPet(String)` to take two parameters flagged every call with the old
   arguments.
-- **Fuzzing against javac:** on every pull request, 8,000 generated overload
-  sets catch any new case of grounds being certain of a call type javac
-  disagrees with (`scripts/fuzz_overloads.py`), and 8,000 generated files of member
-  access (private and nested access, `super`/`I.super`, inner, anonymous and
-  local classes, interface defaults and statics, static imports, method
+- **Fuzzing against javac:** on every pull request, deterministic seeds;
+  known cases are listed in a baseline, and only new ones fail. 8,000
+  overload sets (`scripts/fuzz_overloads.py`) and 8,000 calls in context
+  (`scripts/fuzz_calls.py`: typed targets, method arguments, lambda returns,
+  nested generic calls, lambdas and method references, generic callers, JDK
+  generic methods, inherited overloads; javac's own resolution notes give the
+  expected type) catch any new case of grounds being certain of a type javac
+  disagrees with. 8,000 files of member access (`scripts/fuzz_access.py`:
+  private and nested access, `super`/`I.super`, inner, anonymous and local
+  classes, interface defaults and statics, static imports, method
   references, records, enums, overrides) check that no "won't compile" rule
-  reports anything on a file javac accepts (`scripts/fuzz_access.py`).
-  Deterministic seeds; known cases are listed in a baseline (none for the
-  access rules).
+  reports anything on a file javac accepts. Every night all three also run
+  on new seeds (the date), so the gate is not tuned to fixed cases.
 - **External review:** three rounds of review by OpenAI Codex (gpt-6.1-sol)
   on the shared analyses and engine, and several by gpt-6-astra on the rules
   and on the fixes from the corpus and PMD rounds,

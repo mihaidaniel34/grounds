@@ -160,6 +160,27 @@ thread_local! {
     static RESOLVING: RefCell<FxHashSet<Name>> = RefCell::new(FxHashSet::default());
 }
 
+/// Marks a class as being resolved on this thread for as long as it lives,
+/// also when resolution panics (rule and daemon panics are caught and the
+/// thread is reused). Borrows the name: nothing to clone.
+struct Resolving<'a>(&'a str);
+
+impl<'a> Resolving<'a> {
+    /// `None` if the class is already being resolved further up (a cycle).
+    fn enter(name: &'a str) -> Option<Resolving<'a>> {
+        // one lookup: entering is the common case, a cycle rare
+        RESOLVING.with(|r| r.borrow_mut().insert(Arc::from(name))).then(|| Resolving(name))
+    }
+}
+
+impl Drop for Resolving<'_> {
+    fn drop(&mut self) {
+        RESOLVING.with(|r| {
+            r.borrow_mut().remove(self.0);
+        });
+    }
+}
+
 impl Index {
     pub fn new(classpath: Arc<Classpath>) -> Index {
         Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), generation: 0 }
@@ -279,13 +300,8 @@ impl Index {
             if let Some(c) = self.cache.get(name) {
                 return c.clone();
             }
-            let in_progress = RESOLVING.with(|r| r.borrow().contains(name));
-            if in_progress {
-                return None;
-            }
-            RESOLVING.with(|r| r.borrow_mut().insert(Arc::from(name)));
+            let _resolving = Resolving::enter(name)?;
             let r = self.resolve_source_class(name).map(Arc::new);
-            RESOLVING.with(|r| r.borrow_mut().remove(name));
             self.cache.insert(Arc::from(name), r.clone());
             return r;
         }
@@ -831,4 +847,30 @@ pub fn coerce_constant(v: Constant, ty: &Ty) -> Option<Constant> {
         Ty::Prim(Prim::Boolean) => Constant::Bool(v.as_bool()?),
         _ => v,
     })
+}
+
+#[cfg(test)]
+mod resolving_tests {
+    use super::*;
+
+    fn resolving(name: &str) -> bool {
+        RESOLVING.with(|r| r.borrow().contains(name))
+    }
+
+    #[test]
+    fn the_guard_marks_a_cycle_and_leaves_on_panic() {
+        {
+            let outer = Resolving::enter("p.A").expect("enters");
+            assert!(Resolving::enter("p.A").is_none(), "a cycle");
+            assert!(resolving("p.A"), "the failed entry did not remove the outer one");
+            drop(outer);
+        }
+        assert!(!resolving("p.A"));
+        let r = std::panic::catch_unwind(|| {
+            let _g = Resolving::enter("p.B").expect("enters");
+            panic!("resolution bug");
+        });
+        assert!(r.is_err());
+        assert!(!resolving("p.B"), "left on panic");
+    }
 }
