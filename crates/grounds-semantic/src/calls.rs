@@ -273,6 +273,15 @@ impl<'t> FileModel<'t> {
                 if !c.method.type_params.iter().any(|tp| tp.name == *v) {
                     return false;
                 }
+                // a lambda or method reference may add a lower bound once checked
+                // (`requireNonNullElseGet("x", () -> 1)` is no String)
+                let args = self.args_of(a);
+                let functional = args.iter().enumerate().any(|(i, x)| {
+                    matches!(x.unparen().kind(), "lambda_expression" | "method_reference") && param_type_for_arg(&c.method, i, args.len()).is_some_and(|p| mentions(&p, v))
+                });
+                if functional {
+                    return true;
+                }
                 let inf = self.partial_inference(a, &c.method);
                 let fixed = inf.bindings.iter().any(|(k, _)| k == v)
                     && !inf.upper_only.contains(v)
@@ -864,7 +873,8 @@ impl<'t> FileModel<'t> {
                 // a poly argument adapts its type arguments to the parameter
                 // (`Collections.emptyList()` for `Collection<? extends K>`
                 // bounds nothing); for a bare `T` its class is one more bound
-                if poly.get(i).copied().unwrap_or(false) && !matches!(p, Ty::TypeVar(_)) {
+                // and one without any type (`any()`) adapts to a bare `T` as well
+                if poly.get(i).copied().unwrap_or(false) && (!matches!(p, Ty::TypeVar(_)) || a.is_unknown()) {
                     inf.unknown_vars.truncate(unknown_before);
                 }
                 if poly.get(i).copied().unwrap_or(false) && (cs.len(), inf.captures.len()) != before {
@@ -1023,6 +1033,12 @@ impl<'t> FileModel<'t> {
         let loose: Vec<Name> = inf.unknown_vars.iter().filter(|v| !exact.contains(v)).cloned().collect();
         inf.bindings.retain(|(k, _)| !loose.contains(k));
         inf.captures.retain(|c| !loose.contains(&c.var));
+        // nor may a target or lambda bind it later
+        for v in loose {
+            if !inf.poisoned.contains(&v) {
+                inf.poisoned.push(v);
+            }
+        }
         let own = |t: &Ty| vars.iter().any(|v| mentions(t, v));
         // a variable of `m` in `t` with no binding (a binding may be the
         // caller's variable of the same name, so look before substituting)
@@ -1507,6 +1523,7 @@ impl<'t> FileModel<'t> {
         let arg_nodes = self.args_of(call);
         let n = arg_nodes.len();
         let cands: Vec<MethodRef> = cands.into_iter().filter(|m| m.method.accepts_arity(n)).collect();
+        let single = cands.len() == 1;
         if cands.is_empty() {
             return None;
         }
@@ -1562,7 +1579,9 @@ impl<'t> FileModel<'t> {
         // only where a type is unknown: javac's pick in code that compiles.
         // A rival in a later phase wins where the unproven fit fails.
         let only = rivals == 0 && !explicit && pool[w].1.only_blind();
-        let choice = if sure || only || pool.len() == 1 && !rets_differ {
+        // overloads alike in erasure but not in type arguments (`List<String>`,
+        // `List<Integer>`) need the proof as well, or keep the erasure only
+        let choice = if single || sure || only {
             Choice::Sure
         } else if rets_differ {
             Choice::Guess
@@ -1706,6 +1725,8 @@ impl<'t> FileModel<'t> {
             let inf = if rc.method.params.is_empty() { Inference::default() } else { self.partial_inference(call, &rc.method) };
             // bindings the result was computed with
             let mut final_bindings: Vec<(Name, Ty)> = Vec::new();
+            // the part of them the target type gave
+            let mut target_bound: Vec<(Name, Ty)> = Vec::new();
             if let Some(ta) = call.child_by_field_name("type_arguments") {
                 // `Collections.<String>emptyList()`: no inference
                 let given: Vec<Ty> = ta.kids().into_iter().map(|t| self.resolve_type_node(t)).collect();
@@ -1766,7 +1787,9 @@ impl<'t> FileModel<'t> {
                         Target::None => Ty::Unknown,
                     };
                     if exp.is_known() {
+                        let before = bindings.len();
                         unify(self, &rc.method.ret, &exp, &open, &mut bindings);
+                        target_bound = bindings[before..].to_vec();
                     }
                 }
                 for p in &mut rc.method.params {
@@ -1792,8 +1815,9 @@ impl<'t> FileModel<'t> {
             // instantiated (JLS 18.5.2): `<T> T` inferred String stays String
             if inf.unchecked {
                 // a variable no argument constrains is its bound in javac
+                let from_args: Vec<(Name, Ty)> = final_bindings.iter().filter(|(k, _)| !target_bound.iter().any(|(t, _)| t == k)).cloned().collect();
                 let free = |v: &Name| {
-                    !final_bindings.iter().any(|(k, _)| k == v)
+                    !from_args.iter().any(|(k, _)| k == v)
                         && !inf.poisoned.contains(v)
                         && !inf.unknown_vars.contains(v)
                         && !inf.captures.iter().any(|c| c.var == *v)
@@ -1810,24 +1834,43 @@ impl<'t> FileModel<'t> {
                     }
                 }
                 if let Some(tvars_free) = (!rc.method.type_params.is_empty()).then(|| rc.method.type_params.iter().filter(|tp| free(&tp.name)).map(|tp| tp.name.clone()).collect::<Vec<_>>()) {
-                    if !tvars_free.is_empty() && rc.ret.has_unknown() {
-                        let bounds: Vec<(Name, Ty)> = tvars_free.iter().map(|v| (v.clone(), bound_of(&rc.method, v, &free, 0))).collect();
-                        let t = apply_subst(&apply_subst(&sel.method.ret, &final_bindings), &bounds);
+                    if tvars_free.iter().any(|v| mentions(&sel.method.ret, v)) {
+                        // with a target, javac takes the glb of target and bound
+                        let bounds: Vec<(Name, Ty)> = tvars_free
+                            .iter()
+                            .map(|v| {
+                                let b = bound_of(&rc.method, v, &free, 0);
+                                let t = match target_bound.iter().find(|(k, _)| k == v) {
+                                    None => b,
+                                    Some(_) if b.is_unknown() => Ty::Unknown,
+                                    Some((_, x)) if self.conv(x, &b) == Conv::Yes => x.clone(),
+                                    Some((_, x)) if self.conv(&b, x) == Conv::Yes => b,
+                                    Some(_) => Ty::Unknown,
+                                };
+                                (v.clone(), t)
+                            })
+                            .collect();
+                        let t = apply_subst(&apply_subst(&sel.method.ret, &from_args), &bounds);
                         rc.ret = self.finish_type(&t, &[], call);
                     }
                 }
-                fn erased(t: &Ty) -> Ty {
+                // a caller's type variable erases to its bound
+                fn erased(t: &Ty, var_bound: &dyn Fn(&str) -> Ty) -> Ty {
                     match t {
-                        Ty::Array(e) => match erased(e) {
+                        Ty::Array(e) => match erased(e, var_bound) {
                             Ty::Unknown => Ty::Unknown,
                             e => Ty::Array(Box::new(e)),
                         },
                         Ty::Class { .. } => t.erasure(),
-                        Ty::Unknown | Ty::Wildcard(_) => Ty::Unknown,
-                        t => t.clone(),
+                        Ty::TypeVar(v) => match var_bound(v) {
+                            b @ Ty::Class { .. } => b.erasure(),
+                            _ => Ty::Unknown,
+                        },
+                        Ty::Prim(_) | Ty::Void => t.clone(),
+                        _ => Ty::Unknown,
                     }
                 }
-                rc.ret = erased(&rc.ret);
+                rc.ret = erased(&rc.ret, &|v| self.type_var_bound(v, call));
             }
             if rc.erasure_only {
                 fn erasure_only(t: &Ty) -> Ty {

@@ -765,3 +765,49 @@ fn bounds_between_variables_and_unknown_arguments_leave_lubs_open() {
     // argument we cannot type) is one more lower bound of T
     assert_eq!(t, vec!["java.util.List<? extends ?unknown>", "java.util.List<?unknown>[]", "java.util.List<?unknown>"]);
 }
+
+#[test]
+fn lambda_arguments_leave_a_lower_bound_open() {
+    let t = types_of(
+        "import java.util.*;
+         class P1 { static String pick(String s) { return null; } static Integer pick(Object o) { return null; } }
+         class T { void m() { Object a = /*T*/ P1.pick(Objects.requireNonNullElseGet(\"x\", () -> 1)); } }",
+    );
+    // javac: Integer (T is lub(String, Integer))
+    assert_eq!(t, vec!["?unknown"]);
+}
+
+#[test]
+fn equal_erasures_with_other_type_arguments_need_proof() {
+    let t = types_of(
+        "import java.util.*;
+         class P2 { static <T> T first(List<? super T> xs) { return null; }
+                    static List<String> pick(String s) { return null; } static List<Integer> pick(Integer i, Object... rest) { return null; } }
+         class T { void m(List<Integer> xs) { Object a = /*T*/ P2.pick(P2.first(xs)); } }",
+    );
+    // javac: List<Integer>
+    assert_eq!(t, vec!["java.util.List<?unknown>"]);
+}
+
+#[test]
+fn untyped_poly_arguments_add_no_bound_and_targets_do_not_fill_in() {
+    let t = types_of(
+        "import java.util.*;
+         class P3 { static <T> T any() { return null; } }
+         class T { void m() { Object a = /*T*/ Objects.requireNonNullElse(\"x\", P3.any()); } }",
+    );
+    // javac: String
+    assert_eq!(t, vec!["java.lang.String"]);
+}
+
+#[test]
+fn unchecked_results_take_bounds_not_targets() {
+    let t = types_of(
+        "import java.util.*;
+         class P4 { static <T extends Number> T first(List<T> xs) { return null; }
+                    static <T extends CharSequence> T sequence(T x, List<String> xs) { return null; } }
+         class T { <U extends CharSequence> void m(List raw, U u) { Object a = /*T*/ P4.first(raw); Object b = /*T*/ P4.sequence(u, raw); } }",
+    );
+    // javac: Number (glb of Object and the bound), CharSequence (U erased)
+    assert_eq!(t, vec!["java.lang.Number", "java.lang.CharSequence"]);
+}
