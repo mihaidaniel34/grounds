@@ -165,7 +165,7 @@ struct Resolving(Name);
 impl Resolving {
     fn enter(name: &str) -> Option<Resolving> {
         let name: Name = Arc::from(name);
-        RESOLVING.with(|r| r.borrow_mut().insert(name.clone())).then_some(Resolving(name))
+        RESOLVING.with(|r| r.borrow_mut().insert(name.clone())).then(|| Resolving(name))
     }
 }
 
