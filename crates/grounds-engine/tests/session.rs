@@ -263,6 +263,9 @@ fn base_mode_removed_classes_and_new_beans() {
     let dir = repo.clone();
     write(&dir, "build.gradle", "plugins { id 'java' }\n");
     write(&dir, "src/main/java/org/springframework/stereotype/Component.java", "package org.springframework.stereotype;\npublic @interface Component {}\n");
+    // an application (not a library): its context is complete
+    write(&dir, "src/main/java/org/springframework/boot/autoconfigure/SpringBootApplication.java", "package org.springframework.boot.autoconfigure;\npublic @interface SpringBootApplication {}\n");
+    write(&dir, "src/main/java/demo/App.java", "package demo;\n@org.springframework.boot.autoconfigure.SpringBootApplication\npublic class App {}\n");
     write(&dir, "src/main/java/demo/Gone.java", "package demo;\npublic class Gone {\n    public static int value() { return 1; }\n}\n");
     write(&dir, "src/main/java/demo/SamePackage.java", "package demo;\nclass SamePackage {\n    int v() { return Gone.value(); }\n}\n");
     write(&dir, "src/main/java/other/UseGone.java", "package other;\nimport demo.Gone;\nclass UseGone {\n    int v() { return Gone.value(); }\n}\n");
