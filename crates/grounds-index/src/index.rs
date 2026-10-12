@@ -160,19 +160,23 @@ thread_local! {
     static RESOLVING: RefCell<FxHashSet<Name>> = RefCell::new(FxHashSet::default());
 }
 
-struct Resolving(Name);
+/// Marks a class as being resolved on this thread for as long as it lives,
+/// also when resolution panics (rule and daemon panics are caught and the
+/// thread is reused). Borrows the name: nothing to clone.
+struct Resolving<'a>(&'a str);
 
-impl Resolving {
-    fn enter(name: &str) -> Option<Resolving> {
-        let name: Name = Arc::from(name);
-        RESOLVING.with(|r| r.borrow_mut().insert(name.clone())).then(|| Resolving(name))
+impl<'a> Resolving<'a> {
+    /// `None` if the class is already being resolved further up (a cycle).
+    fn enter(name: &'a str) -> Option<Resolving<'a>> {
+        // one lookup: entering is the common case, a cycle rare
+        RESOLVING.with(|r| r.borrow_mut().insert(Arc::from(name))).then(|| Resolving(name))
     }
 }
 
-impl Drop for Resolving {
+impl Drop for Resolving<'_> {
     fn drop(&mut self) {
         RESOLVING.with(|r| {
-            r.borrow_mut().remove(&self.0);
+            r.borrow_mut().remove(self.0);
         });
     }
 }
@@ -843,4 +847,30 @@ pub fn coerce_constant(v: Constant, ty: &Ty) -> Option<Constant> {
         Ty::Prim(Prim::Boolean) => Constant::Bool(v.as_bool()?),
         _ => v,
     })
+}
+
+#[cfg(test)]
+mod resolving_tests {
+    use super::*;
+
+    fn resolving(name: &str) -> bool {
+        RESOLVING.with(|r| r.borrow().contains(name))
+    }
+
+    #[test]
+    fn the_guard_marks_a_cycle_and_leaves_on_panic() {
+        {
+            let outer = Resolving::enter("p.A").expect("enters");
+            assert!(Resolving::enter("p.A").is_none(), "a cycle");
+            assert!(resolving("p.A"), "the failed entry did not remove the outer one");
+            drop(outer);
+        }
+        assert!(!resolving("p.A"));
+        let r = std::panic::catch_unwind(|| {
+            let _g = Resolving::enter("p.B").expect("enters");
+            panic!("resolution bug");
+        });
+        assert!(r.is_err());
+        assert!(!resolving("p.B"), "left on panic");
+    }
 }
