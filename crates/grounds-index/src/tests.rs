@@ -92,3 +92,16 @@ fn enums_records_interfaces() {
     assert!(s.field("K").unwrap().flags.is_static());
     assert_eq!(s.field("K").unwrap().constant, Some(Constant::Int(3)));
 }
+
+#[test]
+fn without_a_jdk_no_hierarchy_is_complete() {
+    // an interface declares no supertypes, but has Object's methods
+    let src = "package p; interface I {} class C implements I {}";
+    let pf = ParsedFile::parse(src);
+    let mut bare = Index::new(Arc::new(Classpath::empty()));
+    bare.set_file(Arc::from("p/I.java"), Arc::new(extract(&pf)));
+    assert!(!bare.hierarchy_complete("p.I"));
+    assert!(!bare.hierarchy_complete("p.C"));
+    let with_jdk = index_of(&[("p/I.java", src)]);
+    assert!(with_jdk.hierarchy_complete("p.I"));
+}
