@@ -1,0 +1,6 @@
+camunda	maven-replacer-plugin expects AssertJ sources generated from compiled classes
+helidon	no Maven wrapper; its build extension fails on the runner's Maven 3.10 (jansi)
+langchain4j	kotlin-maven-plugin compiles even with maven.main.skip and needs the Java classes
+rewrite	Gradle plugins pinned to latest.release do not resolve on the runner
+spring-ai	kotlin-maven-plugin compiles even with maven.main.skip and needs the Java classes
+thingsboard	needs an unpublished UI artifact (org.thingsboard:ui-ngx)

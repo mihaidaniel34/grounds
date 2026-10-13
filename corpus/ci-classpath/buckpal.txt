@@ -1,0 +1,5 @@
+src/main/java/io/reflectoring/buckpal/application/domain/model/Money.java:11 field-naming
+src/main/java/io/reflectoring/buckpal/application/domain/model/Money.java:11 public-static-non-final-field
+src/main/java/io/reflectoring/buckpal/common/validation/Validation.java:10 utility-class-instantiable
+src/test/java/io/reflectoring/buckpal/SendMoneySystemTest.java:91 unused-private-method
+src/test/java/io/reflectoring/buckpal/application/port/in/SendMoneyCommandTest.java:14 test-without-assertion
