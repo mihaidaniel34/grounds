@@ -198,6 +198,8 @@ struct Inference {
     widenable: Vec<Name>,
     /// incomplete for a reason other than an unknown type
     guess: bool,
+    /// variables an invariant argument gives in part (`Map<K, List<?>>`)
+    partial: Vec<(Name, Ty)>,
 }
 
 impl Inference {
@@ -218,7 +220,7 @@ impl Inference {
     /// Nothing against the arguments but types the model does not know: what
     /// the old erasure check accepted.
     fn only_blind(&self) -> bool {
-        !self.no && self.poisoned.is_empty() && !self.guess
+        !self.no && self.poisoned.iter().all(|v| self.unknown_vars.contains(v)) && !self.guess
     }
 }
 
@@ -276,6 +278,34 @@ impl<'t> FileModel<'t> {
     /// 2)`, `requireNonNull(x)`) has that type, the least any target allows.
     fn poly_untyped(&self, a: Node<'t>) -> bool {
         self.poly_target(a).is_some()
+    }
+
+    /// Types a target-typed call's result is surely a supertype of: its
+    /// plain arguments for a parameter that is the bare result variable
+    /// (`requireNonNullElse(x, new byte[0])` is no `char[]`, whatever `x` is).
+    fn poly_floor(&self, a: Node<'t>) -> Vec<Ty> {
+        let a = a.unparen();
+        if a.kind() != "method_invocation" || !self.poly_untyped(a) {
+            return Vec::new();
+        }
+        let Some(c) = self.select_method(a) else { return Vec::new() };
+        let Ty::TypeVar(v) = &c.method.ret else { return Vec::new() };
+        if c.ambiguous || c.erasure_only || c.method.is_varargs() {
+            return Vec::new();
+        }
+        let args = self.args_of(a);
+        if args.len() != c.method.params.len() {
+            return Vec::new();
+        }
+        args.iter()
+            .zip(&c.method.params)
+            .filter(|(x, p)| matches!(&p.ty, Ty::TypeVar(w) if w == v) && !self.is_poly(**x))
+            .filter_map(|(x, _)| match self.arg_type(*x, Target::None) {
+                Ty::Prim(pr) => Some(Ty::class(pr.box_name())),
+                t @ (Ty::Class { .. } | Ty::Array(_)) if !t.has_unknown() && !t.mentions_type_var() => Some(t),
+                _ => None,
+            })
+            .collect()
     }
 
     /// For a target-typed call ([`Self::poly_untyped`]): whether it only
@@ -606,13 +636,18 @@ impl<'t> FileModel<'t> {
     /// Phase in which `m` fits the args (1 strict, 2 loose, 3 varargs),
     /// with the inference over the arguments' full types. `None` when `m`
     /// surely does not fit; the inference says whether it surely does.
-    fn candidate_fit(&self, m: &MethodInfo, args: &[ArgShape], poly: &[Poly]) -> Option<(u8, Inference)> {
+    fn candidate_fit(&self, m: &MethodInfo, args: &[ArgShape], poly: &[Poly], floors: &[Vec<Ty>]) -> Option<(u8, Inference)> {
         let n = args.len();
         let np = m.params.len();
+        let own = |t: &Ty| m.type_params.iter().any(|tp| mentions(t, &tp.name));
         let in_phase = |params: Vec<Ty>| -> Option<(bool, Inference)> {
             let mut loose = false;
             let mut fits = Vec::new();
-            for ((p, a), poly) in params.iter().zip(args).zip(poly) {
+            for (((p, a), poly), floor) in params.iter().zip(args).zip(poly).zip(floors) {
+                // a target-typed call is a supertype of its floor
+                if !p.is_prim() && !own(p) && floor.iter().any(|f| self.conv(f, &p.erasure()) == Conv::No) {
+                    return None;
+                }
                 let mut f = self.fit_in(m, p, a);
                 // a poly argument's type arguments follow the parameter in javac
                 let mut elem = p;
@@ -1338,6 +1373,13 @@ impl<'t> FileModel<'t> {
         if sa.has_unknown() {
             inf.incomplete = true;
             inf.unknown_vars.extend(vars.iter().filter(|v| mentions(pa, v)).cloned());
+            // an invariant argument known in part is the variable's exact
+            // type in that part
+            if let (Ty::TypeVar(v), Ty::Class { .. }) = (pa, sa) {
+                if vars.contains(v) {
+                    inf.partial.push((v.clone(), sa.clone()));
+                }
+            }
             return;
         }
         // the argument's own wildcards are captured (JLS 5.1.10): a variable
@@ -1610,9 +1652,10 @@ impl<'t> FileModel<'t> {
         };
         let same_rets = cands.iter().all(|m| m.method.ret == cands[0].method.ret && !m.method.type_params.iter().any(|tp| mentions(&m.method.ret, &tp.name)));
         let poly: Vec<Poly> = arg_nodes.iter().map(|a| self.poly_arg(*a)).collect();
-        let args: Vec<ArgShape> = arg_nodes.into_iter().map(|a| self.arg_shape(a)).collect();
+        let args: Vec<ArgShape> = arg_nodes.iter().map(|a| self.arg_shape(*a)).collect();
         let args = &args[..];
-        let fits: Vec<(MethodRef, (u8, Inference))> = cands.into_iter().filter_map(|m| self.candidate_fit(&m.method, args, &poly).map(|f| (m, f))).collect();
+        let floors: Vec<Vec<Ty>> = arg_nodes.iter().map(|a| self.poly_floor(*a)).collect();
+        let fits: Vec<(MethodRef, (u8, Inference))> = cands.into_iter().filter_map(|m| self.candidate_fit(&m.method, args, &poly, &floors).map(|f| (m, f))).collect();
         if fits.is_empty() {
             return None;
         }
@@ -1812,7 +1855,10 @@ impl<'t> FileModel<'t> {
                 let mut poisoned = inf.poisoned.clone();
                 // a lub stands only where the target agrees (javac widens it to an
                 // invariant target); without a target it is what `var` gets
-                let wide: Vec<Name> = inf.widenable.iter().filter(|v| mentions(&rc.method.ret, v) && bindings.iter().any(|(k, _)| k == *v)).cloned().collect();
+                // so does a binding from a poly argument, whose type arguments
+                // javac adapts to the target (`Map<Number, String> m =
+                // s.collect(toMap(k -> 1, v -> ""))` makes K Number)
+                let wide: Vec<Name> = inf.widenable.iter().chain(&inf.soft_vars).filter(|v| mentions(&rc.method.ret, v) && bindings.iter().any(|(k, _)| k == *v)).cloned().collect();
                 let target_type = || match target {
                     Target::Full => self.expected_type(call),
                     Target::Param => self.selected_param_type(call),
@@ -1902,6 +1948,22 @@ impl<'t> FileModel<'t> {
                         }
                         let open: Vec<Name> = tvars.iter().filter(|v| !poisoned.contains(v)).cloned().collect();
                         unify(self, &sam0.method.ret, &body_ty, &open, &mut bindings);
+                    }
+                }
+                // a variable an invariant argument gives in part only (`R` of
+                // `collect(groupingBy(Connection::of))` is `Map<Connection, List<?>>`):
+                // that part is exact unless another parameter bounds it too or
+                // the target reshapes its type arguments; a target never binds it
+                for (v, t) in &inf.partial {
+                    if bindings.iter().any(|(k, _)| k == v) || poisoned.contains(v) {
+                        continue;
+                    }
+                    let once = rc.method.params.iter().filter(|p| mentions(&p.ty, v)).count() == 1;
+                    let reshapes = exp.is_known() && !(matches!(&exp, Ty::Class { args, .. } if args.is_empty()) && self.conv(&t.erasure(), &exp) == Conv::Yes);
+                    if once && !reshapes {
+                        bindings.push((v.clone(), t.clone()));
+                    } else {
+                        poisoned.push(v.clone());
                     }
                 }
                 let open: Vec<Name> = tvars.iter().filter(|v| !poisoned.contains(v)).cloned().collect();
