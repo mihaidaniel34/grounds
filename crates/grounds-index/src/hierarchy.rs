@@ -350,8 +350,13 @@ pub trait ClassLookup {
         None
     }
 
-    /// Whether the full supertype closure of `name` is known.
+    /// Whether the full supertype closure of `name` is known. Every type has
+    /// java.lang.Object above it (interfaces too: they have its methods),
+    /// so without a JDK nothing is complete.
     fn hierarchy_complete(&self, name: &str) -> bool {
+        if self.class("java.lang.Object").is_none() {
+            return false;
+        }
         let mut seen = FxHashSet::default();
         let mut q = VecDeque::new();
         q.push_back(Arc::<str>::from(name));

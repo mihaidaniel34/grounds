@@ -6201,13 +6201,10 @@ zeebe/gateway-rest/src/test/java/io/camunda/zeebe/gateway/rest/controller/Recove
 zeebe/gateway-rest/src/test/java/io/camunda/zeebe/gateway/rest/controller/SecretRequestValidatorSpecSyncTest.java:73 format-string-mismatch
 zeebe/gateway-rest/src/test/java/io/camunda/zeebe/gateway/rest/controller/UserTaskQueryControllerTest.java:321 unused-private-field
 zeebe/gateway-rest/src/test/java/io/camunda/zeebe/gateway/rest/controller/setup/SetupControllerTest.java:371 unused-private-method
-zeebe/gateway-rest/src/test/java/io/camunda/zeebe/gateway/rest/controller/tenant/TenantControllerTest.java:68 unused-private-field
 zeebe/gateway-rest/src/test/java/io/camunda/zeebe/gateway/rest/controller/tenant/TenantQueryControllerTest.java:180 unused-private-field
 zeebe/gateway-rest/src/test/java/io/camunda/zeebe/gateway/rest/controller/tenant/TenantQueryControllerTest.java:181 format-string-mismatch
 zeebe/gateway-rest/src/test/java/io/camunda/zeebe/gateway/rest/controller/usermanagement/AuthorizationControllerTest.java:479 method-too-long
-zeebe/gateway-rest/src/test/java/io/camunda/zeebe/gateway/rest/controller/usermanagement/GroupControllerTest.java:58 unused-private-field
 zeebe/gateway-rest/src/test/java/io/camunda/zeebe/gateway/rest/controller/usermanagement/UserControllerTest.java:405 unused-private-method
-zeebe/gateway-rest/src/test/java/io/camunda/zeebe/gateway/rest/controller/usermanagement/UserControllerTest.java:55 unused-private-field
 zeebe/gateway-rest/src/test/java/io/camunda/zeebe/gateway/rest/validation/ResponseValidationAdviceTest.java:80 throw-generic-exception
 zeebe/gateway-rest/src/test/java/io/camunda/zeebe/gateway/rest/validation/ResponseValidationSpringMvcIntegrationTest.java:54 throw-generic-exception
 zeebe/gateway/src/main/java/io/camunda/zeebe/gateway/Loggers.java:13 utility-class-instantiable

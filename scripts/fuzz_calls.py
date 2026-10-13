@@ -416,13 +416,18 @@ def javac_verdict(case, diags, judged):
         return {"outcome": "other", "why": "no resolution note for pick on the line"}
     if ret is None:
         return {"outcome": "other"}
+    tvs = {v for ov in case["overloads"] for v in tvar_names(ov["tps"])}
     if unchecked:
+        # the note shows the result before erasure, and erasing a variable
+        # needs javac's own choice of bound (`T extends Object & Comparable<T>`
+        # gives Comparable[], not Object[]): not judged
+        if any(re.search(rf"\b{v}\b", ret) for v in tvs):
+            return {"outcome": "skip"}
         ret = erasure(ret)
     if any(x in ret for x in ("captureof", "captured", "intersection", "compiler.misc", "&")):
         return {"outcome": "skip"}
     # a type variable of `pick` left in javac's answer (an unconstrained
     # variable with a recursive bound): only the erasure is comparable
-    tvs = {v for ov in case["overloads"] for v in tvar_names(ov["tps"])}
     if any(re.search(rf"\b{v}\b", ret) for v in tvs):
         if erasure(ret).strip() in tvs:  # the bare variable: its bound is all javac knows
             return {"outcome": "skip"}

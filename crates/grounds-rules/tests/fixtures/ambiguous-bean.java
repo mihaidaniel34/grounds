@@ -19,3 +19,6 @@ interface Clock {}
 @Service class FakeClock implements Clock {}
 @Service class UsesClock { UsesClock(Clock c) {} }
 @Service class Lists { Lists(java.util.List<Store> all) {} }
+
+// the project is an application: its context is complete
+@org.springframework.boot.autoconfigure.SpringBootApplication class FixtureApp {}

@@ -21,9 +21,9 @@ leaves tests for the end of the task.
 
 ## What it checks
 
-- **312 rules**, reimplementations of checks from SonarQube, SpotBugs, PMD,
+- **314 rules**, reimplementations of checks from SonarQube, SpotBugs, PMD,
   Error Prone and IntelliJ inspections. Each rule lists the equivalent IDs
-  in those tools. By category: 109 bug, 58 style, 38 bad practice,
+  in those tools. By category: 111 bug, 58 style, 38 bad practice,
   23 performance, 23 concurrency, 22 security, 20 framework, 14 testing,
   5 complexity. Full list: [docs/RULES.md](docs/RULES.md). Style and
   security rules and the null-dereference check do not run on test
@@ -42,7 +42,11 @@ leaves tests for the end of the task.
   dropping `@Qualifier`, constructor cycles, bean name clashes. It knows
   `@Primary`, profiles and conditions (treated as unknown), generics,
   factory methods, Spring Data repositories, Feign clients, MapStruct mappers
-  and Micronaut's `@EachBean`, `@Replaces` and bean naming.
+  and Micronaut's `@EachBean`, `@Replaces` and bean naming. A Spring
+  library (no `@SpringBootApplication` in its main sources, nor a
+  `@ComponentScan` next to a `main` method; auto-configurations scanning
+  their own packages count as library code) is not judged: the
+  application using it wires its beans.
 - **Lombok:** generated constructors (including `staticName`/`staticConstructor`
   factories), getters, setters, `@With`, `@Builder` on classes, constructors
   and methods (with `@Builder.Default`), `@SuperBuilder` across files,
@@ -172,6 +176,10 @@ on-disk cache.
   references, records, enums, overrides) check that no "won't compile" rule
   reports anything on a file javac accepts. Every night all three also run
   on new seeds (the date), so the gate is not tuned to fixed cases.
+- **CI mode under scripted edits:** on every corpus project, commits that
+  cannot break anything (a new method, a line shift, a new class) must get
+  no report from `grounds changed --base`, and renamed public methods with
+  callers count toward a recall statistic (`scripts/ci_mutations.py`).
 - **External review:** three rounds of review by OpenAI Codex (gpt-6.1-sol)
   on the shared analyses and engine, and several by gpt-6-astra on the rules
   and on the fixes from the corpus and PMD rounds,
@@ -393,6 +401,13 @@ This runs Gradle (through an init script, without touching build files) or
 Maven a single time, about 20–40 s. It writes `.grounds/classpath.txt` and,
 for Gradle, which test task runs each source set. Set `scan_caches = false`
 to use only that file. grounds never runs the build tool on its own.
+
+In a multi-module Maven build whose modules depend on each other and were
+never installed, Maven cannot resolve those dependencies this way. Either run
+`mvn install -DskipTests` once, or `grounds classpath --maven-lifecycle`: it
+runs the lifecycle up to test-compile without compiling, so the reactor
+resolves sibling modules and nothing is installed, but plugins bound to early
+phases (code generators, resource copies) run too.
 
 With the guessed classpath, jar versions may not match the project's, so the
 compile-break rules skip classes that extend library classes (a method

@@ -1,0 +1,8 @@
+src/main/java/org/springframework/samples/petclinic/owner/Owner.java:150 collapsible-if
+src/main/java/org/springframework/samples/petclinic/owner/OwnerRepository.java:60 missing-override
+src/main/java/org/springframework/samples/petclinic/owner/PetController.java:72 local-immediately-returned
+src/main/java/org/springframework/samples/petclinic/system/CrashController.java:33 throw-generic-exception
+src/test/java/org/springframework/samples/petclinic/MySqlIntegrationTests.java:62 test-without-assertion
+src/test/java/org/springframework/samples/petclinic/PetClinicIntegrationTests.java:47 test-without-assertion
+src/test/java/org/springframework/samples/petclinic/PostgresIntegrationTests.java:82 test-without-assertion
+src/test/java/org/springframework/samples/petclinic/system/I18nPropertiesSyncTest.java:40 cognitive-complexity

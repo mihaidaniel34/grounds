@@ -4939,7 +4939,6 @@ rewrite-python/src/main/java/org/openrewrite/python/PythonPrinter.java:1252 loca
 rewrite-python/src/main/java/org/openrewrite/python/PythonPrinter.java:1261 local-variable-naming
 rewrite-python/src/main/java/org/openrewrite/python/PythonPrinter.java:1304 cognitive-complexity
 rewrite-python/src/main/java/org/openrewrite/python/PythonPrinter.java:1451 cognitive-complexity
-rewrite-python/src/main/java/org/openrewrite/python/PythonPrinter.java:41 unused-private-field
 rewrite-python/src/main/java/org/openrewrite/python/PythonPrinter.java:680 private-constructor-class-not-final
 rewrite-python/src/main/java/org/openrewrite/python/PythonPrinter.java:726 local-variable-naming
 rewrite-python/src/main/java/org/openrewrite/python/PythonPrinter.java:741 complex-boolean-expression

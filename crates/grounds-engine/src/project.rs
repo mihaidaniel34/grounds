@@ -166,6 +166,12 @@ impl Project {
         stats.classpath_entries = entries.len();
         let java_home = config.java_home.clone().or_else(grounds_classfile::find_java_home);
         let classpath = Arc::new(Classpath::build(java_home.as_deref(), config.java_release, &entries));
+        if !classpath.contains("java.lang.Object") {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                eprintln!("grounds: warning: no JDK found (set JAVA_HOME, put `java` on PATH, or `java_home` in grounds.toml); checks that need the JDK's classes stay silent");
+            });
+        }
         stats.classpath_classes = classpath.len();
         stats.t_classpath = t.elapsed();
 

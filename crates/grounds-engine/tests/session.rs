@@ -144,6 +144,9 @@ fn base_mode_finds_breaks_in_unchanged_files_and_writes_sarif() {
     for a in ["Service", "Component"] {
         write(&dir, &format!("src/main/java/org/springframework/stereotype/{a}.java"), &format!("package org.springframework.stereotype;\npublic @interface {a} {{}}\n"));
     }
+    // an application (not a library): its context is complete
+    write(&dir, "src/main/java/org/springframework/boot/autoconfigure/SpringBootApplication.java", "package org.springframework.boot.autoconfigure;\npublic @interface SpringBootApplication {}\n");
+    write(&dir, "src/main/java/demo/App.java", "package demo;\n@org.springframework.boot.autoconfigure.SpringBootApplication\npublic class App {}\n");
     write(&dir, "src/main/java/demo/Owner.java", "package demo;\npublic class Owner {\n    public void addPet(String p) {}\n    public boolean old(String s) { return s == \"x\"; }\n}\n");
     write(&dir, "src/main/java/demo/Clinic.java", "package demo;\npublic class Clinic {\n    void m(Owner o) { o.addPet(\"rex\"); }\n}\n");
     write(&dir, "src/main/java/demo/Pets.java", "package demo;\npublic interface Pets {}\n");
@@ -253,5 +256,68 @@ fn base_mode_edge_cases() {
     let sarif: serde_json::Value = serde_json::from_str(&grounds_engine::report::sarif_report(&r, &dir)).unwrap();
     let uris: Vec<&str> = sarif["runs"][0]["results"].as_array().unwrap().iter().map(|x| x["locations"][0]["physicalLocation"]["artifactLocation"]["uri"].as_str().unwrap()).collect();
     assert!(uris.contains(&"my%20app/src/main/java/demo/UseB.java"), "{uris:?}");
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+#[test]
+fn base_mode_removed_classes_and_new_beans() {
+    let repo = std::env::temp_dir().join(format!("grounds-base-removed-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&repo);
+    let dir = repo.clone();
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, "src/main/java/org/springframework/stereotype/Component.java", "package org.springframework.stereotype;\npublic @interface Component {}\n");
+    // an application (not a library): its context is complete
+    write(&dir, "src/main/java/org/springframework/boot/autoconfigure/SpringBootApplication.java", "package org.springframework.boot.autoconfigure;\npublic @interface SpringBootApplication {}\n");
+    write(&dir, "src/main/java/demo/App.java", "package demo;\n@org.springframework.boot.autoconfigure.SpringBootApplication\npublic class App {}\n");
+    write(&dir, "src/main/java/demo/Gone.java", "package demo;\npublic class Gone {\n    public static int value() { return 1; }\n}\n");
+    write(&dir, "src/main/java/demo/SamePackage.java", "package demo;\nclass SamePackage {\n    int v() { return Gone.value(); }\n}\n");
+    write(&dir, "src/main/java/other/UseGone.java", "package other;\nimport demo.Gone;\nclass UseGone {\n    int v() { return Gone.value(); }\n}\n");
+    // another class named Gone is imported explicitly: not the removed one
+    write(&dir, "src/main/java/third/Gone.java", "package third;\npublic class Gone {}\n");
+    write(&dir, "src/main/java/third/Shadowed.java", "package third;\nimport third.Gone;\nclass Shadowed { Gone g; }\n");
+    // same name, other bindings: a nested class, a field, a qualified name,
+    // and a same-package class winning over an on-demand import
+    write(&dir, "src/main/java/demo/Nested.java", "package demo;\nclass Nested {\n    static class Gone {}\n    Gone value;\n}\n");
+    write(&dir, "src/main/java/demo/Field.java", "package demo;\nclass Field {\n    int Gone;\n    int v() { return Gone; }\n}\n");
+    write(&dir, "src/main/java/other/Qualified.java", "package other;\nclass Qualified { third.Gone g; }\n");
+    write(&dir, "src/main/java/third/OnDemand.java", "package third;\nimport demo.*;\nclass OnDemand { Gone g; }\n");
+    // deleting a class named like a java.lang one: the name falls back to java.lang
+    write(&dir, "src/main/java/demo/String.java", "package demo;\npublic class String {}\n");
+    write(&dir, "src/main/java/demo/Text.java", "package demo;\nclass Text { String s; }\n");
+    write(&dir, "src/main/java/demo/Api.java", "package demo;\npublic interface Api {}\n");
+    write(&dir, "src/main/java/demo/ApiImpl.java", "package demo;\n@org.springframework.stereotype.Component\npublic class ApiImpl implements Api {}\n");
+    write(&dir, "src/main/java/demo/Worker.java", "package demo;\n@org.springframework.stereotype.Component\npublic class Worker {\n    Worker(Api service) {}\n}\n");
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "init"]);
+    git(&repo, &["checkout", "-qb", "feature"]);
+    std::fs::remove_file(dir.join("src/main/java/demo/Gone.java")).unwrap();
+    std::fs::remove_file(dir.join("src/main/java/demo/String.java")).unwrap();
+    write(&dir, "src/main/java/demo/ApiImpl2.java", "package demo;\n@org.springframework.stereotype.Component\npublic class ApiImpl2 implements Api {}\n");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "feature"]);
+
+    let mut s = Session::open(&dir).unwrap();
+    let mb = grounds_engine::git::merge_base(&dir, "main").unwrap();
+    let opts = CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: Some(mb) };
+    let r = s.check(&opts);
+    let mut pending: Vec<(&str, u32, &str)> = r.pending.iter().map(|f| (f.path.as_str(), f.line, f.rule)).collect();
+    pending.sort();
+    assert_eq!(
+        pending,
+        vec![
+            ("src/main/java/demo/SamePackage.java", 3, "removed-class-still-used"),
+            ("src/main/java/demo/Worker.java", 4, "ambiguous-bean"),
+            ("src/main/java/other/UseGone.java", 2, "removed-class-still-used"),
+        ],
+        "{:?}",
+        r.pending
+    );
+    // the new bean is blamed on its declaration
+    let breaks: Vec<(&str, u32)> = r.breaks.iter().map(|b| (b.finding.path.as_str(), b.finding.line)).collect();
+    assert_eq!(breaks, vec![("src/main/java/demo/ApiImpl2.java", 3)], "{:?}", r.breaks);
+    let sarif: serde_json::Value = serde_json::from_str(&grounds_engine::report::sarif_report(&r, &dir)).unwrap();
+    let rules: Vec<&str> = sarif["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap()).collect();
+    assert!(rules.contains(&"Removed class still used"), "{rules:?}");
     let _ = std::fs::remove_dir_all(&repo);
 }
