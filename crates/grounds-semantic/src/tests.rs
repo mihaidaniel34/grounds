@@ -929,3 +929,29 @@ fn explicit_lambda_types_under_a_wildcard_are_bounds() {
     // javac: List<Integer> (T <: Number, the target picks Integer)
     assert_eq!(t, vec!["java.util.List<?unknown>"]);
 }
+
+#[test]
+fn unchecked_results_keep_lambda_uncertainty() {
+    let t = types_of(
+        "import java.util.*; import java.util.function.*;
+         class P { static <T> T make(List<String> xs, Consumer<? super T> c) { return null; } }
+         class T { void m(List raw) { Object a = /*T*/ P.make(raw, (Number x) -> {}); } }",
+    );
+    // javac: Number (T <: Number through the lambda, then erased)
+    assert_eq!(t, vec!["?unknown"]);
+}
+
+#[test]
+fn unknown_variables_cause_no_unchecked_erasure() {
+    let t = types_of(
+        "import java.util.*;
+         class Raw<X> extends ArrayList {}
+         class P { static <T, U extends T> List<String> pick(long p0, Collection<? extends T> p1, Map<String,Integer> p2) { return null; } }
+         class T { void m(long l, List<? super Integer> lsu, Raw rw, Map<String,Integer> m) {
+           Object a = /*T*/ List.of(lsu, rw);
+           Object b = /*T*/ P.pick(l, List.of(lsu, rw), m);
+         } }",
+    );
+    // javac: List<List> (no unchecked call), List<String>
+    assert_eq!(t, vec!["java.util.List<?unknown>", "java.util.List<java.lang.String>"]);
+}

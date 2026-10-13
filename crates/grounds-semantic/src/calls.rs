@@ -1224,6 +1224,12 @@ impl<'t> FileModel<'t> {
         let subst: Vec<(Name, Ty)> = inf.bindings.iter().filter(|(k, _)| !inf.captures.iter().any(|c| c.var == *k)).cloned().collect();
         for (i, (p, a)) in params.iter().zip(args).enumerate() {
             let Some(a) = a else { continue };
+            // a variable left unknown proves nothing either way, not even
+            // through a capture it would otherwise have
+            if inf.poisoned.iter().any(|v| mentions(p, v)) {
+                inf.incomplete = true;
+                continue;
+            }
             let q = apply_subst(&with_captures(p, &inf.captures), &subst);
             let poly = poly.get(i).is_some_and(|p| p.any());
             // variables left open (checked before substituting: a binding may be
@@ -1789,6 +1795,8 @@ impl<'t> FileModel<'t> {
             let mut final_bindings: Vec<(Name, Ty)> = Vec::new();
             // the part of them the target type gave
             let mut target_bound: Vec<(Name, Ty)> = Vec::new();
+            // variables left unknown on purpose (lambda inputs, clashes)
+            let mut final_poisoned: Vec<Name> = Vec::new();
             if let Some(ta) = call.child_by_field_name("type_arguments") {
                 // `Collections.<String>emptyList()`: no inference
                 let given: Vec<Ty> = ta.kids().into_iter().map(|t| self.resolve_type_node(t)).collect();
@@ -1923,6 +1931,7 @@ impl<'t> FileModel<'t> {
                 let ret = self.project(&rc.method.ret, &captures);
                 rc.ret = self.finish_type(&ret, &bindings, call);
                 final_bindings = bindings;
+                final_poisoned = poisoned;
             }
             // unchecked conversion of an argument erases the result as
             // instantiated (JLS 18.5.2): `<T> T` inferred String stays String
@@ -1932,6 +1941,7 @@ impl<'t> FileModel<'t> {
                 let free = |v: &Name| {
                     !from_args.iter().any(|(k, _)| k == v)
                         && !inf.poisoned.contains(v)
+                        && !final_poisoned.contains(v)
                         && !inf.unknown_vars.contains(v)
                         && !inf.captures.iter().any(|c| c.var == *v)
                         && !inf.upper_only.contains(v)
