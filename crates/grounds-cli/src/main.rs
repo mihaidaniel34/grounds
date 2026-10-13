@@ -130,6 +130,13 @@ enum Cmd {
         gradle: bool,
         #[arg(long)]
         maven: bool,
+        /// Maven: if a module depends on a sibling module that is not
+        /// installed, run the lifecycle up to test-compile without compiling,
+        /// so the reactor resolves it. Plugins bound to early phases run (code
+        /// generators, resource copies), so this is opt-in; profiles activated
+        /// by the absence of `maven.test.skip` are not.
+        #[arg(long)]
+        maven_lifecycle: bool,
     },
     /// List all rules.
     Rules {
@@ -277,10 +284,10 @@ fn main() -> anyhow::Result<()> {
         }
         Cmd::Hook { event } => std::process::exit(hook(&event)?),
         Cmd::Hooks => println!("{}", HOOKS_JSON),
-        Cmd::Classpath { root, gradle, maven } => {
+        Cmd::Classpath { root, gradle, maven, maven_lifecycle } => {
             let root = find_root(root);
             let use_maven = maven || (!gradle && root.join("pom.xml").exists() && !root.join("build.gradle").exists() && !root.join("build.gradle.kts").exists());
-            let n = if use_maven { grounds_engine::dump::maven(&root)? } else { grounds_engine::dump::gradle(&root)? };
+            let n = if use_maven { grounds_engine::dump::maven(&root, maven_lifecycle)? } else { grounds_engine::dump::gradle(&root)? };
             println!("wrote {} classpath entries to .grounds/classpath.txt", n);
             println!("tip: set `scan_caches = false` in grounds.toml to use only the exact classpath");
         }
