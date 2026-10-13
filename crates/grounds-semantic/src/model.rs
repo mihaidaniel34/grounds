@@ -31,6 +31,9 @@ pub struct ResolvedCall {
     pub receiver: Option<Ty>,
     /// Overload resolution could not pick a unique method.
     pub ambiguous: bool,
+    /// The pick is a guess among overloads with the same erased result:
+    /// only that erasure is known.
+    pub erasure_only: bool,
     /// Static call through a type name (`Foo.bar()`).
     pub via_type: bool,
 }
@@ -464,7 +467,14 @@ impl<'t> ClassLookup for FileModel<'t> {
                 if let Some(oce) = node.parent() {
                     if oce.kind() == "object_creation_expression" {
                         if let Some(t) = oce.field("type") {
-                            let st = self.resolve_type_node(t);
+                            let mut st = self.resolve_type_node(t);
+                            // `new TypeReference<>() {}`: inferred arguments, not a raw type
+                            let diamond = t.kind() == "generic_type" && t.kid_of_kind("type_arguments").is_some_and(|ta| ta.kids().is_empty());
+                            if let (true, Ty::Class { name, args }) = (diamond, &mut st) {
+                                if let Some(c) = self.index.class(name) {
+                                    *args = c.type_params.iter().map(|_| Ty::Unknown).collect();
+                                }
+                            }
                             let is_iface = st.class_name().and_then(|n| self.index.class(n)).is_some_and(|c| c.is_interface());
                             if is_iface {
                                 info.interfaces = vec![st];
