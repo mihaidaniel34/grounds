@@ -271,7 +271,22 @@ impl<'t> FileModel<'t> {
     /// Whether the argument is a poly argument as the enclosing inference
     /// sees it: one only typed by a lambda counts as an unknown type.
     fn poly_arg(&self, a: Node<'t>) -> bool {
-        self.is_poly(a) && (!self.poly_untyped(a) || self.poly_adapts(a))
+        self.is_poly(a) && (!self.poly_untyped(a) || self.poly_adapts(a)) && !self.poly_unsettled(a)
+    }
+
+    /// A generic call whose own inference left a variable of its result
+    /// open for a reason (`singletonList(requireNonNullElseGet(b, () -> c))`):
+    /// what it lacks is a bound, not a free choice, so it is no argument that
+    /// adapts to its parameter.
+    fn poly_unsettled(&self, a: Node<'t>) -> bool {
+        let a = a.unparen();
+        if a.kind() != "method_invocation" {
+            return false;
+        }
+        let Some(c) = self.select_method(a) else { return false };
+        let inf = self.partial_inference(a, &c.method);
+        inf.poisoned.iter().chain(&inf.unknown_vars).any(|v| mentions(&c.method.ret, v))
+            || self.args_of(a).iter().any(|x| self.poly_untyped(*x) && !self.poly_adapts(*x))
     }
 
     fn poly_target(&self, a: Node<'t>) -> Option<bool> {
@@ -1800,7 +1815,18 @@ impl<'t> FileModel<'t> {
                     let open: Vec<Name> = tvars.iter().filter(|v| !poisoned.contains(v)).cloned().collect();
                     let inputs: Vec<Name> = open.iter().filter(|v| !bindings.iter().any(|(k, _)| k == *v) && sam.method.params.iter().any(|p| mentions(&p.ty, v))).cloned().collect();
                     if !inputs.is_empty() {
-                        if exp.is_known() {
+                        // an explicitly typed lambda states them (`(Integer x) -> 1`
+                        // makes T Integer); an exact method reference can too, and
+                        // that is beyond this model: neither yields to the target
+                        let declared: Option<Vec<Ty>> = (a.kind() == "lambda_expression")
+                            .then(|| a.field("parameters").filter(|p| p.kind() == "formal_parameters"))
+                            .flatten()
+                            .map(|ps| ps.kids().into_iter().filter(|k| k.kind() == "formal_parameter").map(|k| k.field("type").map(|t| self.resolve_type_node(t)).unwrap_or(Ty::Unknown)).collect());
+                        if let Some(declared) = declared.filter(|d| !d.is_empty() && d.len() == sam.method.params.len() && d.iter().all(|t| t.is_known() && !t.has_unknown())) {
+                            for (sp, d) in sam.method.params.iter().zip(&declared) {
+                                unify(self, &sp.ty, d, &inputs, &mut bindings);
+                            }
+                        } else if a.kind() == "lambda_expression" && a.field("parameters").is_none_or(|p| p.kind() != "formal_parameters" || p.kids().is_empty()) && exp.is_known() {
                             let before = bindings.len();
                             self.target_bind(&rc.method, &rc.method.ret, &exp, &inputs, &mut bindings);
                             target_bound.extend(bindings[before..].iter().cloned());

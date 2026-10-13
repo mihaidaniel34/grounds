@@ -884,3 +884,26 @@ fn a_panic_inside_a_guard_leaves_the_node() {
     // a real cycle still returns the default
     assert_eq!(fm.guard(8, 0, 0, || fm.guard(8, 0, -1, || 2)), -1);
 }
+
+#[test]
+fn explicit_lambda_types_fix_inputs_and_references_stay_open() {
+    let t = types_of(
+        "import java.util.function.*;
+         class P { static <T extends Number> T apply(UnaryOperator<T> f) { return null; } }
+         class T { void m() { Number a = /*T*/ P.apply((Integer x) -> 1); Number b = /*T*/ P.apply(Integer::intValue); } }",
+    );
+    // javac: Integer, Integer (the target Number does not decide either)
+    assert_eq!(t, vec!["java.lang.Integer", "?unknown"]);
+}
+
+#[test]
+fn unsettled_inner_calls_do_not_adapt_through_a_wrapper() {
+    let t = types_of(
+        "import java.util.*;
+         class Base {} class A extends Base {} class B extends Base {}
+         class P { static <T> List<T> combine(T x, List<? extends T> ys) { return null; } }
+         class T { void m() { Object a = /*T*/ P.combine(new A(), Collections.singletonList(Objects.requireNonNullElseGet(new B(), () -> new B()))); } }",
+    );
+    // javac: List<Base> (the B through the lambda is one more lower bound)
+    assert_eq!(t, vec!["java.util.List<?unknown>"]);
+}
