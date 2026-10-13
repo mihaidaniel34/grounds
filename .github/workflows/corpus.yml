@@ -9,6 +9,8 @@ name: corpus
 # - classpath: `grounds classpath` first (Maven/Gradle resolve the exact
 #   classpath) with scan_caches = false (baseline corpus/ci-classpath); the
 #   compile-break rules check the most here, against code that compiles.
+#   Projects whose build cannot dump a classpath on a runner are listed, with
+#   the reason, in corpus/classpath-skip.tsv.
 # To accept new results, run with `update-baseline` and commit the artifact.
 on:
   pull_request:
@@ -34,6 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       projects: ${{ steps.projects.outputs.names }}
+      classpath-projects: ${{ steps.projects.outputs.classpath }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -46,7 +49,10 @@ jobs:
             target/release/grounds
             target/release/examples/errors
       - id: projects
-        run: echo "names=$(cut -f1 corpus/projects.tsv | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "names=$(cut -f1 corpus/projects.tsv | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
+          # projects whose build cannot dump a classpath on a runner (reasons in the file)
+          echo "classpath=$(cut -f1 corpus/projects.tsv | grep -vxF -f <(cut -f1 corpus/classpath-skip.tsv) | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
 
   check:
     needs: build
@@ -116,7 +122,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        project: ${{ fromJson(needs.build.outputs.projects) }}
+        project: ${{ fromJson(needs.build.outputs.classpath-projects) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5

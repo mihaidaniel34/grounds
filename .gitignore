@@ -26,6 +26,7 @@
 !/scripts/*.py
 !/scripts/*.baseline.json
 !/corpus/projects.tsv
+!/corpus/classpath-skip.tsv
 !/corpus/planted/*.patch
 !/corpus/planted/*.expected
 !/corpus/ci/*.txt
