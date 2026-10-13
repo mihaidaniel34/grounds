@@ -134,7 +134,17 @@ def commit(d, msg):
         "commit", "-q", "--no-verify", "-m", msg)
 
 
+def summary(path):
+    with open(path) as fh:
+        st = json.load(fh)["stats"]
+    print(f"mutations: safe edits {st['safe']} ({st['safe-reported']} reported), "
+          f"breaking renames {st['breaking']} ({st['breaking-reported']} reported)")
+    return 0
+
+
 def main():
+    if len(sys.argv) == 3 and sys.argv[1] == "--summary":
+        return summary(sys.argv[2])
     ap = argparse.ArgumentParser()
     ap.add_argument("dir")
     ap.add_argument("--seed", type=int, default=1)

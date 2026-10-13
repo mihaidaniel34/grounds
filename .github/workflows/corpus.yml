@@ -11,6 +11,7 @@ name: corpus
 #   compile-break rules check the most here, against code that compiles.
 #   Projects whose build cannot dump a classpath on a runner are listed, with
 #   the reason, in corpus/classpath-skip.tsv.
+# The no-jars job also runs CI mode under scripted edits (ci_mutations.py).
 # To accept new results, run with `update-baseline` and commit the artifact.
 on:
   pull_request:
@@ -96,11 +97,19 @@ jobs:
           CORPUS_BASELINE: corpus/ci
           GROUNDS: bin/grounds
           ERRORS: ${{ github.workspace }}/bin/examples/errors
+      # CI mode under scripted edits (scripts/ci_mutations.py): edits that cannot
+      # break anything must get no report from `changed --base`; renamed public
+      # methods with callers count toward a recall statistic
+      - name: mutations
+        run: python3 -I scripts/ci_mutations.py "$CORPUS_DIR/${{ matrix.project }}" --grounds bin/grounds --safe 8 --breaking 4 --out target/corpus/mutations.json
+        env:
+          CORPUS_DIR: ${{ runner.temp }}/corpus
       - name: summary
         if: always()
         run: |
           {
             echo "### ${{ matrix.project }}: calls resolved $(cut -f2 target/corpus/current/stats.tsv 2>/dev/null)"
+            [ -f target/corpus/mutations.json ] && python3 scripts/ci_mutations.py --summary target/corpus/mutations.json
             if [ -s target/corpus/snapshot.diff ]; then
               echo "<details><summary>snapshot diff</summary>"; echo; echo '```diff'; head -200 target/corpus/snapshot.diff; echo '```'; echo "</details>"
             else
@@ -116,6 +125,7 @@ jobs:
             target/corpus/current/stats.tsv
             target/corpus/snapshot.diff
             target/corpus/planted-*.diff
+            target/corpus/mutations.json
 
   classpath:
     needs: build

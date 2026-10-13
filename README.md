@@ -176,6 +176,10 @@ on-disk cache.
   references, records, enums, overrides) check that no "won't compile" rule
   reports anything on a file javac accepts. Every night all three also run
   on new seeds (the date), so the gate is not tuned to fixed cases.
+- **CI mode under scripted edits:** on every corpus project, commits that
+  cannot break anything (a new method, a line shift, a new class) must get
+  no report from `grounds changed --base`, and renamed public methods with
+  callers count toward a recall statistic (`scripts/ci_mutations.py`).
 - **External review:** three rounds of review by OpenAI Codex (gpt-6.1-sol)
   on the shared analyses and engine, and several by gpt-6-astra on the rules
   and on the fixes from the corpus and PMD rounds,
