@@ -1005,20 +1005,27 @@ fn poly_arguments_bind_what_the_target_cannot_change() {
            void m(List<Integer> rs) {
              Object a = /*T*/ rs.stream().collect(Collectors.groupingBy(Conn::of));
              Object b = /*T*/ rs.stream().collect(Collectors.groupingBy(Conn::of)).values();
-             Map<Number, String> c = /*T*/ Stream.of(\"a\").collect(Collectors.toMap(k -> 1, v -> \"x\"));
-             var d = /*T*/ Stream.of(\"a\").collect(Collectors.toMap(k -> 1, v -> \"x\"));
+             Map<Conn, List<Integer>> c = /*T*/ rs.stream().collect(Collectors.groupingBy(Conn::of));
+             Map<Number, String> d = /*T*/ Stream.of(\"a\").collect(Collectors.toMap(k -> 1, v -> \"x\"));
+             var e = /*T*/ Stream.of(\"a\").collect(Collectors.toMap(k -> 1, v -> \"x\"));
+             Map<? extends Number, String> f = /*T*/ Stream.of(\"a\").collect(Collectors.toMap(k -> 1, v -> \"x\"));
+             Map<Object, List<Integer>> g = /*T*/ rs.stream().collect(Collectors.groupingBy(Conn::of));
            }
          }",
     );
-    // javac: Map<Conn, List<Integer>> (not the target's Object), its values,
-    // Map<Number, String> (the target reshapes K), Map<Integer, String>
+    // javac: Map<Conn, List<Integer>> (not the target's Object) and its
+    // values; an invariant target of the result's class is the result; a
+    // wildcard target takes the poly argument's own Map<Integer, String>
     assert_eq!(
         t,
         vec![
             "java.util.Map<T.Conn, java.util.List<?unknown>>",
             "java.util.Collection<java.util.List<?unknown>>",
-            "?unknown",
-            "java.util.Map<java.lang.Integer, java.lang.String>"
+            "java.util.Map<T.Conn, java.util.List<java.lang.Integer>>",
+            "java.util.Map<java.lang.Number, java.lang.String>",
+            "java.util.Map<java.lang.Integer, java.lang.String>",
+            "java.util.Map<java.lang.Integer, java.lang.String>",
+            "java.util.Map<java.lang.Object, java.util.List<java.lang.Integer>>"
         ]
     );
 }

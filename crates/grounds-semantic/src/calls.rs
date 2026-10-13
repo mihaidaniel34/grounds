@@ -1866,6 +1866,14 @@ impl<'t> FileModel<'t> {
                 };
                 if !wide.is_empty() {
                     let exp = target_type();
+                    // a bare result a poly argument gives its class is the target
+                    // itself where that pins it
+                    if let Ty::TypeVar(r) = &rc.method.ret {
+                        if inf.soft_vars.contains(r) && bindings.iter().any(|(k, b)| k == r && self.pins(b, &exp)) {
+                            bindings.retain(|(k, _)| k != r);
+                            bindings.push((r.clone(), exp.clone()));
+                        }
+                    }
                     // the target bounds the lub from above, or forces another
                     // type (an invariant `Stream<Object>`): then it is no answer
                     let lub_ret = apply_subst(&rc.method.ret, &bindings);
@@ -1962,6 +1970,8 @@ impl<'t> FileModel<'t> {
                     let reshapes = exp.is_known() && !(matches!(&exp, Ty::Class { args, .. } if args.is_empty()) && self.conv(&t.erasure(), &exp) == Conv::Yes);
                     if once && !reshapes {
                         bindings.push((v.clone(), t.clone()));
+                    } else if once && matches!(&rc.method.ret, Ty::TypeVar(r) if r == v) && self.pins(t, &exp) {
+                        bindings.push((v.clone(), exp.clone()));
                     } else {
                         poisoned.push(v.clone());
                     }
@@ -2073,6 +2083,21 @@ impl<'t> FileModel<'t> {
             }
             Some(Rc::new(rc))
         }
+    }
+
+    /// Whether a target fixes a result whose class `b` gives (its type
+    /// arguments known in part, or lower bounds): an invariant target of the
+    /// same class is the only type that converts to it (`Map<a, b>` to
+    /// `Map<Number, String>`).
+    fn pins(&self, b: &Ty, exp: &Ty) -> bool {
+        let (Ty::Class { name, args }, Ty::Class { name: en, args: eargs }) = (b, exp) else { return false };
+        name == en
+            && !eargs.is_empty()
+            && args.len() == eargs.len()
+            && !exp.has_unknown()
+            && !exp.mentions_type_var()
+            && !eargs.iter().any(|e| matches!(e, Ty::Wildcard(_)))
+            && args.iter().zip(eargs).all(|(a, e)| self.conv(a, e) != Conv::No)
     }
 
     /// Bindings for `vars` from the target type `exp` of a call returning
