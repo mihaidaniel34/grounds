@@ -1114,6 +1114,14 @@ impl DiModel {
                 return Resolution::QualifierNotFound { qualifier: q.clone(), candidates: before };
             }
         }
+        // Spring skips self-references and falls back to them only when
+        // nothing else matches a single-valued point
+        if p.framework == Framework::Spring {
+            let own = self.self_references(lk, p);
+            if cands.iter().any(|&i| !own.contains(&i)) || p.multiple {
+                cands.retain(|i| !own.contains(i));
+            }
+        }
         if p.multiple {
             return Resolution::Multiple(cands);
         }
@@ -1172,6 +1180,31 @@ impl DiModel {
                 Resolution::Ambiguous(unconditional)
             }
         }
+    }
+
+    /// Beans Spring treats as self-references of the bean receiving `p`
+    /// (`DefaultListableBeanFactory.isSelfReference`): that bean itself and,
+    /// for a class bean, the beans of its own instance `@Bean` methods.
+    fn self_references(&self, lk: &dyn ClassLookup, p: &InjectionPoint) -> Vec<usize> {
+        let own = |b: &Bean| b.declaring_class == p.owner;
+        if let PointKind::FactoryParam(m, _) = &p.kind {
+            return (0..self.beans.len()).filter(|&i| own(&self.beans[i]) && matches!(&self.beans[i].source, BeanSource::FactoryMethod(n) if n == m)).collect();
+        }
+        if !self.beans.iter().any(|b| own(b) && !matches!(b.source, BeanSource::FactoryMethod(_))) {
+            return Vec::new();
+        }
+        // static @Bean methods have no factory bean
+        let instance = |m: &Name| lk.class(&p.owner).is_some_and(|c| c.methods_named(m).any(|x| !x.flags.is_static()));
+        (0..self.beans.len())
+            .filter(|&i| {
+                let b = &self.beans[i];
+                own(b)
+                    && match &b.source {
+                        BeanSource::FactoryMethod(m) => instance(m),
+                        _ => true,
+                    }
+            })
+            .collect()
     }
 
     /// Could we see every provider of this type? Only types declared in the
@@ -1484,5 +1517,51 @@ mod tests {
         ]);
         assert!(m.beans.iter().all(|b| !(b.framework == Framework::Jakarta && simple_name_of(&b.declaring_class) == "Store")));
         let _ = idx;
+    }
+
+    #[test]
+    fn spring_skips_self_references() {
+        // DefaultListableBeanFactory.isSelfReference: the bean itself and the
+        // beans of its own instance @Bean methods are candidates only when
+        // nothing else matches a single-valued point
+        let (idx, m) = model(&[(
+            "app/A.java",
+            "package app; import org.springframework.stereotype.*; import org.springframework.context.annotation.*; import java.util.List;
+             interface A {}
+             @Service class B implements A {}
+             @Service class C implements A { C(A decorated) {} }
+             @Service class D implements A { D(List<A> all) {} }
+             interface Solo {}
+             @Service class S implements Solo { S(Solo self) {} }
+             interface K {}
+             @Service class Plain implements K {}
+             @Configuration class Cfg { @org.springframework.beans.factory.annotation.Autowired K fromCfg; @Bean K made() { return null; } @Bean K wrap(K inner) { return null; } }
+             interface J {}
+             @Configuration class StaticCfg { @org.springframework.beans.factory.annotation.Autowired J own; @Bean static J st() { return null; } @Bean J inst() { return null; } }
+             @ComponentScan class Main { public static void main(String[] args) {} }",
+        )]);
+        let bean = |n: &str| m.beans.iter().position(|b| b.name == n).unwrap();
+        let sorted = |r: Resolution| match r {
+            Resolution::Ambiguous(mut v) => Resolution::Ambiguous({ v.sort(); v }),
+            Resolution::Multiple(mut v) => Resolution::Multiple({ v.sort(); v }),
+            r => r,
+        };
+        let res = |n: &str| sorted(resolution_of(&idx, &m, "app/A.java", n));
+        assert_eq!(res("decorated"), sorted(Resolution::Ambiguous(vec![bean("b"), bean("d")])));
+        assert_eq!(res("all"), sorted(Resolution::Multiple(vec![bean("b"), bean("c")])));
+        assert_eq!(resolution_of(&idx, &m, "app/A.java", "self"), Resolution::Unique(bean("s")));
+        assert_eq!(resolution_of(&idx, &m, "app/A.java", "fromCfg"), Resolution::Unique(bean("plain")));
+        assert_eq!(res("inner"), sorted(Resolution::Ambiguous(vec![bean("plain"), bean("made")])));
+        assert_eq!(resolution_of(&idx, &m, "app/A.java", "own"), Resolution::Unique(bean("st")));
+        // the issue's case: a decorator wrapping the only other implementation
+        let (idx, m) = model(&[(
+            "app/A.java",
+            "package app; import org.springframework.stereotype.*;
+             interface A {}
+             @Service class B implements A {}
+             @Service class C implements A { C(A x) {} }
+             @org.springframework.context.annotation.ComponentScan class Main { public static void main(String[] args) {} }",
+        )]);
+        assert_eq!(resolution_of(&idx, &m, "app/A.java", "x"), Resolution::Unique(m.beans.iter().position(|b| b.name == "b").unwrap()));
     }
 }
