@@ -10,7 +10,7 @@ use crate::workspace::{classify, SourceKind};
 use grounds_index::{simple_name_of, FileStub, Name};
 use grounds_rules::framework::RuleOptions;
 use grounds_rules::{RuleSet, Severity, Tier};
-use grounds_syntax::ParsedFile;
+use grounds_syntax::{NodeExt, ParsedFile};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
@@ -367,9 +367,13 @@ impl Session {
                 None => s.project.index.remove_file(&key),
             }
         };
+        let mut base_classes: Vec<Name> = Vec::new();
         for f in &touched {
             let old = git::version_at(self.root(), rev, f);
             install(self, f, old);
+            if let Some(stub) = self.project.index.file(&path_key(f)) {
+                base_classes.extend(stub.classes.iter().map(|c| c.name.clone()));
+            }
         }
         self.project.rebuild_di();
         // the fingerprint names the line, not the call on it: `a.foo(); a.bar();`
@@ -380,7 +384,93 @@ impl Session {
             install(self, f, cur);
         }
         self.project.rebuild_di();
-        now.into_iter().filter(|f| !before.contains(&(f.fingerprint.clone(), f.col))).collect()
+        let mut found: Vec<Finding> = now.into_iter().filter(|f| !before.contains(&(f.fingerprint.clone(), f.col))).collect();
+        // classes the change deleted or renamed: references to them are unknown
+        // types, which the rules leave alone (a missing jar looks the same)
+        let removed: Vec<Name> = base_classes.into_iter().filter(|c| self.project.index.class(c).is_none()).collect();
+        if !removed.is_empty() {
+            found.extend(others.par_iter().flat_map_iter(|f| self.removed_class_uses(f, &removed)).collect::<Vec<_>>());
+        }
+        found
+    }
+
+    /// Uses of `removed` classes in `file`: an import of one, or its simple
+    /// name in the same package or under an on-demand import of its package.
+    fn removed_class_uses(&self, file: &Path, removed: &[Name]) -> Vec<Finding> {
+        let Some(stub) = self.project.index.file(&path_key(file)) else { return Vec::new() };
+        let mut hits: Vec<(Name, Option<String>)> = Vec::new();
+        for c in removed {
+            let simple = simple_name_of(c);
+            if stub.referenced_names.binary_search_by(|n| (**n).cmp(simple)).is_err() {
+                continue;
+            }
+            let dotted = c.replace('$', ".");
+            let pkg = dotted.rsplit_once('.').map(|(p, _)| p).unwrap_or("");
+            let top_pkg = c.split('$').next().unwrap_or(c).rsplit_once('.').map(|(p, _)| p).unwrap_or("");
+            let exact = stub.imports.iter().any(|i| !i.is_static && !i.on_demand && *i.path == *dotted);
+            // another class of the same simple name imported explicitly wins
+            let shadowed = stub.imports.iter().any(|i| !i.is_static && !i.on_demand && i.last() == simple && *i.path != *dotted);
+            let reachable = !c.contains('$') && (&*stub.package == top_pkg || stub.imports.iter().any(|i| i.on_demand && !i.is_static && *i.path == *pkg));
+            if exact {
+                hits.push((c.clone(), Some(dotted.clone())));
+            } else if reachable && !shadowed {
+                hits.push((c.clone(), None));
+            }
+        }
+        if hits.is_empty() {
+            return Vec::new();
+        }
+        let Ok(text) = std::fs::read_to_string(file) else { return Vec::new() };
+        let pf = ParsedFile::parse(text);
+        let fm = grounds_semantic::FileModel::new(&pf, &self.project.index, path_key(file));
+        let rel = file.strip_prefix(self.root()).unwrap_or(file).to_string_lossy().to_string();
+        let mut out = Vec::new();
+        for (c, import) in hits {
+            let simple = simple_name_of(&c);
+            // the import line (importing a class that exists nowhere does not
+            // compile), or else the first use of the bare name that resolves to
+            // nothing now: a nested class, a field or variable of that name, a
+            // qualified `q.Gone` or java.lang taking over is not the removed class
+            let node = pf.root().descendants().find(|n| match &import {
+                Some(path) => n.kind() == "import_declaration" && pf.text[n.byte_range()].contains(path.as_str()),
+                None => {
+                    if &pf.text[n.byte_range()] != simple || n.ancestors().any(|a| matches!(a.kind(), "import_declaration" | "package_declaration")) {
+                        return false;
+                    }
+                    let qualified = n.parent().is_some_and(|p| matches!(p.kind(), "scoped_type_identifier" | "scoped_identifier") && p.kids().first() != Some(n));
+                    match n.kind() {
+                        "type_identifier" => !qualified && fm.resolve_type_node(*n).is_unknown(),
+                        // `Gone.value()` / `Gone.FIELD`: the receiver names no variable or type
+                        "identifier" => {
+                            let receiver = n.parent().is_some_and(|p| matches!(p.kind(), "method_invocation" | "field_access") && p.field("object") == Some(*n));
+                            receiver && fm.symbol(*n).is_none() && fm.type_of(*n).is_unknown()
+                        }
+                        _ => false,
+                    }
+                }
+            });
+            let Some(node) = node else { continue };
+            let (s, e) = (pf.lines.line_col(&pf.text, node.start_byte() as u32), pf.lines.line_col(&pf.text, node.end_byte() as u32));
+            let dotted = c.replace('$', ".");
+            let fingerprint = format!("{:016x}", xxhash_rust::xxh3::xxh3_64(format!("removed-class-still-used|{rel}|{dotted}").as_bytes()));
+            out.push(Finding {
+                path: rel.clone(),
+                line: s.line,
+                col: s.col,
+                end_line: e.line,
+                end_col: e.col,
+                rule: "removed-class-still-used",
+                severity: Severity::Error,
+                category: "bug",
+                message: format!("`{dotted}` was removed or renamed by this change but is still used here"),
+                fingerprint,
+                legacy_fingerprint: None,
+                fix: None,
+                start: node.start_byte() as u32,
+                end: node.end_byte() as u32,
+            });
+        }
+        out
     }
 
     /// Anchor each broken place in `pending` on the changed line that caused
@@ -404,6 +494,13 @@ impl Session {
             for c in &stub.classes {
                 let owner = simple_name_of(&c.name).to_string();
                 out.push((owner.clone(), None, line(c.range)));
+                // a new bean is blamed for "multiple beans of type `Api`" through
+                // its supertypes
+                for sup in c.superclass.iter().chain(&c.interfaces) {
+                    if let Some(n) = sup.last_name() {
+                        out.push((n.to_string(), None, line(c.range)));
+                    }
+                }
                 for m in &c.methods {
                     let n = if &*m.name == "<init>" { owner.clone() } else { m.name.to_string() };
                     out.push((n, Some(owner.clone()), line(m.range)));

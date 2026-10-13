@@ -11,7 +11,7 @@ use grounds_semantic::Symbol;
 use grounds_syntax::{Node, NodeExt};
 
 pub fn rules() -> Vec<Box<dyn Rule>> {
-    vec![Box::new(UnresolvedMethod), Box::new(UnresolvedConstructor), Box::new(UnresolvedField), Box::new(OverrideWithoutSuper), Box::new(UnimplementedAbstractMethod)]
+    vec![Box::new(UnresolvedMethod), Box::new(UnresolvedConstructor), Box::new(UnresolvedField), Box::new(UnresolvedStaticImport), Box::new(IncompatibleAssignment), Box::new(OverrideWithoutSuper), Box::new(UnimplementedAbstractMethod)]
 }
 
 /// A project class whose full hierarchy is known and that no processor other
@@ -83,13 +83,17 @@ declare_rule!(UnresolvedMethod {
     severity: Error,
     tier: Edit,
     sources: ["javac:cant.resolve.location.args", "intellij:UnresolvedReference"],
-    kinds: ["method_invocation"],
-    description: "The called method does not exist on the receiver's (project) type with this number of arguments, so the code does not compile. Typically a caller that was not updated after a method was renamed, removed or changed its parameters.",
+    kinds: ["method_invocation", "method_reference"],
+    description: "The called method does not exist on the receiver's (project) type with this number of arguments, or is private to another class, so the code does not compile. Typically a caller that was not updated after a method was renamed, removed, made private or changed its parameters. Also checks method references (`Type::name`).",
 });
 
 impl Rule for UnresolvedMethod {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
+        if n.kind() == "method_reference" {
+            check_method_reference(n, cx);
+            return;
+        }
         // inside a case label's pattern (not its guard) a call is never valid
         // Java: it is a pattern the grammar did not understand (`case R(_)`)
         if n.ancestors().take_while(|a| a.kind() != "switch_block").any(|a| a.kind() == "switch_label") && !n.ancestors().any(|a| a.kind() == "guard") {
@@ -169,6 +173,21 @@ impl Rule for UnresolvedMethod {
             cx.report(n.field("name").unwrap_or(n), format!("No `{name}` in `{}` accepts ({arg_list}); available: {}", cls.simple_name(), signatures(&ms)));
             return;
         }
+        // private to another class: nested classes share their top-level
+        // class's private members
+        let top = |c: &str| c.split('$').next().unwrap_or(c).to_string();
+        let here = cx.fm.enclosing_class_name(n).map(|e| top(&e));
+        let arity: Vec<&MethodRef> = ms.iter().filter(|m| m.method.accepts_arity(nargs)).collect();
+        // `methods_named` may hide a supertype's method (an interface default)
+        // behind a superclass's private one, which is not inherited
+        let visible_elsewhere = || {
+            cx.fm.all_supertypes(&cls.this_type()).iter().filter_map(|t| t.class_name().and_then(|n| cx.fm.class(n))).any(|c| c.methods_named(name).any(|m| m.accepts_arity(nargs) && !m.flags.is_private()))
+        };
+        if here.is_some() && arity.iter().all(|m| m.method.flags.is_private() && Some(top(&m.owner)) != here) && !visible_elsewhere() {
+            let m = arity[0];
+            cx.report(n.field("name").unwrap_or(n), format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)));
+            return;
+        }
         // calling an instance method through the type name
         if is_static_ctx && ms.iter().filter(|m| m.method.accepts_arity(nargs)).all(|m| !m.method.flags.is_static()) {
             // `Outer.method()` inside an inner class reaches the outer instance legally
@@ -176,6 +195,152 @@ impl Rule for UnresolvedMethod {
             if !inside {
                 cx.report(n.field("name").unwrap_or(n), format!("`{}.{name}()` is an instance method and cannot be called on the type", cls.simple_name()));
             }
+        }
+    }
+}
+
+/// `Type::name` / `expr::name` naming no method of a closed project class.
+fn check_method_reference<'t>(n: Node<'t>, cx: &mut Ctx<'_, 't>) {
+    // `Type::new` has a single named child; `::` and `new` are tokens
+    let kids = n.kids();
+    if kids.len() < 2 || cx.text(n).rsplit("::").next().is_some_and(|r| r.trim_start().starts_with("new")) {
+        return;
+    }
+    let (recv, name) = (kids[0], kids[kids.len() - 1]);
+    if name.kind() != "identifier" || matches!(recv.kind(), "super" | "this") || recv.kids().iter().any(|k| k.kind() == "super") {
+        return;
+    }
+    let cls = match cx.fm.symbol(recv) {
+        Some(Symbol::Type(t)) => closed_class(cx, &t),
+        Some(Symbol::Package(_)) => None,
+        _ => cx.type_of(recv).class_name().and_then(|t| closed_class(cx, t)),
+    };
+    let Some(cls) = cls else { return };
+    let mname = cx.text(name);
+    if cx.fm.methods_named(&cls.this_type(), mname).is_empty() {
+        let hint = similar_names(&cls, cx.fm, mname).map(|s| format!("; did you mean `{s}`?")).unwrap_or_default();
+        cx.report(name, format!("`{}` has no method `{mname}`{hint}", cls.simple_name()));
+    }
+}
+
+declare_rule!(UnresolvedStaticImport {
+    id: "unresolved-static-import",
+    name: "Static import of a member that does not exist",
+    category: Bug,
+    severity: Error,
+    tier: Edit,
+    sources: ["javac:cant.resolve.location", "intellij:UnresolvedReference"],
+    kinds: ["import_declaration"],
+    description: "`import static pkg.Type.member;` names no static field, method or nested type of the (project) class, so the code does not compile: typically left behind after the member was renamed or removed.",
+});
+
+impl Rule for UnresolvedStaticImport {
+    rule_meta!();
+    fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
+        // `static` and `*` are tokens, not named children
+        let text: String = cx.text(n).split_whitespace().collect::<Vec<_>>().join(" ");
+        if !text.starts_with("import static ") || text.contains('*') {
+            return;
+        }
+        let Some(path) = n.kids().into_iter().find(|k| matches!(k.kind(), "scoped_identifier" | "identifier")) else { return };
+        let text: String = cx.text(path).chars().filter(|c| !c.is_whitespace()).collect();
+        let segs: Vec<&str> = text.split('.').collect();
+        if segs.len() < 2 {
+            return;
+        }
+        let member = segs[segs.len() - 1];
+        // `a.b.Outer.Inner`: which segments are the package
+        let owner = (1..segs.len() - 1).rev().find_map(|k| {
+            let name = format!("{}.{}", segs[..k].join("."), segs[k..segs.len() - 1].join("$"));
+            cx.fm.class(&name).map(|_| name)
+        });
+        let Some(owner) = owner else { return };
+        let Some(cls) = closed_class(cx, &owner) else { return };
+        let mut types: Vec<String> = vec![cls.name.to_string()];
+        types.extend(cx.fm.all_supertypes(&cls.this_type()).iter().filter_map(|t| t.class_name().map(str::to_string)));
+        let exists = types.iter().any(|t| {
+            cx.fm.class(t).is_some_and(|c| c.field(member).is_some() || c.methods_named(member).next().is_some()) || cx.fm.class(&format!("{t}${member}")).is_some()
+        });
+        if !exists {
+            let target = path.field("name").unwrap_or(path);
+            cx.report(target, format!("`{}` has no static member `{member}`", cls.simple_name()));
+        }
+    }
+}
+
+declare_rule!(IncompatibleAssignment {
+    id: "incompatible-assignment",
+    name: "Call result assigned to an incompatible type",
+    category: Bug,
+    severity: Error,
+    tier: Edit,
+    sources: ["javac:prob.found.req", "intellij:IncompatibleTypes"],
+    kinds: ["variable_declarator", "assignment_expression"],
+    description: "A project method's result is assigned to a variable whose type it is not a subtype of, so the code does not compile: typically a caller left behind after the method's return type changed. Only plain class types are judged (no generics, primitives or `var`).",
+});
+
+impl Rule for IncompatibleAssignment {
+    rule_meta!();
+    fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
+        // (declared type, value)
+        let (target, value) = if n.kind() == "variable_declarator" {
+            let Some(v) = n.field("value") else { return };
+            let Some(decl) = n.parent() else { return };
+            let Some(tn) = decl.field("type") else { return };
+            if cx.text(tn) == "var" || n.field("dimensions").is_some() {
+                return;
+            }
+            (cx.fm.resolve_type_node(tn), v.unparen())
+        } else {
+            if n.field("operator").is_some_and(|o| cx.text(o) != "=") || cx.text(n).split_once('=').is_some_and(|(l, _)| l.ends_with(['+', '-', '*', '/', '%', '&', '|', '^', '<', '>'])) {
+                return;
+            }
+            let (Some(l), Some(r)) = (n.field("left"), n.field("right")) else { return };
+            // locals only: a field name may bind to an outer class's field
+            if l.kind() != "identifier" || cx.fm.local_decl(l).is_none() {
+                return;
+            }
+            (cx.type_of(l), r.unparen())
+        };
+        if value.kind() != "method_invocation" {
+            return;
+        }
+        let Ty::Class { name: want, args } = &target else { return };
+        if !args.is_empty() {
+            return;
+        }
+        let Some(c) = cx.fm.select_method(value) else { return };
+        if c.ambiguous || !cx.fm.class(&c.owner).is_some_and(|k| k.is_source()) {
+            return;
+        }
+        // overload selection is approximate (type arguments, lambdas,
+        // inaccessible overloads): judge only a method without rivals
+        let nargs = cx.fm.args_of(value).len();
+        // rivals the lookup above does not see: the other bounds of a type
+        // variable (`T extends A & B`), methods a static import brings in
+        match value.field("object") {
+            Some(o) if matches!(cx.type_of(o), Ty::TypeVar(_)) => return,
+            None if cx.fm.stub.imports.iter().any(|i| i.is_static && (i.on_demand || i.last() == &*c.method.name)) => return,
+            _ => {}
+        }
+        let rivals = match &c.receiver {
+            Some(r) => cx.fm.methods_named(r, &c.method.name).iter().filter(|m| m.method.accepts_arity(nargs)).count(),
+            None => cx.fm.class(&c.owner).map(|k| cx.fm.methods_named(&k.this_type(), &c.method.name).iter().filter(|m| m.method.accepts_arity(nargs)).count()).unwrap_or(2),
+        };
+        if rivals != 1 {
+            return;
+        }
+        let Ty::Class { name: got, args: gargs } = &c.method.ret else { return };
+        if !gargs.is_empty() || got == want {
+            return;
+        }
+        // both hierarchies fully known: an unknown supertype could connect them
+        let known = |n: &str| cx.fm.class(n).is_some() && cx.fm.hierarchy_complete(n) && !cx.fm.index.is_duplicated(n);
+        if !known(got) || !known(want) {
+            return;
+        }
+        if cx.fm.is_assignable(&c.method.ret, &target).is_no() {
+            cx.report(value, format!("`{}.{}()` returns `{}`, which cannot be assigned to `{}`", simple_name_of(&c.owner), c.method.name, simple_name_of(got), simple_name_of(want)));
         }
     }
 }

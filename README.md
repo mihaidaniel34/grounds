@@ -21,9 +21,9 @@ leaves tests for the end of the task.
 
 ## What it checks
 
-- **312 rules**, reimplementations of checks from SonarQube, SpotBugs, PMD,
+- **314 rules**, reimplementations of checks from SonarQube, SpotBugs, PMD,
   Error Prone and IntelliJ inspections. Each rule lists the equivalent IDs
-  in those tools. By category: 109 bug, 58 style, 38 bad practice,
+  in those tools. By category: 111 bug, 58 style, 38 bad practice,
   23 performance, 23 concurrency, 22 security, 20 framework, 14 testing,
   5 complexity. Full list: [docs/RULES.md](docs/RULES.md). Style and
   security rules and the null-dereference check do not run on test
