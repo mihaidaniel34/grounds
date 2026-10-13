@@ -394,6 +394,13 @@ Maven a single time, about 20–40 s. It writes `.grounds/classpath.txt` and,
 for Gradle, which test task runs each source set. Set `scan_caches = false`
 to use only that file. grounds never runs the build tool on its own.
 
+In a multi-module Maven build whose modules depend on each other and were
+never installed, Maven cannot resolve those dependencies this way. Either run
+`mvn install -DskipTests` once, or `grounds classpath --maven-lifecycle`: it
+runs the lifecycle up to test-compile without compiling, so the reactor
+resolves sibling modules and nothing is installed, but plugins bound to early
+phases (code generators, resource copies) run too.
+
 With the guessed classpath, jar versions may not match the project's, so the
 compile-break rules skip classes that extend library classes (a method
 missing from the cached version may exist in the one the project uses).
