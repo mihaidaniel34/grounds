@@ -328,6 +328,8 @@ def grounds_check(cases_dir):
         fh.write("[classpath]\nscan_caches = false\nbuild_outputs = false\n")
     known = subprocess.run([exe, "rules", "--json"], capture_output=True, text=True, check=True).stdout
     rules = [r for r in COMPILE_RULES if f'"{r}"' in known]
+    if "unresolved-method" not in rules:
+        sys.exit(f"grounds check: the compile-break rules are missing ({rules})")
     p = subprocess.run([exe, "check", "--root", cases_dir, "--rules", ",".join(rules), "--format", "json"],
                        capture_output=True, text=True)
     if p.returncode not in (0, 1, 2) or not p.stdout.strip():
@@ -410,7 +412,8 @@ def main():
         with open(a.baseline) as fh:
             base = json.load(fh)
     key = f"{a.seed}:{a.cases}"
-    known = set(base.get(key, {}).get("wrong", [])) | set(base.get(key, {}).get("false_errors", []))
+    # a case is known per verdict: wrong in the baseline does not cover a new false error
+    known = {("wrong", c) for c in base.get(key, {}).get("wrong", [])} | {("false-error", c) for c in base.get(key, {}).get("false_errors", [])}
     wrong = sorted(b["case"] for b in bad if b["verdict"] == "wrong")
     false_errors = sorted(b["case"] for b in bad if b["verdict"] == "false-error")
     if a.update_baseline:
@@ -420,14 +423,18 @@ def main():
             fh.write("\n")
         print(f"baseline {key}: {len(wrong)} wrong recorded")
         return 0
-    new = [w for w in wrong + false_errors if w not in known]
-    fixed = [w for w in known if w not in wrong and w not in false_errors]
+    now = {("wrong", c) for c in wrong} | {("false-error", c) for c in false_errors}
+    new_keys = now - known
+    new = sorted({c for _, c in new_keys})
+    fixed = sorted(f"{c} ({v})" for v, c in known - now)
     if fixed:
         print(f"fixed since the baseline: {len(fixed)} (run with --update-baseline)")
     for b in bad:
-        if b["case"] in new and b["verdict"] == "wrong":
+        if (b["verdict"], b["case"]) not in new_keys:
+            continue
+        if b["verdict"] == "wrong":
             print(f"WRONG {b['case']}: grounds {b['grounds'][0]}, javac {b['javac'].get('type')}  ({out}/cases/{b['case']}.java)")
-        elif b["case"] in new and b["verdict"] == "false-error":
+        elif b["verdict"] == "false-error":
             print(f"FALSE ERROR {b['case']} (javac accepts it): {'; '.join(b['grounds'])}  ({out}/cases/{b['case']}.java)")
     return 1 if new else 0
 

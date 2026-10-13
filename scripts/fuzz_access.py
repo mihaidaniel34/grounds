@@ -186,6 +186,7 @@ def plausible(recv, ctx, m, owner, w):
 def make_site(rng, w, ctx, k, statics):
     owned = [(o, m) for o in ("I", "A", "B") for m in w[o] if m.name in NAMES]
     if ctx == "C" and statics and rng.random() < 0.5:
+        # through the static import: a call or a field, never a method reference
         recv, name = "", rng.choice(statics)
         same = [m for _, m in owned if m.name == name]
         m = rng.choice(same) if same else None
@@ -204,7 +205,7 @@ def make_site(rng, w, ctx, k, statics):
         qual = f"{recv}.{name}" if recv else name
         return f"{target} v{k} = {qual};"
     ps = m.params if m is not None and m.kind == "method" and rng.random() < 0.92 else params(rng)
-    if rng.random() < 0.2:
+    if rng.random() < 0.2 and not (ctx == "C" and recv == ""):
         # a method reference with a functional interface of the right shape, mostly
         if recv in ("", "I.super"):
             recv = "this" if recv == "" else recv
@@ -393,7 +394,11 @@ def main():
         paths.append(path)
     jv = javac_errors(paths, out)
     findings = grounds_check(cases_dir)
-    counts = {"accepted": 0, "rejected": 0, "javac-crash": 0, "false-error": 0, "caught": 0}
+    # suspect: in a file javac rejects, a finding on a line javac has no error
+    # on; javac leaves out errors that follow from another one, so this is
+    # only a lead, not a failure
+    counts = {"accepted": 0, "rejected": 0, "javac-crash": 0, "false-error": 0, "caught": 0, "suspect": 0}
+    suspects = []
     bad = []
     for path in paths:
         f = os.path.basename(path)
@@ -409,6 +414,10 @@ def main():
             counts["rejected"] += 1
             if any(ln in lines for ln, _, _ in fs):
                 counts["caught"] += 1
+            off = [f"{ln}: {r}: {m}" for ln, r, m in fs if ln not in lines]
+            if off:
+                counts["suspect"] += 1
+                suspects.append({"case": f[:-5], "findings": off, "javac_lines": lines})
     key = f"{a.seed}:{a.cases}"
     try:
         with open(a.baseline) as fh:
@@ -418,9 +427,9 @@ def main():
     known = set(base.get(key, []))
     now = sorted(b["case"] for b in bad)
     new = [c for c in now if c not in known]
-    fixed = [c for c in known if c not in now]
+    fixed = sorted(c for c in known if c not in now)
     with open(os.path.join(out, "report.json"), "w") as fh:
-        json.dump({"seed": a.seed, "counts": counts, "false_errors": bad}, fh, indent=1)
+        json.dump({"seed": a.seed, "counts": counts, "false_errors": bad, "suspects": suspects}, fh, indent=1)
     if a.update_baseline:
         base[key] = now
         with open(a.baseline, "w") as fh:
