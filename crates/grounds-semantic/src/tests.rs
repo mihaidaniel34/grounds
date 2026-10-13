@@ -907,3 +907,25 @@ fn unsettled_inner_calls_do_not_adapt_through_a_wrapper() {
     // javac: List<Base> (the B through the lambda is one more lower bound)
     assert_eq!(t, vec!["java.util.List<?unknown>"]);
 }
+
+#[test]
+fn unsettled_poly_arguments_still_adapt_their_settled_parts() {
+    let t = types_of(
+        "import java.util.*;
+         class P { static String pick(Map.Entry<Object, Integer> p) { return null; } static Integer pick(Object p) { return null; } }
+         class T { void m() { Object a = /*T*/ P.pick(Map.entry(\"s\", Objects.requireNonNullElseGet(1, () -> 2))); } }",
+    );
+    // javac: String (the key adapts to Object); the Object overload is no proof
+    assert_eq!(t, vec!["?unknown"]);
+}
+
+#[test]
+fn explicit_lambda_types_under_a_wildcard_are_bounds() {
+    let t = types_of(
+        "import java.util.*; import java.util.function.*;
+         class P { static <T> List<T> make(Consumer<? super T> c) { return null; } }
+         class T { void m() { List<Integer> a = /*T*/ P.make((Number x) -> {}); } }",
+    );
+    // javac: List<Integer> (T <: Number, the target picks Integer)
+    assert_eq!(t, vec!["java.util.List<?unknown>"]);
+}

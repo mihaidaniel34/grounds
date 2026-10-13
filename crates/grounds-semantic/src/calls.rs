@@ -92,6 +92,23 @@ enum Fit {
     No,
 }
 
+/// An argument javac types with its parameter as target.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Poly {
+    No,
+    /// its type arguments follow the parameter
+    Yes,
+    /// so do its type arguments, but where its own inference left its
+    /// result open it lacks a bound
+    Unsettled,
+}
+
+impl Poly {
+    fn any(self) -> bool {
+        self != Poly::No
+    }
+}
+
 /// How sure an overload choice is.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Choice {
@@ -270,14 +287,20 @@ impl<'t> FileModel<'t> {
 
     /// Whether the argument is a poly argument as the enclosing inference
     /// sees it: one only typed by a lambda counts as an unknown type.
-    fn poly_arg(&self, a: Node<'t>) -> bool {
-        self.is_poly(a) && (!self.poly_untyped(a) || self.poly_adapts(a)) && !self.poly_unsettled(a)
+    fn poly_arg(&self, a: Node<'t>) -> Poly {
+        if !self.is_poly(a) || self.poly_untyped(a) && !self.poly_adapts(a) {
+            Poly::No
+        } else if self.poly_unsettled(a) {
+            Poly::Unsettled
+        } else {
+            Poly::Yes
+        }
     }
 
     /// A generic call whose own inference left a variable of its result
     /// open for a reason (`singletonList(requireNonNullElseGet(b, () -> c))`):
-    /// what it lacks is a bound, not a free choice, so it is no argument that
-    /// adapts to its parameter.
+    /// what it lacks there is a bound, not a free choice. Its other type
+    /// arguments still adapt to the parameter.
     fn poly_unsettled(&self, a: Node<'t>) -> bool {
         let a = a.unparen();
         if a.kind() != "method_invocation" {
@@ -583,7 +606,7 @@ impl<'t> FileModel<'t> {
     /// Phase in which `m` fits the args (1 strict, 2 loose, 3 varargs),
     /// with the inference over the arguments' full types. `None` when `m`
     /// surely does not fit; the inference says whether it surely does.
-    fn candidate_fit(&self, m: &MethodInfo, args: &[ArgShape], poly: &[bool]) -> Option<(u8, Inference)> {
+    fn candidate_fit(&self, m: &MethodInfo, args: &[ArgShape], poly: &[Poly]) -> Option<(u8, Inference)> {
         let n = args.len();
         let np = m.params.len();
         let in_phase = |params: Vec<Ty>| -> Option<(bool, Inference)> {
@@ -596,7 +619,7 @@ impl<'t> FileModel<'t> {
                 while let Ty::Array(e) = elem {
                     elem = e;
                 }
-                if f == Fit::No && *poly && !elem.args().is_empty() {
+                if f == Fit::No && poly.any() && !elem.args().is_empty() {
                     if let ArgShape::Ty(t) = a {
                         if self.fit(&erase_in(m, p), &ArgShape::Ty(t.erasure())) != Fit::No {
                             f = Fit::Maybe;
@@ -872,7 +895,7 @@ impl<'t> FileModel<'t> {
     /// of the lower bounds, else the glb of the upper ones, here only when
     /// one of them is that), and check the arguments against the parameters
     /// so instantiated.
-    fn infer_args(&self, m: &MethodInfo, params: &[Ty], args: &[Option<Ty>], poly: &[bool]) -> Inference {
+    fn infer_args(&self, m: &MethodInfo, params: &[Ty], args: &[Option<Ty>], poly: &[Poly]) -> Inference {
         let mut inf = self.infer_args_exact(m, params, args, poly);
         // a poly argument (`List.of(x)`, `new ArrayList<>()`) takes its type
         // arguments from the parameter in javac: what it says about the
@@ -894,7 +917,7 @@ impl<'t> FileModel<'t> {
         inf
     }
 
-    fn infer_args_exact(&self, m: &MethodInfo, params: &[Ty], args: &[Option<Ty>], poly: &[bool]) -> Inference {
+    fn infer_args_exact(&self, m: &MethodInfo, params: &[Ty], args: &[Option<Ty>], poly: &[Poly]) -> Inference {
         let vars: Vec<Name> = m.type_params.iter().map(|t| t.name.clone()).collect();
         let mut inf = Inference::default();
         let mut cs: Vec<(Name, Rel, Ty)> = Vec::new();
@@ -907,10 +930,11 @@ impl<'t> FileModel<'t> {
                 // (`Collections.emptyList()` for `Collection<? extends K>`
                 // bounds nothing); for a bare `T` its class is one more bound
                 // and one without any type (`any()`) adapts to a bare `T` as well
-                if poly.get(i).copied().unwrap_or(false) && (!matches!(p, Ty::TypeVar(_)) || a.is_unknown()) {
+                // (an unsettled one lacks a bound where its type is unknown)
+                if poly.get(i) == Some(&Poly::Yes) && (!matches!(p, Ty::TypeVar(_)) || a.is_unknown()) {
                     inf.unknown_vars.truncate(unknown_before);
                 }
-                if poly.get(i).copied().unwrap_or(false) && (cs.len(), inf.captures.len()) != before {
+                if poly.get(i).is_some_and(|p| p.any()) && (cs.len(), inf.captures.len()) != before {
                     inf.soft = true;
                     for c in &cs[before.0..] {
                         inf.soft_vars.push(c.0.clone());
@@ -1201,7 +1225,7 @@ impl<'t> FileModel<'t> {
         for (i, (p, a)) in params.iter().zip(args).enumerate() {
             let Some(a) = a else { continue };
             let q = apply_subst(&with_captures(p, &inf.captures), &subst);
-            let poly = poly.get(i).copied().unwrap_or(false);
+            let poly = poly.get(i).is_some_and(|p| p.any());
             // variables left open (checked before substituting: a binding may be
             // the caller's own variable of the same name)
             let open = vars.iter().any(|v| mentions(p, v) && !subst.iter().any(|(k, _)| k == v) && !inf.captures.iter().any(|c| c.var == *v));
@@ -1579,7 +1603,7 @@ impl<'t> FileModel<'t> {
             first.is_none() || cands.iter().any(|m| ret_key(&m.method) != first)
         };
         let same_rets = cands.iter().all(|m| m.method.ret == cands[0].method.ret && !m.method.type_params.iter().any(|tp| mentions(&m.method.ret, &tp.name)));
-        let poly: Vec<bool> = arg_nodes.iter().map(|a| self.poly_arg(*a)).collect();
+        let poly: Vec<Poly> = arg_nodes.iter().map(|a| self.poly_arg(*a)).collect();
         let args: Vec<ArgShape> = arg_nodes.into_iter().map(|a| self.arg_shape(a)).collect();
         let args = &args[..];
         let fits: Vec<(MethodRef, (u8, Inference))> = cands.into_iter().filter_map(|m| self.candidate_fit(&m.method, args, &poly).map(|f| (m, f))).collect();
@@ -1822,7 +1846,10 @@ impl<'t> FileModel<'t> {
                             .then(|| a.field("parameters").filter(|p| p.kind() == "formal_parameters"))
                             .flatten()
                             .map(|ps| ps.kids().into_iter().filter(|k| k.kind() == "formal_parameter").map(|k| k.field("type").map(|t| self.resolve_type_node(t)).unwrap_or(Ty::Unknown)).collect());
-                        if let Some(declared) = declared.filter(|d| !d.is_empty() && d.len() == sam.method.params.len() && d.iter().all(|t| t.is_known() && !t.has_unknown())) {
+                        // equal only where the functional type holds the variable
+                        // invariantly: `Consumer<? super T>` with `(Number x)` is T <: Number
+                        let invariant = !wild_on(&pt, &inputs);
+                        if let Some(declared) = declared.filter(|d| invariant && !d.is_empty() && d.len() == sam.method.params.len() && d.iter().all(|t| t.is_known() && !t.has_unknown())) {
                             for (sp, d) in sam.method.params.iter().zip(&declared) {
                                 unify(self, &sp.ty, d, &inputs, &mut bindings);
                             }
@@ -2115,7 +2142,7 @@ impl<'t> FileModel<'t> {
             let args = self.args_of(call);
             let mut params = Vec::new();
             let mut tys = Vec::new();
-            let poly: Vec<bool> = args.iter().map(|a| self.poly_arg(*a)).collect();
+            let poly: Vec<Poly> = args.iter().map(|a| self.poly_arg(*a)).collect();
             for (i, a) in args.iter().enumerate() {
                 let a = a.unparen();
                 let lambda = matches!(a.kind(), "lambda_expression" | "method_reference");
@@ -2318,6 +2345,19 @@ pub fn param_type_for_arg(m: &MethodInfo, i: usize, nargs: usize) -> Option<Ty> 
         });
     }
     m.params.get(i).map(|p| p.ty.clone())
+}
+
+/// A wildcard in `t` whose bound mentions one of `vars`.
+fn wild_on(t: &Ty, vars: &[Name]) -> bool {
+    match t {
+        Ty::Wildcard(Some(b)) => {
+            let (WildcardBound::Extends(x) | WildcardBound::Super(x)) = &**b;
+            vars.iter().any(|v| mentions(x, v))
+        }
+        Ty::Class { args, .. } => args.iter().any(|a| wild_on(a, vars)),
+        Ty::Array(e) => wild_on(e, vars),
+        _ => false,
+    }
 }
 
 /// `t` with captured variables replaced the way the argument holds them:
