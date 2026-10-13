@@ -7,6 +7,7 @@ pub mod index;
 pub mod jdk_modules;
 pub mod lombok;
 pub mod model;
+pub mod sources;
 pub mod stubs;
 
 pub use hierarchy::{ClassLookup, FieldRef, MethodRef, Tri};

@@ -9,3 +9,6 @@ interface Mailer {}
     Uses(MailProperties props,
          Mailer mailer) {} // expect
 }
+
+// the project is an application: its context is complete
+@org.springframework.boot.autoconfigure.SpringBootApplication class FixtureApp {}

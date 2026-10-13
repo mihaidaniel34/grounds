@@ -8,3 +8,6 @@ import org.springframework.context.annotation.*;
     @Bean Object clock() { return null; }
     @Bean(name = "mailer") Object other() { return null; } // expect
 }
+
+// the project is an application: its context is complete
+@org.springframework.boot.autoconfigure.SpringBootApplication class FixtureApp {}

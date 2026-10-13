@@ -14,3 +14,6 @@ interface Store {}
     @Qualifier("absent")
     Store requiredStore; // expect
 }
+
+// the project is an application: its context is complete
+@org.springframework.boot.autoconfigure.SpringBootApplication class FixtureApp {}
