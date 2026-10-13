@@ -179,14 +179,21 @@ impl SarifDoc {
                 "defaultConfiguration": { "level": level(m.severity) },
                 "properties": { "category": m.category.as_str(), "sources": m.sources },
             }),
-            None => json!({
-                "id": id,
-                "name": "Change breaks other files",
-                "shortDescription": { "text": "Change breaks other files" },
-                "fullDescription": { "text": "A change on this line broke code in files the change did not touch: calls to members that no longer exist, overrides of changed supertypes, or injection points whose bean is gone. The broken places are related locations, and each is also reported on its own." },
-                "helpUri": format!("{HOME}#ci"),
-                "defaultConfiguration": { "level": level(severity) },
-            }),
+            // findings only CI mode (`changed --base`) produces
+            None => {
+                let (name, text) = match id {
+                    "removed-class-still-used" => ("Removed class still used", "A class this change deleted or renamed is still imported or used in a file the change did not touch, so that file no longer compiles."),
+                    _ => ("Change breaks other files", "A change on this line broke code in files the change did not touch: calls to members that no longer exist, overrides of changed supertypes, or injection points whose bean is gone. The broken places are related locations, and each is also reported on its own."),
+                };
+                json!({
+                    "id": id,
+                    "name": name,
+                    "shortDescription": { "text": name },
+                    "fullDescription": { "text": text },
+                    "helpUri": format!("{HOME}#ci"),
+                    "defaultConfiguration": { "level": level(severity) },
+                })
+            }
         };
         self.rules.push(rule);
         self.rule_index.insert(id, self.rules.len() - 1);

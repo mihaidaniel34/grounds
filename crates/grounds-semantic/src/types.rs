@@ -398,17 +398,27 @@ impl<'t> FileModel<'t> {
                     }
                 }
                 let name = n.text(self.src);
-                // fields of enclosing classes
+                // fields of enclosing classes; a superclass's private field is
+                // not inherited (and hides the ones above it), so the name
+                // belongs to an outer class if one has it
                 let mut cur = self.enclosing_class_node(n);
+                let mut not_inherited = None;
                 while let Some(c) = cur {
                     if let Some(cn) = self.class_names.get(&c.id()) {
                         if let Some(ci) = self.class(cn) {
                             if let Some(f) = self.field(&ci.this_type(), name) {
-                                return Some(Symbol::Field(f));
+                                if f.field.flags.is_private() && f.owner != *cn {
+                                    not_inherited.get_or_insert(f);
+                                } else {
+                                    return Some(Symbol::Field(f));
+                                }
                             }
                         }
                     }
                     cur = self.enclosing_class_node(c);
+                }
+                if let Some(f) = not_inherited {
+                    return Some(Symbol::Field(f));
                 }
                 // static imports
                 for imp in self.stub.imports.iter().filter(|i| i.is_static) {

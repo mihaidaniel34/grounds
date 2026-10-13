@@ -9,3 +9,6 @@ interface Mailer {}
 @Service class Optional1 {
     Optional1(java.util.Optional<Mailer> m, java.util.List<Mailer> all) {}
 }
+
+// the project is an application: its context is complete
+@org.springframework.boot.autoconfigure.SpringBootApplication class FixtureApp {}

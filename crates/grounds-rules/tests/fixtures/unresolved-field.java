@@ -11,3 +11,12 @@ class Use {
         Object n = new Config.Nested();
     }
 }
+// qualified super reaches a private field of the same top-level class
+class QTest {
+    private int x;
+    class Sub extends QTest {
+        class Inner {
+            int f() { return Sub.super.x; }
+        }
+    }
+}

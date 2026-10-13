@@ -8,6 +8,7 @@ import java.lang.annotation.*;
 // the scanned packages; composed stereotypes name properties classes
 @Configuration @ComponentScan("app") @Import(Plain.class)
 class App {
+    public static void main(String[] args) {}
     @Bean Object imported(@Qualifier("app.Plain") Plain p) { return new Object(); }
     @Bean Object composed(@Qualifier("props") Props p) { return new Object(); }
     @Bean Object wrong(@Qualifier("plain") Plain p) { return new Object(); } // expect
