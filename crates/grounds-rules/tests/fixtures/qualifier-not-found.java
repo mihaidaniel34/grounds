@@ -9,3 +9,6 @@ interface Store {}
 @Service class Ok {
     Ok(@Qualifier("primaryStore") Store s) {}
 }
+
+// the project is an application: its context is complete
+@org.springframework.boot.autoconfigure.SpringBootApplication class FixtureApp {}

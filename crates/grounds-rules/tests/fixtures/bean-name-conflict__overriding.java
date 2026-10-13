@@ -8,3 +8,6 @@ import org.springframework.context.annotation.*;
 @Configuration class Cfg {
     @Bean(name = "mailer") Object other() { return null; }
 }
+
+// the project is an application: its context is complete
+@org.springframework.boot.autoconfigure.SpringBootApplication class FixtureApp {}
