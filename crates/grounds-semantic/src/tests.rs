@@ -1055,3 +1055,21 @@ fn unknown_variables_keep_the_concrete_parts_of_their_parameter() {
     assert_eq!(t, vec!["java.util.List"]);
 }
 
+#[test]
+fn unknown_arguments_may_be_raw() {
+    // Astra round 10: the argument javac types as raw List needs unchecked
+    // conversion for List<T>, which erases the result (javac: raw List); and
+    // a raw floor does not equal the List<?> target (javac: raw List)
+    let t = types_of(
+        "import java.util.*;
+         class P {
+           static <T> List<String> pick(List<T> xs, int n) { return null; }
+           static List<Integer> pick(String xs, String n) { return null; }
+         }
+         class T { void m(List raw) {
+           Object a = /*T*/ P.pick(Objects.requireNonNullElseGet(raw, () -> raw), 1);
+           List<?> b = /*T*/ Objects.requireNonNullElse(Objects.requireNonNullElseGet(raw, () -> raw), raw);
+         } }",
+    );
+    assert_eq!(t, vec!["java.util.List<?unknown>", "?unknown"]);
+}

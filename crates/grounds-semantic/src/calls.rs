@@ -1982,7 +1982,8 @@ impl<'t> FileModel<'t> {
                 // that type (`new String(requireNonNullElse(x, new byte[0]))`)
                 if let Ty::TypeVar(r) = &rc.method.ret {
                     if exp.is_known() && !exp.is_prim() && poisoned.contains(r) && inf.unknown_vars.contains(r) && !bindings.iter().any(|(k, _)| k == r) {
-                        if self.poly_floor(call).iter().any(|l| self.conv(l, &exp) == Conv::Yes && self.conv(&exp, l) == Conv::Yes) {
+                        // equal, not just convertible both ways (raw `List` and `List<?>`)
+                        if self.poly_floor(call).iter().any(|l| *l == exp) {
                             poisoned.retain(|v| v != r);
                             bindings.push((r.clone(), exp.clone()));
                         }
@@ -2096,6 +2097,10 @@ impl<'t> FileModel<'t> {
                     }
                 }
                 rc.ret = erased(&rc.ret, &|v| self.type_var_bound(v, call));
+            }
+            // only the erasure is sure where an argument may need unchecked conversion
+            if !inf.unchecked && !rc.erasure_only && matches!(&rc.ret, Ty::Class { args, .. } if args.iter().any(|x| !x.is_unknown())) && self.maybe_unchecked(call, &sel.method) {
+                rc.erasure_only = true;
             }
             if rc.erasure_only {
                 fn erasure_only(t: &Ty) -> Ty {
@@ -2281,6 +2286,47 @@ impl<'t> FileModel<'t> {
             }
             self.infer_args(m, &params, &tys, &poly)
         })
+    }
+
+    /// Whether an argument of unknown type may be raw for a parameterized
+    /// parameter of `m`'s variables: unchecked conversion would erase the
+    /// result.
+    fn maybe_unchecked(&self, call: Node<'t>, m: &MethodInfo) -> bool {
+        let args = self.args_of(call);
+        args.iter().enumerate().any(|(i, a)| {
+            let generic = param_type_for_arg(m, i, args.len()).is_some_and(|p| matches!(&p, Ty::Class { args, .. } if !args.is_empty()) && m.type_params.iter().any(|tp| mentions(&p, &tp.name)));
+            generic && !matches!(a.unparen().kind(), "lambda_expression" | "method_reference") && {
+                let t = if self.poly_untyped(*a) { Ty::Unknown } else { self.arg_type(*a, Target::Param) };
+                self.maybe_raw(*a, &t)
+            }
+        })
+    }
+
+    /// Whether an argument typed `t` may really be raw: its type, or every
+    /// type argument of it, is unknown, and it is not a call typed by its
+    /// target alone (`any()`, `emptyList()` take the parameter's type) unless
+    /// an argument of its own is unknown too (`requireNonNull(x)`), nor one
+    /// whose declared parameterized result needs no unchecked conversion.
+    fn maybe_raw(&self, a: Node<'t>, t: &Ty) -> bool {
+        let blind = t.is_unknown() || matches!(t, Ty::Class { args, .. } if !args.is_empty() && args.iter().all(|x| x.is_unknown()));
+        if !blind {
+            return false;
+        }
+        let a = a.unparen();
+        // a call declared to return a parameterized type is raw only by
+        // unchecked conversion of its own arguments
+        if a.kind() == "method_invocation" {
+            if let Some(c) = self.select_method(a) {
+                if matches!(&c.method.ret, Ty::Class { args, .. } if !args.is_empty()) {
+                    return self.maybe_unchecked(a, &c.method);
+                }
+            }
+        }
+        match self.poly_arg(a) {
+            Poly::Yes if self.poly_untyped(a) => self.args_of(a).iter().any(|x| !matches!(x.unparen().kind(), "lambda_expression" | "method_reference") && self.arg_type(*x, Target::None).has_unknown()),
+            Poly::Yes => false,
+            _ => true,
+        }
     }
 
     /// Parameter type of the selected method at argument index (target type
