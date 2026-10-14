@@ -1194,7 +1194,25 @@ impl DiModel {
             return Vec::new();
         }
         // static @Bean methods have no factory bean
-        let instance = |m: &Name| lk.class(&p.owner).is_some_and(|c| c.methods_named(m).any(|x| !x.flags.is_static() && x.annotations.iter().any(|a| a.simple_name() == "Bean")));
+        // the @Bean method of that name, declared here or inherited (a
+        // helper overload does not count); without one in sight, any method
+        let instance = |m: &Name| {
+            let mut beans = Vec::new();
+            let mut cur = lk.class(&p.owner);
+            for _ in 0..16 {
+                let Some(c) = cur else { break };
+                beans.extend(c.methods_named(m).filter(|x| x.annotations.iter().any(|a| a.simple_name() == "Bean")).map(|x| x.flags.is_static()));
+                if !beans.is_empty() {
+                    break;
+                }
+                cur = c.superclass.as_ref().and_then(|s| s.class_name()).and_then(|s| lk.class(s));
+            }
+            if beans.is_empty() {
+                lk.class(&p.owner).is_some_and(|c| c.methods_named(m).any(|x| !x.flags.is_static()))
+            } else {
+                beans.iter().any(|st| !st)
+            }
+        };
         (0..self.beans.len())
             .filter(|&i| {
                 let b = &self.beans[i];
@@ -1538,6 +1556,10 @@ mod tests {
              @Configuration class Cfg { @org.springframework.beans.factory.annotation.Autowired K fromCfg; @Bean K made() { return null; } @Bean K wrap(K inner) { return null; } }
              interface J {}
              @Configuration class StaticCfg { @org.springframework.beans.factory.annotation.Autowired J own; @Bean static J st() { return null; } J st(int helper) { return null; } @Bean J inst() { return null; } }
+             interface H {}
+             @Service class OtherH implements H {}
+             class BaseCfg { @Bean H inherited() { return null; } }
+             @Configuration class SubCfg extends BaseCfg { @org.springframework.beans.factory.annotation.Autowired H viaSuper; H inherited(int helper) { return null; } }
              @ComponentScan class Main { public static void main(String[] args) {} }",
         )]);
         let bean = |n: &str| m.beans.iter().position(|b| b.name == n).unwrap();
@@ -1553,6 +1575,8 @@ mod tests {
         assert_eq!(resolution_of(&idx, &m, "app/A.java", "fromCfg"), Resolution::Unique(bean("plain")));
         assert_eq!(res("inner"), sorted(Resolution::Ambiguous(vec![bean("plain"), bean("made")])));
         assert_eq!(resolution_of(&idx, &m, "app/A.java", "own"), Resolution::Unique(bean("st")));
+        // an inherited instance @Bean is the config's own, beside a helper overload
+        assert_eq!(resolution_of(&idx, &m, "app/A.java", "viaSuper"), Resolution::Unique(bean("otherH")));
         // the issue's case: a decorator wrapping the only other implementation
         let (idx, m) = model(&[(
             "app/A.java",

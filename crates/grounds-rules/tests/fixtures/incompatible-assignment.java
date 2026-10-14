@@ -55,3 +55,10 @@ interface IGet { default Integer get() { return 1; } }
 class PB { private String get() { return ""; } }
 class PC extends PB implements IGet {}
 class PMain { Integer f(PC c) { Integer v = c.get(); return v; } }
+// nestmates share private access, but a private method is still not inherited
+class NMain {
+    interface I { default Integer get() { return 1; } }
+    static class Base { private String get() { return ""; } }
+    static class Child extends Base implements I {}
+    Integer f(Child c) { Integer value = c.get(); return value; }
+}

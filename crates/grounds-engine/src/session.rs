@@ -7,7 +7,7 @@ use crate::analyze::{analyze_text, build_ruleset, Finding};
 use crate::git;
 use crate::project::{path_key, Project};
 use crate::workspace::{classify, SourceKind};
-use grounds_index::{simple_name_of, FileStub, Name};
+use grounds_index::{simple_name_of, ClassLookup, FileStub, Name};
 use grounds_rules::framework::RuleOptions;
 use grounds_rules::{RuleSet, Severity, Tier};
 use grounds_syntax::{NodeExt, ParsedFile};
@@ -405,7 +405,20 @@ impl Session {
             Simple,
             Qualified(String),
         }
-        let mut hits: Vec<(Name, Use)> = Vec::new();
+        // an import other than of `pkg` that may supply `name`: one naming it,
+        // or an on-demand one (nested types under a static one) we cannot see
+        // all of; only the JDK defines `java.*`, so those are complete
+        let idx = &self.project.index;
+        let may_supply = |name: &str, pkg: &str| {
+            stub.imports.iter().any(|i| {
+                if !i.on_demand {
+                    return i.last() == name && (i.is_static || *i.path != *format!("{pkg}.{name}"));
+                }
+                *i.path != *pkg && (!i.path.starts_with("java.") || idx.class_exists(&format!("{}.{name}", i.path)) || idx.class_exists(&format!("{}${name}", i.path)))
+            })
+        };
+        // ordered: the first of them found in the file is reported
+        let mut hits: Vec<(Name, Vec<Use>)> = Vec::new();
         for c in removed {
             let simple = simple_name_of(c);
             if stub.referenced_names.binary_search_by(|n| (**n).cmp(simple)).is_err() {
@@ -415,23 +428,22 @@ impl Session {
             let pkg = dotted.rsplit_once('.').map(|(p, _)| p).unwrap_or("");
             let top_pkg = c.split('$').next().unwrap_or(c).rsplit_once('.').map(|(p, _)| p).unwrap_or("");
             let exact = stub.imports.iter().any(|i| !i.is_static && !i.on_demand && *i.path == *dotted);
-            // another class of the same simple name imported explicitly wins
-            let shadowed = stub.imports.iter().any(|i| !i.is_static && !i.on_demand && i.last() == simple && *i.path != *dotted);
             let reachable = !c.contains('$') && (&*stub.package == top_pkg || stub.imports.iter().any(|i| i.on_demand && !i.is_static && *i.path == *pkg));
-            // another on-demand import may supply the name now: a class of that
-            // name there, or a package or type whose classes we cannot see
-            let taken_over = stub.imports.iter().any(|i| {
-                i.on_demand && !i.is_static && *i.path != *pkg && {
-                    let idx = &self.project.index;
-                    idx.class_exists(&format!("{}.{simple}", i.path)) || !idx.package_exists(&i.path)
-                }
-            });
+            let mut uses = Vec::new();
             if exact {
-                hits.push((c.clone(), Use::Import(dotted.clone())));
-            } else if reachable && !shadowed && !taken_over {
-                hits.push((c.clone(), Use::Simple));
-            } else {
-                hits.push((c.clone(), Use::Qualified(dotted.clone())));
+                uses.push(Use::Import(dotted.clone()));
+            }
+            // another import, or a class of that name it brings, wins now
+            if reachable && !may_supply(simple, pkg) {
+                uses.push(Use::Simple);
+            }
+            // `p.Gone`: `p` must not be able to name anything but the package
+            let first = dotted.split('.').next().unwrap_or("");
+            if !may_supply(first, &stub.package) {
+                uses.push(Use::Qualified(dotted.clone()));
+            }
+            if !uses.is_empty() {
+                hits.push((c.clone(), uses));
             }
         }
         if hits.is_empty() {
@@ -442,13 +454,25 @@ impl Session {
         let fm = grounds_semantic::FileModel::new(&pf, &self.project.index, path_key(file));
         let rel = file.strip_prefix(self.root()).unwrap_or(file).to_string_lossy().to_string();
         let mut out = Vec::new();
-        for (c, how) in hits {
+        // a variable named like the qualifier may come from a supertype we
+        // cannot see
+        fn enclosing_complete<'t>(fm: &grounds_semantic::FileModel<'t>, n: grounds_syntax::Node<'t>) -> bool {
+            let mut cur = fm.enclosing_class_node(n);
+            while let Some(c) = cur {
+                if !fm.class_name_of_decl(c).is_some_and(|cn| fm.hierarchy_complete(cn)) {
+                    return false;
+                }
+                cur = fm.enclosing_class_node(c);
+            }
+            true
+        }
+        for (c, uses) in hits {
             let simple = simple_name_of(&c);
             // the import line (importing a class that exists nowhere does not
             // compile), or else the first use of the bare name that resolves to
             // nothing now: a nested class, a field or variable of that name, a
             // qualified `q.Gone` or java.lang taking over is not the removed class
-            let node = pf.root().descendants().find(|n| match &how {
+            let node = uses.iter().find_map(|how| pf.root().descendants().find(|n| match how {
                 Use::Import(path) => n.kind() == "import_declaration" && pf.text[n.byte_range()].contains(path.as_str()),
                 // `p.Gone` as a type, or as the receiver of a call or field,
                 // that resolves to nothing now and does not start with a variable
@@ -461,14 +485,14 @@ impl Session {
                         return false;
                     }
                     if n.kind() == "scoped_type_identifier" {
-                        return fm.resolve_type_node(*n).is_unknown();
+                        return fm.resolve_type_node(*n).is_unknown() && enclosing_complete(&fm, *n);
                     }
                     let receiver = n.parent().is_some_and(|p| matches!(p.kind(), "method_invocation" | "field_access") && p.field("object") == Some(*n));
                     let mut first = *n;
                     while let Some(k) = first.kids().first().copied() {
                         first = k;
                     }
-                    receiver && first.kind() == "identifier" && !matches!(fm.symbol(first), Some(grounds_semantic::Symbol::Local(..) | grounds_semantic::Symbol::Field(..))) && fm.type_of(*n).is_unknown()
+                    receiver && first.kind() == "identifier" && fm.symbol(first).is_none() && fm.type_of(*n).is_unknown() && enclosing_complete(&fm, *n)
                 }
                 Use::Simple => {
                     if &pf.text[n.byte_range()] != simple || n.ancestors().any(|a| matches!(a.kind(), "import_declaration" | "package_declaration")) {
@@ -485,7 +509,7 @@ impl Session {
                         _ => false,
                     }
                 }
-            });
+            }));
             let Some(node) = node else { continue };
             let (s, e) = (pf.lines.line_col(&pf.text, node.start_byte() as u32), pf.lines.line_col(&pf.text, node.end_byte() as u32));
             let dotted = c.replace('$', ".");

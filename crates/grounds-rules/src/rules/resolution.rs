@@ -214,6 +214,10 @@ fn private_elsewhere<'t>(cx: &Ctx<'_, 't>, n: Node<'t>, cls: &ClassInfo, name: &
     if cands.is_empty() || !cands.iter().all(|m| m.method.flags.is_private() && top(&m.owner) != here) {
         return None;
     }
+    // a class defined in several modules: the index holds one of them
+    if cx.fm.index.is_duplicated(&cls.name) || cands.iter().any(|m| cx.fm.index.is_duplicated(&m.owner)) {
+        return None;
+    }
     let visible_elsewhere = cx.fm.all_supertypes(&cls.this_type()).iter().filter_map(|t| t.class_name().and_then(|n| cx.fm.class(n))).any(|c| c.methods_named(name).any(|m| fits(m) && !m.flags.is_private()));
     (!visible_elsewhere).then(|| cands[0].clone())
 }
@@ -340,11 +344,14 @@ impl Rule for IncompatibleAssignment {
         if cx.fm.index.is_duplicated(&c.owner) || receiver_class.as_deref().is_some_and(|r| cx.fm.index.is_duplicated(r)) {
             return;
         }
-        // a private method of another class is not inherited: the lookup may
-        // have put it in front of an interface default the receiver has
-        let top = |c: &str| c.split('$').next().unwrap_or(c).to_string();
-        if c.method.flags.is_private() && cx.fm.enclosing_class_name(value).map(|e| top(&e)) != Some(top(&c.owner)) {
-            return;
+        // a private method is never inherited, nestmates or not: found through
+        // another class, the lookup may have put it in front of an interface
+        // default that class has
+        if c.method.flags.is_private() {
+            let through = receiver_class.or_else(|| cx.fm.enclosing_class_name(value).map(|e| e.to_string()));
+            if through.as_deref() != Some(&*c.owner) {
+                return;
+            }
         }
         // overload selection is approximate (type arguments, lambdas,
         // inaccessible overloads): judge only a method without rivals
