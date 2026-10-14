@@ -1977,6 +1977,17 @@ impl<'t> FileModel<'t> {
                         unify(self, &sam0.method.ret, &body_ty, &open, &mut bindings);
                     }
                 }
+                // a result left open by an unknown argument, with a plain
+                // argument below it and a target equal to that above it, is
+                // that type (`new String(requireNonNullElse(x, new byte[0]))`)
+                if let Ty::TypeVar(r) = &rc.method.ret {
+                    if exp.is_known() && !exp.is_prim() && poisoned.contains(r) && inf.unknown_vars.contains(r) && !bindings.iter().any(|(k, _)| k == r) {
+                        if self.poly_floor(call).iter().any(|l| self.conv(l, &exp) == Conv::Yes && self.conv(&exp, l) == Conv::Yes) {
+                            poisoned.retain(|v| v != r);
+                            bindings.push((r.clone(), exp.clone()));
+                        }
+                    }
+                }
                 // a variable an invariant argument gives in part only (`R` of
                 // `collect(groupingBy(Connection::of))` is `Map<Connection, List<?>>`):
                 // that part is exact unless another parameter bounds it too or

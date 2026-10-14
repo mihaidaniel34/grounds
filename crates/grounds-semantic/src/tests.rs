@@ -994,6 +994,16 @@ fn target_typed_arguments_keep_what_their_arguments_prove() {
          } }",
     );
     assert_eq!(c, vec!["String.<init>(byte[])", "AccessController.doPrivileged(java.security.PrivilegedAction)"]);
+    // T is at least byte[] and, as String(byte[])'s argument, at most byte[]
+    let t = types_of(
+        "import java.util.Objects; import io.github.resilience4j.retry.Retry;
+         class T { void m(Retry retry) throws Exception {
+           final var response = retry.executeCallable(() -> 1);
+           String a = new String(/*T*/ Objects.requireNonNullElse(response.body(), new byte[0]));
+           Object b = /*T*/ Objects.requireNonNullElse(response.body(), new byte[0]);
+         } }",
+    );
+    assert_eq!(t, vec!["byte[]", "?unknown"]);
 }
 
 #[test]
@@ -1044,3 +1054,4 @@ fn unknown_variables_keep_the_concrete_parts_of_their_parameter() {
     );
     assert_eq!(t, vec!["java.util.List"]);
 }
+
