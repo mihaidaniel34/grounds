@@ -229,9 +229,9 @@ on-disk cache.
   and macOS for every pull request.
 - **CI mode:** 107 pull-request-shaped changes over 8 corpus projects
   (renames, deletions, signature changes, new and deleted beans, plus
-  changes that break nothing): no false reports. Known gaps: a deleted
+  changes that break nothing): no false reports. Since 0.0.9 a deleted
   class, a method made private, static imports, method references and
-  return types assigned to variables are not yet checked across files.
+  return types assigned to variables are checked across files too.
 
 Not tested: Windows (the daemon uses Unix sockets), Kotlin or mixed
 Kotlin/Java projects (Kotlin sources are ignored, so types defined in them
@@ -247,8 +247,8 @@ target for your machine:
 
 ```bash
 target=aarch64-apple-darwin   # x86_64-apple-darwin, x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
-curl -fsSL https://github.com/mihaidaniel34/grounds/releases/download/v0.0.8/grounds-0.0.8-$target.tar.gz | tar -xz
-sudo mv grounds-0.0.8-$target/grounds /usr/local/bin/
+curl -fsSL https://github.com/mihaidaniel34/grounds/releases/download/v0.0.9/grounds-0.0.9-$target.tar.gz | tar -xz
+sudo mv grounds-0.0.9-$target/grounds /usr/local/bin/
 ```
 
 Each archive has a `.sha256` next to it. The macOS binaries are not
@@ -347,8 +347,8 @@ jobs:
         with: { distribution: temurin, java-version: 21 }
       - run: ./gradlew compileJava -q     # dependency jars into the Gradle cache (or: grounds classpath)
       - run: |
-          curl -fsSL https://github.com/mihaidaniel34/grounds/releases/download/v0.0.8/grounds-0.0.8-x86_64-unknown-linux-musl.tar.gz | tar -xz
-          echo "$PWD/grounds-0.0.8-x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
+          curl -fsSL https://github.com/mihaidaniel34/grounds/releases/download/v0.0.9/grounds-0.0.9-x86_64-unknown-linux-musl.tar.gz | tar -xz
+          echo "$PWD/grounds-0.0.9-x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
       - run: grounds changed --base "origin/$BASE_REF" --no-daemon --format sarif --exit-zero > grounds.sarif
         env: { BASE_REF: "${{ github.base_ref }}" }   # never interpolate a branch name into the script
       - uses: github/codeql-action/upload-sarif@v3
