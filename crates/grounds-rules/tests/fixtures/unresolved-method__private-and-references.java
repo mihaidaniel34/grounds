@@ -15,7 +15,8 @@ class Caller {
         u.secret(); // expect
         Supplier<Integer> s = Util::name;
         IntSupplier t = Util::nmae; // expect
-        Function<Util, Integer> f = Util::secret;
+        Function<Util, Integer> f = Util::secret; // expect
+        IntUnaryOperator tw = Util::twice; // expect
         Runnable r = u::own;
         Runnable q = u::gone; // expect
         Supplier<Util> mk = Util::new;
@@ -43,3 +44,8 @@ class HTest extends HBase {
         void f() { x.unique(); }
     }
 }
+// a superclass's private method is no member of the subclass (javac: cannot
+// find symbol); an interface default of the same name is
+class PBase { private void hidden() {} }
+class PSub extends PBase { void f() { hidden(); } } // expect
+class ViaDefault2 extends Base implements Api { void g() { run(); } }

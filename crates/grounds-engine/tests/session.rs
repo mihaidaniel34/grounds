@@ -281,6 +281,10 @@ fn base_mode_removed_classes_and_new_beans() {
     write(&dir, "src/main/java/demo/Field.java", "package demo;\nclass Field {\n    int Gone;\n    int v() { return Gone; }\n}\n");
     write(&dir, "src/main/java/other/Qualified.java", "package other;\nclass Qualified { third.Gone g; }\n");
     write(&dir, "src/main/java/third/OnDemand.java", "package third;\nimport demo.*;\nclass OnDemand { Gone g; }\n");
+    // a qualified use breaks too; another on-demand import of a package we
+    // cannot see may supply the name once the class is gone
+    write(&dir, "src/main/java/other/FullyQualified.java", "package other;\nclass FullyQualified {\n    demo.Gone g;\n}\n");
+    write(&dir, "src/main/java/demo/Wildcard.java", "package demo;\nimport somelib.*;\nclass Wildcard { Gone g; }\n");
     // deleting a class named like a java.lang one: the name falls back to java.lang
     write(&dir, "src/main/java/demo/String.java", "package demo;\npublic class String {}\n");
     write(&dir, "src/main/java/demo/Text.java", "package demo;\nclass Text { String s; }\n");
@@ -308,6 +312,7 @@ fn base_mode_removed_classes_and_new_beans() {
         vec![
             ("src/main/java/demo/SamePackage.java", 3, "removed-class-still-used"),
             ("src/main/java/demo/Worker.java", 4, "ambiguous-bean"),
+            ("src/main/java/other/FullyQualified.java", 3, "removed-class-still-used"),
             ("src/main/java/other/UseGone.java", 2, "removed-class-still-used"),
         ],
         "{:?}",

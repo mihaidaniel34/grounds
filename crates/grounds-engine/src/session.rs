@@ -398,7 +398,14 @@ impl Session {
     /// name in the same package or under an on-demand import of its package.
     fn removed_class_uses(&self, file: &Path, removed: &[Name]) -> Vec<Finding> {
         let Some(stub) = self.project.index.file(&path_key(file)) else { return Vec::new() };
-        let mut hits: Vec<(Name, Option<String>)> = Vec::new();
+        // how the file names a removed class: its import, its simple name,
+        // or its qualified name
+        enum Use {
+            Import(String),
+            Simple,
+            Qualified(String),
+        }
+        let mut hits: Vec<(Name, Use)> = Vec::new();
         for c in removed {
             let simple = simple_name_of(c);
             if stub.referenced_names.binary_search_by(|n| (**n).cmp(simple)).is_err() {
@@ -411,10 +418,20 @@ impl Session {
             // another class of the same simple name imported explicitly wins
             let shadowed = stub.imports.iter().any(|i| !i.is_static && !i.on_demand && i.last() == simple && *i.path != *dotted);
             let reachable = !c.contains('$') && (&*stub.package == top_pkg || stub.imports.iter().any(|i| i.on_demand && !i.is_static && *i.path == *pkg));
+            // another on-demand import may supply the name now: a class of that
+            // name there, or a package or type whose classes we cannot see
+            let taken_over = stub.imports.iter().any(|i| {
+                i.on_demand && !i.is_static && *i.path != *pkg && {
+                    let idx = &self.project.index;
+                    idx.class_exists(&format!("{}.{simple}", i.path)) || !idx.package_exists(&i.path)
+                }
+            });
             if exact {
-                hits.push((c.clone(), Some(dotted.clone())));
-            } else if reachable && !shadowed {
-                hits.push((c.clone(), None));
+                hits.push((c.clone(), Use::Import(dotted.clone())));
+            } else if reachable && !shadowed && !taken_over {
+                hits.push((c.clone(), Use::Simple));
+            } else {
+                hits.push((c.clone(), Use::Qualified(dotted.clone())));
             }
         }
         if hits.is_empty() {
@@ -425,15 +442,35 @@ impl Session {
         let fm = grounds_semantic::FileModel::new(&pf, &self.project.index, path_key(file));
         let rel = file.strip_prefix(self.root()).unwrap_or(file).to_string_lossy().to_string();
         let mut out = Vec::new();
-        for (c, import) in hits {
+        for (c, how) in hits {
             let simple = simple_name_of(&c);
             // the import line (importing a class that exists nowhere does not
             // compile), or else the first use of the bare name that resolves to
             // nothing now: a nested class, a field or variable of that name, a
             // qualified `q.Gone` or java.lang taking over is not the removed class
-            let node = pf.root().descendants().find(|n| match &import {
-                Some(path) => n.kind() == "import_declaration" && pf.text[n.byte_range()].contains(path.as_str()),
-                None => {
+            let node = pf.root().descendants().find(|n| match &how {
+                Use::Import(path) => n.kind() == "import_declaration" && pf.text[n.byte_range()].contains(path.as_str()),
+                // `p.Gone` as a type, or as the receiver of a call or field,
+                // that resolves to nothing now and does not start with a variable
+                Use::Qualified(dotted) => {
+                    if !matches!(n.kind(), "scoped_type_identifier" | "scoped_identifier" | "field_access") || n.ancestors().any(|a| matches!(a.kind(), "import_declaration" | "package_declaration")) {
+                        return false;
+                    }
+                    let text: String = pf.text[n.byte_range()].chars().filter(|c| !c.is_whitespace()).collect();
+                    if text != *dotted {
+                        return false;
+                    }
+                    if n.kind() == "scoped_type_identifier" {
+                        return fm.resolve_type_node(*n).is_unknown();
+                    }
+                    let receiver = n.parent().is_some_and(|p| matches!(p.kind(), "method_invocation" | "field_access") && p.field("object") == Some(*n));
+                    let mut first = *n;
+                    while let Some(k) = first.kids().first().copied() {
+                        first = k;
+                    }
+                    receiver && first.kind() == "identifier" && !matches!(fm.symbol(first), Some(grounds_semantic::Symbol::Local(..) | grounds_semantic::Symbol::Field(..))) && fm.type_of(*n).is_unknown()
+                }
+                Use::Simple => {
                     if &pf.text[n.byte_range()] != simple || n.ancestors().any(|a| matches!(a.kind(), "import_declaration" | "package_declaration")) {
                         return false;
                     }

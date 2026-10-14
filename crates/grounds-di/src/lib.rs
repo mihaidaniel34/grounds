@@ -1194,7 +1194,7 @@ impl DiModel {
             return Vec::new();
         }
         // static @Bean methods have no factory bean
-        let instance = |m: &Name| lk.class(&p.owner).is_some_and(|c| c.methods_named(m).any(|x| !x.flags.is_static()));
+        let instance = |m: &Name| lk.class(&p.owner).is_some_and(|c| c.methods_named(m).any(|x| !x.flags.is_static() && x.annotations.iter().any(|a| a.simple_name() == "Bean")));
         (0..self.beans.len())
             .filter(|&i| {
                 let b = &self.beans[i];
@@ -1537,7 +1537,7 @@ mod tests {
              @Service class Plain implements K {}
              @Configuration class Cfg { @org.springframework.beans.factory.annotation.Autowired K fromCfg; @Bean K made() { return null; } @Bean K wrap(K inner) { return null; } }
              interface J {}
-             @Configuration class StaticCfg { @org.springframework.beans.factory.annotation.Autowired J own; @Bean static J st() { return null; } @Bean J inst() { return null; } }
+             @Configuration class StaticCfg { @org.springframework.beans.factory.annotation.Autowired J own; @Bean static J st() { return null; } J st(int helper) { return null; } @Bean J inst() { return null; } }
              @ComponentScan class Main { public static void main(String[] args) {} }",
         )]);
         let bean = |n: &str| m.beans.iter().position(|b| b.name == n).unwrap();

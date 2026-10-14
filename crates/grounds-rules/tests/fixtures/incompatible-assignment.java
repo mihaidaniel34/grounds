@@ -50,3 +50,8 @@ class Bounds {
         String s = t.pick(java.util.List.of("x"));
     }
 }
+// a superclass's private get() is not inherited: PC's get() is IGet's default
+interface IGet { default Integer get() { return 1; } }
+class PB { private String get() { return ""; } }
+class PC extends PB implements IGet {}
+class PMain { Integer f(PC c) { Integer v = c.get(); return v; } }

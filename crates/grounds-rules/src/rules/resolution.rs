@@ -138,20 +138,33 @@ impl Rule for UnresolvedMethod {
                 }
                 let mut cur = cx.fm.enclosing_class_node(n);
                 let mut innermost = None;
+                // a superclass's private method is no member here: the search
+                // goes on outward
+                let mut private_hit = None;
                 while let Some(c) = cur {
                     let Some(cn) = cx.fm.class_name_of_decl(c).cloned() else { return };
                     let Some(ci) = cx.fm.class(&cn) else { return };
                     if !ci.is_source() || !cx.fm.hierarchy_complete(&cn) {
                         return;
                     }
-                    if !cx.fm.methods_named(&ci.this_type(), name).is_empty() {
-                        return;
+                    let ms = cx.fm.methods_named(&ci.this_type(), name);
+                    if !ms.is_empty() {
+                        match private_elsewhere(cx, n, &ci, name, &ms, None) {
+                            Some(m) => {
+                                private_hit.get_or_insert(m);
+                            }
+                            None => return,
+                        }
                     }
                     innermost.get_or_insert(ci);
                     cur = cx.fm.enclosing_class_node(c);
                 }
                 let Some(ci) = innermost else { return };
                 if closed_class(cx, &ci.name).is_none() {
+                    return;
+                }
+                if let Some(m) = private_hit {
+                    cx.report(n.field("name").unwrap_or(n), format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)));
                     return;
                 }
                 let hint = similar_names(&ci, cx.fm, name).map(|s| format!("; did you mean `{s}`?")).unwrap_or_default();
@@ -173,18 +186,7 @@ impl Rule for UnresolvedMethod {
             cx.report(n.field("name").unwrap_or(n), format!("No `{name}` in `{}` accepts ({arg_list}); available: {}", cls.simple_name(), signatures(&ms)));
             return;
         }
-        // private to another class: nested classes share their top-level
-        // class's private members
-        let top = |c: &str| c.split('$').next().unwrap_or(c).to_string();
-        let here = cx.fm.enclosing_class_name(n).map(|e| top(&e));
-        let arity: Vec<&MethodRef> = ms.iter().filter(|m| m.method.accepts_arity(nargs)).collect();
-        // `methods_named` may hide a supertype's method (an interface default)
-        // behind a superclass's private one, which is not inherited
-        let visible_elsewhere = || {
-            cx.fm.all_supertypes(&cls.this_type()).iter().filter_map(|t| t.class_name().and_then(|n| cx.fm.class(n))).any(|c| c.methods_named(name).any(|m| m.accepts_arity(nargs) && !m.flags.is_private()))
-        };
-        if here.is_some() && arity.iter().all(|m| m.method.flags.is_private() && Some(top(&m.owner)) != here) && !visible_elsewhere() {
-            let m = arity[0];
+        if let Some(m) = private_elsewhere(cx, n, &cls, name, &ms, Some(nargs)) {
             cx.report(n.field("name").unwrap_or(n), format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)));
             return;
         }
@@ -197,6 +199,23 @@ impl Rule for UnresolvedMethod {
             }
         }
     }
+}
+
+/// The method `n` would reach in `cls` when every candidate (of `nargs`
+/// arguments, if given) is private to another top-level class: nested classes
+/// share their top-level class's private members. `methods_named` may hide a
+/// supertype's method (an interface default) behind a superclass's private
+/// one, which is not inherited.
+fn private_elsewhere<'t>(cx: &Ctx<'_, 't>, n: Node<'t>, cls: &ClassInfo, name: &str, ms: &[MethodRef], nargs: Option<usize>) -> Option<MethodRef> {
+    let top = |c: &str| c.split('$').next().unwrap_or(c).to_string();
+    let here = cx.fm.enclosing_class_name(n).map(|e| top(&e))?;
+    let fits = |m: &MethodInfo| nargs.is_none_or(|k| m.accepts_arity(k));
+    let cands: Vec<&MethodRef> = ms.iter().filter(|m| fits(&m.method)).collect();
+    if cands.is_empty() || !cands.iter().all(|m| m.method.flags.is_private() && top(&m.owner) != here) {
+        return None;
+    }
+    let visible_elsewhere = cx.fm.all_supertypes(&cls.this_type()).iter().filter_map(|t| t.class_name().and_then(|n| cx.fm.class(n))).any(|c| c.methods_named(name).any(|m| fits(m) && !m.flags.is_private()));
+    (!visible_elsewhere).then(|| cands[0].clone())
 }
 
 /// `Type::name` / `expr::name` naming no method of a closed project class.
@@ -217,9 +236,12 @@ fn check_method_reference<'t>(n: Node<'t>, cx: &mut Ctx<'_, 't>) {
     };
     let Some(cls) = cls else { return };
     let mname = cx.text(name);
-    if cx.fm.methods_named(&cls.this_type(), mname).is_empty() {
+    let ms = cx.fm.methods_named(&cls.this_type(), mname);
+    if ms.is_empty() {
         let hint = similar_names(&cls, cx.fm, mname).map(|s| format!("; did you mean `{s}`?")).unwrap_or_default();
         cx.report(name, format!("`{}` has no method `{mname}`{hint}", cls.simple_name()));
+    } else if let Some(m) = private_elsewhere(cx, n, &cls, mname, &ms, None) {
+        cx.report(name, format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)));
     }
 }
 
@@ -311,6 +333,17 @@ impl Rule for IncompatibleAssignment {
         }
         let Some(c) = cx.fm.select_method(value) else { return };
         if c.ambiguous || !cx.fm.class(&c.owner).is_some_and(|k| k.is_source()) {
+            return;
+        }
+        // a class defined in several modules: the index holds one of them
+        let receiver_class = c.receiver.as_ref().and_then(|r| r.class_name().map(str::to_string));
+        if cx.fm.index.is_duplicated(&c.owner) || receiver_class.as_deref().is_some_and(|r| cx.fm.index.is_duplicated(r)) {
+            return;
+        }
+        // a private method of another class is not inherited: the lookup may
+        // have put it in front of an interface default the receiver has
+        let top = |c: &str| c.split('$').next().unwrap_or(c).to_string();
+        if c.method.flags.is_private() && cx.fm.enclosing_class_name(value).map(|e| top(&e)) != Some(top(&c.owner)) {
             return;
         }
         // overload selection is approximate (type arguments, lambdas,
