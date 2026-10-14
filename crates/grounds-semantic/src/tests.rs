@@ -1029,3 +1029,18 @@ fn poly_arguments_bind_what_the_target_cannot_change() {
         ]
     );
 }
+
+#[test]
+fn unknown_variables_keep_the_concrete_parts_of_their_parameter() {
+    // Astra: the Map key String rules the generic overload out whatever T
+    // is; javac picks the other by unchecked conversion and erases its result
+    let t = types_of(
+        "import java.util.*;
+         class P {
+           static <T extends Number> List<String> pick(Map<String, ? super T> m, List xs) { return null; }
+           static List<String> pick(Object m, Collection<String> xs) { return null; }
+         }
+         class T { void m(Map<Integer, ? super Integer> m, List raw) { Object r = /*T*/ P.pick(m, raw); } }",
+    );
+    assert_eq!(t, vec!["java.util.List"]);
+}

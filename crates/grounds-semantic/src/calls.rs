@@ -1259,14 +1259,33 @@ impl<'t> FileModel<'t> {
         let subst: Vec<(Name, Ty)> = inf.bindings.iter().filter(|(k, _)| !inf.captures.iter().any(|c| c.var == *k)).cloned().collect();
         for (i, (p, a)) in params.iter().zip(args).enumerate() {
             let Some(a) = a else { continue };
+            let poly = poly.get(i).is_some_and(|p| p.any());
             // a variable left unknown proves nothing either way, not even
-            // through a capture it would otherwise have
+            // through a capture it would otherwise have; the parameter's
+            // other parts still must fit (`Map<String, ? super T>` takes no
+            // `Map<Integer, ...>`): with each type argument naming it widened
+            // to `?`, which contains any instantiation
             if inf.poisoned.iter().any(|v| mentions(p, v)) {
                 inf.incomplete = true;
+                fn widen(t: &Ty, poisoned: &[Name]) -> Option<Ty> {
+                    match t {
+                        Ty::TypeVar(v) if poisoned.contains(v) => None,
+                        Ty::Array(e) => widen(e, poisoned).map(|e| Ty::Array(Box::new(e))),
+                        Ty::Class { name, args } => Some(Ty::Class {
+                            name: name.clone(),
+                            args: args.iter().map(|x| if poisoned.iter().any(|v| mentions(x, v)) { Ty::Wildcard(None) } else { x.clone() }).collect(),
+                        }),
+                        _ => None,
+                    }
+                }
+                if let Some(q) = widen(p, &inf.poisoned).map(|q| apply_subst(&q, &subst)) {
+                    if self.conv(a, &q) == Conv::No && !(poly && self.conv(&a.erasure(), &q.erasure()) != Conv::No) {
+                        inf.no = true;
+                    }
+                }
                 continue;
             }
             let q = apply_subst(&with_captures(p, &inf.captures), &subst);
-            let poly = poly.get(i).is_some_and(|p| p.any());
             // variables left open (checked before substituting: a binding may be
             // the caller's own variable of the same name)
             let open = vars.iter().any(|v| mentions(p, v) && !subst.iter().any(|(k, _)| k == v) && !inf.captures.iter().any(|c| c.var == *v));
