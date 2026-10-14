@@ -45,6 +45,30 @@ fn types_of(src: &str) -> Vec<String> {
     out
 }
 
+/// The method each call marked with /*C*/ (the call starts right after the
+/// marker) resolves to, with `?` when the pick is uncertain.
+fn calls_of(src: &str) -> Vec<String> {
+    let pf = ParsedFile::parse(src);
+    let mut idx = Index::new(jdk());
+    idx.set_file(Arc::from("T.java"), Arc::new(extract(&pf)));
+    let fm = FileModel::new(&pf, &idx, Arc::from("T.java"));
+    let marks: Vec<usize> = src.match_indices("/*C*/").map(|(i, _)| i + 5).collect();
+    marks
+        .into_iter()
+        .map(|m| {
+            let start = m + src[m..].len() - src[m..].trim_start().len();
+            let call = pf.root().descendants().find(|n| n.start_byte() == start && matches!(n.kind(), "method_invocation" | "object_creation_expression")).expect("call after marker");
+            match fm.resolve_call(call) {
+                Some(rc) => {
+                    let params: Vec<String> = rc.method.params.iter().map(|p| p.ty.erasure().to_string()).collect();
+                    format!("{}.{}({}){}", simple_name_of(&rc.owner), rc.method.name, params.join(","), if rc.ambiguous { "?" } else { "" })
+                }
+                None => "none".to_string(),
+            }
+        })
+        .collect()
+}
+
 #[test]
 fn literal_and_local_types() {
     let t = types_of(
@@ -954,4 +978,98 @@ fn unknown_variables_cause_no_unchecked_erasure() {
     );
     // javac: List<List> (no unchecked call), List<String>
     assert_eq!(t, vec!["java.util.List<?unknown>", "java.util.List<java.lang.String>"]);
+}
+
+#[test]
+fn target_typed_arguments_keep_what_their_arguments_prove() {
+    // javac: String(byte[]), doPrivileged(PrivilegedAction): the other
+    // overloads fail whatever the unknown types are
+    let c = calls_of(
+        "import java.util.Objects; import java.security.*;
+         import io.github.resilience4j.retry.Retry; import groovy.lang.GroovyClassLoader;
+         class T { Object m(Retry retry) throws Exception {
+           final var response = retry.executeCallable(() -> 1);
+           Object a = /*C*/ new String(Objects.requireNonNullElse(response.body(), new byte[0]));
+           return /*C*/ AccessController.doPrivileged((PrivilegedAction<GroovyClassLoader>) GroovyClassLoader::new);
+         } }",
+    );
+    assert_eq!(c, vec!["String.<init>(byte[])", "AccessController.doPrivileged(java.security.PrivilegedAction)"]);
+    // T is at least byte[] and, as String(byte[])'s argument, at most byte[]
+    let t = types_of(
+        "import java.util.Objects; import io.github.resilience4j.retry.Retry;
+         class T { void m(Retry retry) throws Exception {
+           final var response = retry.executeCallable(() -> 1);
+           String a = new String(/*T*/ Objects.requireNonNullElse(response.body(), new byte[0]));
+           Object b = /*T*/ Objects.requireNonNullElse(response.body(), new byte[0]);
+         } }",
+    );
+    assert_eq!(t, vec!["byte[]", "?unknown"]);
+}
+
+#[test]
+fn poly_arguments_bind_what_the_target_cannot_change() {
+    let t = types_of(
+        "import java.util.*; import java.util.stream.*;
+         class T {
+           record Conn(String a) { static Conn of(Number r) { return null; } }
+           void m(List<Integer> rs) {
+             Object a = /*T*/ rs.stream().collect(Collectors.groupingBy(Conn::of));
+             Object b = /*T*/ rs.stream().collect(Collectors.groupingBy(Conn::of)).values();
+             Map<Conn, List<Integer>> c = /*T*/ rs.stream().collect(Collectors.groupingBy(Conn::of));
+             Map<Number, String> d = /*T*/ Stream.of(\"a\").collect(Collectors.toMap(k -> 1, v -> \"x\"));
+             var e = /*T*/ Stream.of(\"a\").collect(Collectors.toMap(k -> 1, v -> \"x\"));
+             Map<? extends Number, String> f = /*T*/ Stream.of(\"a\").collect(Collectors.toMap(k -> 1, v -> \"x\"));
+             Map<Object, List<Integer>> g = /*T*/ rs.stream().collect(Collectors.groupingBy(Conn::of));
+           }
+         }",
+    );
+    // javac: Map<Conn, List<Integer>> (not the target's Object) and its
+    // values; an invariant target of the result's class is the result; a
+    // wildcard target takes the poly argument's own Map<Integer, String>
+    assert_eq!(
+        t,
+        vec![
+            "java.util.Map<T.Conn, java.util.List<?unknown>>",
+            "java.util.Collection<java.util.List<?unknown>>",
+            "java.util.Map<T.Conn, java.util.List<java.lang.Integer>>",
+            "java.util.Map<java.lang.Number, java.lang.String>",
+            "java.util.Map<java.lang.Integer, java.lang.String>",
+            "java.util.Map<java.lang.Integer, java.lang.String>",
+            "java.util.Map<java.lang.Object, java.util.List<java.lang.Integer>>"
+        ]
+    );
+}
+
+#[test]
+fn unknown_variables_keep_the_concrete_parts_of_their_parameter() {
+    // Astra: the Map key String rules the generic overload out whatever T
+    // is; javac picks the other by unchecked conversion and erases its result
+    let t = types_of(
+        "import java.util.*;
+         class P {
+           static <T extends Number> List<String> pick(Map<String, ? super T> m, List xs) { return null; }
+           static List<String> pick(Object m, Collection<String> xs) { return null; }
+         }
+         class T { void m(Map<Integer, ? super Integer> m, List raw) { Object r = /*T*/ P.pick(m, raw); } }",
+    );
+    assert_eq!(t, vec!["java.util.List"]);
+}
+
+#[test]
+fn unknown_arguments_may_be_raw() {
+    // Astra round 10: the argument javac types as raw List needs unchecked
+    // conversion for List<T>, which erases the result (javac: raw List); and
+    // a raw floor does not equal the List<?> target (javac: raw List)
+    let t = types_of(
+        "import java.util.*;
+         class P {
+           static <T> List<String> pick(List<T> xs, int n) { return null; }
+           static List<Integer> pick(String xs, String n) { return null; }
+         }
+         class T { void m(List raw) {
+           Object a = /*T*/ P.pick(Objects.requireNonNullElseGet(raw, () -> raw), 1);
+           List<?> b = /*T*/ Objects.requireNonNullElse(Objects.requireNonNullElseGet(raw, () -> raw), raw);
+         } }",
+    );
+    assert_eq!(t, vec!["java.util.List<?unknown>", "?unknown"]);
 }
