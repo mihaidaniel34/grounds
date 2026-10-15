@@ -114,3 +114,16 @@ fn without_a_jdk_no_hierarchy_is_complete() {
     let with_jdk = index_of(&[("p/I.java", src)]);
     assert!(with_jdk.hierarchy_complete("p.I"));
 }
+
+#[test]
+fn package_private_jdk_classes_are_not_visible() {
+    let Some(home) = grounds_classfile::find_java_home() else { return };
+    let Some(release) = grounds_classfile::jdk_feature_release(&home) else { return };
+    let cp = Classpath::build(Some(&home), release, &[]);
+    assert!(!cp.contains("java.util.ImmutableCollections"));
+    assert!(cp.class("java.util.ImmutableCollections").is_none());
+    assert!(cp.contains("java.util.List"));
+    assert!(cp.class("java.util.List").is_some());
+    assert!(cp.contains("java.awt.Container$AccessibleAWTContainer"));
+    assert!(cp.class_names().all(|n| cp.contains(n)));
+}

@@ -95,14 +95,20 @@ impl Classpath {
     pub fn containers(&self) -> &[ClassContainer] {
         &self.containers
     }
+    /// Whether a class exists. The JDK runtime image also holds package-private
+    /// classes, which `class` hides, so those are checked by parsing the class.
     pub fn contains(&self, name: &str) -> bool {
-        self.names.contains_key(name)
+        match self.names.get(name) {
+            Some(&idx) if matches!(self.containers[idx as usize], ClassContainer::JImage(_)) => self.class(name).is_some(),
+            Some(_) => true,
+            None => false,
+        }
     }
     pub fn has_package(&self, p: &str) -> bool {
         self.packages.contains(p)
     }
     pub fn class_names(&self) -> impl Iterator<Item = &Name> {
-        self.names.keys()
+        self.names.keys().filter(|n| self.contains(n))
     }
 
     pub fn class(&self, name: &str) -> Option<Arc<ClassInfo>> {
