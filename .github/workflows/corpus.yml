@@ -303,7 +303,7 @@ jobs:
             target/corpus/snapshot.diff
 
   baseline:
-    needs: [check, classpath]
+    needs: [check, check-jdk27, classpath]
     if: always() && github.event_name == 'workflow_dispatch' && inputs.update-baseline
     runs-on: ubuntu-latest
     steps:
