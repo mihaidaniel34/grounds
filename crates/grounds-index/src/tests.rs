@@ -113,4 +113,40 @@ fn without_a_jdk_no_hierarchy_is_complete() {
     assert!(!bare.hierarchy_complete("p.C"));
     let with_jdk = index_of(&[("p/I.java", src)]);
     assert!(with_jdk.hierarchy_complete("p.I"));
+
+    let with_jdk = index_of(&[("p/I.java", src)]);
+    assert!(with_jdk.hierarchy_complete("p.I"));
+}
+
+#[test]
+fn release_newer_than_the_jdk_leaves_jdk_subclasses_incomplete() {
+    let Some(home) = grounds_classfile::find_java_home() else { return };
+    let Some(installed) = grounds_classfile::jdk_feature_version(&home) else { return };
+    let src = "package p; class Meter extends java.util.concurrent.CopyOnWriteArrayList<String> {} class Plain {}";
+    let index = |release: u32| {
+        let mut idx = Index::new(Arc::new(Classpath::build(Some(&home), release, &[])));
+        idx.set_file(Arc::from("p/M.java"), Arc::new(extract(&ParsedFile::parse(src))));
+        idx
+    };
+    // the JDK's own release and older ones are exact: nothing to hide
+    let exact = index(installed);
+    assert_eq!(exact.classpath.jdk, JdkApi::Complete);
+    assert!(exact.hierarchy_complete("p.Meter"));
+    // a newer release: JDK classes may have members the JDK does not have yet,
+    // but a class without JDK supertypes is still complete
+    let newer = index(installed + 1);
+    assert_eq!(newer.classpath.jdk, JdkApi::Newer { requested: installed + 1, installed });
+    assert!(!newer.hierarchy_complete("p.Meter"));
+    assert!(newer.hierarchy_complete("p.Plain"));
+}
+
+#[test]
+fn jdk_home_without_ct_sym_is_absent() {
+    let dir = std::env::temp_dir().join(format!("grounds-index-absent-jdk-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("lib")).unwrap();
+    let cp = Classpath::build(Some(&dir), 21, &[]);
+    assert_eq!(cp.jdk, JdkApi::Absent { home: dir.clone() });
+    assert!(cp.is_empty());
+    assert!(!Index::new(Arc::new(cp)).hierarchy_complete("p.C"));
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -11,7 +11,7 @@
 
 use crate::config::Config;
 use crate::workspace::Workspace;
-use grounds_index::Index;
+use grounds_index::{Index, JdkApi};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -77,6 +77,11 @@ pub enum Warning {
     /// No classpath file, and no jar has most of the library types the
     /// sources import.
     FewJars { missing: usize, imported: usize, packages: Vec<String> },
+    /// The project compiles for a release newer than the installed JDK: its
+    /// API is unknown, so checks that could depend on it stay silent.
+    JdkNewer { release: u32, jdk: u32 },
+    /// The JDK home has no usable `lib/ct.sym`: its classes are unknown.
+    JdkAbsent { home: String },
 }
 
 impl std::fmt::Display for Warning {
@@ -89,6 +94,14 @@ impl std::fmt::Display for Warning {
                 f,
                 "grounds: warning: no jar found for {missing} of {imported} imported library types ({}); calls into them stay unresolved and most checks skip them. Build the project once or run `grounds classpath` (silence: `[classpath] warn = false`)",
                 packages.join(", ")
+            ),
+            Warning::JdkNewer { release, jdk } => write!(
+                f,
+                "grounds: warning: the project compiles for Java {release} but the JDK is Java {jdk}; grounds cannot see the APIs added since Java {jdk}, so checks that could depend on them stay silent. Set `java_home` in grounds.toml to a JDK {release} (silence: `[classpath] warn = false`)"
+            ),
+            Warning::JdkAbsent { home } => write!(
+                f,
+                "grounds: warning: {home} has no lib/ct.sym (a JRE, or a JDK older than 9), so the JDK's classes are unknown and checks that need them stay silent. Set `java_home` in grounds.toml to a JDK 9 or newer (silence: `[classpath] warn = false`)"
             ),
         }
     }
@@ -114,6 +127,11 @@ pub fn warnings(ws: &Workspace, cfg: &Config, index: &Index) -> Vec<Warning> {
         if !f.exists() {
             out.push(Warning::MissingFile(rel(&f)));
         }
+    }
+    match &index.classpath.jdk {
+        JdkApi::Newer { requested, installed } => out.push(Warning::JdkNewer { release: *requested, jdk: *installed }),
+        JdkApi::Absent { home } => out.push(Warning::JdkAbsent { home: home.display().to_string() }),
+        JdkApi::Complete => {}
     }
     let files = classpath_files(ws, cfg);
     let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
@@ -472,5 +490,29 @@ mod tests {
         assert!(newer("2.0.0", "2.0.0-RC1"));
         assert!(!newer("3.0.0-M1", "2.7.5"));
         assert!(newer("5.10.2", "5.9.0"));
+    }
+
+    #[test]
+    fn jdk_warnings_for_a_release_newer_than_the_jdk_or_a_home_without_ct_sym() {
+        let Some(home) = grounds_classfile::find_java_home() else { return };
+        let Some(installed) = grounds_classfile::jdk_feature_version(&home) else { return };
+        let dir = temp("jdk-warnings");
+        let ws = Workspace::discover(&dir, &[]);
+        let warn = |cfg: &Config, home: &Path, release: u32| {
+            let index = Index::new(Arc::new(Classpath::build(Some(home), release, &[])));
+            warnings(&ws, cfg, &index)
+        };
+        let cfg = Config::default();
+        assert_eq!(warn(&cfg, &home, installed + 1), vec![Warning::JdkNewer { release: installed + 1, jdk: installed }]);
+        assert!(warn(&cfg, &home, installed).is_empty());
+        // a JRE, or a JDK 8 home: nothing to read the JDK's classes from
+        let jre = dir.join("jre");
+        std::fs::create_dir_all(jre.join("lib")).unwrap();
+        assert_eq!(warn(&cfg, &jre, 21), vec![Warning::JdkAbsent { home: jre.display().to_string() }]);
+        let mut silent = Config::default();
+        silent.classpath.warn = false;
+        assert!(warn(&silent, &jre, 21).is_empty());
+        assert!(warn(&silent, &home, installed + 1).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

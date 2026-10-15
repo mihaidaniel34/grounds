@@ -453,6 +453,10 @@ impl Unknowable for Ty {
 const WORK_BUDGET: u64 = 300_000;
 
 impl<'t> ClassLookup for FileModel<'t> {
+    fn may_lack_members(&self, name: &str) -> bool {
+        self.index.may_lack_members(name)
+    }
+
     fn class(&self, name: &str) -> Option<Arc<ClassInfo>> {
         if let Some((raw, node)) = self.local_raw.get(name) {
             if let Some(c) = self.local_lowered.borrow().get(name) {

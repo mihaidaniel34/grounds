@@ -127,6 +127,47 @@ jobs:
             target/corpus/planted-*.diff
             target/corpus/mutations.json
 
+  # helidon on JDK 21: the release it infers (27) is newer than the JDK, which
+  # used to report the JDK 20 API's missing members (getFirst, a Java 21 method)
+  # as compile breaks. Only the hard checks gate here: the snapshot is against
+  # the JDK 25 baseline, so its diff is informational.
+  check-jdk21:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: actions/download-artifact@v5
+        with:
+          name: binaries
+          path: bin
+      - run: chmod +x bin/grounds bin/examples/errors
+      - name: fetch the pinned commit
+        run: scripts/corpus.sh fetch
+        env:
+          CORPUS_ONLY: helidon
+          CORPUS_DIR: ${{ runner.temp }}/corpus
+          CORPUS_SHALLOW: "1"
+      - name: check
+        run: scripts/corpus.sh check
+        env:
+          CORPUS_ONLY: helidon
+          CORPUS_DIR: ${{ runner.temp }}/corpus
+          CORPUS_BASELINE: corpus/ci
+          GROUNDS: bin/grounds
+          ERRORS: ${{ github.workspace }}/bin/examples/errors
+      - if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: corpus-helidon-jdk21
+          path: |
+            target/corpus/current/*.txt
+            target/corpus/current/stats.tsv
+            target/corpus/snapshot.diff
+
   classpath:
     needs: build
     strategy:

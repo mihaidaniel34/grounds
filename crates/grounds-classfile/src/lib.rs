@@ -142,6 +142,16 @@ impl ClassContainer {
     }
 }
 
+/// The JDK's feature release, from `release` in its home (`JAVA_VERSION="21.0.12"`
+/// or `"1.8.0_392"` for Java 8). None for a JRE without that file.
+pub fn jdk_feature_version(home: &Path) -> Option<u32> {
+    let text = std::fs::read_to_string(home.join("release")).ok()?;
+    let line = text.lines().find_map(|l| l.strip_prefix("JAVA_VERSION="))?;
+    let v = line.trim().trim_matches('"');
+    let v = v.strip_prefix("1.").unwrap_or(v);
+    v.split(['.', '_', '-', '+']).next()?.parse().ok()
+}
+
 /// Locate the JDK home: `$JAVA_HOME`, then macOS `java_home`, then `java` on PATH.
 pub fn find_java_home() -> Option<PathBuf> {
     if let Ok(h) = std::env::var("JAVA_HOME") {
@@ -207,5 +217,24 @@ mod tests {
         assert!(s.methods.iter().any(|m| m.name == "isBlank"));
         let names = c.class_names();
         assert!(names.len() > 1000);
+    }
+
+    #[test]
+    fn reads_jdk_feature_version() {
+        let dir = std::env::temp_dir().join(format!("grounds-jdk-release-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (text, want) in [("JAVA_VERSION=\"21.0.12.1\"\n", Some(21)), ("JAVA_VERSION=\"1.8.0_392\"\n", Some(8)), ("IMPLEMENTOR=\"x\"\nJAVA_VERSION=\"25\"\n", Some(25)), ("", None)] {
+            std::fs::write(dir.join("release"), text).unwrap();
+            assert_eq!(jdk_feature_version(&dir), want, "{text:?}");
+        }
+        std::fs::remove_file(dir.join("release")).unwrap();
+        assert_eq!(jdk_feature_version(&dir), None);
+        let _ = std::fs::remove_dir_all(&dir);
+        // the JDK running the tests, when there is one
+        if let Some(home) = find_java_home() {
+            if let Some(v) = jdk_feature_version(&home) {
+                assert!(v >= 8, "{v}");
+            }
+        }
     }
 }

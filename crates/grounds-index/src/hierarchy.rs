@@ -237,6 +237,12 @@ fn same_arg(a: &Ty, b: &Ty) -> bool {
 pub trait ClassLookup {
     fn class(&self, name: &str) -> Option<Arc<ClassInfo>>;
 
+    /// Whether a JDK class's API may be newer than the one loaded: members
+    /// absent from it may exist (see `Classpath::may_lack_members`).
+    fn may_lack_members(&self, _name: &str) -> bool {
+        false
+    }
+
     /// Direct supertypes of a class type with type arguments substituted.
     fn direct_supertypes(&self, ty: &Ty) -> Vec<Ty> {
         let Ty::Class { name, args } = ty else {
@@ -463,7 +469,9 @@ pub trait ClassLookup {
 
     /// Whether the full supertype closure of `name` is known. Every type has
     /// java.lang.Object above it (interfaces too: they have its methods),
-    /// so without a JDK nothing is complete.
+    /// so without a JDK nothing is complete. A JDK class newer than the one
+    /// loaded (the project's release is newer than the JDK) may have members
+    /// we cannot see, so it is incomplete too.
     fn hierarchy_complete(&self, name: &str) -> bool {
         if self.class("java.lang.Object").is_none() {
             return false;
@@ -474,6 +482,9 @@ pub trait ClassLookup {
         while let Some(n) = q.pop_front() {
             if !seen.insert(n.clone()) {
                 continue;
+            }
+            if &*n != "java.lang.Object" && self.may_lack_members(&n) {
+                return false;
             }
             let Some(c) = self.class(&n) else { return false };
             for t in c.superclass.iter().chain(c.interfaces.iter()) {

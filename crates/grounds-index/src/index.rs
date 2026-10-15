@@ -18,12 +18,27 @@ use std::cell::RefCell;
 use std::path::Path;
 use std::sync::Arc;
 
+/// How much of the JDK's API the classpath holds for the project's release.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum JdkApi {
+    /// The JDK's signatures for the release (or the JDK's own release, which
+    /// `open_ct_sym` cannot read exactly).
+    Complete,
+    /// The JDK home has no `lib/ct.sym` that can be read: a JRE, or a JDK older than 9.
+    Absent { home: std::path::PathBuf },
+    /// The project compiles for a release newer than the installed JDK, whose
+    /// API `open_ct_sym` can only approximate with the newest older release.
+    /// Members added since then may be missing from JDK classes.
+    Newer { requested: u32, installed: u32 },
+}
+
 /// Immutable classpath: JDK symbols plus dependency jars and class dirs.
 pub struct Classpath {
     containers: Vec<ClassContainer>,
     names: FxHashMap<Name, u32>,
     packages: FxHashSet<Name>,
     cache: DashMap<Name, Option<Arc<ClassInfo>>>,
+    pub jdk: JdkApi,
 }
 
 impl std::fmt::Debug for Classpath {
@@ -34,7 +49,7 @@ impl std::fmt::Debug for Classpath {
 
 impl Classpath {
     pub fn empty() -> Classpath {
-        Classpath { containers: Vec::new(), names: FxHashMap::default(), packages: FxHashSet::default(), cache: DashMap::new() }
+        Classpath { containers: Vec::new(), names: FxHashMap::default(), packages: FxHashSet::default(), cache: DashMap::new(), jdk: JdkApi::Complete }
     }
 
     /// Build from containers in priority order (first definition wins).
@@ -65,16 +80,23 @@ impl Classpath {
                 names.entry(Arc::from(b.as_str())).or_insert(i as u32);
             }
         }
-        Classpath { containers, names, packages, cache: DashMap::new() }
+        Classpath { containers, names, packages, cache: DashMap::new(), jdk: JdkApi::Complete }
     }
 
     /// JDK from `ct.sym` for a release, followed by the given jars/dirs.
     pub fn build(java_home: Option<&Path>, release: u32, entries: &[std::path::PathBuf]) -> Classpath {
         let mut containers = Vec::new();
+        let mut jdk = JdkApi::Complete;
         if let Some(home) = java_home {
-            let ct = home.join("lib/ct.sym");
-            if let Ok(c) = ClassContainer::open_ct_sym(&ct, release) {
-                containers.push(c);
+            match ClassContainer::open_ct_sym(&home.join("lib/ct.sym"), release) {
+                Ok(c) => {
+                    containers.push(c);
+                    // ct.sym has no signatures for the JDK's own release or newer
+                    if let Some(installed) = grounds_classfile::jdk_feature_version(home).filter(|&v| release > v) {
+                        jdk = JdkApi::Newer { requested: release, installed };
+                    }
+                }
+                Err(_) => jdk = JdkApi::Absent { home: home.to_path_buf() },
             }
         }
         for e in entries {
@@ -84,7 +106,15 @@ impl Classpath {
                 containers.push(c);
             }
         }
-        Classpath::from_containers(containers)
+        let mut cp = Classpath::from_containers(containers);
+        cp.jdk = jdk;
+        cp
+    }
+
+    /// Whether `name` is a JDK class whose API may be newer than the one
+    /// loaded (see [`JdkApi::Newer`]). The JDK is the first container then.
+    pub fn may_lack_members(&self, name: &str) -> bool {
+        matches!(self.jdk, JdkApi::Newer { .. }) && self.names.get(name) == Some(&0)
     }
 
     pub fn len(&self) -> usize {
@@ -826,6 +856,9 @@ impl Index {
 impl ClassLookup for Index {
     fn class(&self, name: &str) -> Option<Arc<ClassInfo>> {
         Index::class(self, name)
+    }
+    fn may_lack_members(&self, name: &str) -> bool {
+        self.classpath.may_lack_members(name)
     }
 }
 
