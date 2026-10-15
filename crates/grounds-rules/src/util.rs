@@ -187,6 +187,23 @@ pub fn members<'t>(type_decl: Node<'t>) -> Vec<Node<'t>> {
     out
 }
 
+/// Is the class declaration final, in source or made so by Lombok (`@Value`,
+/// `@UtilityClass`)?
+pub fn is_final_class<'t>(fm: &FileModel<'t>, decl: Node<'t>) -> bool {
+    decl.has_modifier("final") || fm.class_of_decl(decl).is_some_and(|c| c.flags.is_final())
+}
+
+/// Is the field declaration final, in source or made so by Lombok (`@Value`,
+/// `@FieldDefaults(makeFinal = true)`)?
+pub fn is_final_field<'t>(fm: &FileModel<'t>, decl: Node<'t>) -> bool {
+    if decl.has_modifier("final") {
+        return true;
+    }
+    let Some(cls) = owning_type_decl(decl).and_then(|d| fm.class_of_decl(d)) else { return false };
+    let mut names = decl.fields("declarator").into_iter().filter_map(|d| d.field("name")).peekable();
+    names.peek().is_some() && names.all(|n| cls.field(n.text(fm.src)).is_some_and(|f| f.flags.is_final()))
+}
+
 pub fn methods_of<'t>(type_decl: Node<'t>) -> Vec<Node<'t>> {
     members(type_decl).into_iter().filter(|m| m.kind() == "method_declaration").collect()
 }

@@ -379,7 +379,9 @@ impl<'t> FileModel<'t> {
                         "method_reference" => p.kids().last() == Some(&n) && p.kids().len() > 1,
                         "variable_declarator" | "formal_parameter" | "catch_formal_parameter" | "enhanced_for_statement" | "resource" => p.field("name") == Some(n),
                         "method_declaration" | "constructor_declaration" | "class_declaration" | "interface_declaration" | "enum_declaration" | "record_declaration" | "annotation_type_declaration" | "enum_constant" => p.field("name") == Some(n),
-                        "labeled_statement" | "break_statement" | "continue_statement" | "element_value_pair" | "inferred_parameters" => true,
+                        "labeled_statement" | "break_statement" | "continue_statement" | "inferred_parameters" => true,
+                        // `@A(key = VALUE)`: the key names an element, the value is an expression
+                        "element_value_pair" => p.field("key") == Some(n),
                         "lambda_expression" => p.field("parameters") == Some(n),
                         _ => false,
                     };

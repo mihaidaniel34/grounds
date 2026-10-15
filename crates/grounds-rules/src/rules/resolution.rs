@@ -582,11 +582,8 @@ impl Rule for OverrideWithoutSuper {
                     && !x.flags.is_static()
                     && !x.flags.is_private()
                     && x.params.len() == m.params.len()
-                    && x.params.iter().zip(&m.params).all(|(a, b)| {
-                        // generic parameters of raw/diamond supertypes match anything
-                        if a.ty.mentions_type_var() || b.ty.mentions_type_var() {
-                            return true;
-                        }
+                    && (!grounds_index::hierarchy::is_subsignature(&m, x, &sc, st.args()).is_no()
+                        || x.params.iter().zip(&m.params).all(|(a, b)| {
                         let at = grounds_index::hierarchy::apply_subst(&a.ty, &map);
                         // unknown classes and same-named types from another
                         // package (javax vs jakarta when the cached jars do not
@@ -598,8 +595,8 @@ impl Rule for OverrideWithoutSuper {
                             }
                             _ => false,
                         };
-                        at.erasure() == b.ty.erasure() || skew || !fully_known(cx, &at) || !fully_known(cx, &b.ty)
-                    })
+                        skew || !fully_known(cx, &at) || !fully_known(cx, &b.ty)
+                    }))
             });
         }
         if !found && cls.is_interface() {

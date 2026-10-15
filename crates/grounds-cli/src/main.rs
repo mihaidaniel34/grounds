@@ -170,7 +170,7 @@ fn main() -> anyhow::Result<()> {
             let s = &p.stats;
             println!("modules: {}", p.workspace.modules.len());
             println!("files: {} (parsed {}, cached {})", s.files, s.parsed, s.cached);
-            println!("classpath: {} entries, {} classes", s.classpath_entries, s.classpath_classes);
+            println!("classpath: {} entries, {} classes (Java {} API)", s.classpath_entries, s.classpath_classes, s.java_release);
             println!("source classes: {}", p.index.source_class_names().count());
             // tree-sitter recovers from syntax it cannot parse; analysis of those
             // regions is degraded, so make the count visible

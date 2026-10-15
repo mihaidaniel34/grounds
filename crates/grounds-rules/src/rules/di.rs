@@ -895,7 +895,7 @@ impl Rule for FinalConfigurationClass {
             cx.fm.annotations_of(decl).iter().any(|a| a.simple_name() == "Configuration" && (a.name.starts_with("org.springframework") || !a.resolved) && a.arg("proxyBeanMethods").and_then(|v| v.as_bool()) != Some(false))
         };
         if n.kind() == "class_declaration" {
-            if n.has_modifier("final") && cfg_proxied(n) {
+            if is_final_class(cx.fm, n) && cfg_proxied(n) {
                 if let Some(nm) = n.field("name") {
                     cx.report(nm, "@Configuration classes must not be final (use proxyBeanMethods = false to opt out of proxying)");
                 }

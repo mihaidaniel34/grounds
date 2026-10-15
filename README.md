@@ -369,7 +369,7 @@ filter, which would drop the breaks in unchanged files:
 - Project-wide, in `grounds.toml`:
 
 ```toml
-java_release = 21                     # which JDK API version to check against
+java_release = 17                     # which JDK API version to check against (default: from the build, else 21)
 exclude = ["**/generated/**"]
 test_source_sets = ["scenarios"]      # besides test/integration/e2e/functional/...
 
@@ -386,6 +386,17 @@ files = [".grounds/classpath.txt"]
 scan_caches = true      # use the newest version of each artifact in ~/.gradle and ~/.m2
 build_outputs = true    # module build/classes directories
 ```
+
+When `java_release` is not set, grounds reads it from the build: Maven's
+`maven.compiler.release`/`target`/`source` properties or the
+maven-compiler-plugin's `<release>`/`<target>`/`<source>` (with `${...}`
+resolved, also from parent poms in the repository; `java.version` under
+Spring Boot's parent), and Gradle's `options.release`,
+`targetCompatibility`, `sourceCompatibility` or toolchain
+`languageVersion` (Groovy and Kotlin DSL, convention plugins in
+`buildSrc`/`build-logic` included). Modules on different releases share one
+JDK API, so the highest is used; without any, 21. `grounds index` prints the
+release in use.
 
 ### Classpath
 

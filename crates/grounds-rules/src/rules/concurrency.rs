@@ -320,7 +320,7 @@ impl Rule for StartThreadInConstructor {
             return;
         }
         let Some(o) = n.field("object") else { return };
-        let class_final = enclosing_method_decl(n).and_then(owning_type_decl).is_some_and(|d| d.has_modifier("final"));
+        let class_final = enclosing_method_decl(n).and_then(owning_type_decl).is_some_and(|d| is_final_class(cx.fm, d));
         if class_final {
             return;
         }

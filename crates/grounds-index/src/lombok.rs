@@ -186,14 +186,21 @@ fn apply_one(c: &mut RawClass, imported: bool, cfg: &LombokConfig) -> Vec<RawCla
         }
     }
 
+    // @Value: final class (unless @NonFinal), private final instance fields
+    // (@NonFinal keeps a field assignable, @PackagePrivate keeps its access)
     if value {
-        c.flags.set(Flags::FINAL);
+        if has("NonFinal").is_none() {
+            c.flags.set(Flags::FINAL);
+        }
         for f in &mut c.fields {
-            if !f.flags.is_static() && !f.annotations.iter().any(|a| a.simple_name() == "NonFinal") {
+            if f.flags.is_static() {
+                continue;
+            }
+            if !f.annotations.iter().any(|a| a.simple_name() == "NonFinal") {
                 f.flags.set(Flags::FINAL);
-                if !f.flags.has(Flags::PUBLIC | Flags::PROTECTED) && !f.annotations.iter().any(|a| a.simple_name() == "PackagePrivate") {
-                    f.flags.set(Flags::PRIVATE);
-                }
+            }
+            if !f.flags.has(Flags::PUBLIC | Flags::PROTECTED | Flags::PRIVATE) && !f.annotations.iter().any(|a| a.simple_name() == "PackagePrivate") {
+                f.flags.set(Flags::PRIVATE);
             }
         }
     }

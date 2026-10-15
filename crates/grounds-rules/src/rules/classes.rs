@@ -295,7 +295,7 @@ impl Rule for ConstructorCallsOverridable {
             return;
         }
         let Some(cls_decl) = owning_type_decl(ctor) else { return };
-        if cls_decl.has_modifier("final") || cls_decl.kind() != "class_declaration" {
+        if is_final_class(cx.fm, cls_decl) || cls_decl.kind() != "class_declaration" {
             return;
         }
         let Some(cls) = cx.fm.class_of_decl(cls_decl) else { return };
@@ -894,7 +894,7 @@ impl Rule for CloneWithoutSuper {
             return;
         }
         let Some(decl) = owning_type_decl(n) else { return };
-        if decl.has_modifier("final") || decl.kind() != "class_declaration" {
+        if is_final_class(cx.fm, decl) || decl.kind() != "class_declaration" {
             return;
         }
         // without Cloneable, super.clone() throws: a copy-style clone is the only option
@@ -1170,7 +1170,13 @@ impl Rule for MissingOverride {
             let Some(sc) = cx.fm.class(sn) else { continue };
             let map = grounds_index::hierarchy::substitution(&sc, st.args());
             for sm in sc.methods.iter().filter(|x| x.name == m.name && x.params.len() == m.params.len() && !x.flags.is_static() && !x.flags.is_private()) {
-                let same = sm.params.iter().zip(&m.params).all(|(a, b)| grounds_index::hierarchy::apply_subst(&a.ty, &map).erasure() == b.ty.erasure());
+                // where our types cannot tell (unresolved classes), equal
+                // erasures still count
+                let same = match grounds_index::hierarchy::is_subsignature(&m, sm, &sc, st.args()) {
+                    Tri::Yes => true,
+                    Tri::No => false,
+                    Tri::Unknown => sm.params.iter().zip(&m.params).all(|(a, b)| grounds_index::hierarchy::apply_subst(&a.ty, &map).erasure() == b.ty.erasure()),
+                };
                 if same {
                     found = Some(sc.name.clone());
                     break;
@@ -1270,7 +1276,7 @@ impl Rule for RedundantModifier {
             }
             "method_declaration" => {
                 // final on private methods or on methods of a final class
-                let cls_final = owning_type_decl(n).is_some_and(|d| d.has_modifier("final") || d.kind() == "record_declaration" || d.kind() == "enum_declaration");
+                let cls_final = owning_type_decl(n).is_some_and(|d| is_final_class(cx.fm, d) || d.kind() == "record_declaration" || d.kind() == "enum_declaration");
                 if n.has_modifier("final") && (n.has_modifier("private") || cls_final) && !has_annotation_named(n, cx.src, "SafeVarargs") {
                     &["final"]
                 } else {
@@ -1335,7 +1341,7 @@ declare_rule!(MutableException {
 impl Rule for MutableException {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
-        if n.has_modifier("static") || n.has_modifier("final") {
+        if n.has_modifier("static") || is_final_field(cx.fm, n) {
             return;
         }
         let Some(cls) = cx.fm.enclosing_class(n) else { return };
@@ -1471,7 +1477,7 @@ declare_rule!(PrivateConstructorNotFinal {
 impl Rule for PrivateConstructorNotFinal {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
-        if n.has_modifier("final") || n.has_modifier("abstract") || n.has_modifier("sealed") || n.has_modifier("non-sealed") {
+        if is_final_class(cx.fm, n) || n.has_modifier("abstract") || n.has_modifier("sealed") || n.has_modifier("non-sealed") {
             return;
         }
         let ctors: Vec<Node> = members(n).into_iter().filter(|m| m.kind() == "constructor_declaration").collect();
