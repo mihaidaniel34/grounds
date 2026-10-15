@@ -68,12 +68,11 @@ impl Classpath {
         Classpath { containers, names, packages, cache: DashMap::new() }
     }
 
-    /// JDK from `ct.sym` for a release, followed by the given jars/dirs.
+    /// JDK classes for a release (see `ClassContainer::open_jdk`), followed by the given jars/dirs.
     pub fn build(java_home: Option<&Path>, release: u32, entries: &[std::path::PathBuf]) -> Classpath {
         let mut containers = Vec::new();
         if let Some(home) = java_home {
-            let ct = home.join("lib/ct.sym");
-            if let Ok(c) = ClassContainer::open_ct_sym(&ct, release) {
+            if let Ok(c) = ClassContainer::open_jdk(home, release) {
                 containers.push(c);
             }
         }
