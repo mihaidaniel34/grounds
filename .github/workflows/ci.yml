@@ -21,6 +21,8 @@ jobs:
             java: 25
           - os: macos-14
             java: 21
+    # the JDK 21 jobs keep the plain names branch protection requires
+    name: test (${{ matrix.os }}${{ matrix.java != 21 && format(', jdk {0}', matrix.java) || '' }})
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
