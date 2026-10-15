@@ -56,6 +56,9 @@ pub struct Bean {
     pub dynamic_names: bool,
     /// Declares @Replaces (Micronaut): replacement semantics we do not model fully.
     pub replaces: bool,
+    /// Made by a static factory method, which has no factory bean (Spring
+    /// does not count it as a self-reference of its configuration).
+    pub static_factory: bool,
 }
 
 /// Module directory of a source path (the part before `/src/`).
@@ -591,6 +594,7 @@ impl<'a> Builder<'a> {
                         framework: fw,
                         dynamic_names: false,
                         replaces: false,
+                        static_factory: false,
                     });
                     self.model.component_classes.insert(c.name.clone(), i);
                 }
@@ -616,6 +620,7 @@ impl<'a> Builder<'a> {
                         framework: Framework::Spring,
                         dynamic_names: false,
                         replaces: false,
+                        static_factory: false,
                     });
                     self.model.component_classes.insert(c.name.clone(), i);
                 }
@@ -697,6 +702,7 @@ impl<'a> Builder<'a> {
                 framework: fw,
                 dynamic_names: anns.iter().any(|a| matches!(a.simple_name(), "EachBean" | "EachProperty")),
                 replaces: anns.iter().any(|a| a.simple_name() == "Replaces"),
+                static_factory: false,
             });
             self.model.component_classes.insert(c.name.clone(), i);
             let class_dynamic = anns.iter().any(|a| matches!(a.simple_name(), "EachBean" | "EachProperty"));
@@ -763,6 +769,7 @@ impl<'a> Builder<'a> {
                     framework: fw,
                     dynamic_names: class_dynamic || m.annotations.iter().any(|a| matches!(a.simple_name(), "EachBean" | "EachProperty")),
                     replaces: m.annotations.iter().any(|a| a.simple_name() == "Replaces"),
+                    static_factory: m.flags.is_static(),
                 };
                 self.add_bean(mbean);
                 // factory method parameters are injection points
@@ -853,6 +860,7 @@ impl<'a> Builder<'a> {
                     framework: Framework::Spring,
                     dynamic_names: false,
                     replaces: false,
+                    static_factory: false,
                 });
             }
         }
@@ -1117,7 +1125,7 @@ impl DiModel {
         // Spring skips self-references and falls back to them only when
         // nothing else matches a single-valued point
         if p.framework == Framework::Spring {
-            let own = self.self_references(lk, p);
+            let own = self.self_references(p);
             if cands.iter().any(|&i| !own.contains(&i)) || p.multiple {
                 cands.retain(|i| !own.contains(i));
             }
@@ -1185,7 +1193,7 @@ impl DiModel {
     /// Beans Spring treats as self-references of the bean receiving `p`
     /// (`DefaultListableBeanFactory.isSelfReference`): that bean itself and,
     /// for a class bean, the beans of its own instance `@Bean` methods.
-    fn self_references(&self, lk: &dyn ClassLookup, p: &InjectionPoint) -> Vec<usize> {
+    fn self_references(&self, p: &InjectionPoint) -> Vec<usize> {
         let own = |b: &Bean| b.declaring_class == p.owner;
         if let PointKind::FactoryParam(m, _) = &p.kind {
             return (0..self.beans.len()).filter(|&i| own(&self.beans[i]) && matches!(&self.beans[i].source, BeanSource::FactoryMethod(n) if n == m)).collect();
@@ -1194,13 +1202,12 @@ impl DiModel {
             return Vec::new();
         }
         // static @Bean methods have no factory bean
-        let instance = |m: &Name| lk.class(&p.owner).is_some_and(|c| c.methods_named(m).any(|x| !x.flags.is_static()));
         (0..self.beans.len())
             .filter(|&i| {
                 let b = &self.beans[i];
                 own(b)
                     && match &b.source {
-                        BeanSource::FactoryMethod(m) => instance(m),
+                        BeanSource::FactoryMethod(_) => !b.static_factory,
                         _ => true,
                     }
             })
@@ -1537,7 +1544,20 @@ mod tests {
              @Service class Plain implements K {}
              @Configuration class Cfg { @org.springframework.beans.factory.annotation.Autowired K fromCfg; @Bean K made() { return null; } @Bean K wrap(K inner) { return null; } }
              interface J {}
-             @Configuration class StaticCfg { @org.springframework.beans.factory.annotation.Autowired J own; @Bean static J st() { return null; } @Bean J inst() { return null; } }
+             @Configuration class StaticCfg { @org.springframework.beans.factory.annotation.Autowired J own; @Bean static J st() { return null; } J st(int helper) { return null; } @Bean J inst() { return null; } }
+             interface H {}
+             @Service class OtherH implements H {}
+             class BaseCfg { @Bean H inherited() { return null; } }
+             @Configuration class SubCfg extends BaseCfg { @org.springframework.beans.factory.annotation.Autowired H viaSuper; H inherited(int helper) { return null; } }
+             interface G {}
+             @Service class OtherG1 implements G {}
+             @Service class OtherG2 implements G {}
+             class MakeBase { @Bean(\"primaryG\") @Primary static G make() { return null; } @Bean(\"number\") Integer make(String unused) { return 1; } }
+             @Configuration class MakeCfg extends MakeBase { @org.springframework.beans.factory.annotation.Autowired G viaStatic; }
+             interface F {}
+             @Service @Primary class ExternalF implements F {}
+             class FBase { @Bean(\"ownF\") @Primary F make(int unused) { return null; } }
+             @Configuration class FCfg extends FBase { @Bean(\"staticF\") static F make() { return null; } @Bean(\"numberF\") Integer make(String unused) { return 2; } @org.springframework.beans.factory.annotation.Autowired F viaHierarchy; }
              @ComponentScan class Main { public static void main(String[] args) {} }",
         )]);
         let bean = |n: &str| m.beans.iter().position(|b| b.name == n).unwrap();
@@ -1553,6 +1573,12 @@ mod tests {
         assert_eq!(resolution_of(&idx, &m, "app/A.java", "fromCfg"), Resolution::Unique(bean("plain")));
         assert_eq!(res("inner"), sorted(Resolution::Ambiguous(vec![bean("plain"), bean("made")])));
         assert_eq!(resolution_of(&idx, &m, "app/A.java", "own"), Resolution::Unique(bean("st")));
+        // an inherited instance @Bean is the config's own, beside a helper overload
+        assert_eq!(resolution_of(&idx, &m, "app/A.java", "viaSuper"), Resolution::Unique(bean("otherH")));
+        // an inherited static @Bean is no self-reference beside an instance one of the same name
+        assert_eq!(resolution_of(&idx, &m, "app/A.java", "viaStatic"), Resolution::Unique(bean("primaryG")));
+        // the inherited instance factory is a self-reference, the static one beside it is not
+        assert_eq!(resolution_of(&idx, &m, "app/A.java", "viaHierarchy"), Resolution::Unique(bean("externalF")));
         // the issue's case: a decorator wrapping the only other implementation
         let (idx, m) = model(&[(
             "app/A.java",
