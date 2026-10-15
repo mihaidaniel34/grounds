@@ -113,9 +113,6 @@ fn without_a_jdk_no_hierarchy_is_complete() {
     assert!(!bare.hierarchy_complete("p.C"));
     let with_jdk = index_of(&[("p/I.java", src)]);
     assert!(with_jdk.hierarchy_complete("p.I"));
-
-    let with_jdk = index_of(&[("p/I.java", src)]);
-    assert!(with_jdk.hierarchy_complete("p.I"));
 }
 
 #[test]
