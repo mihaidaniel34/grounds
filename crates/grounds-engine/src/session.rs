@@ -25,6 +25,8 @@ pub struct Session {
     pub resolution_rules: RuleSet,
     pub options: RuleOptions,
     mtimes: FxHashMap<PathBuf, SystemTime>,
+    /// Classpath warnings already shown in this session.
+    warned: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -127,13 +129,22 @@ impl Session {
         // same configuration as full checks, narrowed to edit-tier rules
         let edit_rules = RuleSet::new(crate::analyze::selected_rules(&project).into_iter().filter(|r| r.meta().tier == Tier::Edit).collect());
         let resolution_rules = RuleSet::new(crate::analyze::selected_rules(&project).into_iter().filter(|r| r.meta().id.starts_with("unresolved-")).collect());
-        let mut s = Session { project, all_rules, edit_rules, resolution_rules, options, mtimes: FxHashMap::default() };
+        let mut s = Session { project, all_rules, edit_rules, resolution_rules, options, mtimes: FxHashMap::default(), warned: false };
         for f in &s.project.workspace.files {
             if let Ok(m) = std::fs::metadata(&f.path).and_then(|m| m.modified()) {
                 s.mtimes.insert(f.path.clone(), m);
             }
         }
         s
+    }
+
+    /// Classpath warnings, the first time they are asked for: agents and
+    /// hooks run checks over and over, one mention is enough.
+    pub fn take_warnings(&mut self) -> Vec<String> {
+        if std::mem::replace(&mut self.warned, true) {
+            return Vec::new();
+        }
+        self.project.classpath_warnings.iter().map(|w| w.to_string()).collect()
     }
 
     pub fn root(&self) -> &Path {

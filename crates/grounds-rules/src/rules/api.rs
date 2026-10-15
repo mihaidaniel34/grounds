@@ -304,7 +304,7 @@ declare_rule!(CollectionReturnsNull {
     id: "collection-method-returns-null",
     name: "Collection or array method returns null",
     category: BadPractice,
-    severity: Warning,
+    severity: Info,
     sources: ["sonar:S1168", "spotbugs:PZLA_PREFER_ZERO_LENGTH_ARRAYS", "pmd:ReturnEmptyCollectionRatherThanNull"],
     kinds: ["return_statement"],
     description: "Returning null instead of an empty collection or array forces every caller to null-check and invites NullPointerExceptions. Return `List.of()`, `Collections.emptyList()` or an empty array.",
@@ -811,7 +811,7 @@ declare_rule!(DeprecatedApiUsage {
     severity: Info,
     sources: ["sonar:S1874", "sonar:S5738", "intellij:Deprecation"],
     kinds: ["method_invocation", "object_creation_expression"],
-    description: "The called method, constructor or its class is marked `@Deprecated`; it may be removed or has a better replacement. APIs deprecated `forRemoval` are reported as warnings.",
+    description: "The called method, constructor or its class is marked `@Deprecated`; it may be removed or has a better replacement. APIs deprecated `forRemoval` are reported as warnings. The project's own deprecated APIs (usually compatibility shims it still maintains) are reported only when deprecated `forRemoval`, and not from code that is itself deprecated (the method or any enclosing class).",
 });
 
 impl Rule for DeprecatedApiUsage {
@@ -827,13 +827,28 @@ impl Rule for DeprecatedApiUsage {
         if !method_dep && !class_dep {
             return;
         }
+        // a plain @Deprecated method of a class deprecated forRemoval goes with its class
+        let removal = |anns: &[AnnotationInfo]| anns.iter().any(|a| a.simple_name() == "Deprecated" && a.arg("forRemoval").and_then(|v| v.as_bool()) == Some(true));
+        let for_removal = (method_dep && removal(&c.method.annotations)) || (class_dep && owner.as_ref().is_some_and(|o| removal(&o.annotations)));
+        // the project's own deprecations are mostly compatibility shims it still
+        // maintains; only the ones it is about to remove are worth acting on
+        let own = owner.as_ref().is_some_and(|o| o.is_source());
+        if own && !for_removal {
+            return;
+        }
         // usage from inside the deprecated class itself is not interesting
         if let Some(enc) = cx.fm.enclosing_class_name(n) {
             if enc.starts_with(&*c.owner) {
                 return;
             }
-            if cx.fm.class(&enc).is_some_and(|e| e.flags.has(Flags::DEPRECATED)) {
-                return;
+            // nor from deprecated code (any enclosing class)
+            let mut cur = Some(enc);
+            while let Some(name) = cur {
+                let Some(e) = cx.fm.class(&name) else { break };
+                if e.flags.has(Flags::DEPRECATED) {
+                    return;
+                }
+                cur = e.outer.clone();
             }
         }
         if let Some(m) = enclosing_method_decl(n) {
@@ -841,8 +856,6 @@ impl Rule for DeprecatedApiUsage {
                 return;
             }
         }
-        let anns = if method_dep { &c.method.annotations } else { &owner.as_ref().unwrap().annotations };
-        let for_removal = anns.iter().any(|a| a.simple_name() == "Deprecated" && a.arg("forRemoval").and_then(|v| v.as_bool()) == Some(true));
         let what = if c.method.is_constructor() { format!("constructor of `{}`", simple_name_of(&c.owner)) } else { format!("`{}.{}()`", simple_name_of(&c.owner), c.method.name) };
         let msg = format!("{what} is deprecated{}", if for_removal { " for removal" } else { "" });
         if for_removal {
@@ -977,6 +990,7 @@ declare_rule!(OptionalParameter {
     name: "Optional used as a parameter or field type",
     category: BadPractice,
     severity: Info,
+    enabled: false,
     sources: ["sonar:S3553", "intellij:OptionalUsedAsFieldOrParameterType"],
     kinds: ["formal_parameter", "field_declaration"],
     description: "Optional is designed as a return type. As a parameter it forces callers to wrap values (and can itself be null); as a field it is not serializable. Use overloads or nullable values instead.",

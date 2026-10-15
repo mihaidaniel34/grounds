@@ -4,6 +4,7 @@ use crate::framework::*;
 use crate::util::*;
 use crate::{declare_rule, rule_meta};
 use grounds_index::*;
+use grounds_semantic::Symbol;
 use grounds_syntax::{Node, NodeExt};
 
 pub fn rules() -> Vec<Box<dyn Rule>> {
@@ -32,12 +33,44 @@ fn is_test_method(m: Node, src: &str) -> bool {
     annotation_names(m, src).iter().any(|a| TEST_ANNOTATIONS.contains(a))
 }
 
-fn assertion_owner<'t>(cx: &Ctx<'_, 't>, call: Node<'t>) -> Option<Name> {
-    cx.fm.select_method(call).map(|c| c.owner.clone())
-}
-
-fn is_testng<'t>(cx: &Ctx<'_, 't>, call: Node<'t>) -> bool {
-    assertion_owner(cx, call).is_some_and(|o| o.starts_with("org.testng"))
+/// The class declaring an assertion call: the resolved method's owner, or,
+/// when overloads cannot be told apart (arguments of unknown type), the one
+/// class all candidates come from: the qualifier (`Assert.assertEquals`),
+/// an inherited method (JUnit 3), or a static import.
+fn assertion_class<'t>(cx: &Ctx<'_, 't>, call: Node<'t>) -> Option<Name> {
+    if let Some(c) = cx.fm.select_method(call) {
+        return Some(c.owner.clone());
+    }
+    let name = cx.fm.call_name(call)?;
+    let mut owners: Vec<Name> = Vec::new();
+    if let Some(o) = call.field("object") {
+        if let Some(Symbol::Type(t)) = cx.fm.symbol(o) {
+            owners.push(t);
+        }
+    } else {
+        for cls in call.ancestors().filter(|a| grounds_syntax::is_type_declaration(a.kind())).filter_map(|d| cx.fm.class_of_decl(d)) {
+            owners.extend(cx.fm.methods_named(&cls.this_type(), name).into_iter().map(|m| m.owner));
+            if !owners.is_empty() {
+                break;
+            }
+        }
+        if owners.is_empty() {
+            for i in cx.fm.stub.imports.iter().filter(|i| i.is_static) {
+                let class = if i.on_demand { &*i.path } else if i.last() == name { i.path.rsplit_once('.').map_or("", |x| x.0) } else { continue };
+                match cx.fm.index.binary_name_for_dotted(class) {
+                    Some(b) if !i.on_demand || !cx.fm.methods_named(&Ty::class(&b), name).is_empty() => owners.push(b),
+                    Some(_) => {}
+                    // not on the classpath: it may provide the method
+                    None => owners.push(Name::from(class)),
+                }
+            }
+        }
+    }
+    owners.dedup();
+    match owners.as_slice() {
+        [o] => Some(o.clone()),
+        _ => None,
+    }
 }
 
 declare_rule!(AssertionArgumentOrder {
@@ -61,24 +94,23 @@ impl Rule for AssertionArgumentOrder {
         if args.len() < 2 {
             return;
         }
+        let owner = assertion_class(cx, n);
         // a project helper named assertEquals may take (actual, expected)
-        if assertion_owner(cx, n).is_some_and(|o| !(o.starts_with("org.junit") || o.starts_with("junit.") || o.starts_with("org.testng") || o.starts_with("kotlin.test"))) {
+        if owner.as_ref().is_some_and(|o| !(o.starts_with("org.junit") || o.starts_with("junit.") || o.starts_with("org.testng") || o.starts_with("kotlin.test"))) {
             return;
         }
-        // JUnit 4 has an optional leading message String
-        let (first, second) = if args.len() >= 3 && cx.type_of(args[0]).is_string() && assertion_owner(cx, n).is_some_and(|o| &*o == "org.junit.Assert") { (args[1], args[2]) } else { (args[0], args[1]) };
-        let testng = is_testng(cx, n);
+        // JUnit 4 (and 3) take an optional leading message String, JUnit 5
+        // and TestNG a trailing one
+        let message_first = owner.as_ref().is_some_and(|o| matches!(&**o, "org.junit.Assert" | "junit.framework.Assert" | "junit.framework.TestCase"));
+        let string = |x: Node<'t>| cx.type_of(x).is_string() || x.unparen().kind() == "string_literal" || x.unparen().kind() == "binary_expression" && x.unparen().kids().iter().any(|k| k.kind() == "string_literal");
+        let (first, second) = if args.len() >= 3 && message_first && string(args[0]) { (args[1], args[2]) } else { (args[0], args[1]) };
+        let testng = owner.as_ref().is_some_and(|o| o.starts_with("org.testng"));
         let lit = |x: Node<'t>| cx.fm.constant_value(x).is_some() || matches!(x.unparen().kind(), "null_literal" | "class_literal");
         let (exp, act) = if testng { (second, first) } else { (first, second) };
         if lit(act) && !lit(exp) {
             cx.report(n, if testng { "TestNG expects (actual, expected); the constant should be second" } else { "The expected value should be the first argument" });
         }
     }
-}
-
-fn is_assertion_call(name: &str) -> bool {
-    // MockMvc `andExpect`, Awaitility `untilAsserted`
-    name.starts_with("andExpect") || name == "untilAsserted" || name.starts_with("assert") || name.starts_with("verify") || name.starts_with("expect") || name.starts_with("check") || name.starts_with("should") || name == "fail" || name.starts_with("then") || name == "isEqualTo" || name.starts_with("validate") || name.starts_with("ensure") || name.starts_with("must")
 }
 
 declare_rule!(TestWithoutAssertion {
@@ -111,45 +143,12 @@ impl Rule for TestWithoutAssertion {
         if text.contains("assert ") || text.contains("fail(") {
             return;
         }
-        let mut calls = Vec::new();
-        find_kind(body, "method_invocation", &mut calls);
         // lambdas count too (assertions in callbacks)
-        for c in body.descendants().filter(|d| d.kind() == "method_invocation") {
-            calls.push(c);
-        }
-        let has = calls.iter().any(|c| {
-            let name = cx.fm.call_name(*c).unwrap_or("");
-            if is_assertion_call(name) {
-                return true;
-            }
-            // helper in the same class that asserts
-            if c.field("object").is_none() {
-                if let Some(cls_decl) = owning_type_decl(n) {
-                    let arity = cx.fm.args_of(*c).len();
-                    let own: Vec<Node<'t>> = methods_of(cls_decl).into_iter().filter(|m| method_name(*m, cx.src) == name && takes_args(*m, arity)).collect();
-                    if !own.is_empty() {
-                        return own.iter().any(|m| m.field("body").is_some_and(|b| asserts_in(b, cls_decl, cx, 3)));
-                    }
-                    // inherited from a test base class or interface (`rewriteRun(...)`
-                    // from OpenRewrite's RewriteTest): the harness asserts
-                    let own_class = cx.fm.class_of_decl(cls_decl).map(|ci| ci.name.clone());
-                    return match cx.fm.select_method(*c) {
-                        // a void harness method; `int compute()` merely computes
-                        Some(m) => m.method.ret == Ty::Void && own_class.is_some_and(|oc| m.owner != oc && cx.fm.is_subclass(&oc, &m.owner).is_yes()),
-                        // not resolved: inherited from a supertype we cannot see, unless
-                        // a static import may provide it
-                        None => !cx.fm.stub.imports.iter().any(|i| {
-                            i.is_static
-                                && if i.on_demand {
-                                    cx.fm.index.binary_name_for_dotted(&i.path).is_none_or(|b| !cx.fm.methods_named(&Ty::class(&b), name).is_empty())
-                                } else {
-                                    i.last() == name
-                                }
-                        }),
-                    };
-                }
-            }
-            false
+        let mut seen = Vec::new();
+        let has = body.descendants().any(|c| match c.kind() {
+            "method_invocation" => call_asserts(c, n, cx, HELPER_DEPTH, &mut seen),
+            "method_reference" => verifier_ref(c, cx),
+            _ => false,
         });
         if !has {
             if let Some(nm) = n.field("name") {
@@ -157,6 +156,111 @@ impl Rule for TestWithoutAssertion {
             }
         }
     }
+}
+
+/// How many levels of project helpers a test's calls are followed through.
+const HELPER_DEPTH: u32 = 3;
+
+/// Expectations a helper checks when it is given one (`perform(url, status().isOk())`).
+const MATCHER_TYPES: &[&str] = &["org.hamcrest.Matcher", "org.springframework.test.web.servlet.ResultMatcher"];
+
+/// Whether a call made by `test` asserts: an assertion-style call, a helper
+/// given a matcher, a project helper that asserts, or an inherited
+/// test-harness method.
+fn call_asserts<'t>(c: Node<'t>, test: Node<'t>, cx: &Ctx<'_, 't>, depth: u32, seen: &mut Vec<usize>) -> bool {
+    let name = cx.fm.call_name(c).unwrap_or("");
+    if is_assertion_name(name) {
+        return true;
+    }
+    // Awaitility's `await().atMost(t).until(condition)` fails when the
+    // condition never holds
+    if name.starts_with("until") && chain_root(c).is_some_and(|r| cx.fm.call_name(r) == Some("await")) {
+        return true;
+    }
+    let resolved = cx.fm.select_method(c);
+    let matcher = |t: &Ty| is_subtype_any(cx.fm, t, MATCHER_TYPES);
+    if resolved.as_ref().is_some_and(|m| m.method.params.iter().any(|p| matcher(&p.ty))) || cx.fm.args_of(c).iter().any(|a| matcher(&cx.type_of(*a))) {
+        return true;
+    }
+    let unqualified = c.field("object").is_none_or(|o| matches!(o.kind(), "this" | "super"));
+    let Some(m) = resolved else {
+        return unqualified && unresolved_helper_asserts(c, name, test, cx, depth, seen);
+    };
+    match cx.fm.index.source_file_of(&m.owner) {
+        // declared here: follow the body, which may call helpers of other files
+        Some(f) if *f == cx.fm.path => m.method.flags.has(Flags::ASSERTS) || depth > 0 && method_decl(cx, &m.method).is_some_and(|d| decl_asserts(d, test, cx, depth - 1, seen)),
+        // a test helper of another file, checked when it was indexed; one
+        // that delegates to a method inherited from yet another file may
+        // assert there
+        Some(f) if grounds_index::sources::is_test_path(f) => m.method.flags.has(Flags::ASSERTS) || m.method.flags.has(Flags::DELEGATES),
+        // library (or main) code: an inherited void harness method asserts
+        // (`rewriteRun(...)` from OpenRewrite's RewriteTest); `int compute()`
+        // merely computes
+        _ => {
+            unqualified
+                && m.method.ret == Ty::Void
+                && test.ancestors().filter(|a| grounds_syntax::is_type_declaration(a.kind())).filter_map(|d| cx.fm.class_of_decl(d)).any(|oc| m.owner != oc.name && cx.fm.is_subclass(&oc.name, &m.owner).is_yes())
+        }
+    }
+}
+
+/// A verifying method passed to a helper (`StepVerifier.LastStep::verifyComplete`).
+fn verifier_ref<'t>(r: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+    r.kids().last().is_some_and(|k| k.kind() == "identifier" && is_assertion_name(cx.text(*k)))
+}
+
+/// The first call of a receiver chain (`await()` in `await().atMost(t).until(c)`).
+fn chain_root(c: Node<'_>) -> Option<Node<'_>> {
+    let mut root = c.field("object").filter(|o| o.kind() == "method_invocation")?;
+    while let Some(o) = root.field("object").filter(|o| o.kind() == "method_invocation") {
+        root = o;
+    }
+    Some(root)
+}
+
+/// An unqualified call that did not resolve: a same-named helper declared
+/// around it, else a method inherited from a supertype we cannot see (unless
+/// a static import may provide it).
+fn unresolved_helper_asserts<'t>(c: Node<'t>, name: &str, test: Node<'t>, cx: &Ctx<'_, 't>, depth: u32, seen: &mut Vec<usize>) -> bool {
+    let arity = cx.fm.args_of(c).len();
+    for cls in c.ancestors().filter(|a| grounds_syntax::is_type_declaration(a.kind())) {
+        let own: Vec<Node<'t>> = methods_of(cls).into_iter().filter(|m| method_name(*m, cx.src) == name && takes_args(*m, arity)).collect();
+        if !own.is_empty() {
+            return depth > 0 && own.iter().any(|m| decl_asserts(*m, test, cx, depth - 1, seen));
+        }
+    }
+    !cx.fm.stub.imports.iter().any(|i| {
+        i.is_static
+            && if i.on_demand {
+                cx.fm.index.binary_name_for_dotted(&i.path).is_none_or(|b| !cx.fm.methods_named(&Ty::class(&b), name).is_empty())
+            } else {
+                i.last() == name
+            }
+    })
+}
+
+/// The declaration of a method of this file.
+fn method_decl<'t>(cx: &Ctx<'_, 't>, m: &MethodInfo) -> Option<Node<'t>> {
+    let (s, e) = m.range?;
+    let name = cx.fm.root().descendant_for_byte_range(s as usize, e as usize)?;
+    name.parent().filter(|p| p.kind() == "method_declaration")
+}
+
+/// Whether a helper declared in this file asserts: `assert`, a thrown
+/// `AssertionError`, or a call that asserts. `seen` guards against cycles.
+fn decl_asserts<'t>(d: Node<'t>, test: Node<'t>, cx: &Ctx<'_, 't>, depth: u32, seen: &mut Vec<usize>) -> bool {
+    if seen.contains(&d.id()) {
+        return false;
+    }
+    seen.push(d.id());
+    let Some(body) = d.field("body") else { return false };
+    body.descendants().any(|x| match x.kind() {
+        "method_invocation" => call_asserts(x, test, cx, depth, seen),
+        "method_reference" => verifier_ref(x, cx),
+        "assert_statement" => true,
+        "throw_statement" => cx.text(x).contains("AssertionError"),
+        _ => false,
+    })
 }
 
 /// Whether a method declaration accepts `n` arguments (varargs included).
@@ -168,26 +272,6 @@ fn takes_args(m: Node<'_>, n: usize) -> bool {
     } else {
         n == pc
     }
-}
-
-/// Whether a helper body asserts: an assertion-style call, `assert`, or a
-/// thrown `AssertionError`.
-fn asserts_in<'t>(body: Node<'t>, cls: Node<'t>, cx: &Ctx<'_, 't>, depth: u32) -> bool {
-    body.descendants().any(|d| match d.kind() {
-        "method_invocation" => {
-            let Some(name) = cx.fm.call_name(d) else { return false };
-            if is_assertion_call(name) {
-                return true;
-            }
-            // a further helper of the same class (`searchAndAssert` -> `assertResults`)
-            depth > 0
-                && d.field("object").is_none_or(|o| o.kind() == "this")
-                && methods_of(cls).iter().any(|m| method_name(*m, cx.src) == name && takes_args(*m, cx.fm.args_of(d).len()) && m.field("body").is_some_and(|b| b != body && asserts_in(b, cls, cx, depth - 1)))
-        }
-        "assert_statement" => true,
-        "throw_statement" => cx.text(d).contains("AssertionError"),
-        _ => false,
-    })
 }
 
 fn is_junit5_class<'t>(decl: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
@@ -626,11 +710,23 @@ impl Rule for AssertThrowsMultipleCalls {
         }
         let Some(l) = cx.fm.args_of(n).into_iter().find(|a| a.kind() == "lambda_expression") else { return };
         let Some(body) = l.field("body") else { return };
-        let calls: Vec<Node> = body.descendants().filter(|d| matches!(d.kind(), "method_invocation" | "object_creation_expression")).collect();
-        // nested calls used only as arguments of the single call are fine
-        let top_level = calls.iter().filter(|c| !c.ancestors().take_while(|a| *a != body).any(|a| a.kind() == "argument_list" || a.kind() == "method_invocation" && a != **c && c.parent() != Some(a))).count();
-        if body.kind() == "block" && body.kids().len() > 1 || top_level > 1 {
+        if invocations(body, cx) > 1 {
             cx.report(l, "Keep a single throwing invocation inside the assertThrows lambda");
         }
+    }
+}
+
+/// Invocations that run when a lambda body runs. A receiver chain
+/// (`builder().a(x).build()`) is one invocation, and calls made only as its
+/// arguments are part of it; nested lambdas, anonymous class bodies and
+/// `catch` clauses do not run with it, and `fail()` is not a call that could
+/// throw the expected exception (its arguments are).
+fn invocations<'t>(n: Node<'t>, cx: &Ctx<'_, 't>) -> usize {
+    match n.kind() {
+        "lambda_expression" | "class_body" | "catch_clause" => 0,
+        // its message is still evaluated
+        "method_invocation" if cx.fm.call_name(n) == Some("fail") => n.kids().into_iter().map(|k| invocations(k, cx)).sum(),
+        "method_invocation" | "object_creation_expression" => 1,
+        _ => n.kids().into_iter().map(|k| invocations(k, cx)).sum(),
     }
 }

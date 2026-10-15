@@ -715,6 +715,7 @@ declare_rule!(LiteralFirstInComparison {
     name: "String literal should be the receiver of equals()",
     category: Style,
     severity: Info,
+    enabled: false,
     sources: ["sonar:S1132", "pmd:LiteralsFirstInComparisons", "intellij:LiteralAsArgToStringEquals"],
     kinds: ["method_invocation"],
     description: "`variable.equals(\"literal\")` throws when the variable is null; `\"literal\".equals(variable)` returns false. Put the literal first.",
@@ -1059,7 +1060,7 @@ declare_rule!(EnumEqualsNull {
     severity: Info,
     sources: ["sonar:S4551"],
     kinds: ["method_invocation"],
-    description: "Enum constants are singletons: `==` is null-safe, faster and checked at compile time for type compatibility, while `equals()` throws on a null receiver.",
+    description: "Enum constants are singletons: `==` is null-safe, faster and checked at compile time for type compatibility, while `equals()` throws on a null receiver. Calls on an enum constant or `this` (`Color.RED.equals(c)`) cannot throw and are not reported.",
 });
 
 impl Rule for EnumEqualsNull {
@@ -1071,6 +1072,11 @@ impl Rule for EnumEqualsNull {
         let args = cx.fm.args_of(n);
         let Some(o) = n.field("object") else { return };
         if args.len() != 1 || o.kind() == "super" {
+            return;
+        }
+        // `Color.RED.equals(x)` and `this.equals(x)` cannot throw; `==` gains nothing there
+        let recv = o.unparen();
+        if recv.kind() == "this" || cx.fm.field_ref(recv).is_some_and(|f| f.field.flags.has(Flags::ENUM_CONSTANT)) {
             return;
         }
         let (ot, at) = (cx.type_of(o), cx.type_of(args[0]));

@@ -167,6 +167,7 @@ fn main() -> anyhow::Result<()> {
         Cmd::Index { root } => {
             let t = std::time::Instant::now();
             let p = grounds_engine::Project::load(&root)?;
+            warn_classpath(&p);
             let s = &p.stats;
             println!("modules: {}", p.workspace.modules.len());
             println!("files: {} (parsed {}, cached {})", s.files, s.parsed, s.cached);
@@ -234,6 +235,9 @@ fn main() -> anyhow::Result<()> {
             let resp = if no_daemon { grounds_engine::daemon::execute(&mut grounds_engine::session::Session::open(&root)?, &req) } else { grounds_engine::daemon::run(&root, &req, true)? };
             print!("{}", resp.stdout);
             eprint!("{}", resp.stderr);
+            for w in &resp.warnings {
+                eprintln!("{w}");
+            }
             if resp.stdout.is_empty() && resp.code == 0 && !json && !sarif {
                 eprintln!("grounds: no new problems in changed code");
             }
@@ -244,6 +248,9 @@ fn main() -> anyhow::Result<()> {
             let resp = grounds_engine::daemon::run(&root, &grounds_engine::daemon::Request::Baseline { files: abs(&files), merge }, false)?;
             print!("{}", resp.stdout);
             eprint!("{}", resp.stderr);
+            for w in &resp.warnings {
+                eprintln!("{w}");
+            }
             std::process::exit(resp.code);
         }
         Cmd::ImpactedTests { files, root, gradle } => {
@@ -294,6 +301,7 @@ fn main() -> anyhow::Result<()> {
         Cmd::Beans { root, ty } => {
             let root = find_root(root);
             let p = grounds_engine::Project::load(&root)?;
+            warn_classpath(&p);
             beans(&p, ty.as_deref(), style);
         }
         Cmd::Rules { json, markdown } => {
@@ -408,14 +416,25 @@ fn hook(event: &str) -> anyhow::Result<i32> {
             Ok(0)
         }
         "session-start" => {
-            // accept whatever is already wrong in uncommitted work, so the session only sees new problems
-            let _ = run(&root, &Request::Baseline { files: Vec::new(), merge: true }, true)?;
+            // accept whatever is already wrong in uncommitted work, so the session only sees new problems;
+            // stdout becomes context: the one place the agent learns that missing jars silence checks
+            let resp = run(&root, &Request::SessionStart, true)?;
+            for w in &resp.warnings {
+                println!("{w}");
+            }
             Ok(0)
         }
         _ => {
             eprintln!("unknown hook event {event}");
             Ok(1)
         }
+    }
+}
+
+/// Classpath problems on stderr: they silence checks without any other sign.
+fn warn_classpath(p: &grounds_engine::Project) {
+    for w in &p.classpath_warnings {
+        eprintln!("{w}");
     }
 }
 
@@ -442,6 +461,7 @@ fn check(root: &std::path::Path, paths: &[PathBuf], format: &str, rules: Option<
     use grounds_engine::analyze;
     let t = std::time::Instant::now();
     let mut project = grounds_engine::Project::load(root)?;
+    warn_classpath(&project);
     if let Some(r) = rules {
         project.config.rules.enable = r.split(',').map(|s| s.trim().to_string()).collect();
     }
@@ -465,7 +485,10 @@ fn check(root: &std::path::Path, paths: &[PathBuf], format: &str, rules: Option<
     } else {
         match format {
             "json" => println!("{}", report::json(&findings)),
-            "sarif" => println!("{}", report::sarif(&findings, &project.workspace.root)),
+            "sarif" => {
+                let warnings: Vec<String> = project.classpath_warnings.iter().map(|w| w.to_string()).collect();
+                println!("{}", report::sarif(&findings, &project.workspace.root, &warnings))
+            }
             _ => print!("{}", report::text(&findings, max, style)),
         }
     }
@@ -487,6 +510,7 @@ fn type_stats(root: &std::path::Path, show: bool) -> anyhow::Result<()> {
     use grounds_syntax::NodeExt;
     use rayon::prelude::*;
     let p = grounds_engine::Project::load(root)?;
+    warn_classpath(&p);
     let t = std::time::Instant::now();
     let files: Vec<_> = p.workspace.files.iter().filter(|f| f.kind != grounds_engine::workspace::SourceKind::Generated).collect();
     let res: Vec<(usize, usize, usize, usize, Vec<String>)> = files

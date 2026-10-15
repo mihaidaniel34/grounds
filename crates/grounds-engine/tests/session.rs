@@ -190,7 +190,7 @@ fn base_mode_finds_breaks_in_unchanged_files_and_writes_sarif() {
     assert!(s.check(&opts(None)).pending.is_empty());
 
     // SARIF: paths from the repository root, the break with related locations
-    let sarif: serde_json::Value = serde_json::from_str(&grounds_engine::report::sarif_report(&r, &dir)).unwrap();
+    let sarif: serde_json::Value = serde_json::from_str(&grounds_engine::report::sarif_report(&r, &dir, &[])).unwrap();
     let results = sarif["runs"][0]["results"].as_array().unwrap();
     assert_eq!(results.len(), r.findings.len() + 3);
     let uris: Vec<&str> = results.iter().map(|x| x["locations"][0]["physicalLocation"]["artifactLocation"]["uri"].as_str().unwrap()).collect();
@@ -253,7 +253,7 @@ fn base_mode_edge_cases() {
     let c = CheckOptions { mode: Mode::Checkpoint, files: vec![dir.join(j("demo/C.java"))], all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None };
     assert!(s.check(&c).findings.iter().all(|f| f.rule != "unimplemented-abstract-method"));
 
-    let sarif: serde_json::Value = serde_json::from_str(&grounds_engine::report::sarif_report(&r, &dir)).unwrap();
+    let sarif: serde_json::Value = serde_json::from_str(&grounds_engine::report::sarif_report(&r, &dir, &[])).unwrap();
     let uris: Vec<&str> = sarif["runs"][0]["results"].as_array().unwrap().iter().map(|x| x["locations"][0]["physicalLocation"]["artifactLocation"]["uri"].as_str().unwrap()).collect();
     assert!(uris.contains(&"my%20app/src/main/java/demo/UseB.java"), "{uris:?}");
     let _ = std::fs::remove_dir_all(&repo);
@@ -331,8 +331,40 @@ fn base_mode_removed_classes_and_new_beans() {
     // the new bean is blamed on its declaration
     let breaks: Vec<(&str, u32)> = r.breaks.iter().map(|b| (b.finding.path.as_str(), b.finding.line)).collect();
     assert_eq!(breaks, vec![("src/main/java/demo/ApiImpl2.java", 3)], "{:?}", r.breaks);
-    let sarif: serde_json::Value = serde_json::from_str(&grounds_engine::report::sarif_report(&r, &dir)).unwrap();
+    let sarif: serde_json::Value = serde_json::from_str(&grounds_engine::report::sarif_report(&r, &dir, &[])).unwrap();
     let rules: Vec<&str> = sarif["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap().iter().map(|r| r["name"].as_str().unwrap()).collect();
     assert!(rules.contains(&"Removed class still used"), "{rules:?}");
     let _ = std::fs::remove_dir_all(&repo);
+}
+
+#[test]
+fn classpath_warnings_once_per_session_and_at_session_start() {
+    use grounds_engine::daemon::{execute, Request};
+    let dir = std::env::temp_dir().join(format!("grounds-session-warn-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write(&dir, "pom.xml", "<project/>\n");
+    write(&dir, "grounds.toml", "[classpath]\nfiles = [\".grounds/classpath.txt\"]\n");
+    write(&dir, "src/main/java/demo/A.java", "package demo;\nclass A {}\n");
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+
+    let mut s = Session::open(&dir).unwrap();
+    let check = |sarif| Request::Check { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, baseline: true, max: 15, min_severity: "warning".into(), json: false, color: false, base: None, sarif };
+    let warned = execute(&mut s, &check(true));
+    assert_eq!(warned.warnings.len(), 1, "{:?}", warned.warnings);
+    assert!(warned.warnings[0].contains(".grounds/classpath.txt"));
+    let sarif: serde_json::Value = serde_json::from_str(&warned.stdout).unwrap();
+    let note = &sarif["runs"][0]["invocations"][0]["toolExecutionNotifications"][0];
+    assert_eq!(note["level"], "warning");
+    assert!(note["message"]["text"].as_str().unwrap().starts_with("classpath file .grounds/classpath.txt"));
+    // once per session; a new agent session hears it again
+    let again = execute(&mut s, &check(true));
+    assert!(again.warnings.is_empty());
+    let sarif: serde_json::Value = serde_json::from_str(&again.stdout).unwrap();
+    assert!(sarif["runs"][0].get("invocations").is_none());
+    assert_eq!(execute(&mut s, &Request::SessionStart).warnings, warned.warnings);
+    assert!(execute(&mut s, &check(false)).warnings.is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
 }

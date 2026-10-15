@@ -4,6 +4,7 @@ use crate::framework::*;
 use crate::util::*;
 use crate::{declare_rule, rule_meta};
 use grounds_index::*;
+use grounds_semantic::MethodMatcher;
 use grounds_syntax::{Node, NodeExt};
 
 pub fn rules() -> Vec<Box<dyn Rule>> {
@@ -127,22 +128,39 @@ impl Rule for CatchThrowable {
 
 declare_rule!(CatchNullPointer {
     id: "catch-null-pointer",
-    name: "Catching NullPointerException",
+    name: "Catching NullPointerException or a similar programming error",
     category: BadPractice,
     severity: Warning,
     sources: ["sonar:S1696", "pmd:AvoidCatchingNPE"],
     kinds: ["catch_clause"],
-    description: "Catching `NullPointerException` (or `IndexOutOfBoundsException`, `ClassCastException`) masks a programming error instead of preventing it with a check.",
+    description: "Catching `NullPointerException`, `ArrayIndexOutOfBoundsException` or `ClassCastException` masks a programming error instead of preventing it with a check. `ClassCastException` is only reported when the try block casts (or calls `Class.cast()`) itself, where `instanceof` can test first; thrown from inside a library call there is nothing to check.",
 });
+
+/// Does the try block of catch clause `c` cast a reference itself (a cast
+/// expression or `Class.cast()`), so `instanceof` could replace catching
+/// ClassCastException? Primitive casts never throw it.
+fn try_casts<'t>(c: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+    let Some(t) = c.parent() else { return false };
+    [t.field("resources"), t.field("body")].into_iter().flatten().any(|b| {
+        b.descendants().any(|d| match d.kind() {
+            "cast_expression" => d.field("type").is_some_and(|ty| !matches!(ty.kind(), "integral_type" | "floating_point_type" | "boolean_type")),
+            "method_invocation" => cx.fm.call_matches(d, &MethodMatcher::instance("java.lang.Class").named(&["cast"])),
+            _ => false,
+        })
+    })
+}
 
 impl Rule for CatchNullPointer {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
         for t in catch_types(n, cx) {
-            if matches!(t.class_name(), Some("java.lang.NullPointerException" | "java.lang.ArrayIndexOutOfBoundsException" | "java.lang.ClassCastException")) {
-                if let Some(p) = catch_param(n) {
-                    cx.report(p, format!("Catching `{}` hides a bug; check the condition instead", t.display_simple()));
-                }
+            let msg = match t.class_name() {
+                Some("java.lang.NullPointerException" | "java.lang.ArrayIndexOutOfBoundsException") => "check the condition instead",
+                Some("java.lang.ClassCastException") if try_casts(n, cx) => "check with `instanceof` before casting",
+                _ => continue,
+            };
+            if let Some(p) = catch_param(n) {
+                cx.report(p, format!("Catching `{}` hides a bug; {msg}", t.display_simple()));
             }
         }
     }

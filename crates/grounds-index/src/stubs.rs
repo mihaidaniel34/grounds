@@ -878,6 +878,8 @@ impl<'s> Extractor<'s> {
 
         let mut fields = Vec::new();
         let mut methods = Vec::new();
+        // (index in `methods`, body) of methods not known to assert
+        let mut helpers: Vec<(usize, Node)> = Vec::new();
         let mut inners = Vec::new();
         let is_iface = matches!(kind, ClassKind::Interface | ClassKind::Annotation);
 
@@ -997,6 +999,13 @@ impl<'s> Extractor<'s> {
                     if throws_on_false(m, src) {
                         ff.set(Flags::THROWS_ON_FALSE);
                     }
+                    if let Some(b) = m.field("body") {
+                        if asserts_directly(b, src) {
+                            ff.set(Flags::ASSERTS);
+                        } else {
+                            helpers.push((methods.len(), b));
+                        }
+                    }
                     let mut ret = m.field("type").map(|t| type_syntax(t, src)).unwrap_or(TypeSyntax::Unknown);
                     if let Some(d) = m.field("dimensions") {
                         ret = wrap_array(ret, d.text(src).matches('[').count());
@@ -1053,6 +1062,37 @@ impl<'s> Extractor<'s> {
                     }
                 }
                 _ => {}
+            }
+        }
+
+        // a method calling an asserting method of its class asserts too
+        // (`checkAll` -> `assertResult`); a few rounds follow helper chains
+        for _ in 0..3 {
+            let asserting: Vec<&RawMethod> = methods.iter().filter(|m| m.flags.has(Flags::ASSERTS)).collect();
+            let found: Vec<usize> = helpers.iter().filter(|(_, b)| calls_any(*b, &asserting, src)).map(|(i, _)| *i).collect();
+            if found.is_empty() {
+                break;
+            }
+            for &i in &found {
+                methods[i].flags.set(Flags::ASSERTS);
+            }
+            helpers.retain(|(i, _)| !found.contains(i));
+        }
+        // the rest may still assert through a method inherited from another
+        // file (`check(x)` -> `super.check(x, y)`), directly or via a helper
+        for (i, b) in &helpers {
+            if calls_other(*b, &methods, src) {
+                methods[*i].flags.set(Flags::DELEGATES);
+            }
+        }
+        for _ in 0..3 {
+            let delegating: Vec<&RawMethod> = methods.iter().filter(|m| m.flags.has(Flags::DELEGATES)).collect();
+            let found: Vec<usize> = helpers.iter().filter(|(i, b)| !methods[*i].flags.has(Flags::DELEGATES) && calls_any(*b, &delegating, src)).map(|(i, _)| *i).collect();
+            if found.is_empty() {
+                break;
+            }
+            for &i in &found {
+                methods[i].flags.set(Flags::DELEGATES);
             }
         }
 
@@ -1145,6 +1185,48 @@ fn always_throws(body: Node) -> bool {
         })
     }
     !returns(body)
+}
+
+/// Names of calls that assert in test code: JUnit/TestNG/AssertJ `assert*`,
+/// `fail`, Mockito `verify`, MockMvc `andExpect`, Awaitility
+/// `untilAsserted`, and project helpers named like `checkResult`.
+pub fn is_assertion_name(name: &str) -> bool {
+    name.starts_with("andExpect") || name == "untilAsserted" || name.starts_with("assert") || name.starts_with("verify") || name.starts_with("expect") || name.starts_with("check") || name.starts_with("should") || name == "fail" || name.starts_with("then") || name == "isEqualTo" || name.starts_with("validate") || name.starts_with("ensure") || name.starts_with("must")
+}
+
+/// A body that asserts by itself: an assertion-style call, `assert`, or a
+/// thrown `AssertionError`.
+fn asserts_directly(body: Node, src: &str) -> bool {
+    body.descendants().any(|d| match d.kind() {
+        "method_invocation" => d.field("name").is_some_and(|n| is_assertion_name(n.text(src))),
+        "assert_statement" => true,
+        "throw_statement" => d.text(src).contains("AssertionError"),
+        _ => false,
+    })
+}
+
+/// Whether a body calls one of `methods` of its own class (unqualified or
+/// through `this`), matched by name and arity.
+fn calls_any(body: Node, methods: &[&RawMethod], src: &str) -> bool {
+    body.descendants().any(|d| d.kind() == "method_invocation" && d.field("object").is_none_or(|o| o.kind() == "this") && accepts_call(d, methods.iter().copied(), src))
+}
+
+/// Whether one of `methods` takes the call, by name and arity.
+fn accepts_call<'m>(call: Node, mut methods: impl Iterator<Item = &'m RawMethod>, src: &str) -> bool {
+    let Some(name) = call.field("name").map(|n| n.text(src)) else { return false };
+    let argc = call.field("arguments").map_or(0, |a| a.kids().len());
+    methods.any(|m| &*m.name == name && if m.flags.has(Flags::VARARGS) { argc + 1 >= m.params.len() } else { argc == m.params.len() })
+}
+
+/// Whether a body calls a method its class does not declare, unqualified or
+/// through `this`/`super`: one inherited from another file (or statically
+/// imported, which cannot be told apart here).
+fn calls_other(body: Node, methods: &[RawMethod], src: &str) -> bool {
+    body.descendants().any(|d| {
+        d.kind() == "method_invocation"
+            && d.field("object").is_none_or(|o| matches!(o.kind(), "this" | "super"))
+            && (d.field("object").is_some_and(|o| o.kind() == "super") || !accepts_call(d, methods.iter(), src))
+    })
 }
 
 /// `void check(boolean ok, ...) { if (!ok) throw ...; ... }`

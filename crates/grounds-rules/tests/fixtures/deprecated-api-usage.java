@@ -4,12 +4,31 @@ class Old {
     @Deprecated(forRemoval = true) void gone() {}
     void fresh() {}
 }
+@Deprecated(forRemoval = true)
+class Doomed {
+    static Doomed create() { return new Doomed(); }
+    @Deprecated static void old() {}
+}
+@Deprecated
+class Shim {
+    static Shim create() { return new Shim(); }
+}
 class A {
     void m(Old o, Date d) {
-        o.legacy(); // expect
+        o.legacy();
+        Shim.create();
         o.gone(); // expect
+        Doomed.create(); // expect
+        Doomed.old(); // expect
         int y = d.getYear(); // expect
         o.fresh();
     }
-    @Deprecated void alsoOld(Old o) { o.legacy(); }
+    @Deprecated void alsoOld(Old o, Date d) { o.legacy(); o.gone(); d.getYear(); }
+}
+@Deprecated
+class Compat {
+    void m(Old o, Date d) { o.gone(); d.getYear(); }
+    class Inner {
+        void m(Old o, Date d) { o.gone(); d.getYear(); }
+    }
 }

@@ -423,6 +423,14 @@ impl Flags {
     /// A source method that starts with `if (!flag) throw ...;` on its first
     /// (boolean) parameter: a check that returns only when the flag is true.
     pub const THROWS_ON_FALSE: u32 = 1 << 25;
+    /// A source method whose body asserts (an assertion-style call, `assert`,
+    /// a thrown `AssertionError`), directly or through a helper of its class.
+    /// Only meaningful in test code: see [`crate::stubs::is_assertion_name`].
+    pub const ASSERTS: u32 = 1 << 26;
+    /// A source method not known to assert that calls a method its class does
+    /// not declare (inherited from another file), directly or through a helper
+    /// of its class: it may assert there.
+    pub const DELEGATES: u32 = 1 << 27;
 
     pub fn has(self, f: u32) -> bool {
         self.0 & f != 0

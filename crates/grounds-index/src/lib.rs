@@ -13,7 +13,7 @@ pub mod stubs;
 pub use hierarchy::{ClassLookup, FieldRef, MethodRef, Tri};
 pub use index::{Classpath, Index, Scope};
 pub use model::*;
-pub use stubs::{extract, FileStub, Import, RawClass, TypeSyntax};
+pub use stubs::{extract, is_assertion_name, FileStub, Import, RawClass, TypeSyntax};
 
 #[cfg(test)]
 mod tests;

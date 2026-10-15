@@ -23,17 +23,17 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `exception-message-only-logged` | info | checkpoint | sonar:S1166, intellij:ThrowableNotPassedToLogger |
 | `catch-return-null` | info | checkpoint | sonar:S1166 |
 | `ignored-status-result` | warning | checkpoint | sonar:S899, spotbugs:RV_RETURN_VALUE_IGNORED_BAD_PRACTICE |
-| `collection-method-returns-null` | warning | checkpoint | sonar:S1168, spotbugs:PZLA_PREFER_ZERO_LENGTH_ARRAYS, pmd:ReturnEmptyCollectionRatherThanNull |
+| `collection-method-returns-null` | info | checkpoint | sonar:S1168, spotbugs:PZLA_PREFER_ZERO_LENGTH_ARRAYS, pmd:ReturnEmptyCollectionRatherThanNull |
 | `system-exit` | info | checkpoint | sonar:S1147, spotbugs:DM_EXIT, pmd:DoNotTerminateVM |
 | `system-out-println` | info | checkpoint | sonar:S106, pmd:SystemPrintln, intellij:UseOfSystemOutOrSystemErr |
 | `deprecated-api-usage` | info | checkpoint | sonar:S1874, sonar:S5738, intellij:Deprecation |
-| `optional-as-parameter-or-field` | info | checkpoint | sonar:S3553, intellij:OptionalUsedAsFieldOrParameterType |
+| `optional-as-parameter-or-field` *off* | info | checkpoint | sonar:S3553, intellij:OptionalUsedAsFieldOrParameterType |
 | `loop-counter-modified-in-body` | info | checkpoint | sonar:S127, pmd:AvoidReassigningLoopVariables, intellij:AssignmentToForLoopParameter |
 | `public-static-non-final-field` | warning | checkpoint | sonar:S1444, spotbugs:MS_SHOULD_BE_FINAL, pmd:MutableStaticState |
 | `public-static-mutable-container` | warning | checkpoint | sonar:S2386, spotbugs:MS_MUTABLE_ARRAY, spotbugs:MS_MUTABLE_COLLECTION, spotbugs:MS_MUTABLE_COLLECTION_PKGPROTECT |
 | `static-field-written-from-instance-method` | warning | checkpoint | sonar:S2696, spotbugs:ST_WRITE_TO_STATIC_FROM_INSTANCE_METHOD |
 | `field-hides-superclass-field` | info | checkpoint | sonar:S2387, spotbugs:MF_CLASS_MASKS_FIELD, intellij:FieldNameHidesFieldInSuperclass |
-| `class-shadows-supertype-name` | info | checkpoint | sonar:S2176, spotbugs:NM_SAME_SIMPLE_NAME_AS_SUPERCLASS, spotbugs:NM_SAME_SIMPLE_NAME_AS_INTERFACE |
+| `class-shadows-supertype-name` *off* | info | checkpoint | sonar:S2176, spotbugs:NM_SAME_SIMPLE_NAME_AS_SUPERCLASS, spotbugs:NM_SAME_SIMPLE_NAME_AS_INTERFACE |
 | `missing-serial-version-uid` *off* | info | checkpoint | sonar:S2057, spotbugs:SE_NO_SERIALVERSIONID, pmd:MissingSerialVersionUID |
 | `cloneable-without-clone` | info | checkpoint | sonar:S2157, spotbugs:CN_IDIOM |
 | `compareto-without-equals` | info | checkpoint | sonar:S1210, spotbugs:EQ_COMPARETO_USE_OBJECT_EQUALS |
@@ -285,7 +285,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 
 | id | severity | tier | origin |
 |---|---|---|---|
-| `literal-first-in-comparison` | info | checkpoint | sonar:S1132, pmd:LiteralsFirstInComparisons, intellij:LiteralAsArgToStringEquals |
+| `literal-first-in-comparison` *off* | info | checkpoint | sonar:S1132, pmd:LiteralsFirstInComparisons, intellij:LiteralAsArgToStringEquals |
 | `enum-compared-with-equals` | info | checkpoint | sonar:S4551 |
 | `lowercase-long-literal` | info | checkpoint | sonar:S818, errorprone:LongLiteralLowerCaseSuffix |
 | `string-tostring` | info | checkpoint | sonar:S1858, pmd:StringToString |
@@ -327,7 +327,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `local-variable-naming` | info | checkpoint | sonar:S117, pmd:LocalVariableNamingConventions, pmd:FormalParameterNamingConventions |
 | `package-naming` | info | checkpoint | sonar:S120, pmd:PackageCase |
 | `type-parameter-naming` *off* | info | checkpoint | sonar:S119, pmd:GenericsNaming |
-| `abstract-class-public-constructor` | info | checkpoint | sonar:S5993 |
+| `abstract-class-public-constructor` *off* | info | checkpoint | sonar:S5993 |
 | `static-member-via-instance` | info | checkpoint | sonar:S2209, intellij:StaticMethodReferencedViaSubclass |
 | `empty-method` | info | checkpoint | sonar:S1186, pmd:UncommentedEmptyMethodBody |
 | `missing-override` | info | checkpoint | sonar:S1161, pmd:MissingOverride, intellij:MissingOverrideAnnotation |

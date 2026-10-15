@@ -290,7 +290,7 @@ projects; outside Java projects the hooks do nothing).
 
 | hook | runs | does |
 |---|---|---|
-| SessionStart | `grounds hook session-start` | records problems already in uncommitted work as a baseline and starts the daemon |
+| SessionStart | `grounds hook session-start` | records problems already in uncommitted work as a baseline, starts the daemon, and tells the agent if the classpath is missing or stale |
 | PostToolUse (Edit/Write) | `grounds hook post-edit` | high-confidence rules on the edited file's changed lines, plus callers in other files broken by API changes in it |
 | Stop | `grounds hook stop` | all rules on changed lines of all changed files, at most 15 findings; blocks the end of the turn once if anything new was found |
 
@@ -385,6 +385,7 @@ entries = ["libs/vendor.jar"]
 files = [".grounds/classpath.txt"]
 scan_caches = true      # use the newest version of each artifact in ~/.gradle and ~/.m2
 build_outputs = true    # module build/classes directories
+warn = true             # warn when the classpath looks missing or stale
 ```
 
 When `java_release` is not set, grounds reads it from the build: Maven's
@@ -419,6 +420,20 @@ never installed, Maven cannot resolve those dependencies this way. Either run
 runs the lifecycle up to test-compile without compiling, so the reactor
 resolves sibling modules and nothing is installed, but plugins bound to early
 phases (code generators, resource copies) run too.
+
+Without the jars, calls into libraries stay unresolved and most checks skip
+them, so grounds warns (on stderr; for agents once, at session start; in
+SARIF as a tool notification) when:
+
+- a classpath file listed in `files` does not exist,
+- a classpath file is older than the build files it comes from (`pom.xml`,
+  `build.gradle(.kts)`, `settings.gradle(.kts)`, `gradle.properties`,
+  `gradle/libs.versions.toml`),
+- jars listed in a classpath file no longer exist (a cleaned cache),
+- there is no classpath file and no jar was found for most of the library
+  types the sources import.
+
+Set `warn = false` under `[classpath]` to silence these.
 
 With the guessed classpath, jar versions may not match the project's, so the
 compile-break rules skip classes that extend library classes (a method
