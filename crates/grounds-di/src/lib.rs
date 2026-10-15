@@ -275,6 +275,8 @@ struct Builder<'a> {
     qualifier_ann: FxHashMap<Name, bool>,
     /// classes registered through META-INF files
     registered: rustc_hash::FxHashSet<String>,
+    /// the auto-configurations among them
+    auto_registered: rustc_hash::FxHashSet<String>,
 }
 
 impl<'a> Builder<'a> {
@@ -451,8 +453,8 @@ impl<'a> Builder<'a> {
         for n in &names {
             let Some(c) = self.index.class(n) else { continue };
             if c.annotations.iter().any(|a| a.is("org.springframework.boot.autoconfigure.AutoConfiguration") || (!a.resolved && a.simple_name() == "AutoConfiguration"))
-                || self.registered.contains(&**n)
-                || self.registered.contains(&n.replace('$', "."))
+                || self.auto_registered.contains(&**n)
+                || self.auto_registered.contains(&n.replace('$', "."))
             {
                 self.model.auto_configurations.insert(n.clone());
             }
@@ -979,13 +981,21 @@ pub fn unwrap_injected(ty: &Ty) -> (Ty, bool, bool, bool) {
 
 impl DiModel {
     pub fn build(index: &Index) -> DiModel {
-        Self::build_with(index, &[])
+        Self::build_with(index, &[], &[])
     }
 
     /// `registered`: classes listed in META-INF/spring.factories or
-    /// META-INF/spring/*.imports (auto-configurations and similar).
-    pub fn build_with(index: &Index, registered: &[String]) -> DiModel {
-        let mut b = Builder { index, model: DiModel::default(), stereo: FxHashMap::default(), qualifier_ann: FxHashMap::default(), registered: registered.iter().cloned().collect() };
+    /// META-INF/spring/*.imports (auto-configurations and similar);
+    /// `auto_registered`: the auto-configurations among them.
+    pub fn build_with(index: &Index, registered: &[String], auto_registered: &[String]) -> DiModel {
+        let mut b = Builder {
+            index,
+            model: DiModel::default(),
+            stereo: FxHashMap::default(),
+            qualifier_ann: FxHashMap::default(),
+            registered: registered.iter().cloned().collect(),
+            auto_registered: auto_registered.iter().cloned().collect(),
+        };
         b.scan();
         let mut m = b.model;
         m.duplicated = index.source_class_names().filter(|n| index.is_duplicated(n)).cloned().collect();
@@ -1333,10 +1343,10 @@ mod tests {
     use grounds_syntax::ParsedFile;
 
     fn model(files: &[(&str, &str)]) -> (Index, DiModel) {
-        model_with(files, &[])
+        model_with(files, &[], &[])
     }
 
-    fn model_with(files: &[(&str, &str)], registered: &[String]) -> (Index, DiModel) {
+    fn model_with(files: &[(&str, &str)], registered: &[String], auto_registered: &[String]) -> (Index, DiModel) {
         let cp = Arc::new(Classpath::build(grounds_classfile::find_java_home().as_deref(), 21, &[]));
         let mut idx = Index::new(cp);
         let stubs = [
@@ -1351,7 +1361,7 @@ mod tests {
             let pf = ParsedFile::parse(*s);
             idx.set_file(Arc::from(*p), Arc::new(extract(&pf)));
         }
-        let m = DiModel::build_with(&idx, registered);
+        let m = DiModel::build_with(&idx, registered, auto_registered);
         (idx, m)
     }
 
@@ -1458,13 +1468,18 @@ mod tests {
                  public class PluginAutoConfiguration { @Bean Object client(Extension<?> extension) { return null; } }",
             ),
             ("shop/plugins/core/src/main/java/com/example/shop/plugin/Registered.java", "package com.example.shop.plugin; @org.springframework.context.annotation.Configuration public class Registered { @org.springframework.context.annotation.Bean Object other(Extension<?> c) { return null; } }"),
+            // registered under another key (spring.factories listeners and
+            // the like): the scan still picks it up
+            ("shop/plugins/core/src/main/java/com/example/shop/plugin/Listed.java", "package com.example.shop.plugin; @org.springframework.context.annotation.Configuration public class Listed { @org.springframework.context.annotation.Bean Object listed(Extension<?> l) { return null; } }"),
             // a plain @ComponentScan does not skip them
             ("other/src/main/java/com/example/other/Main.java", "package com.example.other; @org.springframework.context.annotation.ComponentScan public class Main { public static void main(String[] args) {} }"),
             ("other/src/main/java/com/example/other/OtherAutoConfiguration.java", "package com.example.other; interface Missing {} @org.springframework.boot.autoconfigure.AutoConfiguration class OtherAutoConfiguration { @org.springframework.context.annotation.Bean Object x(Missing m) { return null; } }"),
         ];
-        let (idx, m) = model_with(&files, &["com.example.shop.plugin.Registered".to_string()]);
+        let registered = ["com.example.shop.plugin.Registered".to_string(), "com.example.shop.plugin.Listed".to_string()];
+        let (idx, m) = model_with(&files, &registered, &registered[..1]);
         assert_eq!(resolution_of(&idx, &m, "shop/plugins/core/src/main/java/com/example/shop/plugin/PluginAutoConfiguration.java", "extension"), Resolution::Unknown);
         assert_eq!(resolution_of(&idx, &m, "shop/plugins/core/src/main/java/com/example/shop/plugin/Registered.java", "c"), Resolution::Unknown);
+        assert_eq!(resolution_of(&idx, &m, "shop/plugins/core/src/main/java/com/example/shop/plugin/Listed.java", "l"), Resolution::NotFound);
         assert_eq!(resolution_of(&idx, &m, "other/src/main/java/com/example/other/OtherAutoConfiguration.java", "m"), Resolution::NotFound);
     }
 
