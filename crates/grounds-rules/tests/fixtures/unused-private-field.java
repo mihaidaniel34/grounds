@@ -25,3 +25,23 @@ class Usage {
         Usage build() { return new Usage(this); }
     }
 }
+// constants read only by annotation arguments are used
+@interface Tag { String value() default ""; String[] names() default {}; Tag[] nested() default {}; int size() default 0; }
+@Tag(OnAnnotations.ON_CLASS)
+class OnAnnotations {
+    private static final String ON_CLASS = "c";
+    private static final String ON_METHOD = "m";
+    private static final String IN_ARRAY = "a";
+    private static final String NESTED = "n";
+    private static final String ON_FIELD = "f";
+    private static final String ON_PARAM = "p";
+    private static final int SIZE = 2;
+    private static final String UNREAD = "u"; // expect
+    @Tag(ON_FIELD) private int tagged;
+    @Tag(value = ON_METHOD, size = SIZE + 1)
+    void a() {}
+    @Tag(names = {"x", IN_ARRAY})
+    void b() {}
+    @Tag(nested = @Tag(NESTED))
+    void c(@Tag(ON_PARAM) int p) {}
+}

@@ -9,3 +9,24 @@ class Impl extends Base implements Api {
     @Override public void run(int x) {} // expect
     @Override public String toString() { return ""; }
 }
+interface Node<N extends Node<N>> { N next(); }
+abstract class Chain<E extends Node<E>> extends java.util.AbstractCollection<E> {
+    @Override public boolean remove(Object o) { return false; }
+    @Override public boolean add(E e) { return true; }
+    @Override public <T> T[] toArray(T[] a) { return a; }
+    @Override public boolean contains(E e) { return false; } // expect
+}
+class RawVersion implements Comparable {
+    @Override public int compareTo(Object o) { return 0; }
+}
+class Length implements java.util.function.Function<String, Integer> {
+    @Override public Integer apply(String s) { return s.length(); }
+}
+class Enclosing<T> {
+    class Enclosed<S> { void take(S s, T t) {} }
+}
+class ExtendsEnclosing extends Enclosing<String> {
+    class ExtendsEnclosed extends Enclosed<Integer> {
+        @Override void take(Integer s, String t) {}
+    }
+}

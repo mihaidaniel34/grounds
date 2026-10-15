@@ -19,6 +19,8 @@ pub struct LoadStats {
     pub cached: usize,
     pub classpath_entries: usize,
     pub classpath_classes: usize,
+    /// The Java release whose JDK API is checked against.
+    pub java_release: u32,
     pub t_discover: Duration,
     pub t_classpath: Duration,
     pub t_stubs: Duration,
@@ -179,7 +181,8 @@ impl Project {
         let entries = crate::classpath::collect(&workspace, &config);
         stats.classpath_entries = entries.len();
         let java_home = config.java_home.clone().or_else(grounds_classfile::find_java_home);
-        let classpath = Arc::new(Classpath::build(java_home.as_deref(), config.java_release, &entries));
+        stats.java_release = config.java_release(&workspace);
+        let classpath = Arc::new(Classpath::build(java_home.as_deref(), stats.java_release, &entries));
         if !classpath.contains("java.lang.Object") {
             static WARNED: std::sync::Once = std::sync::Once::new();
             WARNED.call_once(|| {

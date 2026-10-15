@@ -3,11 +3,12 @@
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Default)]
 #[serde(default)]
 pub struct Config {
-    /// Java release used to pick JDK symbols from ct.sym.
-    pub java_release: u32,
+    /// Java release used to pick JDK symbols from ct.sym; when unset, read
+    /// from the build (see [`Config::java_release`]).
+    pub java_release: Option<u32>,
     pub java_home: Option<PathBuf>,
     pub classpath: ClasspathConfig,
     pub rules: RulesConfig,
@@ -62,20 +63,6 @@ pub struct ReportConfig {
     pub min_severity: String,
 }
 
-impl Default for Config {
-    fn default() -> Self {
-        Config {
-            java_release: 21,
-            java_home: None,
-            classpath: ClasspathConfig::default(),
-            rules: RulesConfig::default(),
-            report: ReportConfig::default(),
-            exclude: Vec::new(),
-            test_source_sets: Vec::new(),
-        }
-    }
-}
-
 impl Default for ClasspathConfig {
     fn default() -> Self {
         ClasspathConfig { entries: Vec::new(), files: Vec::new(), scan_caches: true, build_outputs: true, warn: true }
@@ -88,7 +75,16 @@ impl Default for ReportConfig {
     }
 }
 
+/// Release checked against when neither grounds.toml nor the build sets one.
+pub const DEFAULT_JAVA_RELEASE: u32 = 21;
+
 impl Config {
+    /// The release to check against: grounds.toml's, else the one the build
+    /// compiles for, else [`DEFAULT_JAVA_RELEASE`].
+    pub fn java_release(&self, ws: &crate::workspace::Workspace) -> u32 {
+        self.java_release.or_else(|| crate::java_release::infer(ws)).unwrap_or(DEFAULT_JAVA_RELEASE)
+    }
+
     pub fn load(root: &Path) -> anyhow::Result<Config> {
         for name in ["grounds.toml", ".grounds/config.toml"] {
             let p = root.join(name);

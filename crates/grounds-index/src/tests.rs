@@ -50,7 +50,8 @@ fn lombok_members() {
         "P.java",
         "package q; import lombok.*;
          @Data @Builder public class P { private final String name; private boolean active; private int age; }
-         @Value class V { String a; }
+         @Value class V { String a; @NonFinal String b; @PackagePrivate String c; static int d; }
+         @Value @NonFinal class W { String a; }
          @Slf4j @RequiredArgsConstructor class S { private final P p; private String x; }",
     )]);
     let p = idx.class("q.P").unwrap();
@@ -62,8 +63,16 @@ fn lombok_members() {
     assert!(b.methods_named("name").next().is_some());
     assert_eq!(b.methods_named("build").next().unwrap().ret.to_string(), "q.P");
     let v = idx.class("q.V").unwrap();
-    assert!(v.field("a").unwrap().flags.is_final());
-    assert_eq!(v.constructors().next().unwrap().params.len(), 1);
+    assert!(v.flags.is_final());
+    assert!(v.field("a").unwrap().flags.is_final() && v.field("a").unwrap().flags.is_private());
+    let b = v.field("b").unwrap();
+    assert!(!b.flags.is_final() && b.flags.is_private());
+    let c = v.field("c").unwrap();
+    assert!(c.flags.is_final() && !c.flags.is_private());
+    assert!(!v.field("d").unwrap().flags.is_final());
+    assert_eq!(v.constructors().next().unwrap().params.len(), 3);
+    let w = idx.class("q.W").unwrap();
+    assert!(!w.flags.is_final() && w.field("a").unwrap().flags.is_final());
     let s = idx.class("q.S").unwrap();
     assert_eq!(s.field("log").unwrap().ty.to_string(), "org.slf4j.Logger".replace("org.slf4j.Logger", "?unknown"));
     let ctor = s.constructors().next().unwrap();

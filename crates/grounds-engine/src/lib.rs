@@ -8,6 +8,7 @@ pub mod config;
 pub mod daemon;
 pub mod dump;
 pub mod git;
+pub mod java_release;
 pub mod project;
 pub mod report;
 pub mod session;

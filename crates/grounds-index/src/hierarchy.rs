@@ -134,6 +134,106 @@ fn subst_method(m: &MethodInfo, map: &[(Name, Ty)]) -> MethodInfo {
     m
 }
 
+/// Does `sub` (declared in a subtype) override `sup`, declared in `sup_class`
+/// and inherited through the supertype `sup_class<sup_args>` (arguments in
+/// terms of the subtype)? JLS 8.4.2: `sub`'s signature must be the same as
+/// `sup`'s after substituting the supertype's arguments (and renaming method
+/// type variables), or the same as the erasure of `sup`'s signature. Equal
+/// erasures alone are not enough: `remove(E)` with `E extends Node<E>`
+/// overloads `remove(Object)`. Unknown when our types cannot tell.
+pub fn is_subsignature(sub: &MethodInfo, sup: &MethodInfo, sup_class: &ClassInfo, sup_args: &[Ty]) -> Tri {
+    if sub.name != sup.name || sub.params.len() != sup.params.len() {
+        return Tri::No;
+    }
+    let all = |f: &dyn Fn(&Ty, &Ty) -> Tri| sub.params.iter().zip(&sup.params).fold(Tri::Yes, |acc, (a, b)| acc.and(f(&a.ty, &b.ty)));
+    let same = if sub.type_params.len() == sup.type_params.len() {
+        let adapted = subst_method(sup, &substitution(sup_class, sup_args));
+        let rename: Vec<(Name, Ty)> = sup.type_params.iter().zip(&sub.type_params).map(|(a, b)| (a.name.clone(), Ty::TypeVar(b.name.clone()))).collect();
+        sub.params.iter().zip(&adapted.params).zip(&sup.params).fold(Tri::Yes, |acc, ((a, b), declared)| {
+            // a type variable of an enclosing class (`Outer<T>.Inner.m(T)`)
+            // is not substituted through the supertype: unknown
+            let same = if mentions_foreign_var(&declared.ty, sup, sup_class) { Tri::Unknown } else { same_type(&a.ty, &apply_subst(&b.ty, &rename)) };
+            acc.and(same)
+        })
+    } else {
+        Tri::No
+    };
+    let erased = if sub.type_params.is_empty() { all(&|a, b| same_type(a, &erasure_in(b, sup, sup_class, 0))) } else { Tri::No };
+    same.or(erased)
+}
+
+fn mentions_foreign_var(t: &Ty, m: &MethodInfo, c: &ClassInfo) -> bool {
+    match t {
+        Ty::TypeVar(n) => !m.type_params.iter().chain(&c.type_params).any(|p| p.name == *n),
+        Ty::Class { args, .. } => args.iter().any(|a| mentions_foreign_var(a, m, c)),
+        Ty::Array(e) => mentions_foreign_var(e, m, c),
+        Ty::Wildcard(Some(b)) => match &**b {
+            WildcardBound::Extends(t) | WildcardBound::Super(t) => mentions_foreign_var(t, m, c),
+        },
+        _ => false,
+    }
+}
+
+/// Erasure of a type in `m`'s declaration: type variables erase to their
+/// first bound (JLS 4.6).
+fn erasure_in(t: &Ty, m: &MethodInfo, c: &ClassInfo, depth: u32) -> Ty {
+    match t {
+        Ty::TypeVar(n) => {
+            let Some(tp) = m.type_params.iter().chain(&c.type_params).find(|p| p.name == *n) else { return Ty::Unknown };
+            match tp.bounds.first() {
+                None => Ty::object(),
+                Some(_) if depth > 8 => Ty::Unknown,
+                Some(b) => erasure_in(b, m, c, depth + 1),
+            }
+        }
+        Ty::Array(e) => Ty::Array(Box::new(erasure_in(e, m, c, depth))),
+        t => t.erasure(),
+    }
+}
+
+/// Are two parameter types the same type? Type arguments are compared only
+/// loosely (a difference there is Unknown): a compiling override never has
+/// two parameter types with equal erasure but different arguments, so such a
+/// difference is a gap in our model rather than an overload.
+fn same_type(a: &Ty, b: &Ty) -> Tri {
+    match (a, b) {
+        (Ty::Unknown, _) | (_, Ty::Unknown) => Tri::Unknown,
+        (Ty::TypeVar(x), Ty::TypeVar(y)) => {
+            if x == y {
+                Tri::Yes
+            } else {
+                Tri::Unknown
+            }
+        }
+        (Ty::Class { name: x, args: xa }, Ty::Class { name: y, args: ya }) => {
+            if x != y {
+                Tri::No
+            } else if xa.len() == ya.len() && xa.iter().zip(ya).all(|(p, q)| same_arg(p, q)) {
+                Tri::Yes
+            } else {
+                Tri::Unknown
+            }
+        }
+        (Ty::Array(x), Ty::Array(y)) => same_type(x, y),
+        (Ty::Wildcard(_), _) | (_, Ty::Wildcard(_)) => Tri::Unknown,
+        _ => Tri::from_bool(a == b),
+    }
+}
+
+fn same_arg(a: &Ty, b: &Ty) -> bool {
+    match (a, b) {
+        (Ty::Wildcard(x), Ty::Wildcard(y)) => match (x.as_deref(), y.as_deref()) {
+            (None, None) => true,
+            (Some(WildcardBound::Extends(t)), None) | (None, Some(WildcardBound::Extends(t))) => t.is_class("java.lang.Object"),
+            (Some(WildcardBound::Extends(p)), Some(WildcardBound::Extends(q))) | (Some(WildcardBound::Super(p)), Some(WildcardBound::Super(q))) => {
+                same_type(p, q).is_yes()
+            }
+            _ => false,
+        },
+        _ => same_type(a, b).is_yes(),
+    }
+}
+
 pub trait ClassLookup {
     fn class(&self, name: &str) -> Option<Arc<ClassInfo>>;
 
@@ -298,8 +398,14 @@ pub trait ClassLookup {
                 // parameter type cannot prove an override either
                 let overridden = out.iter().any(|o| {
                     o.owner != *cn
-                        && o.method.params.len() == erased.len()
-                        && o.method.params.iter().zip(&erased).all(|(p, e)| !e.has_unknown() && p.ty.erasure() == *e)
+                        && match is_subsignature(&o.method, m, &c, args) {
+                            Tri::Yes => true,
+                            Tri::No => false,
+                            Tri::Unknown => {
+                                o.method.params.len() == erased.len()
+                                    && o.method.params.iter().zip(&erased).all(|(p, e)| !e.has_unknown() && p.ty.erasure() == *e)
+                            }
+                        }
                 });
                 if overridden {
                     continue;
@@ -324,9 +430,14 @@ pub trait ClassLookup {
                 let sm = subst_method(m, &map);
                 let dup = out.iter().any(|o| {
                     o.owner != *cn
-                        && o.method.name == sm.name
-                        && o.method.params.len() == sm.params.len()
-                        && o.method.params.iter().zip(&sm.params).all(|(a, b)| !b.ty.has_unknown() && a.ty.erasure() == b.ty.erasure())
+                        && match is_subsignature(&o.method, m, &c, args) {
+                            Tri::Yes => true,
+                            Tri::No => false,
+                            Tri::Unknown => {
+                                o.method.params.len() == sm.params.len()
+                                    && o.method.params.iter().zip(&sm.params).all(|(a, b)| !b.ty.has_unknown() && a.ty.erasure() == b.ty.erasure())
+                            }
+                        }
                 });
                 if !dup {
                     out.push(MethodRef { owner: cn.clone(), method: sm, owner_kind: c.kind, owner_flags: c.flags });
