@@ -42,9 +42,14 @@ class ATest {
             run();
             fail("not thrown");
         });
+        assertThrows(IllegalStateException.class, () -> { // expect
+            run();
+            fail(message());
+        });
     }
     int prepare() { return 0; }
     int compute() { return 0; }
+    String message() { return ""; }
     void run() {}
     void run(Object o) {}
     Object build() { return null; }

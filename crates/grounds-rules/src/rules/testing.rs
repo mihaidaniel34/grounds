@@ -720,11 +720,12 @@ impl Rule for AssertThrowsMultipleCalls {
 /// (`builder().a(x).build()`) is one invocation, and calls made only as its
 /// arguments are part of it; nested lambdas, anonymous class bodies and
 /// `catch` clauses do not run with it, and `fail()` is not a call that could
-/// throw the expected exception.
+/// throw the expected exception (its arguments are).
 fn invocations<'t>(n: Node<'t>, cx: &Ctx<'_, 't>) -> usize {
     match n.kind() {
         "lambda_expression" | "class_body" | "catch_clause" => 0,
-        "method_invocation" if cx.fm.call_name(n) == Some("fail") => 0,
+        // its message is still evaluated
+        "method_invocation" if cx.fm.call_name(n) == Some("fail") => n.kids().into_iter().map(|k| invocations(k, cx)).sum(),
         "method_invocation" | "object_creation_expression" => 1,
         _ => n.kids().into_iter().map(|k| invocations(k, cx)).sum(),
     }
