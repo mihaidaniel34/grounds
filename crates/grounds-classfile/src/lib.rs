@@ -1,7 +1,8 @@
-//! Reading compiled Java declarations: jars, directories of class files and
-//! the JDK's `ct.sym` symbol archive.
+//! Reading compiled Java declarations: jars, directories of class files, the
+//! JDK's `ct.sym` symbol archive and the JDK's runtime image.
 
 pub mod classfile;
+pub mod jimage;
 pub mod signature;
 pub mod zip;
 
@@ -16,6 +17,8 @@ pub enum ClassContainer {
     Dir(PathBuf),
     /// `ct.sym` restricted to one release; maps internal names to entries.
     CtSym { archive: zip::ZipArchive, entries: rustc_hash::FxHashMap<String, usize> },
+    /// The running JDK's own release, from its runtime image (`lib/modules`).
+    JImage(jimage::JImage),
 }
 
 impl std::fmt::Debug for ClassContainer {
@@ -24,6 +27,7 @@ impl std::fmt::Debug for ClassContainer {
             ClassContainer::Jar(z) => write!(f, "Jar({})", z.path.display()),
             ClassContainer::Dir(p) => write!(f, "Dir({})", p.display()),
             ClassContainer::CtSym { archive, .. } => write!(f, "CtSym({})", archive.path.display()),
+            ClassContainer::JImage(j) => write!(f, "JImage({})", j.path.display()),
         }
     }
 }
@@ -43,6 +47,24 @@ impl ClassContainer {
 
     pub fn open_dir(path: &Path) -> ClassContainer {
         ClassContainer::Dir(path.to_path_buf())
+    }
+
+    /// The JDK at `home` for a release. ct.sym has no signatures for the JDK's
+    /// own release, so that release is read from the runtime image; any other
+    /// release, or an image that cannot be read, comes from ct.sym.
+    pub fn open_jdk(home: &Path, release: u32) -> Result<ClassContainer> {
+        let ct = home.join("lib/ct.sym");
+        let own = match jdk_feature_release(home) {
+            Some(v) => v == release,
+            // no `release` file: ct.sym marks the JDK's own release with a bare `system-modules` entry
+            None => zip::ZipArchive::open(&ct).is_ok_and(|z| z.contains(&format!("{}/system-modules", ct_sym_release_char(release)))),
+        };
+        if own {
+            if let Ok(image) = jimage::JImage::open(&home.join("lib/modules")) {
+                return Ok(ClassContainer::JImage(image));
+            }
+        }
+        Self::open_ct_sym(&ct, release)
     }
 
     /// Open `ct.sym` for a release. ct.sym only carries signatures for
@@ -93,6 +115,7 @@ impl ClassContainer {
                 .map(|n| n.to_string())
                 .collect(),
             ClassContainer::CtSym { entries, .. } => entries.keys().filter(|n| keep(n)).cloned().collect(),
+            ClassContainer::JImage(j) => j.class_names().filter(|n| keep(n)).map(str::to_string).collect(),
             ClassContainer::Dir(root) => {
                 let mut out = Vec::new();
                 let mut stack = vec![root.clone()];
@@ -125,11 +148,23 @@ impl ClassContainer {
                 let idx = *entries.get(internal_name)?;
                 archive.read_entry(&archive.entries()[idx]).ok()
             }
+            ClassContainer::JImage(j) => j.read_class_bytes(internal_name),
         }
     }
 
     pub fn read_class(&self, internal_name: &str) -> Option<ClassFile> {
-        parse_class(&self.read_class_bytes(internal_name)?).ok()
+        let mut class = parse_class(&self.read_class_bytes(internal_name)?).ok()?;
+        if matches!(self, ClassContainer::JImage(_)) {
+            // ct.sym carries only public classes (a protected nested class is public in its class file)
+            // and only their public and protected members; the image has everything
+            if class.access & classfile::access::PUBLIC == 0 {
+                return None;
+            }
+            let api = |access: u16| access & (classfile::access::PUBLIC | classfile::access::PROTECTED) != 0;
+            class.fields.retain(|f| api(f.access));
+            class.methods.retain(|m| api(m.access));
+        }
+        Some(class)
     }
 
     /// Read a non-class resource (e.g. Spring's AutoConfiguration.imports).
@@ -137,19 +172,22 @@ impl ClassContainer {
         match self {
             ClassContainer::Jar(z) => z.read(name),
             ClassContainer::Dir(root) => std::fs::read(root.join(name)).ok(),
-            ClassContainer::CtSym { .. } => None,
+            ClassContainer::CtSym { .. } | ClassContainer::JImage(_) => None,
         }
     }
 }
 
-/// The JDK's feature release, from `release` in its home (`JAVA_VERSION="21.0.12"`
-/// or `"1.8.0_392"` for Java 8). None for a JRE without that file.
-pub fn jdk_feature_version(home: &Path) -> Option<u32> {
+/// The JDK's feature release (21 for `JAVA_VERSION="21.0.12.1"`, 8 for
+/// `"1.8.0_292"`), from `<home>/release`.
+pub fn jdk_feature_release(home: &Path) -> Option<u32> {
     let text = std::fs::read_to_string(home.join("release")).ok()?;
-    let line = text.lines().find_map(|l| l.strip_prefix("JAVA_VERSION="))?;
-    let v = line.trim().trim_matches('"');
-    let v = v.strip_prefix("1.").unwrap_or(v);
-    v.split(['.', '_', '-', '+']).next()?.parse().ok()
+    let version = text.lines().find_map(|l| l.strip_prefix("JAVA_VERSION="))?;
+    let nums: Vec<u32> = version.split(|c: char| !c.is_ascii_digit()).filter_map(|s| s.parse().ok()).collect();
+    match nums.as_slice() {
+        [1, v, ..] => Some(*v),
+        [v, ..] => Some(*v),
+        [] => None,
+    }
 }
 
 /// Locate the JDK home: `$JAVA_HOME`, then macOS `java_home`, then `java` on PATH.
@@ -204,6 +242,41 @@ mod tests {
     }
 
     #[test]
+    fn reads_jdk_own_release_from_image() {
+        let Some(home) = find_java_home() else { return };
+        let Some(release) = jdk_feature_release(&home) else { return };
+        let c = ClassContainer::open_jdk(&home, release).unwrap();
+        assert!(matches!(c, ClassContainer::JImage(_)), "{c:?}");
+        let s = c.read_class("java/lang/String").expect("String in the runtime image");
+        assert_eq!(s.this_class, "java/lang/String");
+        let list = c.read_class("java/util/List").expect("List in the runtime image");
+        // private members are not part of the API ct.sym carries
+        assert!(c.read_class("java/util/ArrayList").is_some_and(|a| !a.methods.iter().any(|m| m.name == "grow")));
+        if release >= 21 {
+            // SequencedCollection and List.getFirst arrived in 21
+            assert!(c.read_class("java/util/SequencedCollection").is_some_and(|s| s.methods.iter().any(|m| m.name == "reversed")));
+            assert!(list.methods.iter().any(|m| m.name == "getFirst"));
+        }
+        // only exported packages: ct.sym does not carry jdk.internal.misc
+        assert!(c.read_class("jdk/internal/misc/Unsafe").is_none());
+        // only public classes: ImmutableCollections is package-private; a protected nested class is public
+        assert!(c.read_class("java/util/ImmutableCollections").is_none());
+        assert!(c.read_class("java/awt/Container$AccessibleAWTContainer").is_some());
+        assert!(c.class_names().len() > 1000);
+    }
+
+    #[test]
+    fn feature_release_from_version_string() {
+        let dir = std::env::temp_dir().join(format!("grounds-jdk-release-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (version, want) in [("21.0.12.1", 21), ("1.8.0_292", 8), ("25-ea", 25)] {
+            std::fs::write(dir.join("release"), format!("IMPLEMENTOR=\"x\"\nJAVA_VERSION=\"{version}\"\n")).unwrap();
+            assert_eq!(jdk_feature_release(&dir), Some(want), "{version}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn reads_jdk_ct_sym() {
         let Some(home) = find_java_home() else { return };
         let ct = home.join("lib/ct.sym");
@@ -217,24 +290,5 @@ mod tests {
         assert!(s.methods.iter().any(|m| m.name == "isBlank"));
         let names = c.class_names();
         assert!(names.len() > 1000);
-    }
-
-    #[test]
-    fn reads_jdk_feature_version() {
-        let dir = std::env::temp_dir().join(format!("grounds-jdk-release-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        for (text, want) in [("JAVA_VERSION=\"21.0.12.1\"\n", Some(21)), ("JAVA_VERSION=\"1.8.0_392\"\n", Some(8)), ("IMPLEMENTOR=\"x\"\nJAVA_VERSION=\"25\"\n", Some(25)), ("", None)] {
-            std::fs::write(dir.join("release"), text).unwrap();
-            assert_eq!(jdk_feature_version(&dir), want, "{text:?}");
-        }
-        std::fs::remove_file(dir.join("release")).unwrap();
-        assert_eq!(jdk_feature_version(&dir), None);
-        let _ = std::fs::remove_dir_all(&dir);
-        // the JDK running the tests, when there is one
-        if let Some(home) = find_java_home() {
-            if let Some(v) = jdk_feature_version(&home) {
-                assert!(v >= 8, "{v}");
-            }
-        }
     }
 }

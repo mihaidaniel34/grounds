@@ -495,7 +495,7 @@ mod tests {
     #[test]
     fn jdk_warnings_for_a_release_newer_than_the_jdk_or_a_home_without_ct_sym() {
         let Some(home) = grounds_classfile::find_java_home() else { return };
-        let Some(installed) = grounds_classfile::jdk_feature_version(&home) else { return };
+        let Some(installed) = grounds_classfile::jdk_feature_release(&home) else { return };
         let dir = temp("jdk-warnings");
         let ws = Workspace::discover(&dir, &[]);
         let warn = |cfg: &Config, home: &Path, release: u32| {

@@ -264,7 +264,8 @@ cargo install --locked --path crates/grounds-cli
 With Nix: `nix profile install .`, or `nix run . -- check` without installing.
 `nix develop` provides Rust, clippy, rust-analyzer and a JDK for the tests.
 
-grounds does not run Java, but it reads the JDK's API signatures (`ct.sym`).
+grounds does not run Java, but it reads the JDK's API signatures (`ct.sym`, and
+`lib/modules` for the JDK's own release, which `ct.sym` does not carry).
 It finds a JDK through `JAVA_HOME`, `/usr/libexec/java_home` or `java` on
 PATH. Without one, most rules have little to work with.
 
@@ -462,7 +463,7 @@ With an exact classpath and `scan_caches = false`, those are checked too.
 
 ```
 grounds-syntax     Java parser (tree-sitter-java-orchard), node helpers
-grounds-classfile  jar/zip reader, class file and generic signature parser, JDK ct.sym
+grounds-classfile  jar/zip reader, class file and generic signature parser, JDK ct.sym and runtime image
 grounds-index      declaration stubs, Lombok model, project-wide index, hierarchy lookup
 grounds-semantic   per-file model: name binding, expression types, overload resolution
                    with type inference, constant folding

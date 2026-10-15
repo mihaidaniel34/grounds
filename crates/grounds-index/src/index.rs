@@ -83,20 +83,19 @@ impl Classpath {
         Classpath { containers, names, packages, cache: DashMap::new(), jdk: JdkApi::Complete }
     }
 
-    /// JDK from `ct.sym` for a release, followed by the given jars/dirs.
+    /// JDK classes for a release (see `ClassContainer::open_jdk`), followed by the given jars/dirs.
     pub fn build(java_home: Option<&Path>, release: u32, entries: &[std::path::PathBuf]) -> Classpath {
         let mut containers = Vec::new();
         let mut jdk = JdkApi::Complete;
         if let Some(home) = java_home {
-            match ClassContainer::open_ct_sym(&home.join("lib/ct.sym"), release) {
-                Ok(c) => {
-                    containers.push(c);
-                    // ct.sym has no signatures for the JDK's own release or newer
-                    if let Some(installed) = grounds_classfile::jdk_feature_version(home).filter(|&v| release > v) {
-                        jdk = JdkApi::Newer { requested: release, installed };
-                    }
+            if let Ok(c) = ClassContainer::open_jdk(home, release) {
+                containers.push(c);
+                // the JDK's own release is read exactly; a newer one has no signatures anywhere
+                if let Some(installed) = grounds_classfile::jdk_feature_release(home).filter(|&v| release > v) {
+                    jdk = JdkApi::Newer { requested: release, installed };
                 }
-                Err(_) => jdk = JdkApi::Absent { home: home.to_path_buf() },
+            } else {
+                jdk = JdkApi::Absent { home: home.to_path_buf() };
             }
         }
         for e in entries {
@@ -126,14 +125,20 @@ impl Classpath {
     pub fn containers(&self) -> &[ClassContainer] {
         &self.containers
     }
+    /// Whether a class exists. The JDK runtime image also holds package-private
+    /// classes, which `class` hides, so those are checked by parsing the class.
     pub fn contains(&self, name: &str) -> bool {
-        self.names.contains_key(name)
+        match self.names.get(name) {
+            Some(&idx) if matches!(self.containers[idx as usize], ClassContainer::JImage(_)) => self.class(name).is_some(),
+            Some(_) => true,
+            None => false,
+        }
     }
     pub fn has_package(&self, p: &str) -> bool {
         self.packages.contains(p)
     }
     pub fn class_names(&self) -> impl Iterator<Item = &Name> {
-        self.names.keys()
+        self.names.keys().filter(|n| self.contains(n))
     }
 
     pub fn class(&self, name: &str) -> Option<Arc<ClassInfo>> {

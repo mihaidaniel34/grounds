@@ -21,7 +21,7 @@ fn write(dir: &Path, rel: &str, text: &str) {
 #[test]
 fn release_newer_than_the_jdk_warns_once_and_stays_silent_on_jdk_subclasses() {
     let Some(home) = grounds_classfile::find_java_home() else { return };
-    let Some(installed) = grounds_classfile::jdk_feature_version(&home) else { return };
+    let Some(installed) = grounds_classfile::jdk_feature_release(&home) else { return };
     let dir = std::env::temp_dir().join(format!("grounds-jdk-release-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

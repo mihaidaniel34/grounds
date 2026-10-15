@@ -121,7 +121,7 @@ fn without_a_jdk_no_hierarchy_is_complete() {
 #[test]
 fn release_newer_than_the_jdk_leaves_jdk_subclasses_incomplete() {
     let Some(home) = grounds_classfile::find_java_home() else { return };
-    let Some(installed) = grounds_classfile::jdk_feature_version(&home) else { return };
+    let Some(installed) = grounds_classfile::jdk_feature_release(&home) else { return };
     let src = "package p; class Meter extends java.util.concurrent.CopyOnWriteArrayList<String> {} class Plain {}";
     let index = |release: u32| {
         let mut idx = Index::new(Arc::new(Classpath::build(Some(&home), release, &[])));
@@ -149,4 +149,17 @@ fn jdk_home_without_ct_sym_is_absent() {
     assert!(cp.is_empty());
     assert!(!Index::new(Arc::new(cp)).hierarchy_complete("p.C"));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn package_private_jdk_classes_are_not_visible() {
+    let Some(home) = grounds_classfile::find_java_home() else { return };
+    let Some(release) = grounds_classfile::jdk_feature_release(&home) else { return };
+    let cp = Classpath::build(Some(&home), release, &[]);
+    assert!(!cp.contains("java.util.ImmutableCollections"));
+    assert!(cp.class("java.util.ImmutableCollections").is_none());
+    assert!(cp.contains("java.util.List"));
+    assert!(cp.class("java.util.List").is_some());
+    assert!(cp.contains("java.awt.Container$AccessibleAWTContainer"));
+    assert!(cp.class_names().all(|n| cp.contains(n)));
 }
