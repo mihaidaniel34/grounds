@@ -132,7 +132,7 @@ pub fn warnings(ws: &Workspace, cfg: &Config, index: &Index) -> Vec<Warning> {
         }
         // entries inside the project (sibling modules' outputs) come and go
         // with builds; those outside are jars in a cache
-        let outside: Vec<PathBuf> = read_list(f).into_iter().filter(|e| !e.starts_with(&ws.root)).collect();
+        let outside: Vec<PathBuf> = read_list(f).into_iter().filter(|e| !inside(e, &ws.root)).collect();
         let missing = outside.iter().filter(|e| !e.exists()).count();
         if missing > 0 {
             out.push(Warning::MissingEntries { file: rel(f), missing, total: outside.len() });
@@ -148,6 +148,12 @@ pub fn warnings(ws: &Workspace, cfg: &Config, index: &Index) -> Vec<Warning> {
         }
     }
     out
+}
+
+/// Whether a path, existing or not, is under the (canonical) root, also when
+/// written through a symlink (`/var` for `/private/var` on macOS).
+fn inside(p: &Path, root: &Path) -> bool {
+    p.starts_with(root) || p.ancestors().find(|a| a.exists()).and_then(|a| a.canonicalize().ok()).is_some_and(|a| a.starts_with(root))
 }
 
 /// Library types imported by the sources (`java.*` and project types
@@ -389,8 +395,11 @@ mod tests {
         let cache = temp("entries-cache");
         write(&cache, "a.jar", "");
         write(&dir, "pom.xml", "<project/>");
-        // a cleaned cache counts; a sibling module's output in the project does not
-        let listed = [cache.join("a.jar"), cache.join("gone-1.jar"), cache.join("gone-2.jar"), dir.join("core/target/classes")];
+        // a cleaned cache counts; a sibling module's output in the project
+        // does not, also when listed through a symlink to the project
+        let link = cache.join("project");
+        std::os::unix::fs::symlink(&dir, &link).unwrap();
+        let listed = [cache.join("a.jar"), cache.join("gone-1.jar"), cache.join("gone-2.jar"), dir.join("core/target/classes"), link.join("api/target/classes")];
         write(&dir, "cp.txt", &listed.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("\n"));
         set_mtime(&dir.join("pom.xml"), SystemTime::now() - Duration::from_secs(3600));
         let w = warnings_of(&dir, &with_files(&["cp.txt"]), &[]);
