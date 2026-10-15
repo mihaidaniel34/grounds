@@ -142,8 +142,16 @@ pub struct DiModel {
     pub spring_application: bool,
     /// Modules (`module_of`) holding such an application.
     pub app_modules: rustc_hash::FxHashSet<String>,
-    /// Packages the applications scan (roots declared in their modules).
-    pub app_roots: Vec<String>,
+    /// Packages the applications scan (roots declared in their modules), and
+    /// whether the scan is `@SpringBootApplication`'s, which skips
+    /// auto-configurations.
+    pub app_roots: Vec<(String, bool)>,
+    /// Auto-configurations: annotated `@AutoConfiguration` or listed in
+    /// META-INF registration files. `@SpringBootApplication`'s scan skips
+    /// them (AutoConfigurationExcludeFilter), so its packages covering one
+    /// (a nested plugin project sharing the application's base package) do not make it
+    /// application code.
+    pub auto_configurations: rustc_hash::FxHashSet<Name>,
     /// (scan root, module declaring it)
     pub scan_root_modules: Vec<(String, String)>,
     /// simple names referenced by classes that register beans
@@ -380,6 +388,8 @@ impl<'a> Builder<'a> {
         // (root package, declared on a conditional class such as @Profile,
         // module declaring it)
         let mut root_conditions: Vec<(String, bool, String)> = Vec::new();
+        // (root package, module declaring it, declared by @SpringBootApplication)
+        let mut boot_scans: Vec<(String, String, bool)> = Vec::new();
         let mut spring = false;
         let mut micronaut = false;
         for (_, stub) in self.index.files() {
@@ -412,6 +422,8 @@ impl<'a> Builder<'a> {
                         self.model.app_modules.insert(c.source_file().map(module_of).unwrap_or("").to_string());
                     }
                     let module = c.source_file().map(module_of).unwrap_or("").to_string();
+                    let boot = a.is("org.springframework.boot.autoconfigure.SpringBootApplication");
+                    boot_scans.extend(declared.iter().map(|r| (r.clone(), module.clone(), boot)));
                     root_conditions.extend(declared.iter().map(|r| (r.clone(), cond, module.clone())));
                     roots.extend(declared);
                 }
@@ -435,7 +447,16 @@ impl<'a> Builder<'a> {
             }
         }
         self.model.spring_application = !self.model.app_modules.is_empty();
-        self.model.app_roots = root_conditions.iter().filter(|(_, _, m)| self.model.app_modules.contains(m)).map(|(r, _, _)| r.clone()).collect();
+        self.model.app_roots = boot_scans.iter().filter(|(_, m, _)| self.model.app_modules.contains(m)).map(|(r, _, boot)| (r.clone(), *boot)).collect();
+        for n in &names {
+            let Some(c) = self.index.class(n) else { continue };
+            if c.annotations.iter().any(|a| a.is("org.springframework.boot.autoconfigure.AutoConfiguration") || (!a.resolved && a.simple_name() == "AutoConfiguration"))
+                || self.registered.contains(&**n)
+                || self.registered.contains(&n.replace('$', "."))
+            {
+                self.model.auto_configurations.insert(n.clone());
+            }
+        }
         if spring {
             self.model.frameworks.push(Framework::Spring);
         }
@@ -1278,7 +1299,8 @@ impl DiModel {
             return true;
         }
         let pkg = package_of(class);
-        self.app_roots.iter().any(|r| r.is_empty() || pkg == r || pkg.strip_prefix(r.as_str()).is_some_and(|rest| rest.starts_with('.')))
+        let auto_configuration = self.auto_configurations.contains(class);
+        self.app_roots.iter().any(|(r, boot)| !(*boot && auto_configuration) && (r.is_empty() || pkg == r || pkg.strip_prefix(r.as_str()).is_some_and(|rest| rest.starts_with('.'))))
     }
 
     pub fn name_conflicts(&self) -> Vec<(usize, usize)> {
@@ -1311,6 +1333,10 @@ mod tests {
     use grounds_syntax::ParsedFile;
 
     fn model(files: &[(&str, &str)]) -> (Index, DiModel) {
+        model_with(files, &[])
+    }
+
+    fn model_with(files: &[(&str, &str)], registered: &[String]) -> (Index, DiModel) {
         let cp = Arc::new(Classpath::build(grounds_classfile::find_java_home().as_deref(), 21, &[]));
         let mut idx = Index::new(cp);
         let stubs = [
@@ -1325,7 +1351,7 @@ mod tests {
             let pf = ParsedFile::parse(*s);
             idx.set_file(Arc::from(*p), Arc::new(extract(&pf)));
         }
-        let m = DiModel::build(&idx);
+        let m = DiModel::build_with(&idx, registered);
         (idx, m)
     }
 
@@ -1414,6 +1440,32 @@ mod tests {
         ]);
         assert_eq!(resolution_of(&idx, &m, "lib/src/main/java/demo/Uses.java", "s"), Resolution::Unknown);
         assert_eq!(resolution_of(&idx, &m, "core/src/main/java/other/core/Svc.java", "m"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn an_application_scan_skips_auto_configurations() {
+        // a nested plugin project shares the application's base package:
+        // @SpringBootApplication's scan excludes auto-configurations, whose
+        // beans the plugin's consumers provide
+        let files = [
+            ("org/springframework/boot/autoconfigure/AutoConfiguration.java", "package org.springframework.boot.autoconfigure; @org.springframework.context.annotation.Configuration public @interface AutoConfiguration {}"),
+            ("shop/src/main/java/com/example/shop/App.java", "package com.example.shop; @org.springframework.boot.autoconfigure.SpringBootApplication public class App {}"),
+            ("shop/plugins/core/src/main/java/com/example/shop/plugin/Extension.java", "package com.example.shop.plugin; public interface Extension<T> {}"),
+            (
+                "shop/plugins/core/src/main/java/com/example/shop/plugin/PluginAutoConfiguration.java",
+                "package com.example.shop.plugin; import org.springframework.context.annotation.Bean;
+                 @org.springframework.boot.autoconfigure.AutoConfiguration
+                 public class PluginAutoConfiguration { @Bean Object client(Extension<?> extension) { return null; } }",
+            ),
+            ("shop/plugins/core/src/main/java/com/example/shop/plugin/Registered.java", "package com.example.shop.plugin; @org.springframework.context.annotation.Configuration public class Registered { @org.springframework.context.annotation.Bean Object other(Extension<?> c) { return null; } }"),
+            // a plain @ComponentScan does not skip them
+            ("other/src/main/java/com/example/other/Main.java", "package com.example.other; @org.springframework.context.annotation.ComponentScan public class Main { public static void main(String[] args) {} }"),
+            ("other/src/main/java/com/example/other/OtherAutoConfiguration.java", "package com.example.other; interface Missing {} @org.springframework.boot.autoconfigure.AutoConfiguration class OtherAutoConfiguration { @org.springframework.context.annotation.Bean Object x(Missing m) { return null; } }"),
+        ];
+        let (idx, m) = model_with(&files, &["com.example.shop.plugin.Registered".to_string()]);
+        assert_eq!(resolution_of(&idx, &m, "shop/plugins/core/src/main/java/com/example/shop/plugin/PluginAutoConfiguration.java", "extension"), Resolution::Unknown);
+        assert_eq!(resolution_of(&idx, &m, "shop/plugins/core/src/main/java/com/example/shop/plugin/Registered.java", "c"), Resolution::Unknown);
+        assert_eq!(resolution_of(&idx, &m, "other/src/main/java/com/example/other/OtherAutoConfiguration.java", "m"), Resolution::NotFound);
     }
 
     #[test]
