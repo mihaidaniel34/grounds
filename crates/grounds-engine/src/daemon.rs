@@ -33,6 +33,9 @@ pub enum Request {
         sarif: bool,
     },
     Baseline { files: Vec<PathBuf>, merge: bool },
+    /// A new agent session: baseline the uncommitted work and report the
+    /// classpath warnings (again, whether or not the daemon showed them).
+    SessionStart,
     ImpactedTests { files: Vec<PathBuf> },
     Shutdown,
 }
@@ -42,6 +45,9 @@ pub struct Response {
     pub code: i32,
     pub stdout: String,
     pub stderr: String,
+    /// Classpath warnings, once per session (for stderr; hooks drop them).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// Identity of the running executable (path + size + mtime), so a client can
@@ -92,9 +98,22 @@ const MAX_REQUEST: u64 = 4 << 20;
 
 /// Execute a request against a session (used by the daemon and in-process).
 pub fn execute(session: &mut Session, req: &Request) -> Response {
+    let warnings = match req {
+        Request::Check { .. } | Request::Baseline { .. } => session.take_warnings(),
+        Request::SessionStart => {
+            session.take_warnings();
+            session.project.classpath_warnings.iter().map(|w| w.to_string()).collect()
+        }
+        Request::Ping | Request::ImpactedTests { .. } | Request::Shutdown => Vec::new(),
+    };
+    let resp = execute_with(session, req, &warnings);
+    Response { warnings, ..resp }
+}
+
+fn execute_with(session: &mut Session, req: &Request, warnings: &[String]) -> Response {
     match req {
-        Request::Ping => Response { code: 0, stdout: format!("ok {}\n", session.root().display()), stderr: build_id() },
-        Request::Shutdown => Response { code: 0, stdout: "bye\n".into(), stderr: String::new() },
+        Request::Ping => Response { code: 0, stdout: format!("ok {}\n", session.root().display()), stderr: build_id(), ..Default::default() },
+        Request::Shutdown => Response { code: 0, stdout: "bye\n".into(), ..Default::default() },
         Request::Check { mode, files, all_lines, baseline, max, min_severity, json, color, base, sarif } => {
             let min = Severity::parse(min_severity).unwrap_or(Severity::Warning);
             let base = match base {
@@ -103,7 +122,7 @@ pub fn execute(session: &mut Session, req: &Request) -> Response {
                     Some(mb) => Some(mb),
                     None => {
                         let msg = format!("grounds: no merge base of `{rev}` and HEAD; fetch enough history (actions/checkout: `fetch-depth: 0`, or `--base HEAD^1` on a pull request's merge commit with `fetch-depth: 2`)\n");
-                        return Response { code: 1, stdout: String::new(), stderr: msg };
+                        return Response { code: 1, stderr: msg, ..Default::default() };
                     }
                 },
             };
@@ -111,25 +130,26 @@ pub fn execute(session: &mut Session, req: &Request) -> Response {
             let report = session.check(&opts);
             let problems = !report.findings.is_empty() || !report.pending.is_empty();
             let text = if *sarif {
-                crate::report::sarif_report(&report, session.root())
+                crate::report::sarif_report(&report, session.root(), warnings)
             } else if *json {
                 serde_json::to_string_pretty(&report).unwrap_or_default()
             } else {
                 render(&report, *max, crate::report::Style { color: *color })
             };
-            Response { code: if problems { 2 } else { 0 }, stdout: text, stderr: String::new() }
+            Response { code: if problems { 2 } else { 0 }, stdout: text, ..Default::default() }
         }
         Request::Baseline { files, merge } => match session.write_baseline(files, *merge) {
-            Ok(n) => Response { code: 0, stdout: format!("baseline: {n} accepted finding(s)\n"), stderr: String::new() },
-            Err(e) => Response { code: 1, stdout: String::new(), stderr: format!("baseline failed: {e}\n") },
+            Ok(n) => Response { code: 0, stdout: format!("baseline: {n} accepted finding(s)\n"), ..Default::default() },
+            Err(e) => Response { code: 1, stderr: format!("baseline failed: {e}\n"), ..Default::default() },
         },
+        Request::SessionStart => execute_with(session, &Request::Baseline { files: Vec::new(), merge: true }, warnings),
         Request::ImpactedTests { files } => {
             let tests = session.impacted_tests(files);
             let mut out = String::new();
             for t in &tests {
                 out.push_str(&format!("{}\t{}\t{}\n", t.module, t.task, t.class));
             }
-            Response { code: 0, stdout: out, stderr: String::new() }
+            Response { code: 0, stdout: out, ..Default::default() }
         }
     }
 }
@@ -209,13 +229,13 @@ fn handle(session: &mut Session, stream: UnixStream) -> bool {
     let req: Request = match serde_json::from_str(&line) {
         Ok(r) => r,
         Err(e) => {
-            let resp = Response { code: 1, stdout: String::new(), stderr: format!("bad request: {e}\n") };
+            let resp = Response { code: 1, stderr: format!("bad request: {e}\n"), ..Default::default() };
             let _ = writeln!(&stream, "{}", serde_json::to_string(&resp).unwrap_or_default());
             return false;
         }
     };
     let stop = matches!(req, Request::Shutdown);
-    let resp = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| execute(session, &req))).unwrap_or_else(|_| Response { code: 1, stdout: String::new(), stderr: "internal error\n".into() });
+    let resp = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| execute(session, &req))).unwrap_or_else(|_| Response { code: 1, stderr: "internal error\n".into(), ..Default::default() });
     let _ = writeln!(&stream, "{}", serde_json::to_string(&resp).unwrap_or_default());
     stop
 }

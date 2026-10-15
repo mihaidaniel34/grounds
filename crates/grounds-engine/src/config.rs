@@ -35,6 +35,9 @@ pub struct ClasspathConfig {
     /// Include module build output directories (`build/classes/...`,
     /// `target/classes`) for generated classes.
     pub build_outputs: bool,
+    /// Warn when the classpath looks missing or stale (calls into libraries
+    /// would stay unresolved and most rules silent on them).
+    pub warn: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -75,7 +78,7 @@ impl Default for Config {
 
 impl Default for ClasspathConfig {
     fn default() -> Self {
-        ClasspathConfig { entries: Vec::new(), files: Vec::new(), scan_caches: true, build_outputs: true }
+        ClasspathConfig { entries: Vec::new(), files: Vec::new(), scan_caches: true, build_outputs: true, warn: true }
     }
 }
 
