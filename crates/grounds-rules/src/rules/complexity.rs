@@ -3,7 +3,7 @@
 use crate::framework::*;
 use crate::util::*;
 use crate::{declare_rule, rule_meta};
-use grounds_syntax::{Node, NodeExt};
+use grounds_syntax::{Node, NodeExt, TextRange};
 
 pub fn rules() -> Vec<Box<dyn Rule>> {
     vec![
@@ -210,16 +210,26 @@ impl Rule for MethodTooLong {
     }
 }
 
-fn comment_task(text: &str, tag: &str) -> bool {
-    let t = text.trim_start_matches(['/', '*', ' ', '\t']);
-    let up = t.to_ascii_uppercase();
-    if let Some(i) = up.find(tag) {
-        let before_ok = i == 0 || !up.as_bytes()[i - 1].is_ascii_alphanumeric();
-        let after = up.as_bytes().get(i + tag.len()).copied();
-        let after_ok = after.is_none_or(|c| !c.is_ascii_alphanumeric());
-        return before_ok && after_ok;
+/// Offset of `tag` as a word in one comment line, e.g. `TODO` in ` * todo: later`.
+fn comment_task(line: &str, tag: &str) -> Option<usize> {
+    let lead = line.len() - line.trim_start_matches(['/', '*', ' ', '\t']).len();
+    let up = line[lead..].to_ascii_uppercase();
+    let i = up.find(tag)?;
+    let before_ok = i == 0 || !up.as_bytes()[i - 1].is_ascii_alphanumeric();
+    let after_ok = up.as_bytes().get(i + tag.len()).is_none_or(|c| !c.is_ascii_alphanumeric());
+    (before_ok && after_ok).then_some(lead + i)
+}
+
+/// Report each task marker of a comment at its own line (not where a
+/// multi-line comment starts), so changed-line filters see it.
+fn report_task_markers<'t>(n: Node<'t>, cx: &mut Ctx<'_, 't>, message: &str, find: impl Fn(&str) -> Option<(usize, usize)>) {
+    let mut start = n.start_byte();
+    for line in cx.text(n).split_inclusive('\n') {
+        if let Some((off, len)) = find(line) {
+            cx.report_range(TextRange::new(start + off, start + off + len), message);
+        }
+        start += line.len();
     }
-    false
 }
 
 declare_rule!(TodoComment {
@@ -235,9 +245,7 @@ declare_rule!(TodoComment {
 impl Rule for TodoComment {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
-        if comment_task(cx.text(n), "TODO") {
-            cx.report(n, "TODO left in code");
-        }
+        report_task_markers(n, cx, "TODO left in code", |line| comment_task(line, "TODO").map(|i| (i, 4)));
     }
 }
 
@@ -254,13 +262,15 @@ declare_rule!(FixmeComment {
 impl Rule for FixmeComment {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
-        let t = cx.text(n);
-        // XXX only as a leading tag: "XXX-XXXX" or "C:\Users\xxx" are placeholders
-        let lead = t.trim_start_matches(['/', '*', ' ', '\t']);
-        let xxx = lead.starts_with("XXX") && lead.as_bytes().get(3).is_none_or(|c| !c.is_ascii_alphanumeric() && *c != b'-' && *c != b'.');
-        if comment_task(t, "FIXME") || xxx {
-            cx.report(n, "FIXME left in code");
-        }
+        report_task_markers(n, cx, "FIXME left in code", |line| {
+            if let Some(i) = comment_task(line, "FIXME") {
+                return Some((i, 5));
+            }
+            // XXX only as a leading tag: "XXX-XXXX" or "C:\Users\xxx" are placeholders
+            let lead = line.trim_start_matches(['/', '*', ' ', '\t']);
+            let xxx = lead.starts_with("XXX") && lead.as_bytes().get(3).is_none_or(|c| !c.is_ascii_alphanumeric() && *c != b'-' && *c != b'.');
+            xxx.then_some((line.len() - lead.len(), 3))
+        });
     }
 }
 
@@ -347,7 +357,9 @@ impl Rule for ComplexBooleanExpression {
         if n.parent_unparen().is_some_and(|p| p.kind() == "binary_expression" && matches!(op(p), "&&" | "||")) {
             return;
         }
-        let count = n.descendants().filter(|d| d.kind() == "binary_expression" && matches!(op(*d), "&&" | "||")).filter(|d| !d.ancestors().take_while(|a| *a != n).any(|a| matches!(a.kind(), "lambda_expression" | "method_invocation"))).count();
+        // operators inside nested lambdas and call arguments belong to those; `n` itself
+        // always counts (its own ancestors may well be a lambda or a call)
+        let count = n.descendants().filter(|d| d.kind() == "binary_expression" && matches!(op(*d), "&&" | "||")).filter(|d| *d == n || !d.ancestors().take_while(|a| *a != n).any(|a| matches!(a.kind(), "lambda_expression" | "method_invocation"))).count();
         let max = cx.option_usize("max", 3);
         if count > max {
             cx.report(n, format!("Boolean expression has {count} operators (max {max}); extract parts into named variables"));
