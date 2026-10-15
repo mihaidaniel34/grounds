@@ -401,6 +401,151 @@ impl<'a, 't> NullnessAnalysis<'a, 't> {
         out
     }
 
+    /// Facts implied when a boolean expression has outcome `truth`, through
+    /// `!`, `&&` (true) and `||` (false).
+    fn implied(&self, e: Node<'t>, truth: bool) -> Vec<(usize, Nullness)> {
+        let e = e.unparen();
+        let op = e.field("operator").map(|o| o.kind());
+        match e.kind() {
+            "unary_expression" if op == Some("!") => e.field("operand").map(|o| self.implied(o, !truth)).unwrap_or_default(),
+            "binary_expression" if (op == Some("&&") && truth) || (op == Some("||") && !truth) => {
+                [e.field("left"), e.field("right")].into_iter().flatten().flat_map(|s| self.implied(s, truth)).collect()
+            }
+            _ => self.cond_effect(e).into_iter().filter(|x| x.2 == truth).map(|(i, s, _)| (i, s)).collect(),
+        }
+    }
+
+    /// Literal a reassigned local was initialized with (`String name = "";`).
+    fn literal_init(&self, i: usize) -> Option<Node<'t>> {
+        let d = &self.fm.binder.decls[i];
+        if d.kind != LocalKind::Local {
+            return None;
+        }
+        let v = d.decl_node.field("value")?.unparen();
+        (crate::cfg::is_literal(v.kind()) && v.kind() != "template_expression").then_some(v)
+    }
+
+    /// Local proven to no longer hold its literal initializer when condition
+    /// `c` has outcome `truth`: `!name.isEmpty()` after `name = ""`, `name != null`
+    /// after `name = null`, `found` after `found = false`, `!"".equals(name)`.
+    fn leaves_init(&self, c: Node<'t>, truth: bool, effects: &[(usize, Nullness, bool)]) -> Option<usize> {
+        let fm = self.fm;
+        // any non-null proof leaves a null initializer: `Objects.nonNull(name)`
+        let null_init = |i: usize| self.literal_init(i).is_some_and(|v| v.kind() == "null_literal");
+        if let Some(&(i, ..)) = effects.iter().find(|&&(i, s, t)| t == truth && s == Nullness::NonNull && null_init(i)) {
+            return Some(i);
+        }
+        let local = |n: Option<Node<'t>>| n.map(|n| n.unparen()).filter(|n| n.kind() == "identifier").and_then(|n| fm.binder.decl_index_of_ref(n));
+        let same = |init: Node<'t>, n: Node<'t>| init.kind() == n.kind() && fm.text(init) == fm.text(n);
+        match c.kind() {
+            "identifier" => {
+                let i = local(Some(c))?;
+                let init = self.literal_init(i)?.kind();
+                ((init == "false" && truth) || (init == "true" && !truth)).then_some(i)
+            }
+            "binary_expression" => {
+                let op = c.field("operator").map(|o| o.kind())?;
+                if !matches!(op, "==" | "!=") || (op == "!=") != truth {
+                    return None;
+                }
+                let (l, r) = (c.field("left")?.unparen(), c.field("right")?.unparen());
+                let (i, lit) = match (local(Some(l)), local(Some(r))) {
+                    (Some(i), None) => (i, r),
+                    (None, Some(i)) => (i, l),
+                    _ => return None,
+                };
+                same(self.literal_init(i)?, lit).then_some(i)
+            }
+            "method_invocation" => {
+                let name = fm.call_name(c)?;
+                let args = fm.args_of(c);
+                if args.is_empty() {
+                    // `name.isEmpty()` is false
+                    let i = local(c.field("object"))?;
+                    let init = self.literal_init(i)?;
+                    return (matches!(name, "isEmpty" | "isBlank") && !truth && fm.text(init) == "\"\"").then_some(i);
+                }
+                if matches!(name, "equals" | "equalsIgnoreCase") && args.len() == 1 && !truth {
+                    // `"".equals(name)` / `name.equals("")` is false
+                    let (o, a) = (c.field("object")?.unparen(), args[0].unparen());
+                    let (i, lit) = match (local(Some(o)), local(Some(a))) {
+                        (Some(i), None) => (i, a),
+                        (None, Some(i)) => (i, o),
+                        _ => return None,
+                    };
+                    return same(self.literal_init(i)?, lit).then_some(i);
+                }
+                // `StringUtils.isNotEmpty(name)` after `name = ""`
+                let i = local(args.first().copied())?;
+                let init = self.literal_init(i)?;
+                let empty = match name {
+                    "isEmpty" | "isBlank" | "isNullOrEmpty" => !truth,
+                    "isNotEmpty" | "isNotBlank" | "hasText" | "hasLength" => truth,
+                    _ => false,
+                };
+                let empty_init = fm.text(init) == "\"\"" || init.kind() == "null_literal";
+                (empty && empty_init).then_some(i)
+            }
+            _ => None,
+        }
+    }
+
+    /// Locals non-null whenever local `i` no longer holds its literal
+    /// initializer, because every write to `i` sits in a branch that checked
+    /// them: `name = ""; if (dto != null) name = dto.getName();`. Only locals
+    /// never reassigned, and not redeclared while `i` lives (a loop body
+    /// declaring `dto` around an outer `name` would see the previous `dto`).
+    fn nonnull_when_written(&self, i: usize) -> Vec<usize> {
+        let fm = self.fm;
+        let d = &fm.binder.decls[i];
+        let mut guarded: Option<Vec<usize>> = None;
+        for u in &fm.binder.uses[i] {
+            let Some(w) = u.parent_unparen() else { continue };
+            let write = match w.kind() {
+                "assignment_expression" => w.field("left").map(|l| l.unparen()) == Some(*u),
+                "update_expression" => true,
+                _ => false,
+            };
+            if !write {
+                continue;
+            }
+            let mut here = Vec::new();
+            let mut child = w;
+            while let Some(a) = child.parent() {
+                if a.kind() == "if_statement" {
+                    if let Some(c) = a.field("condition") {
+                        if a.field("consequence") == Some(child) {
+                            here.extend(self.implied(c, true).into_iter().filter(|x| x.1 == Nullness::NonNull).map(|x| x.0));
+                        } else if a.field("alternative") == Some(child) {
+                            here.extend(self.implied(c, false).into_iter().filter(|x| x.1 == Nullness::NonNull).map(|x| x.0));
+                        }
+                    }
+                }
+                if Some(a) == d.owner || grounds_syntax::is_method_like(a.kind()) || a.kind() == "lambda_expression" {
+                    break;
+                }
+                child = a;
+            }
+            here.retain(|j| guarded.as_ref().is_none_or(|g| g.contains(j)));
+            if here.is_empty() {
+                return here;
+            }
+            guarded = Some(here);
+        }
+        let mut out = guarded.unwrap_or_default();
+        out.retain(|&j| {
+            let dj = &fm.binder.decls[j];
+            let scope = match dj.kind {
+                LocalKind::Param | LocalKind::LambdaParam => dj.owner,
+                LocalKind::Local => dj.decl_node.parent().and_then(|p| p.parent()),
+                LocalKind::ForEach => Some(dj.decl_node),
+                _ => None,
+            };
+            j != i && is_effectively_final(fm, j) && scope.is_some_and(|s| d.decl_node.ancestors().any(|a| a == s))
+        });
+        out
+    }
+
     /// Locals dereferenced by an element (receiver of a call, field access...).
     pub fn derefs(&self, e: Node<'t>) -> Vec<(usize, Node<'t>)> {
         let mut out = Vec::new();
@@ -581,10 +726,18 @@ impl<'a, 't> Analysis<'t> for NullnessAnalysis<'a, 't> {
             }
         }
         let mut f = fact.clone();
-        for (i, s, on_true) in self.cond_effect(c) {
-            if on_true == truth {
-                // contradiction: known non-null but branch requires null
+        let effects = self.cond_effect(c);
+        for &(i, s, on_true) in &effects {
+            // a check of a value known non-null proves nothing: that outcome
+            // is dead (`dto == null ? null : dto.getId()` after `dto.getName()`)
+            if on_true == truth && !(s == Nullness::Null && f.get(&i) == Some(&Nullness::NonNull)) {
                 f.insert(i, s);
+            }
+        }
+        // `name = ""; if (dto != null) name = dto.getName(); if (!name.isEmpty()) dto...`
+        if let Some(i) = self.leaves_init(c, truth, &effects) {
+            for j in self.nonnull_when_written(i) {
+                f.insert(j, Nullness::NonNull);
             }
         }
         Some(f)

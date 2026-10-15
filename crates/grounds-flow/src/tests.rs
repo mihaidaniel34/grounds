@@ -70,6 +70,28 @@ fn nullness_paths() {
 }
 
 #[test]
+fn nullness_correlated_guard() {
+    with_method(
+        "class T { void m(String d) { String n = \"\"; if (d != null) n = d.trim(); if (!n.isEmpty()) { int k = d == null ? 0 : d.length(); d.isEmpty(); } d.chars(); } }",
+        |fm, cfg| {
+            let na = NullnessAnalysis { fm, cfg };
+            let res = solve(cfg, &na);
+            let mut hits = Vec::new();
+            res.for_each_before(cfg, &na, |e, f| {
+                for (i, n) in na.derefs(e) {
+                    if let Some(s) = f.get(&i) {
+                        if !matches!(*s, Nullness::NonNull | Nullness::MaybeAssignedNull) {
+                            hits.push(format!("{}:{}", fm.text(n.parent().unwrap()), s.is_definitely_null()));
+                        }
+                    }
+                }
+            });
+            assert_eq!(hits, vec!["d.chars():false"]);
+        },
+    );
+}
+
+#[test]
 fn resources() {
     with_method(
         "import java.io.*; class T { void m(File f) throws IOException { InputStream a = new FileInputStream(f); InputStream b = new FileInputStream(f); b.close(); InputStream c = new FileInputStream(f); keep(c); Reader r = new StringReader(\"x\"); } void keep(Object o) {} }",
