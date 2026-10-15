@@ -183,7 +183,8 @@ impl Project {
         let java_home = config.java_home.clone().or_else(grounds_classfile::find_java_home);
         stats.java_release = config.java_release(&workspace);
         let classpath = Arc::new(Classpath::build(java_home.as_deref(), stats.java_release, &entries));
-        if !classpath.contains("java.lang.Object") {
+        // a JDK home without lib/ct.sym is reported by the classpath warnings
+        if !classpath.contains("java.lang.Object") && java_home.is_none() {
             static WARNED: std::sync::Once = std::sync::Once::new();
             WARNED.call_once(|| {
                 eprintln!("grounds: warning: no JDK found (set JAVA_HOME, put `java` on PATH, or `java_home` in grounds.toml); checks that need the JDK's classes stay silent");

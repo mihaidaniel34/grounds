@@ -400,6 +400,14 @@ Spring Boot's parent), and Gradle's `options.release`,
 JDK API, so the highest is used; without any, 21. `grounds index` prints the
 release in use.
 
+The JDK's API comes from its `lib/ct.sym` (the signatures of each release
+before its own). A release newer than the installed JDK, say 25 with JDK 21,
+has none: grounds uses the newest older release it has, which lacks APIs
+added since, so it warns and stays silent about classes that inherit from JDK
+classes (an absent member may be one of those APIs). A JDK home without
+`lib/ct.sym` (a JRE, or a JDK older than 9) warns too, and checks that need
+the JDK's classes stay silent.
+
 ### Classpath
 
 By default grounds guesses dependency jars from the local Gradle and Maven
@@ -432,7 +440,9 @@ SARIF as a tool notification) when:
   `gradle/libs.versions.toml`),
 - jars listed in a classpath file no longer exist (a cleaned cache),
 - there is no classpath file and no jar was found for most of the library
-  types the sources import.
+  types the sources import,
+- the release is newer than the installed JDK, or the JDK home has no
+  `lib/ct.sym` (see above). Set `java_home` to a suitable JDK.
 
 Set `warn = false` under `[classpath]` to silence these.
 
