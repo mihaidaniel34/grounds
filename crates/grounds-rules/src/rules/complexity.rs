@@ -210,22 +210,23 @@ impl Rule for MethodTooLong {
     }
 }
 
-/// Offset of `tag` as a word in one comment line, e.g. `TODO` in ` * todo: later`.
-fn comment_task(line: &str, tag: &str) -> Option<usize> {
+/// Offsets of `tag` as a word in one comment line, e.g. `TODO` in ` * todo: later`.
+fn comment_task(line: &str, tag: &str) -> Vec<usize> {
     let lead = line.len() - line.trim_start_matches(['/', '*', ' ', '\t']).len();
     let up = line[lead..].to_ascii_uppercase();
-    let i = up.find(tag)?;
-    let before_ok = i == 0 || !up.as_bytes()[i - 1].is_ascii_alphanumeric();
-    let after_ok = up.as_bytes().get(i + tag.len()).is_none_or(|c| !c.is_ascii_alphanumeric());
-    (before_ok && after_ok).then_some(lead + i)
+    up.match_indices(tag)
+        .filter(|(i, _)| *i == 0 || !up.as_bytes()[i - 1].is_ascii_alphanumeric())
+        .filter(|(i, _)| up.as_bytes().get(i + tag.len()).is_none_or(|c| !c.is_ascii_alphanumeric()))
+        .map(|(i, _)| lead + i)
+        .collect()
 }
 
 /// Report each task marker of a comment at its own line (not where a
 /// multi-line comment starts), so changed-line filters see it.
-fn report_task_markers<'t>(n: Node<'t>, cx: &mut Ctx<'_, 't>, message: &str, find: impl Fn(&str) -> Option<(usize, usize)>) {
+fn report_task_markers<'t>(n: Node<'t>, cx: &mut Ctx<'_, 't>, message: &str, find: impl Fn(&str) -> Vec<(usize, usize)>) {
     let mut start = n.start_byte();
     for line in cx.text(n).split_inclusive('\n') {
-        if let Some((off, len)) = find(line) {
+        for (off, len) in find(line) {
             cx.report_range(TextRange::new(start + off, start + off + len), message);
         }
         start += line.len();
@@ -245,7 +246,7 @@ declare_rule!(TodoComment {
 impl Rule for TodoComment {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
-        report_task_markers(n, cx, "TODO left in code", |line| comment_task(line, "TODO").map(|i| (i, 4)));
+        report_task_markers(n, cx, "TODO left in code", |line| comment_task(line, "TODO").into_iter().map(|i| (i, 4)).collect());
     }
 }
 
@@ -263,13 +264,13 @@ impl Rule for FixmeComment {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
         report_task_markers(n, cx, "FIXME left in code", |line| {
-            if let Some(i) = comment_task(line, "FIXME") {
-                return Some((i, 5));
-            }
+            let mut found: Vec<_> = comment_task(line, "FIXME").into_iter().map(|i| (i, 5)).collect();
             // XXX only as a leading tag: "XXX-XXXX" or "C:\Users\xxx" are placeholders
             let lead = line.trim_start_matches(['/', '*', ' ', '\t']);
-            let xxx = lead.starts_with("XXX") && lead.as_bytes().get(3).is_none_or(|c| !c.is_ascii_alphanumeric() && *c != b'-' && *c != b'.');
-            xxx.then_some((line.len() - lead.len(), 3))
+            if lead.starts_with("XXX") && lead.as_bytes().get(3).is_none_or(|c| !c.is_ascii_alphanumeric() && *c != b'-' && *c != b'.') {
+                found.push((line.len() - lead.len(), 3));
+            }
+            found
         });
     }
 }

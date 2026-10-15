@@ -8,6 +8,7 @@ class A {
     void m() {
         /* todo: later */ // expect
         int todoCount = 0; // mentions todos in prose
+        // two todos: TODO check the bounds // expect
     }
 
     /*

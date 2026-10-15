@@ -827,8 +827,9 @@ impl Rule for DeprecatedApiUsage {
         if !method_dep && !class_dep {
             return;
         }
-        let anns = if method_dep { &c.method.annotations } else { &owner.as_ref().unwrap().annotations };
-        let for_removal = anns.iter().any(|a| a.simple_name() == "Deprecated" && a.arg("forRemoval").and_then(|v| v.as_bool()) == Some(true));
+        // a plain @Deprecated method of a class deprecated forRemoval goes with its class
+        let removal = |anns: &[AnnotationInfo]| anns.iter().any(|a| a.simple_name() == "Deprecated" && a.arg("forRemoval").and_then(|v| v.as_bool()) == Some(true));
+        let for_removal = (method_dep && removal(&c.method.annotations)) || (class_dep && owner.as_ref().is_some_and(|o| removal(&o.annotations)));
         // the project's own deprecations are mostly compatibility shims it still
         // maintains; only the ones it is about to remove are worth acting on
         let own = owner.as_ref().is_some_and(|o| o.is_source());

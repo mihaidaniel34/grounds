@@ -7,6 +7,7 @@ class Old {
 @Deprecated(forRemoval = true)
 class Doomed {
     static Doomed create() { return new Doomed(); }
+    @Deprecated static void old() {}
 }
 @Deprecated
 class Shim {
@@ -18,6 +19,7 @@ class A {
         Shim.create();
         o.gone(); // expect
         Doomed.create(); // expect
+        Doomed.old(); // expect
         int y = d.getYear(); // expect
         o.fresh();
     }
