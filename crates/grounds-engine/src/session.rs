@@ -407,14 +407,16 @@ impl Session {
         }
         // an import other than of `pkg` that may supply `name`: one naming it,
         // or an on-demand one (nested types under a static one) we cannot see
-        // all of; only the JDK defines `java.*`, so those are complete
+        // all of; only the JDK defines `java.*`, so those are complete once the
+        // JDK's classes are loaded at all
         let idx = &self.project.index;
+        let jdk = idx.class_exists("java.lang.Object");
         let may_supply = |name: &str, pkg: &str| {
             stub.imports.iter().any(|i| {
                 if !i.on_demand {
                     return i.last() == name && (i.is_static || *i.path != *format!("{pkg}.{name}"));
                 }
-                *i.path != *pkg && (!i.path.starts_with("java.") || idx.class_exists(&format!("{}.{name}", i.path)) || idx.class_exists(&format!("{}${name}", i.path)))
+                *i.path != *pkg && (!jdk || !i.path.starts_with("java.") || idx.class_exists(&format!("{}.{name}", i.path)) || idx.class_exists(&format!("{}${name}", i.path)))
             })
         };
         // ordered: the first of them found in the file is reported
@@ -484,15 +486,18 @@ impl Session {
                     if text != *dotted {
                         return false;
                     }
-                    if n.kind() == "scoped_type_identifier" {
-                        return fm.resolve_type_node(*n).is_unknown() && enclosing_complete(&fm, *n);
-                    }
-                    let receiver = n.parent().is_some_and(|p| matches!(p.kind(), "method_invocation" | "field_access") && p.field("object") == Some(*n));
                     let mut first = *n;
                     while let Some(k) = first.kids().first().copied() {
                         first = k;
                     }
-                    receiver && first.kind() == "identifier" && fm.symbol(first).is_none() && fm.type_of(*n).is_unknown() && enclosing_complete(&fm, *n)
+                    // the qualifier names no type either (`class p` with a nested
+                    // or inherited `Gone`)
+                    let qualifier_free = || fm.resolve_type_node(first).is_unknown() && !idx.class_exists(&format!("{}.{}", stub.package, &pf.text[first.byte_range()]));
+                    if n.kind() == "scoped_type_identifier" {
+                        return fm.resolve_type_node(*n).is_unknown() && qualifier_free() && enclosing_complete(&fm, *n);
+                    }
+                    let receiver = n.parent().is_some_and(|p| matches!(p.kind(), "method_invocation" | "field_access") && p.field("object") == Some(*n));
+                    receiver && first.kind() == "identifier" && fm.symbol(first).is_none() && qualifier_free() && fm.type_of(*n).is_unknown() && enclosing_complete(&fm, *n)
                 }
                 Use::Simple => {
                     if &pf.text[n.byte_range()] != simple || n.ancestors().any(|a| matches!(a.kind(), "import_declaration" | "package_declaration")) {

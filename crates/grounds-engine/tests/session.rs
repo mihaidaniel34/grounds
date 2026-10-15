@@ -291,6 +291,9 @@ fn base_mode_removed_classes_and_new_beans() {
     write(&dir, "src/main/java/demo/StaticWildcard.java", "package demo;\nimport static somelib.Holder.*;\nclass StaticWildcard { Gone g; }\n");
     write(&dir, "src/main/java/other/Inherited.java", "package other;\nclass Inherited extends somelib.Base {\n    int v() { return demo.Gone.value(); }\n}\n");
     write(&dir, "src/main/java/demo/SelfQualified.java", "package demo;\nclass SelfQualified {\n    demo.Gone g;\n}\n");
+    // the qualifier names a class here (one that may inherit a nested Gone)
+    write(&dir, "src/main/java/fourth/demo.java", "package fourth;\nclass demo extends somelib.Base {}\n");
+    write(&dir, "src/main/java/fourth/ClassQualifier.java", "package fourth;\nclass ClassQualifier { demo.Gone g; }\n");
     // deleting a class named like a java.lang one: the name falls back to java.lang
     write(&dir, "src/main/java/demo/String.java", "package demo;\npublic class String {}\n");
     write(&dir, "src/main/java/demo/Text.java", "package demo;\nclass Text { String s; }\n");

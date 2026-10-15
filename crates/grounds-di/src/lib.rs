@@ -1194,14 +1194,15 @@ impl DiModel {
             return Vec::new();
         }
         // static @Bean methods have no factory bean
-        // the @Bean method of that name, declared here or inherited (a
-        // helper overload does not count); without one in sight, any method
-        let instance = |m: &Name| {
+        // the @Bean method of that name and the bean's type, declared here or
+        // inherited (a helper overload or another bean's factory does not
+        // count); without one in sight, any method of that name
+        let instance = |m: &Name, ty: &Ty| {
             let mut beans = Vec::new();
             let mut cur = lk.class(&p.owner);
             for _ in 0..16 {
                 let Some(c) = cur else { break };
-                beans.extend(c.methods_named(m).filter(|x| x.annotations.iter().any(|a| a.simple_name() == "Bean")).map(|x| x.flags.is_static()));
+                beans.extend(c.methods_named(m).filter(|x| x.ret == *ty && x.annotations.iter().any(|a| a.simple_name() == "Bean")).map(|x| x.flags.is_static()));
                 if !beans.is_empty() {
                     break;
                 }
@@ -1218,7 +1219,7 @@ impl DiModel {
                 let b = &self.beans[i];
                 own(b)
                     && match &b.source {
-                        BeanSource::FactoryMethod(m) => instance(m),
+                        BeanSource::FactoryMethod(m) => instance(m, &b.ty),
                         _ => true,
                     }
             })
@@ -1560,6 +1561,11 @@ mod tests {
              @Service class OtherH implements H {}
              class BaseCfg { @Bean H inherited() { return null; } }
              @Configuration class SubCfg extends BaseCfg { @org.springframework.beans.factory.annotation.Autowired H viaSuper; H inherited(int helper) { return null; } }
+             interface G {}
+             @Service class OtherG1 implements G {}
+             @Service class OtherG2 implements G {}
+             class MakeBase { @Bean(\"primaryG\") @Primary static G make() { return null; } @Bean(\"number\") Integer make(String unused) { return 1; } }
+             @Configuration class MakeCfg extends MakeBase { @org.springframework.beans.factory.annotation.Autowired G viaStatic; }
              @ComponentScan class Main { public static void main(String[] args) {} }",
         )]);
         let bean = |n: &str| m.beans.iter().position(|b| b.name == n).unwrap();
@@ -1577,6 +1583,8 @@ mod tests {
         assert_eq!(resolution_of(&idx, &m, "app/A.java", "own"), Resolution::Unique(bean("st")));
         // an inherited instance @Bean is the config's own, beside a helper overload
         assert_eq!(resolution_of(&idx, &m, "app/A.java", "viaSuper"), Resolution::Unique(bean("otherH")));
+        // an inherited static @Bean is no self-reference beside an instance one of the same name
+        assert_eq!(resolution_of(&idx, &m, "app/A.java", "viaStatic"), Resolution::Unique(bean("primaryG")));
         // the issue's case: a decorator wrapping the only other implementation
         let (idx, m) = model(&[(
             "app/A.java",
