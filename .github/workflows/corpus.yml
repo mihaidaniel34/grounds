@@ -51,7 +51,8 @@ jobs:
             target/release/examples/errors
       - id: projects
         run: |
-          echo "names=$(cut -f1 corpus/projects.tsv | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
+          # helidon runs on JDK 27 in check-jdk27 instead
+          echo "names=$(cut -f1 corpus/projects.tsv | grep -vx helidon | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
           # projects whose build cannot dump a classpath on a runner (reasons in the file)
           echo "classpath=$(cut -f1 corpus/projects.tsv | grep -vxF -f <(cut -f1 corpus/classpath-skip.tsv) | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
 
@@ -168,6 +169,49 @@ jobs:
             target/corpus/current/stats.tsv
             target/corpus/snapshot.diff
 
+  # helidon on JDK 27 (early access): the release it infers is 27, so with the JDK
+  # at 27 grounds reads that release exactly from lib/modules, and the compile-break
+  # checks run against the real API rather than an older one. Only the hard checks
+  # gate here; the snapshot diff against the JDK 25 baseline is informational.
+  # To bump the build, change java-version to the new early-access build (the
+  # setup-java README lists the forms it accepts); the other projects stay on 25.
+  check-jdk27:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 27-ea
+      - uses: actions/download-artifact@v5
+        with:
+          name: binaries
+          path: bin
+      - run: chmod +x bin/grounds bin/examples/errors
+      - name: fetch the pinned commit
+        run: scripts/corpus.sh fetch
+        env:
+          CORPUS_ONLY: helidon
+          CORPUS_DIR: ${{ runner.temp }}/corpus
+          CORPUS_SHALLOW: "1"
+      - name: check
+        run: scripts/corpus.sh check
+        env:
+          CORPUS_ONLY: helidon
+          CORPUS_DIR: ${{ runner.temp }}/corpus
+          CORPUS_BASELINE: corpus/ci
+          GROUNDS: bin/grounds
+          ERRORS: ${{ github.workspace }}/bin/examples/errors
+      - if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: corpus-helidon-jdk27
+          path: |
+            target/corpus/current/*.txt
+            target/corpus/current/stats.tsv
+            target/corpus/snapshot.diff
+
   classpath:
     needs: build
     strategy:
@@ -260,6 +304,7 @@ jobs:
           mkdir -p corpus/ci corpus/ci-classpath
           for d in results/corpus-*; do
             case $d in
+              results/corpus-helidon-jdk21) ;; # not a baseline: JDK 21 results differ
               results/corpus-cp-*) cp "$d"/current/*.txt corpus/ci-classpath/ ;;
               *) cp "$d"/current/*.txt corpus/ci/ ;;
             esac
