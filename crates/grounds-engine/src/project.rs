@@ -38,6 +38,8 @@ pub struct Project {
     pub registered: Vec<String>,
     /// the auto-configurations among them
     pub auto_registered: Vec<String>,
+    /// Classpath problems found at load (missing, stale, too few jars).
+    pub classpath_warnings: Vec<crate::classpath::Warning>,
 }
 
 /// Class names registered through Spring's META-INF files in any module, and
@@ -227,7 +229,8 @@ impl Project {
         let mut di = grounds_di::DiModel::build_with(&index, &registered, &auto_registered);
         di.lombok_copies_qualifiers = lombok_copies_qualifiers(&workspace.root);
         di.bean_overriding_allowed = bean_overriding_allowed(&workspace);
-        Ok(Project { config, workspace, index, stats, di, source_sets, lombok, registered, auto_registered })
+        let classpath_warnings = crate::classpath::warnings(&workspace, &config, &index);
+        Ok(Project { config, workspace, index, stats, di, source_sets, lombok, registered, auto_registered, classpath_warnings })
     }
 
     pub fn source_kind(&self, path: &Path) -> SourceKind {

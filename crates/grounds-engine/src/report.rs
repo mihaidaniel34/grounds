@@ -94,8 +94,8 @@ pub fn json(findings: &[Finding]) -> String {
 const HOME: &str = "https://github.com/mihaidaniel34/grounds";
 
 /// SARIF for `grounds check`.
-pub fn sarif(findings: &[Finding], root: &Path) -> String {
-    let mut doc = SarifDoc::new(root);
+pub fn sarif(findings: &[Finding], root: &Path, warnings: &[String]) -> String {
+    let mut doc = SarifDoc::new(root, warnings);
     for f in findings {
         doc.result(f, Vec::new());
     }
@@ -105,8 +105,8 @@ pub fn sarif(findings: &[Finding], root: &Path) -> String {
 /// SARIF for `grounds changed`: findings on changed lines, the places in
 /// other files the change broke, and on each changed line that broke
 /// something a `breaks-other-files` result listing them as related locations.
-pub fn sarif_report(report: &crate::session::Report, root: &Path) -> String {
-    let mut doc = SarifDoc::new(root);
+pub fn sarif_report(report: &crate::session::Report, root: &Path, warnings: &[String]) -> String {
+    let mut doc = SarifDoc::new(root, warnings);
     for f in &report.findings {
         doc.result(f, Vec::new());
     }
@@ -127,6 +127,8 @@ struct SarifDoc {
     /// The project root relative to the repository root (`app/`), since code
     /// scanning and reviewdog resolve paths from the repository root.
     prefix: String,
+    /// Tool notifications (classpath warnings), outside the results.
+    warnings: Vec<String>,
 }
 
 /// A relative path as a URI reference: everything but unreserved
@@ -152,7 +154,7 @@ fn level(s: Severity) -> &'static str {
 }
 
 impl SarifDoc {
-    fn new(root: &Path) -> SarifDoc {
+    fn new(root: &Path, warnings: &[String]) -> SarifDoc {
         let prefix = crate::git::toplevel(root)
             .and_then(|top| {
                 let (r, t) = (root.canonicalize().ok()?, top.canonicalize().ok()?);
@@ -161,7 +163,7 @@ impl SarifDoc {
             .filter(|p| !p.is_empty())
             .map(|p| format!("{p}/"))
             .unwrap_or_default();
-        SarifDoc { rules: Vec::new(), rule_index: BTreeMap::new(), results: Vec::new(), prefix }
+        SarifDoc { rules: Vec::new(), rule_index: BTreeMap::new(), results: Vec::new(), prefix, warnings: warnings.to_vec() }
     }
 
     fn rule(&mut self, id: &'static str, severity: Severity) -> usize {
@@ -236,7 +238,7 @@ impl SarifDoc {
     }
 
     fn render(self) -> String {
-        let doc = serde_json::json!({
+        let mut doc = serde_json::json!({
             "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
             "version": "2.1.0",
             "runs": [{
@@ -245,6 +247,10 @@ impl SarifDoc {
                 "results": self.results
             }]
         });
+        if !self.warnings.is_empty() {
+            let notes: Vec<_> = self.warnings.iter().map(|w| serde_json::json!({ "level": "warning", "message": { "text": w.strip_prefix("grounds: warning: ").unwrap_or(w) } })).collect();
+            doc["runs"][0]["invocations"] = serde_json::json!([{ "executionSuccessful": true, "toolExecutionNotifications": notes }]);
+        }
         serde_json::to_string_pretty(&doc).unwrap_or_default()
     }
 }
