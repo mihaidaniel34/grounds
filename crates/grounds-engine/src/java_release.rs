@@ -299,8 +299,9 @@ fn parse_pom(text: &str, path: &Path) -> Pom {
             continue;
         }
         // executions may compile other sources for other releases (a Java 9
-        // module-info next to Java 8 code): the plugin-level configuration
-        // counts, else the main compile's (`default-compile`)
+        // module-info next to Java 8 code): only the plugin-level
+        // configuration counts, merged under the main compile's
+        // (`default-compile`), whose settings win as in Maven's merge
         let executions = elements(plugin, "executions").into_iter().flat_map(|e| elements(e, "execution")).collect::<Vec<_>>();
         let mut own = plugin.to_string();
         while let (Some(s), Some(e)) = (own.find("<executions>"), own.find("</executions>")) {
@@ -309,13 +310,14 @@ fn parse_pom(text: &str, path: &Path) -> Pom {
             }
             own.replace_range(s..e + "</executions>".len(), "");
         }
-        let main_compile = executions.iter().filter(|e| element(e, "id") == Some("default-compile")).flat_map(|e| elements(e, "configuration"));
-        for conf in elements(&own, "configuration").into_iter().chain(main_compile) {
-            for (k, v) in children(conf) {
-                if matches!(k.as_str(), "release" | "target" | "source") {
-                    compiler.entry(k).or_insert(v);
-                }
+        let settings = |conf: &str| children(conf).into_iter().filter(|(k, _)| matches!(k.as_str(), "release" | "target" | "source")).collect::<Vec<_>>();
+        for conf in elements(&own, "configuration") {
+            for (k, v) in settings(conf) {
+                compiler.entry(k).or_insert(v);
             }
+        }
+        for conf in executions.iter().filter(|e| element(e, "id") == Some("default-compile")).flat_map(|e| elements(e, "configuration")) {
+            compiler.extend(settings(conf));
         }
     }
     let parent_block = element(&main, "parent");
@@ -401,6 +403,9 @@ mod tests {
         let java9 = "<execution><id>java9</id><configuration><release>9</release></configuration></execution>";
         let dir = temp("exec", &[("pom.xml", &compiler(&format!("<executions><execution><id>default-compile</id><configuration><release>8</release></configuration></execution>{java9}</executions>")))]);
         assert_eq!(infer_dir(&dir), Some(8));
+        // the main compile's settings override the plugin level's
+        let dir = temp("exec-wins", &[("pom.xml", &compiler("<configuration><release>17</release></configuration><executions><execution><id>default-compile</id><configuration><release>11</release></configuration></execution></executions>"))]);
+        assert_eq!(infer_dir(&dir), Some(11));
         let dir = temp("exec-after", &[("pom.xml", &compiler(&format!("<executions>{java9}</executions><configuration><source>1.8</source><target>1.8</target></configuration>")))]);
         assert_eq!(infer_dir(&dir), Some(8));
         let dir = temp("exec-only", &[("pom.xml", &compiler(&format!("<executions>{java9}</executions>")))]);
