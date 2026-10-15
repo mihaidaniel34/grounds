@@ -171,21 +171,30 @@ jobs:
 
   # helidon on JDK 27 (early access): the release it infers is 27, so with the JDK
   # at 27 grounds reads that release exactly from lib/modules, and the compile-break
-  # checks run against the real API rather than an older one. Only the hard checks
-  # gate here; the snapshot diff against the JDK 25 baseline is informational.
-  # To bump the build, change java-version to the new early-access build (the
-  # setup-java README lists the forms it accepts); the other projects stay on 25.
+  # checks run against the real API. Only the hard checks gate here; the snapshot diff
+  # against the JDK 25 baseline is informational.
+  # The build is pinned by URL and SHA-256 (not setup-java, which would take the
+  # newest early-access build), so results do not move with new builds. To bump it,
+  # take the new beta's tarball and its .sha256.txt from
+  # https://github.com/adoptium/temurin27-binaries/releases and replace both values;
+  # the other projects stay on JDK 25.
   check-jdk27:
     needs: build
     runs-on: ubuntu-latest
+    env:
+      JDK27_URL: https://github.com/adoptium/temurin27-binaries/releases/download/jdk27u-2026-10-10-15-56-beta/OpenJDK27U-jdk_x64_linux_hotspot_2026-10-10-15-56.tar.gz
+      JDK27_SHA256: 5201ac9a7367c1276dbfcb7e8dd975d5b97f4603b58a4e8382e648390f2a5152
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: 27-ea
+      - name: install the pinned JDK 27 early-access build
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/jdk27.tar.gz" "$JDK27_URL"
+          echo "$JDK27_SHA256  $RUNNER_TEMP/jdk27.tar.gz" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/jdk27.tar.gz" -C "$RUNNER_TEMP"
+          echo "JAVA_HOME=$RUNNER_TEMP/jdk-27.0.2+0" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/jdk-27.0.2+0/bin" >> "$GITHUB_PATH"
       - uses: actions/download-artifact@v5
         with:
           name: binaries
