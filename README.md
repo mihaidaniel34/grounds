@@ -443,8 +443,9 @@ SARIF as a tool notification) when:
 - jars listed in a classpath file no longer exist (a cleaned cache),
 - there is no classpath file and no jar was found for most of the library
   types the sources import,
-- the release is newer than the installed JDK, or the JDK home has no
-  `lib/ct.sym` (see above). Set `java_home` to a suitable JDK.
+- the release is newer than the installed JDK, the JDK's own runtime image
+  (`lib/modules`) cannot be read, or the JDK home has no `lib/ct.sym` (see
+  above). Set `java_home` to a suitable JDK.
 
 Set `warn = false` under `[classpath]` to silence these.
 
