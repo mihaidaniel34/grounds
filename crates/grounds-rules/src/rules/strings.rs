@@ -720,29 +720,86 @@ declare_rule!(UselessStringValueOf {
     severity: Info,
     sources: ["sonar:S1153", "pmd:UselessStringValueOf"],
     kinds: ["method_invocation"],
-    description: "String concatenation already converts operands; wrapping them in `String.valueOf()` or calling `toString()` is noise.",
+    description: "String concatenation already converts operands; wrapping them in `String.valueOf()` is noise. Only calls whose removal keeps the `+` a string concatenation are reported: in `String.valueOf(a) + String.valueOf(b)` one of the two must stay.",
 });
+
+fn is_plus(n: Node) -> bool {
+    n.kind() == "binary_expression" && op(n) == "+"
+}
+
+/// The argument of a `String.valueOf(x)` that concatenation could do
+/// without; not a `char[]`, whose overload copies the characters instead of
+/// printing the array.
+fn valueof_arg<'t>(n: Node<'t>, cx: &Ctx<'_, 't>) -> Option<Node<'t>> {
+    if n.kind() != "method_invocation" || cx.fm.call_name(n) != Some("valueOf") {
+        return None;
+    }
+    let args = cx.fm.args_of(n);
+    if args.len() != 1 || !cx.fm.call_matches(n, &MethodMatcher::statics(STRING).named(&["valueOf"])) || cx.type_of(args[0]).is_array() {
+        return None;
+    }
+    Some(args[0])
+}
+
+/// Operands of a `+` chain in evaluation order: `(a + b) + c` -> a, b, c.
+/// A parenthesized right operand is a chain of its own.
+fn plus_operands<'t>(n: Node<'t>, out: &mut Vec<Node<'t>>) {
+    let n = n.unparen();
+    if let Some((l, r)) = lr(n).filter(|_| is_plus(n)) {
+        plus_operands(l, out);
+        out.push(r.unparen());
+    } else {
+        out.push(n);
+    }
+}
+
+/// The `String.valueOf()` operands of the `+` chain `root` that can all be
+/// removed at once, and whether the chain is still a String without them.
+/// `+` evaluates left to right, so a call is redundant when what precedes it
+/// is already a String (`a + b + String.valueOf(c)` adds `a + b` first); the
+/// first operand instead relies on the second, and is kept when the second
+/// is itself a call that goes: `String.valueOf(a) + String.valueOf(b)`
+/// without both is `a + b`.
+fn redundant_valueofs<'t>(root: Node<'t>, cx: &Ctx<'_, 't>) -> (Vec<Node<'t>>, bool) {
+    let mut ops = Vec::new();
+    plus_operands(root, &mut ops);
+    let is_str = |o: Node<'t>| if is_plus(o) { redundant_valueofs(o, cx).1 } else { cx.type_of(o).is_string() };
+    let mut removed = Vec::new();
+    let mut acc = false;
+    for (i, &o) in ops.iter().enumerate() {
+        let s = match valueof_arg(o, cx) {
+            Some(arg) => {
+                let arg_str = cx.type_of(arg).is_string();
+                let drop = arg_str
+                    || if i == 0 {
+                        ops.get(1).is_some_and(|&next| valueof_arg(next, cx).map_or_else(|| is_str(next), |a| cx.type_of(a).is_string()))
+                    } else {
+                        acc
+                    };
+                if drop {
+                    removed.push(o);
+                }
+                arg_str || !drop
+            }
+            None => is_str(o),
+        };
+        acc |= s;
+    }
+    (removed, acc)
+}
 
 impl Rule for UselessStringValueOf {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
-        if cx.fm.call_name(n) != Some("valueOf") {
-            return;
+        let Some(arg) = valueof_arg(n, cx) else { return };
+        let Some(mut root) = n.parent_unparen().filter(|p| is_plus(*p)) else { return };
+        while let Some(p) = root.parent_unparen().filter(|p| is_plus(*p) && p.field("left").map(|l| l.unparen()) == Some(root)) {
+            root = p;
         }
-        let args = cx.fm.args_of(n);
-        if args.len() != 1 || !cx.fm.call_matches(n, &MethodMatcher::statics(STRING).named(&["valueOf"])) {
-            return;
-        }
-        if cx.type_of(args[0]).is_array() {
-            return;
-        }
-        let Some(p) = n.parent_unparen() else { return };
-        if p.kind() == "binary_expression" && op(p) == "+" && cx.type_of(p).is_string() {
-            // the other operand must be a String so the conversion still happens
-            let other = if p.field("left").map(|x| x.unparen()) == Some(n) { p.field("right") } else { p.field("left") };
-            if other.is_some_and(|o| cx.type_of(o).is_string()) {
-                cx.report_fix(n, "`String.valueOf()` is redundant in string concatenation", Fix::replace("Remove valueOf", n, cx.text(args[0])));
-            }
+        if redundant_valueofs(root, cx).0.contains(&n) {
+            let a = cx.text(arg);
+            let fix = if matches!(arg.kind(), "binary_expression" | "ternary_expression" | "assignment_expression" | "instanceof_expression" | "lambda_expression") { format!("({a})") } else { a.to_string() };
+            cx.report_fix(n, "`String.valueOf()` is redundant in string concatenation", Fix::replace("Remove valueOf", n, fix));
         }
     }
 }
@@ -754,7 +811,7 @@ declare_rule!(TrimIsEmpty {
     severity: Info,
     sources: ["sonar:S7158", "intellij:StringOperationCanBeSimplified"],
     kinds: ["method_invocation"],
-    description: "`s.trim().isEmpty()` allocates a new string; `s.isBlank()` (Java 11+) checks the same thing without copying and also handles Unicode whitespace.",
+    description: "`s.trim().isEmpty()` allocates a new string; `s.isBlank()` (Java 11+) checks without copying. The two are not equivalent: `trim()` strips every character up to U+0020, control characters included, while `isBlank()` tests `Character.isWhitespace`, which also covers Unicode spaces (U+2003) but not `\\u0000`. `s.strip().isEmpty()` is exactly `isBlank()`.",
 });
 
 impl Rule for TrimIsEmpty {
@@ -767,7 +824,13 @@ impl Rule for TrimIsEmpty {
         if is_call_named(o, cx.src, &["trim", "strip"]) && cx.fm.args_of(o).is_empty() {
             if let Some(r) = o.field("object") {
                 if cx.type_of(r).is_string() {
-                    cx.report_fix(n, "Use `isBlank()` instead of `trim().isEmpty()`", Fix::replace("Use isBlank()", n, format!("{}.isBlank()", cx.text(r))));
+                    let fix = Fix::replace("Use isBlank()", n, format!("{}.isBlank()", cx.text(r)));
+                    // strip() uses Character.isWhitespace like isBlank(); trim() cuts at U+0020
+                    if cx.fm.call_name(o) == Some("strip") {
+                        cx.report_fix(n, "Use `isBlank()` instead of `strip().isEmpty()`", fix);
+                    } else {
+                        cx.report_fix(n, "`trim().isEmpty()` copies the string; `isBlank()` does not, but differs on control characters (true only for `trim()`) and Unicode spaces (true only for `isBlank()`)", fix);
+                    }
                 }
             }
         }
