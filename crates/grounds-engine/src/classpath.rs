@@ -130,7 +130,7 @@ pub fn warnings(ws: &Workspace, cfg: &Config, index: &Index) -> Vec<Warning> {
     }
     match &index.classpath.jdk {
         JdkApi::Newer { requested, installed } => out.push(Warning::JdkNewer { release: *requested, jdk: *installed }),
-        JdkApi::Absent { home } => out.push(Warning::JdkAbsent { home: home.display().to_string() }),
+        JdkApi::Absent { home } => out.push(Warning::JdkAbsent { home: shown(&home.display().to_string()) }),
         JdkApi::Complete => {}
     }
     let files = classpath_files(ws, cfg);
