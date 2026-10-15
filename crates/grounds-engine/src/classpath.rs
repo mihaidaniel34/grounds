@@ -80,6 +80,9 @@ pub enum Warning {
     /// The project compiles for a release newer than the installed JDK: its
     /// API is unknown, so checks that could depend on it stay silent.
     JdkNewer { release: u32, jdk: u32 },
+    /// The JDK's own release, but its runtime image cannot be read: its API
+    /// is approximated from `ct.sym`, so checks that could depend on it stay silent.
+    JdkUnreadable { release: u32 },
     /// The JDK home has no usable `lib/ct.sym`: its classes are unknown.
     JdkAbsent { home: String },
 }
@@ -98,6 +101,10 @@ impl std::fmt::Display for Warning {
             Warning::JdkNewer { release, jdk } => write!(
                 f,
                 "grounds: warning: the project compiles for Java {release} but the JDK is Java {jdk}; grounds cannot see the APIs added since Java {jdk}, so checks that could depend on them stay silent. Set `java_home` in grounds.toml to a JDK {release} (silence: `[classpath] warn = false`)"
+            ),
+            Warning::JdkUnreadable { release } => write!(
+                f,
+                "grounds: warning: the JDK's runtime image (lib/modules) could not be read; checks that could depend on Java {release} APIs stay silent. The JDK's API is approximated from lib/ct.sym (silence: `[classpath] warn = false`)"
             ),
             Warning::JdkAbsent { home } => write!(
                 f,
@@ -130,6 +137,7 @@ pub fn warnings(ws: &Workspace, cfg: &Config, index: &Index) -> Vec<Warning> {
     }
     match &index.classpath.jdk {
         JdkApi::Newer { requested, installed } => out.push(Warning::JdkNewer { release: *requested, jdk: *installed }),
+        JdkApi::Unreadable { release } => out.push(Warning::JdkUnreadable { release: *release }),
         JdkApi::Absent { home } => out.push(Warning::JdkAbsent { home: shown(&home.display().to_string()) }),
         JdkApi::Complete => {}
     }
@@ -513,6 +521,26 @@ mod tests {
         silent.classpath.warn = false;
         assert!(warn(&silent, &jre, 21).is_empty());
         assert!(warn(&silent, &home, installed + 1).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unreadable_runtime_image_warns() {
+        let Some(home) = grounds_classfile::find_java_home() else { return };
+        let Some(installed) = grounds_classfile::jdk_feature_release(&home) else { return };
+        let dir = temp("jdk-unreadable");
+        // the real ct.sym and release, and a lib/modules that is not a runtime image
+        let fake = dir.join("jdk");
+        std::fs::create_dir_all(fake.join("lib")).unwrap();
+        std::fs::copy(home.join("lib/ct.sym"), fake.join("lib/ct.sym")).unwrap();
+        std::fs::copy(home.join("release"), fake.join("release")).unwrap();
+        std::fs::write(fake.join("lib/modules"), b"not a runtime image").unwrap();
+        let ws = Workspace::discover(&dir, &[]);
+        let index = Index::new(Arc::new(Classpath::build(Some(&fake), installed, &[])));
+        assert_eq!(warnings(&ws, &Config::default(), &index), vec![Warning::JdkUnreadable { release: installed }]);
+        let mut silent = Config::default();
+        silent.classpath.warn = false;
+        assert!(warnings(&ws, &silent, &index).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -406,7 +406,9 @@ has none: grounds uses the newest older release it has, which lacks APIs
 added since, so it warns and stays silent about classes that inherit from JDK
 classes (an absent member may be one of those APIs). A JDK home without
 `lib/ct.sym` (a JRE, or a JDK older than 9) warns too, and checks that need
-the JDK's classes stay silent.
+the JDK's classes stay silent. A JDK's own release is read from `lib/modules`;
+if that image cannot be read (a compressed `jlink` image, say), grounds warns
+and uses the release before it, with the same silence about JDK subclasses.
 
 ### Classpath
 
