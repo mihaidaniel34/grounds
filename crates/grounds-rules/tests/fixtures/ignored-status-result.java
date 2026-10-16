@@ -28,6 +28,15 @@ class Latches {
     void unchecked() throws InterruptedException {
         latch.await(1, java.util.concurrent.TimeUnit.SECONDS); // expect
     }
+    void loopNotOnCount() throws InterruptedException {
+        while (latch != null) {
+            latch.await(1, java.util.concurrent.TimeUnit.SECONDS); // expect
+        }
+    }
+    void countIgnored() throws InterruptedException {
+        latch.await(1, java.util.concurrent.TimeUnit.SECONDS); // expect
+        latch.getCount();
+    }
 }
 class Queues {
     private final java.util.concurrent.BlockingQueue<Integer> unbounded = new java.util.concurrent.LinkedBlockingQueue<>();
@@ -39,5 +48,8 @@ class Queues {
         prio.offer(3);
         bounded.offer(4); // expect
         param.offer(5); // expect
+    }
+    void shadowed(java.util.concurrent.BlockingQueue<Integer> unbounded) {
+        unbounded.offer(6); // expect
     }
 }

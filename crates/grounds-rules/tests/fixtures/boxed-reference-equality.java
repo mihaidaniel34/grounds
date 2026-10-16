@@ -11,3 +11,9 @@ class A {
         return x == y; // expect
     }
 }
+class Shadowed {
+    static class Boolean { static final Integer TRUE = 1000; }
+    boolean m(Integer a) {
+        return a == Boolean.TRUE; // expect
+    }
+}

@@ -298,7 +298,7 @@ fn filtered_present<'t>(cx: &Ctx<'_, 't>, get: Node<'t>) -> bool {
     let [pred] = cx.fm.args_of(filter)[..] else { return false };
     let pred = pred.unparen();
     match pred.kind() {
-        "method_reference" => matches!(cx.text(pred).rsplit("::").next(), Some("isPresent")),
+        "method_reference" => matches!(cx.text(pred).split_whitespace().collect::<String>().as_str(), "Optional::isPresent" | "java.util.Optional::isPresent"),
         "lambda_expression" => {
             let (Some(ps), Some(body)) = (pred.field("parameters"), pred.field("body")) else { return false };
             let name = cx.text(ps).trim_matches(|c| c == '(' || c == ')').trim();

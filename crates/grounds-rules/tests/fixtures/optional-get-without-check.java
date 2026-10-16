@@ -58,6 +58,10 @@ class OptionalAliases {
     }
 }
 class OptionalAliasHoles {
+    static boolean isPresent(Optional<String> o) { return true; }
+    java.util.List<String> otherFilter(java.util.List<Optional<String>> l) {
+        return l.stream().filter(OptionalAliasHoles::isPresent).map(x -> x.get()).toList(); // expect
+    }
     String reassigned(Optional<String> o, Optional<String> other) {
         boolean has = o.isPresent();
         o = other;

@@ -100,7 +100,10 @@ impl Rule for BoxedReferenceEquality {
             let e = e.unparen();
             e.kind() == "field_access"
                 && matches!(e.field("field").map(|f| cx.text(f)), Some("TRUE" | "FALSE"))
-                && e.field("object").is_some_and(|o| cx.type_of(o).is_class("java.lang.Boolean") || matches!(cx.text(o), "Boolean" | "java.lang.Boolean"))
+                && match cx.fm.field_ref(e) {
+                    Some(f) => &*f.owner == "java.lang.Boolean",
+                    None => e.field("object").is_some_and(|o| matches!(cx.text(o), "Boolean" | "java.lang.Boolean")),
+                }
         };
         if lt.is_boxed() && rt.is_boxed() && !canonical(l) && !canonical(r) {
             cx.report(n, format!("`{}` and `{}` are boxed; `{}` compares references, not values", lt.display_simple(), rt.display_simple(), op(n)));

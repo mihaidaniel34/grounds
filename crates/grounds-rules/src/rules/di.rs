@@ -532,7 +532,7 @@ impl Rule for SingletonMutableState {
             return;
         }
         let Some(cls) = cx.fm.class_of_decl(decl) else { return };
-        let lifecycle = lifecycle_methods(cx, decl);
+        let lifecycle = lifecycle_methods(cx, decl, &cls.name);
         for d in n.fields("declarator") {
             let Some(name) = d.field("name").map(|x| x.text(cx.src)) else { continue };
             // written outside constructors / init methods?
@@ -558,7 +558,7 @@ impl Rule for SingletonMutableState {
 /// injection, `@PostConstruct`/`@PreDestroy`, the `InitializingBean`/
 /// `Lifecycle`/`*Aware` callbacks, startup event listeners, and private
 /// methods called only from constructors or those.
-fn lifecycle_methods<'t>(cx: &Ctx<'_, 't>, decl: Node<'t>) -> Vec<Node<'t>> {
+fn lifecycle_methods<'t>(cx: &Ctx<'_, 't>, decl: Node<'t>, cls: &str) -> Vec<Node<'t>> {
     const STARTUP_EVENTS: [&str; 5] = ["ApplicationReadyEvent", "ApplicationStartedEvent", "ContextRefreshedEvent", "StartupEvent", "ServerStartupEvent"];
     let methods = methods_of(decl);
     let mut out: Vec<Node<'t>> = methods
@@ -569,8 +569,15 @@ fn lifecycle_methods<'t>(cx: &Ctx<'_, 't>, decl: Node<'t>) -> Vec<Node<'t>> {
             let name = m.field("name").map(|n| cx.text(n)).unwrap_or("");
             let startup_listener = (anns.contains(&"EventListener") || name == "onApplicationEvent")
                 && STARTUP_EVENTS.iter().any(|e| cx.text(*m).split('{').next().unwrap_or("").contains(e));
+            // a callback by name only where the class may implement its contract
+            let contract = match name {
+                "start" | "stop" => Some("org.springframework.context.Lifecycle"),
+                "close" => Some("java.lang.AutoCloseable"),
+                _ => None,
+            };
             anns.iter().any(|a| matches!(*a, "PostConstruct" | "PreDestroy" | "Autowired" | "Inject" | "Value" | "Resource"))
-                || matches!(name, "afterPropertiesSet" | "destroy" | "afterSingletonsInstantiated" | "setApplicationContext" | "setBeanFactory" | "setEnvironment" | "setServletContext" | "start" | "stop" | "init" | "initialize" | "shutdown" | "close")
+                || matches!(name, "afterPropertiesSet" | "destroy" | "afterSingletonsInstantiated" | "setApplicationContext" | "setBeanFactory" | "setEnvironment" | "setServletContext")
+                || contract.is_some_and(|c| !cx.fm.is_subclass(cls, c).is_no())
                 || startup_listener
         })
         .collect();
@@ -583,11 +590,9 @@ fn lifecycle_methods<'t>(cx: &Ctx<'_, 't>, decl: Node<'t>) -> Vec<Node<'t>> {
                 continue;
             }
             let Some(name) = m.field("name").map(|n| cx.text(n)) else { continue };
-            let mut calls = Vec::new();
-            find_kind(decl, "method_invocation", &mut calls);
-            let callers: Vec<Node<'t>> = calls
-                .iter()
-                .filter(|c| cx.fm.call_name(**c) == Some(name) && c.field("object").is_none_or(|o| o.kind() == "this"))
+            let callers: Vec<Node<'t>> = decl
+                .descendants()
+                .filter(|c| c.kind() == "method_invocation" && cx.fm.call_name(*c) == Some(name) && c.field("object").is_none_or(|o| o.kind() == "this"))
                 .filter_map(|c| c.ancestors().find(|a| matches!(a.kind(), "method_declaration" | "constructor_declaration" | "lambda_expression" | "class_body")))
                 .collect();
             if !callers.is_empty() && callers.iter().all(|c| ctors.contains(c) || out.contains(c)) {

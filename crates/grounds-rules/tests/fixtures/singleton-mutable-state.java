@@ -28,3 +28,10 @@ class Coordinator implements org.springframework.beans.factory.InitializingBean 
     public void onReady() { pool = new Object(); }
     public void handle() { requests++; }
 }
+@org.springframework.stereotype.Service
+class Session {
+    private boolean running; // expect
+    private String last; // expect
+    public void start() { running = true; }
+    public void initialize(String s) { last = s; }
+}

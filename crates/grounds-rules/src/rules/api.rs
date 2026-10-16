@@ -217,6 +217,14 @@ fn unbounded_queue<'t>(cx: &Ctx<'_, 't>, recv: Option<Node<'t>>) -> bool {
     // the declarator of that name in this file, written nowhere else
     let mut inits = cx.fm.root().descendants().filter(|d| d.kind() == "variable_declarator" && d.field("name").is_some_and(|n| cx.text(n) == name));
     let (Some(d), None) = (inits.next(), inits.next()) else { return false };
+    // and the one the receiver names: not a field when a parameter shadows it
+    let bound = match cx.fm.local_decl(recv).filter(|_| recv.kind() == "identifier") {
+        Some(l) => l.decl_node == d,
+        None => d.parent().is_some_and(|p| p.kind() == "field_declaration"),
+    };
+    if !bound {
+        return false;
+    }
     let Some(v) = d.field("value").map(|v| v.unparen()).filter(|v| v.kind() == "object_creation_expression") else { return false };
     let reassigned = cx.fm.root().descendants().any(|a| a.kind() == "assignment_expression" && a.field("left").is_some_and(|l| {
         let l = l.unparen();
@@ -236,11 +244,12 @@ fn latch_checked_after<'t>(cx: &Ctx<'_, 't>, call: Node<'t>) -> bool {
     let r = cx.text(recv);
     let Some(scope) = call.ancestors().find(|a| matches!(a.kind(), "method_declaration" | "constructor_declaration" | "lambda_expression")) else { return false };
     let in_loop = call.ancestors().take_while(|a| *a != scope).any(|a| {
-        matches!(a.kind(), "while_statement" | "do_statement" | "for_statement") && a.field("condition").is_some_and(|c| cx.text(c).contains(r))
+        matches!(a.kind(), "while_statement" | "do_statement" | "for_statement") && a.field("condition").is_some_and(|c| cx.text(c).contains(&format!("{r}.getCount()")))
     });
     in_loop
         || scope.descendants().any(|d| {
             d.start_byte() >= call.end_byte() && d.kind() == "method_invocation" && cx.fm.call_name(d) == Some("getCount") && d.field("object").is_some_and(|o| cx.text(o.unparen()) == r)
+                && d.parent().is_some_and(|p| p.kind() != "expression_statement")
         })
 }
 
