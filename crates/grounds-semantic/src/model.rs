@@ -79,6 +79,9 @@ pub struct FileModel<'t> {
     pub(crate) symbols: RefCell<FxHashMap<usize, Option<Symbol<'t>>>>,
     captures: std::cell::OnceCell<FxHashMap<usize, Vec<usize>>>,
     occurrences: std::cell::OnceCell<FxHashMap<&'t str, Vec<Node<'t>>>>,
+    /// node id -> parent, built in one pass on first use: tree-sitter's
+    /// `parent()` walks down from the root on every call
+    parents: std::cell::OnceCell<FxHashMap<usize, Node<'t>>>,
 }
 
 impl<'t> FileModel<'t> {
@@ -114,6 +117,7 @@ impl<'t> FileModel<'t> {
             symbols: RefCell::new(FxHashMap::default()),
             captures: std::cell::OnceCell::new(),
             occurrences: std::cell::OnceCell::new(),
+            parents: std::cell::OnceCell::new(),
         };
         m.collect_classes();
         m
@@ -219,9 +223,45 @@ impl<'t> FileModel<'t> {
         self.class(&n)
     }
 
+    /// The parent of a node of this file (`Node::parent` without its walk
+    /// from the root).
+    pub fn parent_of(&self, n: Node<'t>) -> Option<Node<'t>> {
+        let parents = self.parents.get_or_init(|| {
+            let mut map = FxHashMap::default();
+            let mut cursor = self.file.root().walk();
+            let mut stack: Vec<Node<'t>> = Vec::new();
+            loop {
+                let node = cursor.node();
+                if let Some(&p) = stack.last() {
+                    map.insert(node.id(), p);
+                }
+                if cursor.goto_first_child() {
+                    stack.push(node);
+                    continue;
+                }
+                loop {
+                    if cursor.goto_next_sibling() {
+                        break;
+                    }
+                    if !cursor.goto_parent() {
+                        return map;
+                    }
+                    stack.pop();
+                }
+            }
+        });
+        parents.get(&n.id()).copied()
+    }
+
+    /// Ancestors of a node of this file, innermost first (`NodeExt::ancestors`
+    /// through the parent table).
+    pub fn ancestors_of(&self, n: Node<'t>) -> impl Iterator<Item = Node<'t>> + '_ {
+        std::iter::successors(self.parent_of(n), move |&a| self.parent_of(a))
+    }
+
     /// The innermost type declaration or anonymous class body enclosing `n`.
     pub fn enclosing_class_node(&self, n: Node<'t>) -> Option<Node<'t>> {
-        n.ancestors().find(|a| self.class_names.contains_key(&a.id()))
+        self.ancestors_of(n).find(|a| self.class_names.contains_key(&a.id()))
     }
 
     pub fn enclosing_class_name(&self, n: Node<'t>) -> Option<Name> {
@@ -234,12 +274,12 @@ impl<'t> FileModel<'t> {
 
     /// Enclosing method, constructor or lambda.
     pub fn enclosing_callable(&self, n: Node<'t>) -> Option<Node<'t>> {
-        n.ancestors().take_while(|a| !self.class_names.contains_key(&a.id())).find(|a| grounds_syntax::is_method_like(a.kind()))
+        self.ancestors_of(n).take_while(|a| !self.class_names.contains_key(&a.id())).find(|a| grounds_syntax::is_method_like(a.kind()))
     }
 
     /// Enclosing method or constructor declaration (skipping lambdas).
     pub fn enclosing_method(&self, n: Node<'t>) -> Option<Node<'t>> {
-        n.ancestors()
+        self.ancestors_of(n)
             .take_while(|a| !self.class_names.contains_key(&a.id()))
             .find(|a| matches!(a.kind(), "method_declaration" | "constructor_declaration" | "compact_constructor_declaration"))
     }
@@ -263,7 +303,7 @@ impl<'t> FileModel<'t> {
     pub fn scope_at(&self, n: Node<'t>) -> Scope<'_> {
         let mut enclosing = Vec::new();
         let mut type_vars = Vec::new();
-        for a in std::iter::once(n).chain(n.ancestors()) {
+        for a in std::iter::once(n).chain(self.ancestors_of(n)) {
             if let Some(name) = self.class_names.get(&a.id()) {
                 enclosing.push(name.clone());
             }
@@ -303,10 +343,10 @@ impl<'t> FileModel<'t> {
     /// Type of a `var` component of a record pattern: the record's component
     /// at the same position (unknown for generic components).
     pub fn record_pattern_component_type(&self, component: Node<'t>) -> Ty {
-        let Some(body) = component.parent().filter(|b| b.kind() == "record_pattern_body") else { return Ty::Unknown };
+        let Some(body) = self.parent_of(component).filter(|b| b.kind() == "record_pattern_body") else { return Ty::Unknown };
         let parts: Vec<Node> = body.kids().into_iter().filter(|k| matches!(k.kind(), "record_pattern_component" | "record_pattern")).collect();
         let Some(pos) = parts.iter().position(|k| *k == component) else { return Ty::Unknown };
-        let Some(type_node) = body.parent().and_then(|p| p.kids().into_iter().find(|k| k.kind() != "record_pattern_body")) else { return Ty::Unknown };
+        let Some(type_node) = self.parent_of(body).and_then(|p| p.kids().into_iter().find(|k| k.kind() != "record_pattern_body")) else { return Ty::Unknown };
         let record = self.resolve_pattern_type(type_node);
         let Some(cls) = record.class_name().and_then(|c| self.class(c)) else { return Ty::Unknown };
         let comps: Vec<&FieldInfo> = cls.fields.iter().filter(|f| f.flags.has(Flags::RECORD_COMPONENT)).collect();
@@ -378,7 +418,7 @@ impl<'t> FileModel<'t> {
             for (i, d) in self.binder.decls.iter().enumerate() {
                 let decl_pos = d.name_node.start_byte();
                 for u in &self.binder.uses[i] {
-                    for a in u.ancestors() {
+                    for a in self.ancestors_of(*u) {
                         if a.start_byte() <= decl_pos && decl_pos < a.end_byte() {
                             break;
                         }
@@ -468,7 +508,7 @@ impl<'t> ClassLookup for FileModel<'t> {
             let mut info = self.index.lower_raw_class(raw, &scope, Origin::Source { file: self.path.clone() });
             if raw.flags.has(Flags::ANON) {
                 // super type from the creation expression
-                if let Some(oce) = node.parent() {
+                if let Some(oce) = self.parent_of(*node) {
                     if oce.kind() == "object_creation_expression" {
                         if let Some(t) = oce.field("type") {
                             let mut st = self.resolve_type_node(t);

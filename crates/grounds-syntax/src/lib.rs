@@ -5,8 +5,9 @@
 //! [`NodeExt`] extension trait so that the parser could be swapped later
 //! without touching rules.
 
+use rustc_hash::FxHashMap;
 use std::cell::RefCell;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 pub use tree_sitter::{Node, Point, Tree, TreeCursor};
 
@@ -15,6 +16,43 @@ pub use line_index::{LineCol, LineIndex};
 
 pub fn language() -> tree_sitter::Language {
     tree_sitter_java_orchard::LANGUAGE.into()
+}
+
+/// Field and node-kind ids of the grammar, looked up by name once: by name,
+/// tree-sitter compares the name against its whole field table on every
+/// call, and `Node::kind()` re-reads a C string (strlen, UTF-8 check).
+struct Grammar {
+    fields: FxHashMap<&'static str, u16>,
+    /// named kind -> ids (aliases can give one name several ids)
+    kinds: FxHashMap<&'static str, Vec<u16>>,
+    comments: Vec<u16>,
+}
+
+fn grammar() -> &'static Grammar {
+    static G: OnceLock<Grammar> = OnceLock::new();
+    G.get_or_init(|| {
+        let lang: &'static tree_sitter::Language = Box::leak(Box::new(language()));
+        let fields = (1..=lang.field_count() as u16).filter_map(|id| lang.field_name_for_id(id).map(|n| (n, id))).collect();
+        let mut kinds: FxHashMap<&'static str, Vec<u16>> = FxHashMap::default();
+        for id in 0..lang.node_kind_count() as u16 {
+            if lang.node_kind_is_named(id) {
+                if let Some(n) = lang.node_kind_for_id(id) {
+                    kinds.entry(n).or_default().push(id);
+                }
+            }
+        }
+        let comments = ["line_comment", "block_comment"].iter().flat_map(|k| kinds.get(k).cloned().unwrap_or_default()).collect();
+        Grammar { fields, kinds, comments }
+    })
+}
+
+fn is_comment_node(n: &Node) -> bool {
+    grammar().comments.contains(&n.kind_id())
+}
+
+/// Ids of a named kind (empty for a name the grammar does not have).
+fn kind_ids(kind: &str) -> &'static [u16] {
+    grammar().kinds.get(kind).map(|v| v.as_slice()).unwrap_or(&[])
 }
 
 thread_local! {
@@ -261,29 +299,33 @@ pub fn modifier_keyword<'t>(k: Node<'t>) -> Option<&'t str> {
 
 impl<'t> NodeExt<'t> for Node<'t> {
     fn field(&self, name: &str) -> Option<Node<'t>> {
-        self.child_by_field_name(name)
+        let id = *grammar().fields.get(name)?;
+        self.child_by_field_id(id)
     }
     fn fields(&self, name: &str) -> Vec<Node<'t>> {
+        let Some(&id) = grammar().fields.get(name) else { return Vec::new() };
         let mut c = self.walk();
-        self.children_by_field_name(name, &mut c).collect()
+        self.children_by_field_id(std::num::NonZeroU16::new(id).expect("field ids start at 1"), &mut c).collect()
     }
     fn kids(&self) -> Vec<Node<'t>> {
         let mut c = self.walk();
-        self.named_children(&mut c).filter(|n| !is_comment(n.kind())).collect()
+        self.named_children(&mut c).filter(|n| !is_comment_node(n)).collect()
     }
     fn first_kid(&self) -> Option<Node<'t>> {
         let mut c = self.walk();
-        let r = self.named_children(&mut c).find(|n| !is_comment(n.kind()));
+        let r = self.named_children(&mut c).find(|n| !is_comment_node(n));
         r
     }
     fn kid_of_kind(&self, kind: &str) -> Option<Node<'t>> {
+        let ids = kind_ids(kind);
         let mut c = self.walk();
-        let r = self.named_children(&mut c).find(|n| n.kind() == kind);
+        let r = self.named_children(&mut c).find(|n| if ids.is_empty() { n.kind() == kind } else { ids.contains(&n.kind_id()) });
         r
     }
     fn kids_of_kind(&self, kind: &str) -> Vec<Node<'t>> {
+        let ids = kind_ids(kind);
         let mut c = self.walk();
-        self.named_children(&mut c).filter(|n| n.kind() == kind).collect()
+        self.named_children(&mut c).filter(|n| if ids.is_empty() { n.kind() == kind } else { ids.contains(&n.kind_id()) }).collect()
     }
     fn text<'s>(&self, src: &'s str) -> &'s str {
         &src[self.start_byte()..self.end_byte()]
@@ -328,10 +370,14 @@ impl<'t> NodeExt<'t> for Node<'t> {
         TextRange::of(*self)
     }
     fn is_kind(&self, kind: &str) -> bool {
-        self.kind() == kind
+        let ids = kind_ids(kind);
+        if ids.is_empty() || !self.is_named() {
+            return self.kind() == kind;
+        }
+        ids.contains(&self.kind_id())
     }
     fn descendants(&self) -> Descendants<'t> {
-        Descendants { stack: vec![*self] }
+        Descendants { cursor: self.walk(), depth: 0, started: false }
     }
 }
 
@@ -349,19 +395,50 @@ impl<'t> Iterator for Ancestors<'t> {
 }
 
 /// Pre-order traversal over named, non-comment descendants (including self).
+/// One cursor for the whole walk: no child list per node.
 pub struct Descendants<'t> {
-    stack: Vec<Node<'t>>,
+    cursor: TreeCursor<'t>,
+    /// depth below the start node; the walk ends when it would leave it
+    depth: u32,
+    started: bool,
+}
+
+impl<'t> Descendants<'t> {
+    /// Next node in pre-order (any node), or None when the subtree is done.
+    fn advance(&mut self) -> Option<Node<'t>> {
+        if !self.started {
+            self.started = true;
+            return Some(self.cursor.node());
+        }
+        // into the first child, unless this is an unnamed token or a comment
+        let n = self.cursor.node();
+        if (n.is_named() && !is_comment_node(&n)) && self.cursor.goto_first_child() {
+            self.depth += 1;
+            return Some(self.cursor.node());
+        }
+        loop {
+            if self.depth == 0 {
+                return None;
+            }
+            if self.cursor.goto_next_sibling() {
+                return Some(self.cursor.node());
+            }
+            self.cursor.goto_parent();
+            self.depth -= 1;
+        }
+    }
 }
 
 impl<'t> Iterator for Descendants<'t> {
     type Item = Node<'t>;
     fn next(&mut self) -> Option<Node<'t>> {
-        let n = self.stack.pop()?;
-        let kids = n.kids();
-        for k in kids.into_iter().rev() {
-            self.stack.push(k);
+        loop {
+            let n = self.advance()?;
+            // the start node itself is yielded whatever it is, as before
+            if self.depth == 0 || (n.is_named() && !is_comment_node(&n)) {
+                return Some(n);
+            }
         }
-        Some(n)
     }
 }
 

@@ -1699,7 +1699,7 @@ impl<'t> FileModel<'t> {
         // over `<T> assertThat(T)`).
         let wm = &pool[w].0.method;
         // explicit `T.<Double>pick(x)` replaces inference: not modelled here
-        let explicit = call.child_by_field_name("type_arguments").is_some();
+        let explicit = call.field("type_arguments").is_some();
         let sure = !explicit
             && pool[w].1.sure()
             && pool.iter().enumerate().all(|(i, (m, _))| {
@@ -1822,8 +1822,8 @@ impl<'t> FileModel<'t> {
     /// Parameter type of the selected enclosing method for an argument,
     /// without inference.
     fn selected_param_type(&self, arg: Node<'t>) -> Ty {
-        let Some(list) = arg.parent().filter(|p| p.kind() == "argument_list") else { return Ty::Unknown };
-        let Some(call) = list.parent() else { return Ty::Unknown };
+        let Some(list) = self.parent_of(arg).filter(|p| p.kind() == "argument_list") else { return Ty::Unknown };
+        let Some(call) = self.parent_of(list) else { return Ty::Unknown };
         let Some(sel) = self.select_method(call) else { return Ty::Unknown };
         let args = list.kids();
         let idx = args.iter().position(|k| *k == arg).unwrap_or(0);

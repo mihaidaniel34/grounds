@@ -6,3 +6,4 @@ edition.workspace = true
 [dependencies]
 tree-sitter.workspace = true
 tree-sitter-java-orchard.workspace = true
+rustc-hash.workspace = true
