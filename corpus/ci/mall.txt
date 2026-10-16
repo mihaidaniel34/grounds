@@ -171,8 +171,6 @@ mall-common/src/main/java/com/macro/mall/common/util/RequestUtil.java:16 cogniti
 mall-common/src/main/java/com/macro/mall/common/util/RequestUtil.java:19 use-isempty
 mall-common/src/main/java/com/macro/mall/common/util/RequestUtil.java:22 use-isempty
 mall-common/src/main/java/com/macro/mall/common/util/RequestUtil.java:25 use-isempty
-mall-common/src/main/java/com/macro/mall/common/util/RequestUtil.java:28 literal-first-in-comparison
-mall-common/src/main/java/com/macro/mall/common/util/RequestUtil.java:28 literal-first-in-comparison
 mall-common/src/main/java/com/macro/mall/common/util/RequestUtil.java:33 print-stack-trace
 mall-common/src/main/java/com/macro/mall/common/util/RequestUtil.java:39 collapsible-if
 mall-common/src/main/java/com/macro/mall/common/util/RequestUtil.java:40 indexof-positive-check

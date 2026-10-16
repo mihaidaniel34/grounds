@@ -18,7 +18,6 @@ eladmin-common/src/main/java/me/zhengjie/config/webConfig/MultipartConfig.java:1
 eladmin-common/src/main/java/me/zhengjie/config/webConfig/MultipartConfig.java:39 collapsible-if
 eladmin-common/src/main/java/me/zhengjie/config/webConfig/MultipartConfig.java:41 system-out-println
 eladmin-common/src/main/java/me/zhengjie/config/webConfig/QueryCustomizer.java:16 package-naming
-eladmin-common/src/main/java/me/zhengjie/config/webConfig/SwaggerConfig.java:110 literal-first-in-comparison
 eladmin-common/src/main/java/me/zhengjie/config/webConfig/SwaggerConfig.java:16 package-naming
 eladmin-common/src/main/java/me/zhengjie/config/webConfig/SwaggerDataConfig.java:1 package-naming
 eladmin-common/src/main/java/me/zhengjie/config/webConfig/SwaggerDataConfig.java:42 private-constructor-class-not-final
@@ -47,9 +46,7 @@ eladmin-common/src/main/java/me/zhengjie/utils/FileUtil.java:223 complex-boolean
 eladmin-common/src/main/java/me/zhengjie/utils/FileUtil.java:321 system-out-println
 eladmin-common/src/main/java/me/zhengjie/utils/FileUtil.java:327 collection-method-returns-null
 eladmin-common/src/main/java/me/zhengjie/utils/FileUtil.java:338 weak-hash-algorithm
-eladmin-common/src/main/java/me/zhengjie/utils/FileUtil.java:45 class-shadows-supertype-name
 eladmin-common/src/main/java/me/zhengjie/utils/FileUtil.java:76 static-non-thread-safe-field
-eladmin-common/src/main/java/me/zhengjie/utils/PageUtil.java:26 class-shadows-supertype-name
 eladmin-common/src/main/java/me/zhengjie/utils/RequestHolder.java:28 utility-class-instantiable
 eladmin-common/src/main/java/me/zhengjie/utils/RsaUtils.java:100 insecure-cipher-mode
 eladmin-common/src/main/java/me/zhengjie/utils/RsaUtils.java:102 default-charset
@@ -79,7 +76,6 @@ eladmin-common/src/main/java/me/zhengjie/utils/SecurityUtils.java:48 public-stat
 eladmin-common/src/main/java/me/zhengjie/utils/SecurityUtils.java:52 static-field-written-from-instance-method
 eladmin-common/src/main/java/me/zhengjie/utils/SecurityUtils.java:57 static-field-written-from-instance-method
 eladmin-common/src/main/java/me/zhengjie/utils/StringUtils.java:212 deep-nesting
-eladmin-common/src/main/java/me/zhengjie/utils/StringUtils.java:36 class-shadows-supertype-name
 eladmin-common/src/main/java/me/zhengjie/utils/ThrowableUtil.java:25 utility-class-instantiable
 eladmin-common/src/main/java/me/zhengjie/utils/ValidationUtil.java:28 utility-class-instantiable
 eladmin-common/src/test/java/me/zhengjie/utils/DateUtilsTest.java:10 test-without-assertion
