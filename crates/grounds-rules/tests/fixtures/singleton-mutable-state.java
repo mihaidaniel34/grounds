@@ -13,3 +13,18 @@ class ConfiguredService {
     public void setEndpoint(String endpoint) { this.endpoint = endpoint; }
     String endpoint() { return endpoint; }
 }
+@org.springframework.stereotype.Component
+class Coordinator implements org.springframework.beans.factory.InitializingBean {
+    private Thread worker;
+    private String format;
+    private Object pool;
+    private java.util.concurrent.atomic.AtomicBoolean scan;
+    private int requests; // expect
+    Coordinator() { initialize(); }
+    private void initialize() { scan = new java.util.concurrent.atomic.AtomicBoolean(true); }
+    public synchronized void start() { worker = new Thread(() -> { }); }
+    public void afterPropertiesSet() { format = "x"; }
+    @org.springframework.context.event.EventListener(org.springframework.boot.context.event.ApplicationReadyEvent.class)
+    public void onReady() { pool = new Object(); }
+    public void handle() { requests++; }
+}

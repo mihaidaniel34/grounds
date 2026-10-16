@@ -335,21 +335,10 @@ impl<'a, 't> NullnessAnalysis<'a, 't> {
                 if init.kind() == "identifier" {
                     return out; // no alias chains
                 }
-                let is_and = |n: Node<'t>| n.kind() == "binary_expression" && n.field("operator").is_some_and(|o| o.kind() == "&&");
-                if is_and(init) {
-                    // the true edge implies every conjunct
-                    let mut stack = vec![init];
-                    while let Some(n) = stack.pop() {
-                        let n = n.unparen();
-                        if is_and(n) {
-                            stack.extend(n.field("left"));
-                            stack.extend(n.field("right"));
-                        } else if n.kind() != "identifier" {
-                            out.extend(self.cond_effect(n).into_iter().filter(|e| e.2));
-                        }
-                    }
-                } else {
-                    out = self.cond_effect(init);
+                // the true edge implies every conjunct, the false edge every
+                // disjunct's negation: `boolean empty = q == null || q.isEmpty(); if (!empty) q.peek()`
+                for truth in [true, false] {
+                    out.extend(self.implied_direct(init, truth).into_iter().map(|(j, s)| (j, s, truth)));
                 }
                 // the checked locals must still hold the checked values
                 out.retain(|(j, _, _)| is_effectively_final(self.fm, *j));
@@ -410,6 +399,20 @@ impl<'a, 't> NullnessAnalysis<'a, 't> {
             "unary_expression" if op == Some("!") => e.field("operand").map(|o| self.implied(o, !truth)).unwrap_or_default(),
             "binary_expression" if (op == Some("&&") && truth) || (op == Some("||") && !truth) => {
                 [e.field("left"), e.field("right")].into_iter().flatten().flat_map(|s| self.implied(s, truth)).collect()
+            }
+            _ => self.cond_effect(e).into_iter().filter(|x| x.2 == truth).map(|(i, s, _)| (i, s)).collect(),
+        }
+    }
+
+    /// `implied` without following boolean locals (no alias chains).
+    fn implied_direct(&self, e: Node<'t>, truth: bool) -> Vec<(usize, Nullness)> {
+        let e = e.unparen();
+        let op = e.field("operator").map(|o| o.kind());
+        match e.kind() {
+            "identifier" => Vec::new(),
+            "unary_expression" if op == Some("!") => e.field("operand").map(|o| self.implied_direct(o, !truth)).unwrap_or_default(),
+            "binary_expression" if (op == Some("&&") && truth) || (op == Some("||") && !truth) => {
+                [e.field("left"), e.field("right")].into_iter().flatten().flat_map(|s| self.implied_direct(s, truth)).collect()
             }
             _ => self.cond_effect(e).into_iter().filter(|x| x.2 == truth).map(|(i, s, _)| (i, s)).collect(),
         }
@@ -1068,6 +1071,82 @@ impl<'a, 't> OptionalPresence<'a, 't> {
     }
 }
 
+impl<'a, 't> OptionalPresence<'a, 't> {
+    /// Optional locals known present when boolean `e` has outcome `truth`:
+    /// `o.isPresent()`, `!o.isEmpty()`, through `!`, `&&` (true), `||`
+    /// (false), and an effectively-final boolean local holding such a test
+    /// (`boolean has = o.isPresent(); if (has) ...`).
+    pub fn present_when(&self, e: Node<'t>, truth: bool) -> Vec<usize> {
+        self.present_when_in(e, truth, true)
+    }
+
+    fn present_when_in(&self, e: Node<'t>, truth: bool, follow_alias: bool) -> Vec<usize> {
+        let e = e.unparen();
+        let op = e.field("operator").map(|o| o.kind());
+        match e.kind() {
+            "unary_expression" if op == Some("!") => e.field("operand").map(|o| self.present_when_in(o, !truth, follow_alias)).unwrap_or_default(),
+            "binary_expression" if (op == Some("&&") && truth) || (op == Some("||") && !truth) => {
+                [e.field("left"), e.field("right")].into_iter().flatten().flat_map(|s| self.present_when_in(s, truth, follow_alias)).collect()
+            }
+            "method_invocation" if self.fm.args_of(e).is_empty() => {
+                match (self.fm.call_name(e), self.optional_local(e.field("object"))) {
+                    (Some("isPresent"), Some(i)) if truth => vec![i],
+                    (Some("isEmpty"), Some(i)) if !truth => vec![i],
+                    _ => Vec::new(),
+                }
+            }
+            // no alias chains; the Optional must still hold the tested value
+            "identifier" if follow_alias => {
+                let Some(i) = self.fm.binder.decl_index_of_ref(e) else { return Vec::new() };
+                let d = &self.fm.binder.decls[i];
+                if d.kind != LocalKind::Local || !is_effectively_final(self.fm, i) {
+                    return Vec::new();
+                }
+                let Some(init) = d.decl_node.field("value") else { return Vec::new() };
+                let mut out = self.present_when_in(init, truth, false);
+                out.retain(|j| is_effectively_final(self.fm, *j));
+                out
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// The boolean a call requires to return, by name: Guava
+    /// `checkArgument`/`checkState`, Spring `Assert.isTrue`/`state`, commons
+    /// `Validate.isTrue`/`validState`, `assertTrue`/`assertFalse`, AssertJ
+    /// `assertThat(b).isTrue()`, Hamcrest `assertThat(b, is(true))`.
+    fn required_condition(&self, call: Node<'t>) -> Option<(Node<'t>, bool)> {
+        let fm = self.fm;
+        let args = fm.args_of(call);
+        let name = fm.call_name(call)?;
+        match name {
+            "checkArgument" | "checkState" | "state" | "validState" | "assertTrue" | "assertFalse" | "isTrue" | "isFalse" if !args.is_empty() => {
+                let want = !matches!(name, "assertFalse" | "isFalse");
+                // JUnit 4 and TestNG: `assertTrue(message, condition)` / `assertTrue(condition, message)`
+                let cond = args.iter().copied().find(|a| !matches!(a.unparen().kind(), "string_literal" | "binary_expression" if fm.type_of(*a).is_string()))?;
+                Some((cond, want))
+            }
+            "isTrue" | "isFalse" => {
+                let root = assert_that_root(fm, call.field("object"))?;
+                Some((fm.args_of(root).first().copied()?, name == "isTrue"))
+            }
+            "assertThat" if args.len() == 2 => {
+                // `is(true)`, `equalTo(false)`, `is(equalTo(true))`
+                let mut m = args[1].unparen();
+                while m.kind() == "method_invocation" && matches!(fm.call_name(m), Some("is" | "equalTo")) && fm.args_of(m).len() == 1 {
+                    m = fm.args_of(m)[0].unparen();
+                }
+                match m.kind() {
+                    "true" => Some((args[0], true)),
+                    "false" => Some((args[0], false)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
 impl<'a, 't> Analysis<'t> for OptionalPresence<'a, 't> {
     type Fact = PresentFact;
     fn bottom(&self) -> PresentFact {
@@ -1106,16 +1185,10 @@ impl<'a, 't> Analysis<'t> for OptionalPresence<'a, 't> {
                         f.insert(i);
                     }
                 }
-                if matches!(name, "assertTrue" | "assertFalse") {
-                    let want = if name == "assertTrue" { "isPresent" } else { "isEmpty" };
-                    for a in self.fm.args_of(e) {
-                        let a = a.unparen();
-                        if a.kind() == "method_invocation" && self.fm.call_name(a) == Some(want) {
-                            if let Some(i) = self.optional_local(a.field("object")) {
-                                f.insert(i);
-                            }
-                        }
-                    }
+                // calls that return only when a condition holds: `assertTrue(o.isPresent())`,
+                // `checkArgument(o.isPresent(), ..)`, `assertThat(o.isPresent(), is(true))`
+                if let Some((cond, want)) = self.required_condition(e) {
+                    f.extend(self.present_when(cond, want));
                 }
             }
         }
@@ -1126,20 +1199,9 @@ impl<'a, 't> Analysis<'t> for OptionalPresence<'a, 't> {
             EdgeKind::False(c) => (*c, false),
             _ => return Some(fact.clone()),
         };
-        let c = c.unparen();
-        if c.kind() == "method_invocation" {
-            if let Some(i) = self.optional_local(c.field("object")) {
-                match (self.fm.call_name(c), truth) {
-                    (Some("isPresent"), true) | (Some("isEmpty"), false) => {
-                        let mut f = fact.clone();
-                        f.insert(i);
-                        return Some(f);
-                    }
-                    _ => {}
-                }
-            }
-        }
-        Some(fact.clone())
+        let mut f = fact.clone();
+        f.extend(self.present_when(c, truth));
+        Some(f)
     }
 }
 

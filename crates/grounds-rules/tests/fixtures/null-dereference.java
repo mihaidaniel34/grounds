@@ -37,6 +37,16 @@ class Guards {
         if (a == null) { }
         if (either) a.intValue(); // expect
     }
+    void aliasDisjunction(java.util.Queue<String> q) {
+        boolean empty = q == null || q.isEmpty();
+        if (q == null) { }
+        if (!empty) q.peek();
+    }
+    void aliasDisjunctionWrongEdge(java.util.Queue<String> q) {
+        boolean empty = q == null || q.isEmpty();
+        if (q == null) { }
+        if (empty) q.peek(); // expect
+    }
     void assertj(String s) {
         if (s == null) { }
         org.assertj.core.api.Assertions.assertThat(s).isNotNull();

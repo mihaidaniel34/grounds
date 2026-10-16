@@ -278,6 +278,37 @@ fn checked_before_lambda<'t>(cx: &Ctx<'_, 't>, callable: Node<'t>, local: usize)
     present || (outer.kind() == "lambda_expression" && checked_before_lambda(cx, outer, local))
 }
 
+/// `get()` on the parameter of a stream step right after a filter that
+/// keeps only present Optionals: `.filter(o -> o.isPresent()).map(o -> o.get())`,
+/// `.filter(Optional::isPresent)`.
+fn filtered_present<'t>(cx: &Ctx<'_, 't>, get: Node<'t>) -> bool {
+    let Some(obj) = get.field("object").map(|o| o.unparen()).filter(|o| o.kind() == "identifier") else { return false };
+    let Some(i) = cx.fm.binder.decl_index_of_ref(obj) else { return false };
+    let decl = cx.fm.binder.decls[i].decl_node;
+    let Some(lambda) = std::iter::once(decl).chain(decl.ancestors()).find(|a| a.kind() == "lambda_expression") else { return false };
+    // a parameter of that lambda, not a local of its body
+    if lambda.field("body").is_some_and(|b| b.byte_range().contains(&decl.start_byte())) {
+        return false;
+    }
+    let Some(step) = lambda.parent().filter(|p| p.kind() == "argument_list").and_then(|a| a.parent()) else { return false };
+    if !matches!(cx.fm.call_name(step), Some("map" | "flatMap" | "forEach" | "forEachOrdered" | "mapToInt" | "mapToLong" | "mapToDouble" | "mapToObj" | "anyMatch" | "allMatch" | "noneMatch" | "peek")) {
+        return false;
+    }
+    let Some(filter) = step.field("object").map(|o| o.unparen()).filter(|f| f.kind() == "method_invocation" && cx.fm.call_name(*f) == Some("filter")) else { return false };
+    let [pred] = cx.fm.args_of(filter)[..] else { return false };
+    let pred = pred.unparen();
+    match pred.kind() {
+        "method_reference" => matches!(cx.text(pred).rsplit("::").next(), Some("isPresent")),
+        "lambda_expression" => {
+            let (Some(ps), Some(body)) = (pred.field("parameters"), pred.field("body")) else { return false };
+            let name = cx.text(ps).trim_matches(|c| c == '(' || c == ')').trim();
+            let body = cx.text(body.unparen());
+            body == format!("{name}.isPresent()") || body == format!("!{name}.isEmpty()")
+        }
+        _ => false,
+    }
+}
+
 impl Rule for OptionalGetWithoutCheck {
     rule_meta!();
     fn check_file<'t>(&self, cx: &mut Ctx<'_, 't>) {
@@ -291,7 +322,7 @@ impl Rule for OptionalGetWithoutCheck {
                     return;
                 }
                 if let Some(i) = oa.optional_local(e.field("object")) {
-                    if !f.contains(&i) && !checked_before_lambda(cx, c, i) {
+                    if !f.contains(&i) && !checked_before_lambda(cx, c, i) && !filtered_present(cx, e) {
                         found.push(e);
                     }
                 }
