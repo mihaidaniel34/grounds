@@ -1,6 +1,6 @@
 # Rule catalog
 
-314 rules. `grounds explain <id>` prints the full description.
+315 rules. `grounds explain <id>` prints the full description.
 
 Tier `edit` rules run after every edit; all rules run at checkpoints. Rules marked *off* are disabled by default (enable in `grounds.toml`).
 
@@ -47,7 +47,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `dead-store` | warning | checkpoint | sonar:S1854, spotbugs:DLS_DEAD_LOCAL_STORE, pmd:UnusedAssignment, intellij:UnusedAssignment |
 | `legacy-date-api` *off* | info | checkpoint | sonar:S2143 |
 
-## bug (111)
+## bug (112)
 
 | id | severity | tier | origin |
 |---|---|---|---|
@@ -159,6 +159,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `unresolved-constructor` | error | edit | javac:cant.apply.symbol, intellij:UnresolvedReference |
 | `unresolved-field` | error | edit | javac:cant.resolve.location, intellij:UnresolvedReference |
 | `unresolved-static-import` | error | edit | javac:cant.resolve.location, intellij:UnresolvedReference |
+| `missing-jdk-import` | warning | edit | javac:doesnt.exist, javac:cant.resolve.location |
 | `incompatible-assignment` | error | edit | javac:prob.found.req, intellij:IncompatibleTypes |
 | `override-matches-nothing` | error | edit | javac:method.does.not.override.superclass, intellij:MethodDoesntOverride |
 | `unimplemented-abstract-method` | error | edit | javac:does.not.override.abstract, intellij:ClassNotImplementingAbstractMethods |

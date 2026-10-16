@@ -43,6 +43,11 @@ pub struct Classpath {
     packages: FxHashSet<Name>,
     cache: DashMap<Name, Option<Arc<ClassInfo>>>,
     pub jdk: JdkApi,
+    /// The release the JDK's classes (the first container) were read for.
+    jdk_release: Option<u32>,
+    /// Whether the JDK home has `lib/ct.sym`, which only a full JDK has: a
+    /// runtime image cut down by jlink lacks modules, and their packages.
+    jdk_full: bool,
 }
 
 impl std::fmt::Debug for Classpath {
@@ -53,7 +58,7 @@ impl std::fmt::Debug for Classpath {
 
 impl Classpath {
     pub fn empty() -> Classpath {
-        Classpath { containers: Vec::new(), names: FxHashMap::default(), packages: FxHashSet::default(), cache: DashMap::new(), jdk: JdkApi::Complete }
+        Classpath { containers: Vec::new(), names: FxHashMap::default(), packages: FxHashSet::default(), cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false }
     }
 
     /// Build from containers in priority order (first definition wins).
@@ -84,15 +89,19 @@ impl Classpath {
                 names.entry(Arc::from(b.as_str())).or_insert(i as u32);
             }
         }
-        Classpath { containers, names, packages, cache: DashMap::new(), jdk: JdkApi::Complete }
+        Classpath { containers, names, packages, cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false }
     }
 
     /// JDK classes for a release (see `ClassContainer::open_jdk`), followed by the given jars/dirs.
     pub fn build(java_home: Option<&Path>, release: u32, entries: &[std::path::PathBuf]) -> Classpath {
         let mut containers = Vec::new();
         let mut jdk = JdkApi::Complete;
+        let mut jdk_release = None;
+        let mut jdk_full = false;
         if let Some(home) = java_home {
             if let Ok(c) = ClassContainer::open_jdk(home, release) {
+                jdk_release = Some(release);
+                jdk_full = home.join("lib/ct.sym").is_file();
                 // the JDK's own release is read exactly from its image; a newer one has no signatures anywhere
                 let unreadable = grounds_classfile::jdk_is_own_release(home, release) && !matches!(c, ClassContainer::JImage(_));
                 containers.push(c);
@@ -114,6 +123,8 @@ impl Classpath {
         }
         let mut cp = Classpath::from_containers(containers);
         cp.jdk = jdk;
+        cp.jdk_release = jdk_release;
+        cp.jdk_full = jdk_full;
         cp
     }
 
@@ -121,6 +132,19 @@ impl Classpath {
     /// loaded (see [`JdkApi::Newer`] and [`JdkApi::Unreadable`]). The JDK is the first container then.
     pub fn may_lack_members(&self, name: &str) -> bool {
         matches!(self.jdk, JdkApi::Newer { .. } | JdkApi::Unreadable { .. }) && self.names.get(name) == Some(&0)
+    }
+
+    /// The release whose JDK API the classpath holds exactly: every public
+    /// JDK class of that release, and no other. None without a JDK, or when
+    /// the API is approximated ([`JdkApi::Newer`], [`JdkApi::Unreadable`]).
+    pub fn exact_jdk_release(&self) -> Option<u32> {
+        self.jdk_release.filter(|_| self.jdk == JdkApi::Complete)
+    }
+
+    /// Whether the JDK holds all of its modules (see `jdk_full`), so a JDK
+    /// package missing from it is missing from the release.
+    pub fn jdk_is_full(&self) -> bool {
+        self.jdk_full
     }
 
     pub fn len(&self) -> usize {
