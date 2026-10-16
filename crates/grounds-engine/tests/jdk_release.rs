@@ -51,6 +51,10 @@ fn release_newer_than_the_jdk_warns_once_and_stays_silent_on_jdk_subclasses() {
 #[test]
 fn imports_of_jdk_classes_the_release_lacks_are_reported() {
     let Some(home) = grounds_classfile::find_java_home() else { return };
+    // Java 17's API needs ct.sym, which a JRE or a jlink image lacks
+    if !home.join("lib/ct.sym").is_file() {
+        return;
+    }
     // Java 17's API from ct.sym, and the JDK's own (21 or newer) from its image
     let Some(installed) = grounds_classfile::jdk_feature_release(&home).filter(|&v| v >= 21) else { return };
     let check = |release: u32| {

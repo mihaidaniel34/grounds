@@ -8,6 +8,8 @@ import static java.util.Collections.*;
 import java.util.NoSuchCollection; // expect
 import java.util.ImmutableCollections; // expect
 import java.util.nosuchpackage.*; // expect
+// java.desktop does not export java.awt.peer
+import java.awt.peer.*; // expect
 import static java.util.NoSuchHelper.helper; // expect
 import org.example.Missing;
 
