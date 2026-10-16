@@ -27,7 +27,7 @@ case $grounds in /*) ;; *) grounds=$PWD/$grounds ;; esac  # classpath runs it fr
 out=$repo/target/corpus
 projects=$repo/corpus/projects.tsv
 
-hard_rules=unresolved-method,unresolved-constructor,unresolved-field,override-matches-nothing,unimplemented-abstract-method,bean-not-found,ambiguous-bean,qualifier-not-found,bean-name-conflict,circular-constructor-dependency
+hard_rules=unresolved-method,missing-jdk-import,unresolved-constructor,unresolved-field,override-matches-nothing,unimplemented-abstract-method,bean-not-found,ambiguous-bean,qualifier-not-found,bean-name-conflict,circular-constructor-dependency
 planted_rules=bean-not-found,ambiguous-bean,qualifier-not-found,bean-name-conflict,circular-constructor-dependency,lombok-constructor-drops-qualifier
 
 # path:line rule, one per finding, sorted

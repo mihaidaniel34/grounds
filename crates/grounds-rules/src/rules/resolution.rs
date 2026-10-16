@@ -11,7 +11,7 @@ use grounds_semantic::Symbol;
 use grounds_syntax::{Node, NodeExt};
 
 pub fn rules() -> Vec<Box<dyn Rule>> {
-    vec![Box::new(UnresolvedMethod), Box::new(UnresolvedConstructor), Box::new(UnresolvedField), Box::new(UnresolvedStaticImport), Box::new(IncompatibleAssignment), Box::new(OverrideWithoutSuper), Box::new(UnimplementedAbstractMethod)]
+    vec![Box::new(UnresolvedMethod), Box::new(UnresolvedConstructor), Box::new(UnresolvedField), Box::new(UnresolvedStaticImport), Box::new(MissingJdkImport), Box::new(IncompatibleAssignment), Box::new(OverrideWithoutSuper), Box::new(UnimplementedAbstractMethod)]
 }
 
 /// A project class whose full hierarchy is known and that no processor other
@@ -291,6 +291,61 @@ impl Rule for UnresolvedStaticImport {
             let target = path.field("name").unwrap_or(path);
             cx.report(target, format!("`{}` has no static member `{member}`", cls.simple_name()));
         }
+    }
+}
+
+declare_rule!(MissingJdkImport {
+    id: "missing-jdk-import",
+    name: "Import of a JDK class the Java release does not have",
+    category: Bug,
+    severity: Warning,
+    tier: Edit,
+    sources: ["javac:doesnt.exist", "javac:cant.resolve.location"],
+    kinds: ["import_declaration"],
+    description: "The imported `java.*` class or package is not public API in the project's Java release, so the code does not compile for that release: a class added in a later release (`java.util.SequencedCollection` is Java 21), one removed since, or one the JDK does not export. Checked only when the JDK's API for the release is read exactly (see the JDK warnings).",
+});
+
+impl Rule for MissingJdkImport {
+    rule_meta!();
+    fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
+        let cp = &cx.fm.index.classpath;
+        let Some(release) = cp.exact_jdk_release() else { return };
+        // multi-release sources (`src/main/java24`) compile for their own, newer release
+        let own_release = cx.info.path.split(['/', '\\']).filter_map(|d| d.strip_prefix("java")).filter_map(|v| v.strip_prefix('-').unwrap_or(v).parse::<u32>().ok()).max();
+        if own_release.is_some_and(|v| v > release) {
+            return;
+        }
+        // `static` and `*` are tokens, not named children
+        let words: String = cx.text(n).split_whitespace().collect::<Vec<_>>().join(" ");
+        let is_static = words.starts_with("import static ");
+        let on_demand = words.contains('*');
+        let Some(path) = n.kids().into_iter().find(|k| matches!(k.kind(), "scoped_identifier" | "identifier")) else { return };
+        let text: String = cx.text(path).chars().filter(|c| !c.is_whitespace()).collect();
+        if !text.starts_with("java.") {
+            return;
+        }
+        let segs: Vec<&str> = text.split('.').collect();
+        // the type the import names: all of it, or all but the static member
+        let ty = if is_static && !on_demand { &segs[..segs.len() - 1] } else { &segs[..] };
+        let index = &cx.fm.index;
+        // `a.b.Outer.Inner`: some prefix is the package
+        let class_at = |k: usize| format!("{}.{}", ty[..k].join("."), ty[k..].join("$"));
+        if (1..ty.len()).any(|k| index.class_exists(&class_at(k))) {
+            return;
+        }
+        // `import java.util.*;` names a package
+        if on_demand && !is_static && index.package_exists(&ty.join(".")) {
+            return;
+        }
+        // the package, by convention the lowercase segments: a class missing
+        // from a package the JDK has, or a package missing from the release
+        let pkg_len = ty.iter().take_while(|s| s.starts_with(|c: char| c.is_ascii_lowercase())).count();
+        let what = if on_demand && !is_static { format!("package `{}`", ty.join(".")) } else { format!("`{}`", ty.join(".")) };
+        // a JDK cut down by jlink lacks whole modules, so their packages
+        if !index.package_exists(&ty[..pkg_len].join(".")) && !cp.jdk_is_full() {
+            return;
+        }
+        cx.report(path, format!("{what} is not public API in Java {release}"));
     }
 }
 
