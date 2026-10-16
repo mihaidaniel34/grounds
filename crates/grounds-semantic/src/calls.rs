@@ -1516,7 +1516,10 @@ impl<'t> FileModel<'t> {
                     x => !g_vars(x),
                 };
                 let Ty::Class { name: pn, args: pargs } = p else { return false };
-                if pargs.is_empty() || !args.iter().all(|a| free(a)) || !self.is_subclass(pn, qn).is_yes() {
+                // a raw `p` needs unchecked conversion; a non-generic one (`Path`
+                // is an `Iterable<Path>`) has its supertypes' arguments fixed
+                let raw = pargs.is_empty() && self.class(pn).is_none_or(|c| !c.type_params.is_empty());
+                if raw || !args.iter().all(|a| free(a)) || !self.is_subclass(pn, qn).is_yes() {
                     return false;
                 }
                 // which argument of `p` lands where in `q` (`List<#0>` is
