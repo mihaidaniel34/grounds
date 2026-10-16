@@ -406,7 +406,9 @@ has none: grounds uses the newest older release it has, which lacks APIs
 added since, so it warns and stays silent about classes that inherit from JDK
 classes (an absent member may be one of those APIs). A JDK home without
 `lib/ct.sym` (a JRE, or a JDK older than 9) warns too, and checks that need
-the JDK's classes stay silent.
+the JDK's classes stay silent. A JDK's own release is read from `lib/modules`;
+if that image cannot be read (a compressed `jlink` image, say), grounds warns
+and uses the release before it, with the same silence about JDK subclasses.
 
 ### Classpath
 
@@ -441,8 +443,9 @@ SARIF as a tool notification) when:
 - jars listed in a classpath file no longer exist (a cleaned cache),
 - there is no classpath file and no jar was found for most of the library
   types the sources import,
-- the release is newer than the installed JDK, or the JDK home has no
-  `lib/ct.sym` (see above). Set `java_home` to a suitable JDK.
+- the release is newer than the installed JDK, the JDK's own runtime image
+  (`lib/modules`) cannot be read, or the JDK home has no `lib/ct.sym` (see
+  above). Set `java_home` to a suitable JDK.
 
 Set `warn = false` under `[classpath]` to silence these.
 

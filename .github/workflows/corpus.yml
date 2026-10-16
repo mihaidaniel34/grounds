@@ -51,7 +51,8 @@ jobs:
             target/release/examples/errors
       - id: projects
         run: |
-          echo "names=$(cut -f1 corpus/projects.tsv | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
+          # helidon runs on JDK 27 in check-jdk27 instead
+          echo "names=$(cut -f1 corpus/projects.tsv | grep -vx helidon | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
           # projects whose build cannot dump a classpath on a runner (reasons in the file)
           echo "classpath=$(cut -f1 corpus/projects.tsv | grep -vxF -f <(cut -f1 corpus/classpath-skip.tsv) | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
 
@@ -168,6 +169,60 @@ jobs:
             target/corpus/current/stats.tsv
             target/corpus/snapshot.diff
 
+  # helidon on JDK 27 (early access): the release it infers is 27, so with the JDK
+  # at 27 grounds reads that release exactly from lib/modules, and the compile-break
+  # checks run against the real API. Only the hard checks gate here; the snapshot diff
+  # against the JDK 25 baseline is informational.
+  # The build is pinned by URL and SHA-256 (not setup-java, which would take the
+  # newest early-access build), so results do not move with new builds. To bump it,
+  # take the new beta's tarball and its .sha256.txt from
+  # https://github.com/adoptium/temurin27-binaries/releases and replace both values;
+  # the other projects stay on JDK 25.
+  check-jdk27:
+    needs: build
+    runs-on: ubuntu-latest
+    env:
+      JDK27_URL: https://github.com/adoptium/temurin27-binaries/releases/download/jdk27u-2026-10-10-15-56-beta/OpenJDK27U-jdk_x64_linux_hotspot_2026-10-10-15-56.tar.gz
+      JDK27_SHA256: 5201ac9a7367c1276dbfcb7e8dd975d5b97f4603b58a4e8382e648390f2a5152
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: install the pinned JDK 27 early-access build
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/jdk27.tar.gz" "$JDK27_URL"
+          echo "$JDK27_SHA256  $RUNNER_TEMP/jdk27.tar.gz" | sha256sum -c -
+          tar xzf "$RUNNER_TEMP/jdk27.tar.gz" -C "$RUNNER_TEMP"
+          echo "JAVA_HOME=$RUNNER_TEMP/jdk-27.0.2+0" >> "$GITHUB_ENV"
+          echo "$RUNNER_TEMP/jdk-27.0.2+0/bin" >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@v5
+        with:
+          name: binaries
+          path: bin
+      - run: chmod +x bin/grounds bin/examples/errors
+      - name: fetch the pinned commit
+        run: scripts/corpus.sh fetch
+        env:
+          CORPUS_ONLY: helidon
+          CORPUS_DIR: ${{ runner.temp }}/corpus
+          CORPUS_SHALLOW: "1"
+      - name: check
+        run: scripts/corpus.sh check
+        env:
+          CORPUS_ONLY: helidon
+          CORPUS_DIR: ${{ runner.temp }}/corpus
+          CORPUS_BASELINE: corpus/ci
+          GROUNDS: bin/grounds
+          ERRORS: ${{ github.workspace }}/bin/examples/errors
+      - if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: corpus-helidon-jdk27
+          path: |
+            target/corpus/current/*.txt
+            target/corpus/current/stats.tsv
+            target/corpus/snapshot.diff
+
   classpath:
     needs: build
     strategy:
@@ -248,7 +303,7 @@ jobs:
             target/corpus/snapshot.diff
 
   baseline:
-    needs: [check, classpath]
+    needs: [check, check-jdk27, classpath]
     if: always() && github.event_name == 'workflow_dispatch' && inputs.update-baseline
     runs-on: ubuntu-latest
     steps:
@@ -260,6 +315,7 @@ jobs:
           mkdir -p corpus/ci corpus/ci-classpath
           for d in results/corpus-*; do
             case $d in
+              results/corpus-helidon-jdk21) ;; # not a baseline: JDK 21 results differ
               results/corpus-cp-*) cp "$d"/current/*.txt corpus/ci-classpath/ ;;
               *) cp "$d"/current/*.txt corpus/ci/ ;;
             esac

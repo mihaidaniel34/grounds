@@ -30,6 +30,10 @@ pub enum JdkApi {
     /// API `open_ct_sym` can only approximate with the newest older release.
     /// Members added since then may be missing from JDK classes.
     Newer { requested: u32, installed: u32 },
+    /// The project compiles for the JDK's own release, but its runtime image
+    /// (`lib/modules`) cannot be read (a compressed image, a parse error), so
+    /// its API is approximated from `ct.sym` like [`JdkApi::Newer`].
+    Unreadable { release: u32 },
 }
 
 /// Immutable classpath: JDK symbols plus dependency jars and class dirs.
@@ -89,9 +93,12 @@ impl Classpath {
         let mut jdk = JdkApi::Complete;
         if let Some(home) = java_home {
             if let Ok(c) = ClassContainer::open_jdk(home, release) {
+                // the JDK's own release is read exactly from its image; a newer one has no signatures anywhere
+                let unreadable = grounds_classfile::jdk_is_own_release(home, release) && !matches!(c, ClassContainer::JImage(_));
                 containers.push(c);
-                // the JDK's own release is read exactly; a newer one has no signatures anywhere
-                if let Some(installed) = grounds_classfile::jdk_feature_release(home).filter(|&v| release > v) {
+                if unreadable {
+                    jdk = JdkApi::Unreadable { release };
+                } else if let Some(installed) = grounds_classfile::jdk_feature_release(home).filter(|&v| release > v) {
                     jdk = JdkApi::Newer { requested: release, installed };
                 }
             } else {
@@ -111,9 +118,9 @@ impl Classpath {
     }
 
     /// Whether `name` is a JDK class whose API may be newer than the one
-    /// loaded (see [`JdkApi::Newer`]). The JDK is the first container then.
+    /// loaded (see [`JdkApi::Newer`] and [`JdkApi::Unreadable`]). The JDK is the first container then.
     pub fn may_lack_members(&self, name: &str) -> bool {
-        matches!(self.jdk, JdkApi::Newer { .. }) && self.names.get(name) == Some(&0)
+        matches!(self.jdk, JdkApi::Newer { .. } | JdkApi::Unreadable { .. }) && self.names.get(name) == Some(&0)
     }
 
     pub fn len(&self) -> usize {

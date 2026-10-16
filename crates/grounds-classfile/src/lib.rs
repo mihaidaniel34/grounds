@@ -54,12 +54,7 @@ impl ClassContainer {
     /// release, or an image that cannot be read, comes from ct.sym.
     pub fn open_jdk(home: &Path, release: u32) -> Result<ClassContainer> {
         let ct = home.join("lib/ct.sym");
-        let own = match jdk_feature_release(home) {
-            Some(v) => v == release,
-            // no `release` file: ct.sym marks the JDK's own release with a bare `system-modules` entry
-            None => zip::ZipArchive::open(&ct).is_ok_and(|z| z.contains(&format!("{}/system-modules", ct_sym_release_char(release)))),
-        };
-        if own {
+        if jdk_is_own_release(home, release) {
             if let Ok(image) = jimage::JImage::open(&home.join("lib/modules")) {
                 return Ok(ClassContainer::JImage(image));
             }
@@ -187,6 +182,15 @@ pub fn jdk_feature_release(home: &Path) -> Option<u32> {
         [1, v, ..] => Some(*v),
         [v, ..] => Some(*v),
         [] => None,
+    }
+}
+
+/// Whether `release` is the JDK's own release, whose classes are in its runtime image.
+pub fn jdk_is_own_release(home: &Path, release: u32) -> bool {
+    match jdk_feature_release(home) {
+        Some(v) => v == release,
+        // no `release` file: ct.sym marks the JDK's own release with a bare `system-modules` entry
+        None => zip::ZipArchive::open(&home.join("lib/ct.sym")).is_ok_and(|z| z.contains(&format!("{}/system-modules", ct_sym_release_char(release)))),
     }
 }
 

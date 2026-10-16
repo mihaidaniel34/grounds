@@ -137,6 +137,32 @@ fn release_newer_than_the_jdk_leaves_jdk_subclasses_incomplete() {
     assert!(newer.hierarchy_complete("p.Plain"));
 }
 
+/// A JDK home whose runtime image cannot be read: the real `ct.sym` and
+/// `release` of `real`, and a `lib/modules` that is not a jimage.
+fn jdk_with_unreadable_image(dir: &std::path::Path, real: &std::path::Path) {
+    std::fs::create_dir_all(dir.join("lib")).unwrap();
+    std::fs::copy(real.join("lib/ct.sym"), dir.join("lib/ct.sym")).unwrap();
+    std::fs::copy(real.join("release"), dir.join("release")).unwrap();
+    std::fs::write(dir.join("lib/modules"), b"not a runtime image").unwrap();
+}
+
+#[test]
+fn unreadable_runtime_image_approximates_the_jdk_api() {
+    let Some(home) = grounds_classfile::find_java_home() else { return };
+    let Some(installed) = grounds_classfile::jdk_feature_release(&home) else { return };
+    let dir = std::env::temp_dir().join(format!("grounds-index-unreadable-jdk-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    jdk_with_unreadable_image(&dir, &home);
+    let src = "package p; class Meter extends java.util.concurrent.CopyOnWriteArrayList<String> {} class Plain {}";
+    let mut idx = Index::new(Arc::new(Classpath::build(Some(&dir), installed, &[])));
+    idx.set_file(Arc::from("p/M.java"), Arc::new(extract(&ParsedFile::parse(src))));
+    // the JDK's own release, approximated by the release before it
+    assert_eq!(idx.classpath.jdk, JdkApi::Unreadable { release: installed });
+    assert!(!idx.hierarchy_complete("p.Meter"));
+    assert!(idx.hierarchy_complete("p.Plain"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn jdk_home_without_ct_sym_is_absent() {
     let dir = std::env::temp_dir().join(format!("grounds-index-absent-jdk-{}", std::process::id()));
