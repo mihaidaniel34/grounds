@@ -9,9 +9,7 @@ spring-modulith-apt/src/main/java/org/springframework/modulith/apt/SpringModulit
 spring-modulith-core/src/main/java/org/springframework/modulith/core/AnnotationModulithMetadata.java:35 private-constructor-class-not-final
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ApplicationModule.java:1136 private-constructor-class-not-final
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ApplicationModule.java:1150 local-variable-naming
-spring-modulith-core/src/main/java/org/springframework/modulith/core/ApplicationModule.java:1151 literal-first-in-comparison
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ApplicationModule.java:1497 enum-compared-with-equals
-spring-modulith-core/src/main/java/org/springframework/modulith/core/ApplicationModule.java:1744 optional-as-parameter-or-field
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ApplicationModule.java:1844 private-constructor-class-not-final
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ApplicationModule.java:631 complex-boolean-expression
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ApplicationModule.java:706 identical-branches
@@ -23,11 +21,9 @@ spring-modulith-core/src/main/java/org/springframework/modulith/core/Application
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ApplicationModuleIdentifier.java:28 private-constructor-class-not-final
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ApplicationModuleIdentifiers.java:31 private-constructor-class-not-final
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ApplicationModuleInformation.java:36 redundant-modifier
-spring-modulith-core/src/main/java/org/springframework/modulith/core/ApplicationModuleInformationFactory.java:119 optional-as-parameter-or-field
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ApplicationModuleInformationFactory.java:173 enum-compared-with-equals
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ApplicationModuleInformationFactory.java:180 unused-parameter
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ApplicationModuleInformationFactory.java:41 utility-class-instantiable
-spring-modulith-core/src/main/java/org/springframework/modulith/core/ApplicationModuleInformationFactory.java:66 optional-as-parameter-or-field
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ApplicationModuleSource.java:41 private-constructor-class-not-final
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ApplicationModuleSourceContributions.java:34 field-naming
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ApplicationModules.java:185 too-many-parameters
@@ -38,14 +34,12 @@ spring-modulith-core/src/main/java/org/springframework/modulith/core/Application
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ApplicationModules.java:885 private-constructor-class-not-final
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ApplicationModules.java:899 optional-orelse-eager-call
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ApplicationModulesFactory.java:42 redundant-modifier
-spring-modulith-core/src/main/java/org/springframework/modulith/core/ArchitecturallyEvidentType.java:179 literal-first-in-comparison
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ArchitecturallyEvidentType.java:419 too-many-parameters
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ArchitecturallyEvidentType.java:51 field-naming
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ArchitecturallyEvidentType.java:570 redundant-modifier
 spring-modulith-core/src/main/java/org/springframework/modulith/core/Classes.java:48 private-constructor-class-not-final
 spring-modulith-core/src/main/java/org/springframework/modulith/core/Classes.java:50 field-naming
 spring-modulith-core/src/main/java/org/springframework/modulith/core/Classes.java:50 public-static-non-final-field
-spring-modulith-core/src/main/java/org/springframework/modulith/core/EntryPoints.java:281 literal-first-in-comparison
 spring-modulith-core/src/main/java/org/springframework/modulith/core/EntryPoints.java:328 private-constructor-class-not-final
 spring-modulith-core/src/main/java/org/springframework/modulith/core/EntryPoints.java:57 private-constructor-class-not-final
 spring-modulith-core/src/main/java/org/springframework/modulith/core/EventType.java:45 constructor-calls-overridable-method
@@ -60,7 +54,6 @@ spring-modulith-core/src/main/java/org/springframework/modulith/core/ModulithMet
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ModulithMetadata.java:40 redundant-modifier
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ModulithMetadata.java:51 redundant-modifier
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ModulithMetadata.java:67 redundant-modifier
-spring-modulith-core/src/main/java/org/springframework/modulith/core/NamedInterface.java:199 literal-first-in-comparison
 spring-modulith-core/src/main/java/org/springframework/modulith/core/NamedInterface.java:43 private-constructor-class-not-final
 spring-modulith-core/src/main/java/org/springframework/modulith/core/NamedInterfaces.java:387 private-constructor-class-not-final
 spring-modulith-core/src/main/java/org/springframework/modulith/core/NamedInterfaces.java:45 private-constructor-class-not-final
@@ -106,14 +99,10 @@ spring-modulith-core/src/test/java/org/springframework/modulith/core/JavaPackage
 spring-modulith-core/src/test/java/org/springframework/modulith/core/PackageNameUnitTests.java:43 negated-compareto
 spring-modulith-core/src/test/java/reproducers/gh1778/bidding/BidService.java:27 unused-private-field
 spring-modulith-docs/src/main/java/org/springframework/modulith/docs/Asciidoctor.java:207 stringbuilder-append-concat
-spring-modulith-docs/src/main/java/org/springframework/modulith/docs/Asciidoctor.java:289 optional-as-parameter-or-field
 spring-modulith-docs/src/main/java/org/springframework/modulith/docs/Asciidoctor.java:304 string-reference-equality
-spring-modulith-docs/src/main/java/org/springframework/modulith/docs/Asciidoctor.java:310 optional-as-parameter-or-field
 spring-modulith-docs/src/main/java/org/springframework/modulith/docs/Asciidoctor.java:439 redundant-modifier
 spring-modulith-docs/src/main/java/org/springframework/modulith/docs/Asciidoctor.java:52 private-constructor-class-not-final
 spring-modulith-docs/src/main/java/org/springframework/modulith/docs/Asciidoctor.java:54 field-naming
-spring-modulith-docs/src/main/java/org/springframework/modulith/docs/Asciidoctor.java:59 optional-as-parameter-or-field
-spring-modulith-docs/src/main/java/org/springframework/modulith/docs/Asciidoctor.java:63 optional-as-parameter-or-field
 spring-modulith-docs/src/main/java/org/springframework/modulith/docs/ConfigurationProperties.java:124 redundant-modifier
 spring-modulith-docs/src/main/java/org/springframework/modulith/docs/ConfigurationProperties.java:165 redundant-modifier
 spring-modulith-docs/src/main/java/org/springframework/modulith/docs/ConfigurationProperties.java:65 throw-generic-exception
@@ -134,7 +123,6 @@ spring-modulith-docs/src/main/java/org/springframework/modulith/docs/Documenter.
 spring-modulith-docs/src/main/java/org/springframework/modulith/docs/Documenter.java:1435 stray-semicolon
 spring-modulith-docs/src/main/java/org/springframework/modulith/docs/Documenter.java:461 stream-foreach-on-collection
 spring-modulith-docs/src/main/java/org/springframework/modulith/docs/Documenter.java:545 stream-foreach-on-collection
-spring-modulith-docs/src/main/java/org/springframework/modulith/docs/Documenter.java:661 literal-first-in-comparison
 spring-modulith-docs/src/main/java/org/springframework/modulith/docs/Documenter.java:675 redundant-modifier
 spring-modulith-docs/src/main/java/org/springframework/modulith/docs/Documenter.java:716 too-many-parameters
 spring-modulith-docs/src/main/java/org/springframework/modulith/docs/Documenter.java:891 enum-compared-with-equals
@@ -143,7 +131,6 @@ spring-modulith-docs/src/main/java/org/springframework/modulith/docs/Groupings.j
 spring-modulith-docs/src/main/java/org/springframework/modulith/docs/SpringModulithDocumentationSource.java:137 utility-class-instantiable
 spring-modulith-docs/src/main/java/org/springframework/modulith/docs/SpringModulithDocumentationSource.java:160 throw-generic-exception
 spring-modulith-docs/src/main/java/org/springframework/modulith/docs/SpringModulithDocumentationSource.java:46 private-constructor-class-not-final
-spring-modulith-docs/src/main/java/org/springframework/modulith/docs/SpringModulithDocumentationSource.java:49 optional-as-parameter-or-field
 spring-modulith-docs/src/main/java/org/springframework/modulith/docs/util/BuildSystemUtils.java:32 utility-class-instantiable
 spring-modulith-docs/src/test/java/org/springframework/modulith/docs/SpringModulithDocumentationSourceUnitTests.java:39 default-charset
 spring-modulith-docs/src/test/java/org/springframework/modulith/docs/SpringModulithDocumentationSourceUnitTests.java:51 default-charset
@@ -167,7 +154,6 @@ spring-modulith-events/spring-modulith-events-api/src/main/java/org/springframew
 spring-modulith-events/spring-modulith-events-api/src/main/java/org/springframework/modulith/events/ResubmissionOptions.java:29 private-constructor-class-not-final
 spring-modulith-events/spring-modulith-events-api/src/main/java/org/springframework/modulith/events/RoutingTarget.java:31 private-constructor-class-not-final
 spring-modulith-events/spring-modulith-events-api/src/main/java/org/springframework/modulith/events/RoutingTarget.java:84 private-constructor-class-not-final
-spring-modulith-events/spring-modulith-events-api/src/test/java/org/springframework/modulith/events/AnnotationTargetLookupUnitTests.java:41 test-without-assertion
 spring-modulith-events/spring-modulith-events-api/src/test/java/org/springframework/modulith/events/AnnotationTargetLookupUnitTests.java:79 inner-class-could-be-static
 spring-modulith-events/spring-modulith-events-api/src/test/java/org/springframework/modulith/events/AnnotationTargetLookupUnitTests.java:82 inner-class-could-be-static
 spring-modulith-events/spring-modulith-events-api/src/test/java/org/springframework/modulith/events/AnnotationTargetLookupUnitTests.java:85 inner-class-could-be-static
@@ -178,7 +164,6 @@ spring-modulith-events/spring-modulith-events-core/src/main/java/org/springframe
 spring-modulith-events/spring-modulith-events-core/src/main/java/org/springframework/modulith/events/config/StalenessProperties.java:36 public-static-non-final-field
 spring-modulith-events/spring-modulith-events-core/src/main/java/org/springframework/modulith/events/core/DefaultEventPublication.java:105 missing-override
 spring-modulith-events/spring-modulith-events-core/src/main/java/org/springframework/modulith/events/core/DefaultEventPublication.java:179 complex-boolean-expression
-spring-modulith-events/spring-modulith-events-core/src/main/java/org/springframework/modulith/events/core/DefaultEventPublication.java:41 optional-as-parameter-or-field
 spring-modulith-events/spring-modulith-events-core/src/main/java/org/springframework/modulith/events/core/DefaultEventPublication.java:97 missing-override
 spring-modulith-events/spring-modulith-events-core/src/main/java/org/springframework/modulith/events/core/DefaultEventPublicationRegistry.java:237 log-string-concatenation
 spring-modulith-events/spring-modulith-events-core/src/main/java/org/springframework/modulith/events/core/DefaultEventPublicationRegistry.java:253 log-placeholder-mismatch
@@ -195,8 +180,6 @@ spring-modulith-events/spring-modulith-events-core/src/main/java/org/springframe
 spring-modulith-events/spring-modulith-events-core/src/main/java/org/springframework/modulith/events/support/ListenerIds.java:30 private-constructor-class-not-final
 spring-modulith-events/spring-modulith-events-core/src/main/java/org/springframework/modulith/events/support/OutboxEventExternalizer.java:107 throw-generic-exception
 spring-modulith-events/spring-modulith-events-core/src/main/java/org/springframework/modulith/events/support/OutboxEventExternalizer.java:109 throw-generic-exception
-spring-modulith-events/spring-modulith-events-core/src/main/java/org/springframework/modulith/events/support/TransportAwareEventExternalizer.java:49 abstract-class-public-constructor
-spring-modulith-events/spring-modulith-events-core/src/main/java/org/springframework/modulith/events/support/TransportAwareEventExternalizer.java:69 abstract-class-public-constructor
 spring-modulith-events/spring-modulith-events-core/src/test/java/org/springframework/modulith/events/config/StalenessPropertiesUnitTests.java:38 test-without-assertion
 spring-modulith-events/spring-modulith-events-core/src/test/java/org/springframework/modulith/events/core/InMemoryEventPublicationRepository.java:35 optional-null-comparison
 spring-modulith-events/spring-modulith-events-core/src/test/java/org/springframework/modulith/events/support/CompletionRegisteringAdvisorUnitTests.java:180 interrupted-exception-swallowed
@@ -214,9 +197,6 @@ spring-modulith-events/spring-modulith-events-jdbc/src/main/java/org/springframe
 spring-modulith-events/spring-modulith-events-jdbc/src/main/java/org/springframework/modulith/events/jdbc/JdbcEventPublicationRepositoryV2.java:747 too-many-parameters
 spring-modulith-events/spring-modulith-events-jdbc/src/main/java/org/springframework/modulith/events/jdbc/JdbcEventPublicationRepositoryV2.java:761 nested-ternary
 spring-modulith-events/spring-modulith-events-jdbc/src/main/java/org/springframework/modulith/events/jdbc/JdbcEventPublicationRepositoryV2.java:873 complex-boolean-expression
-spring-modulith-events/spring-modulith-events-jdbc/src/test/java/org/springframework/modulith/events/jdbc/DatabaseSchemaInitializerIntegrationTests.java:61 optional-as-parameter-or-field
-spring-modulith-events/spring-modulith-events-jdbc/src/test/java/org/springframework/modulith/events/jdbc/DatabaseSchemaInitializerIntegrationTests.java:79 optional-as-parameter-or-field
-spring-modulith-events/spring-modulith-events-jdbc/src/test/java/org/springframework/modulith/events/jdbc/DatabaseSchemaInitializerIntegrationTests.java:97 optional-as-parameter-or-field
 spring-modulith-events/spring-modulith-events-jdbc/src/test/java/org/springframework/modulith/events/jdbc/JdbcEventPublicationRepositoryIntegrationTests.java:221 thread-sleep-in-test
 spring-modulith-events/spring-modulith-events-jdbc/src/test/java/org/springframework/modulith/events/jdbc/JdbcEventPublicationRepositoryIntegrationTests.java:332 thread-sleep-in-test
 spring-modulith-events/spring-modulith-events-jdbc/src/test/java/org/springframework/modulith/events/jdbc/JdbcEventPublicationRepositoryIntegrationTests.java:467 inner-class-could-be-static
@@ -306,7 +286,6 @@ spring-modulith-events/spring-modulith-events-mongodb/src/test/java/org/springfr
 spring-modulith-events/spring-modulith-events-mongodb/src/test/java/org/springframework/modulith/events/mongodb/MongoDbEventPublicationRepositoryTest.java:545 test-without-assertion
 spring-modulith-events/spring-modulith-events-mongodb/src/test/java/org/springframework/modulith/events/mongodb/MongoDbEventPublicationRepositoryTest.java:574 thread-sleep-in-test
 spring-modulith-events/spring-modulith-events-neo4j/src/main/java/org/springframework/modulith/events/neo4j/Neo4jEventPublication.java:43 too-many-parameters
-spring-modulith-events/spring-modulith-events-neo4j/src/main/java/org/springframework/modulith/events/neo4j/Neo4jEventPublicationRepository.java:220 literal-first-in-comparison
 spring-modulith-events/spring-modulith-events-neo4j/src/main/java/org/springframework/modulith/events/neo4j/Neo4jEventPublicationRepository.java:346 default-charset
 spring-modulith-events/spring-modulith-events-neo4j/src/main/java/org/springframework/modulith/events/neo4j/Neo4jEventPublicationRepository.java:370 default-charset
 spring-modulith-events/spring-modulith-events-neo4j/src/main/java/org/springframework/modulith/events/neo4j/Neo4jEventPublicationRepository.java:526 default-charset
@@ -318,8 +297,6 @@ spring-modulith-events/spring-modulith-events-neo4j/src/test/java/org/springfram
 spring-modulith-events/spring-modulith-events-neo4j/src/test/java/org/springframework/modulith/events/neo4j/Neo4jEventPublicationRepositoryTest.java:413 test-without-assertion
 spring-modulith-events/spring-modulith-events-neo4j/src/test/java/org/springframework/modulith/events/neo4j/Neo4jEventPublicationRepositoryTest.java:442 thread-sleep-in-test
 spring-modulith-events/spring-modulith-events-neo4j/src/test/java/org/springframework/modulith/events/neo4j/Neo4jEventPublicationRepositoryTest.java:96 default-charset
-spring-modulith-events/spring-modulith-events-neo4j/src/test/java/org/springframework/modulith/events/neo4j/Neo4jIndexInitializerTest.java:74 optional-as-parameter-or-field
-spring-modulith-events/spring-modulith-events-neo4j/src/test/java/org/springframework/modulith/events/neo4j/Neo4jIndexInitializerTest.java:94 optional-as-parameter-or-field
 spring-modulith-events/spring-modulith-events-tests/src/test/java/example/events/PersistentDomainEventIntegrationTest.java:103 deprecated-api-usage
 spring-modulith-events/spring-modulith-events-tests/src/test/java/example/events/PersistentDomainEventIntegrationTest.java:219 throw-generic-exception
 spring-modulith-events/spring-modulith-events-tests/src/test/java/example/events/PersistentDomainEventIntegrationTest.java:64 thread-sleep-in-test
@@ -393,7 +370,6 @@ spring-modulith-junit/src/main/java/org/springframework/modulith/junit/diff/File
 spring-modulith-junit/src/main/java/org/springframework/modulith/junit/diff/FileModificationDetector.java:54 redundant-modifier
 spring-modulith-junit/src/main/java/org/springframework/modulith/junit/diff/JGitUtil.java:27 throw-generic-exception
 spring-modulith-junit/src/main/java/org/springframework/modulith/junit/diff/JGitUtil.java:36 throw-generic-exception
-spring-modulith-junit/src/main/java/org/springframework/modulith/junit/diff/JGitUtil.java:57 literal-first-in-comparison
 spring-modulith-junit/src/main/java/org/springframework/modulith/junit/diff/JGitUtil.java:60 throw-generic-exception
 spring-modulith-moments/src/main/java/org/springframework/modulith/moments/DayHasPassed.java:29 private-constructor-class-not-final
 spring-modulith-moments/src/main/java/org/springframework/modulith/moments/HourHasPassed.java:29 private-constructor-class-not-final
@@ -476,7 +452,6 @@ spring-modulith-test/src/main/java/org/springframework/modulith/test/PublishedEv
 spring-modulith-test/src/main/java/org/springframework/modulith/test/PublishedEventsParameterResolver.java:179 missing-override
 spring-modulith-test/src/main/java/org/springframework/modulith/test/PublishedEventsParameterResolver.java:219 private-constructor-class-not-final
 spring-modulith-test/src/main/java/org/springframework/modulith/test/PublishedEventsParameterResolver.java:64 class-name-comparison
-spring-modulith-test/src/main/java/org/springframework/modulith/test/PublishedEventsParameterResolver.java:64 literal-first-in-comparison
 spring-modulith-test/src/main/java/org/springframework/modulith/test/ScenarioCustomizer.java:62 redundant-modifier
 spring-modulith-test/src/main/java/org/springframework/modulith/test/TestApplicationModules.java:28 utility-class-instantiable
 spring-modulith-test/src/main/java/org/springframework/modulith/test/TestApplicationModules.java:30 field-naming

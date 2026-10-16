@@ -110,7 +110,6 @@ apollo-common/src/main/java/com/ctrip/framework/apollo/common/config/Refreshable
 apollo-common/src/main/java/com/ctrip/framework/apollo/common/config/RefreshableConfig.java:147 catch-throwable
 apollo-common/src/main/java/com/ctrip/framework/apollo/common/config/RefreshableConfig.java:49 field-injection
 apollo-common/src/main/java/com/ctrip/framework/apollo/common/config/RefreshableConfig.java:82 catch-throwable
-apollo-common/src/main/java/com/ctrip/framework/apollo/common/config/RefreshablePropertySource.java:26 abstract-class-public-constructor
 apollo-common/src/main/java/com/ctrip/framework/apollo/common/constants/AccessKeyMode.java:19 constant-interface
 apollo-common/src/main/java/com/ctrip/framework/apollo/common/constants/ApolloServer.java:22 utility-class-instantiable
 apollo-common/src/main/java/com/ctrip/framework/apollo/common/constants/GsonType.java:28 constant-interface
@@ -125,15 +124,11 @@ apollo-common/src/main/java/com/ctrip/framework/apollo/common/controller/Charact
 apollo-common/src/main/java/com/ctrip/framework/apollo/common/controller/GlobalDefaultExceptionHandler.java:117 unused-parameter
 apollo-common/src/main/java/com/ctrip/framework/apollo/common/controller/GlobalDefaultExceptionHandler.java:133 catch-throwable
 apollo-common/src/main/java/com/ctrip/framework/apollo/common/controller/HttpMessageConverterConfiguration.java:82 deprecated-api-usage
-apollo-common/src/main/java/com/ctrip/framework/apollo/common/datasource/ApolloDataSourceScriptDatabaseInitializerFactory.java:121 enum-compared-with-equals
-apollo-common/src/main/java/com/ctrip/framework/apollo/common/datasource/ApolloDataSourceScriptDatabaseInitializerFactory.java:124 enum-compared-with-equals
 apollo-common/src/main/java/com/ctrip/framework/apollo/common/datasource/ApolloDataSourceScriptDatabaseInitializerFactory.java:36 utility-class-instantiable
 apollo-common/src/main/java/com/ctrip/framework/apollo/common/datasource/ApolloDataSourceScriptDatabaseInitializerFactory.java:86 collection-method-returns-null
 apollo-common/src/main/java/com/ctrip/framework/apollo/common/datasource/ApolloDataSourceScriptDatabaseInitializerFactory.java:91 collection-method-returns-null
 apollo-common/src/main/java/com/ctrip/framework/apollo/common/dto/GrayReleaseRuleItemDTO.java:30 constant-naming
 apollo-common/src/main/java/com/ctrip/framework/apollo/common/exception/AbstractApolloHttpException.java:26 mutable-exception
-apollo-common/src/main/java/com/ctrip/framework/apollo/common/exception/AbstractApolloHttpException.java:35 abstract-class-public-constructor
-apollo-common/src/main/java/com/ctrip/framework/apollo/common/exception/AbstractApolloHttpException.java:39 abstract-class-public-constructor
 apollo-common/src/main/java/com/ctrip/framework/apollo/common/exception/BadRequestException.java:29 constructor-calls-overridable-method
 apollo-common/src/main/java/com/ctrip/framework/apollo/common/exception/NotFoundException.java:28 constructor-calls-overridable-method
 apollo-common/src/main/java/com/ctrip/framework/apollo/common/exception/ServiceException.java:28 constructor-calls-overridable-method
@@ -311,10 +306,6 @@ apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/constant/RoleType.
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/constant/TracerEventType.java:19 constant-interface
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/controller/AppController.java:208 catch-instanceof-dispatch
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/controller/ConfigsExportController.java:109 default-charset
-apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/controller/ConfigsImportController.java:113 literal-first-in-comparison
-apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/controller/ConfigsImportController.java:122 literal-first-in-comparison
-apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/controller/ConfigsImportController.java:123 literal-first-in-comparison
-apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/controller/ConfigsImportController.java:94 literal-first-in-comparison
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/controller/OrganizationController.java:47 request-mapping-without-method
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/controller/SystemInfoController.java:140 catch-throwable
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/controller/SystemInfoController.java:94 cognitive-complexity
@@ -342,7 +333,6 @@ apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/listener/DeletionL
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/listener/DeletionListener.java:78 catch-throwable
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/service/ConfigsExportService.java:337 default-charset
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/service/ConfigsImportService.java:108 cognitive-complexity
-apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/service/ConfigsImportService.java:135 literal-first-in-comparison
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/service/ConfigsImportService.java:144 deep-nesting
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/service/ConfigsImportService.java:176 cognitive-complexity
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/service/ConfigsImportService.java:300 catch-instanceof-dispatch
@@ -369,7 +359,6 @@ apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/spi/ldap/LdapUserS
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/spi/oidc/OidcUserInfoUtil.java:25 private-constructor-class-not-final
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/spi/springsecurity/ApolloPasswordEncoderFactory.java:72 todo-comment
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/ConfigFileUtils.java:147 enum-compared-with-equals
-apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/ConfigFileUtils.java:165 enum-compared-with-equals
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/ConfigFileUtils.java:39 utility-class-instantiable
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/ConfigToFileUtils.java:30 utility-class-instantiable
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/ConfigToFileUtils.java:35 default-charset
@@ -377,12 +366,10 @@ apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/ConfigToFileU
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/ConfigToFileUtils.java:44 default-charset
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/KeyValueUtils.java:27 utility-class-instantiable
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/NamespaceBOUtils.java:38 utility-class-instantiable
-apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/NamespaceBOUtils.java:72 enum-compared-with-equals
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/NamespaceTextSyntaxChecker.java:46 lost-stack-trace
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/RelativeDateFormat.java:27 utility-class-instantiable
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/RelativeDateFormat.java:36 cognitive-complexity
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/RoleUtils.java:25 utility-class-instantiable
-apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/RoleUtils.java:40 literal-first-in-comparison
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/UserTokenAuditUtil.java:128 catch-throwable
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/UserTokenAuditUtil.java:47 field-naming
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/UserTokenAuditUtil.java:48 field-naming
@@ -402,7 +389,6 @@ apollo-portal/src/test/java/com/ctrip/framework/apollo/openapi/v1/controller/Nam
 apollo-portal/src/test/java/com/ctrip/framework/apollo/openapi/v1/controller/NamespaceControllerTest.java:56 deprecated-api-usage
 apollo-portal/src/test/java/com/ctrip/framework/apollo/portal/RetryableRestTemplateTest.java:181 catch-throwable
 apollo-portal/src/test/java/com/ctrip/framework/apollo/portal/ServiceExceptionTest.java:70 default-charset
-apollo-portal/src/test/java/com/ctrip/framework/apollo/portal/ServiceExceptionTest.java:77 deprecated-api-usage
 apollo-portal/src/test/java/com/ctrip/framework/apollo/portal/component/RestTemplateFactoryTest.java:64 deprecated-api-usage
 apollo-portal/src/test/java/com/ctrip/framework/apollo/portal/component/txtresolver/PropertyResolverTest.java:43 assert-true-with-comparison
 apollo-portal/src/test/java/com/ctrip/framework/apollo/portal/component/txtresolver/PropertyResolverTest.java:52 assert-true-with-comparison

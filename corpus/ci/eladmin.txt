@@ -17,7 +17,6 @@ eladmin-common/src/main/java/me/zhengjie/config/webConfig/MultipartConfig.java:1
 eladmin-common/src/main/java/me/zhengjie/config/webConfig/MultipartConfig.java:39 collapsible-if
 eladmin-common/src/main/java/me/zhengjie/config/webConfig/MultipartConfig.java:41 system-out-println
 eladmin-common/src/main/java/me/zhengjie/config/webConfig/QueryCustomizer.java:16 package-naming
-eladmin-common/src/main/java/me/zhengjie/config/webConfig/SwaggerConfig.java:110 literal-first-in-comparison
 eladmin-common/src/main/java/me/zhengjie/config/webConfig/SwaggerConfig.java:16 package-naming
 eladmin-common/src/main/java/me/zhengjie/config/webConfig/SwaggerDataConfig.java:1 package-naming
 eladmin-common/src/main/java/me/zhengjie/config/webConfig/SwaggerDataConfig.java:42 private-constructor-class-not-final

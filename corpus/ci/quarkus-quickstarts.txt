@@ -17,15 +17,9 @@ amazon-sns-quickstart/src/main/java/org/acme/sns/QuarksCannonSyncResource.java:3
 amazon-sns-quickstart/src/main/java/org/acme/sns/QuarksShieldAsyncResource.java:120 throw-generic-exception
 amazon-sns-quickstart/src/main/java/org/acme/sns/QuarksShieldAsyncResource.java:33 field-injection
 amazon-sns-quickstart/src/main/java/org/acme/sns/QuarksShieldAsyncResource.java:44 field-naming
-amazon-sns-quickstart/src/main/java/org/acme/sns/QuarksShieldAsyncResource.java:59 literal-first-in-comparison
-amazon-sns-quickstart/src/main/java/org/acme/sns/QuarksShieldAsyncResource.java:64 literal-first-in-comparison
-amazon-sns-quickstart/src/main/java/org/acme/sns/QuarksShieldAsyncResource.java:73 literal-first-in-comparison
 amazon-sns-quickstart/src/main/java/org/acme/sns/QuarksShieldSyncResource.java:108 throw-generic-exception
 amazon-sns-quickstart/src/main/java/org/acme/sns/QuarksShieldSyncResource.java:32 field-injection
 amazon-sns-quickstart/src/main/java/org/acme/sns/QuarksShieldSyncResource.java:43 field-naming
-amazon-sns-quickstart/src/main/java/org/acme/sns/QuarksShieldSyncResource.java:58 literal-first-in-comparison
-amazon-sns-quickstart/src/main/java/org/acme/sns/QuarksShieldSyncResource.java:62 literal-first-in-comparison
-amazon-sns-quickstart/src/main/java/org/acme/sns/QuarksShieldSyncResource.java:66 literal-first-in-comparison
 amazon-sqs-quickstart/src/main/java/org/acme/sqs/QuarksCannonAsyncResource.java:24 field-injection
 amazon-sqs-quickstart/src/main/java/org/acme/sqs/QuarksCannonAsyncResource.java:30 field-naming
 amazon-sqs-quickstart/src/main/java/org/acme/sqs/QuarksCannonSyncResource.java:24 field-injection
@@ -40,7 +34,6 @@ amazon-ssm-quickstart/src/main/java/org/acme/ssm/QuarkusSsmAsyncResource.java:22
 amazon-ssm-quickstart/src/main/java/org/acme/ssm/QuarkusSsmSyncResource.java:21 field-injection
 awt-graphics-rest-quickstart/src/main/java/org/acme/awt/rest/ImageResource.java:28 field-injection
 cache-quickstart/src/main/java/org/acme/cache/WeatherForecastResource.java:16 field-injection
-config-quickstart/src/main/java/org/acme/config/GreetingResource.java:22 optional-as-parameter-or-field
 context-propagation-quickstart/src/main/java/org/acme/context/EmitterResource.java:23 field-injection
 context-propagation-quickstart/src/main/java/org/acme/context/PriceResource.java:15 field-injection
 context-propagation-quickstart/src/main/java/org/acme/context/PriceResource.java:6 unused-import
@@ -103,11 +96,9 @@ hibernate-reactive-stateless-quickstart/src/main/java/org/acme/hibernate/reactiv
 hibernate-reactive-stateless-quickstart/src/main/java/org/acme/hibernate/reactive/FruitMutinyResource.java:27 unused-import
 hibernate-reactive-stateless-quickstart/src/main/java/org/acme/hibernate/reactive/FruitMutinyResource.java:28 unused-import
 hibernate-reactive-stateless-quickstart/src/main/java/org/acme/hibernate/reactive/FruitMutinyResource.java:37 field-injection
-hibernate-search-orm-elasticsearch-quickstart/src/main/java/org/acme/hibernate/search/elasticsearch/LibraryResource.java:114 optional-as-parameter-or-field
 hibernate-search-orm-elasticsearch-quickstart/src/main/java/org/acme/hibernate/search/elasticsearch/LibraryResource.java:116 trim-isempty
 hibernate-search-orm-elasticsearch-quickstart/src/main/java/org/acme/hibernate/search/elasticsearch/LibraryResource.java:30 field-injection
 hibernate-search-orm-elasticsearch-quickstart/src/main/java/org/acme/hibernate/search/elasticsearch/LibraryResource.java:33 field-injection
-hibernate-search-standalone-elasticsearch-quickstart/src/main/java/org/acme/hibernate/search/elasticsearch/LibraryResource.java:141 optional-as-parameter-or-field
 hibernate-search-standalone-elasticsearch-quickstart/src/main/java/org/acme/hibernate/search/elasticsearch/LibraryResource.java:34 field-injection
 infinispan-client-quickstart/src/main/java/org/acme/infinispan/client/InfinispanGreetingResource.java:15 field-injection
 jms-quickstart/src/main/java/org/acme/jms/PriceConsumer.java:24 field-injection
@@ -202,7 +193,6 @@ optaplanner-quickstart/src/test/java/org/acme/optaplanner/solver/TimeTableBenchm
 pulsar-quickstart/pulsar-quickstart-producer/src/main/java/org/acme/pulsar/producer/QuotesResource.java:30 system-out-println
 quartz-quickstart/src/test/java/org/acme/quartz/TaskResourceTest.java:16 thread-sleep-in-test
 qute-quickstart/src/main/java/org/acme/qute/HelloResource.java:17 field-injection
-rabbitmq-quickstart/rabbitmq-quickstart-processor/src/test/java/org/acme/rabbitmq/processor/QuoteProcessorTest.java:35 test-without-assertion
 redis-quickstart/src/main/java/org/acme/redis/IncrementResource.java:17 field-injection
 rest-client-quickstart/src/test/java/org/acme/rest/client/resources/WireMockExtensions.java:49 default-charset
 resteasy-client-multipart-quickstart/src/main/java/org/acme/rest/client/multipart/MultipartClientResource.java:17 field-injection
@@ -240,14 +230,9 @@ security-openid-connect-websockets-next-quickstart/src/main/java/org/acme/websoc
 security-openid-connect-websockets-next-quickstart/src/main/java/org/acme/websockets/KeycloakCustomizer.java:36 throw-generic-exception
 security-openid-connect-websockets-next-quickstart/src/test/java/org/acme/websockets/WebSocketsOidcIdentityUpdateTest.java:100 thread-sleep-in-test
 security-webauthn-quickstart/src/main/java/org/acme/security/webauthn/LoginResource.java:21 field-injection
-security-webauthn-quickstart/src/main/java/org/acme/security/webauthn/MyWebAuthnSetup.java:54 literal-first-in-comparison
-security-webauthn-quickstart/src/test/java/org/acme/security/webauthn/test/RenardeCookieFilter.java:91 deprecated-api-usage
 security-webauthn-reactive-quickstart/src/main/java/org/acme/security/webauthn/LoginResource.java:22 field-injection
-security-webauthn-reactive-quickstart/src/main/java/org/acme/security/webauthn/MyWebAuthnSetup.java:53 literal-first-in-comparison
-security-webauthn-reactive-quickstart/src/test/java/org/acme/security/webauthn/test/RenardeCookieFilter.java:91 deprecated-api-usage
 software-transactional-memory-quickstart/src/main/java/org/acme/software/transactional/memory/FlightResource.java:26 stray-semicolon
 software-transactional-memory-quickstart/src/main/java/org/acme/software/transactional/memory/FlightResource.java:28 field-injection
-spring-boot-properties-quickstart/src/main/java/org/acme/spring/boot/properties/GreetingProperties.java:12 optional-as-parameter-or-field
 spring-boot-properties-quickstart/src/main/java/org/acme/spring/boot/properties/GreetingResource.java:12 field-injection
 spring-di-quickstart/src/main/java/org/acme/spring/di/GreeterBean.java:29 field-injection
 spring-di-quickstart/src/main/java/org/acme/spring/di/GreeterBean.java:33 field-injection
@@ -265,5 +250,4 @@ vertx-quickstart/src/main/java/org/acme/VertxResource.java:49 field-injection
 vertx-quickstart/src/main/java/org/acme/extra/SockJsExample.java:17 field-injection
 vertx-quickstart/src/main/java/org/acme/extra/StreamingResource.java:17 field-injection
 websockets-next-quickstart/src/main/java/org/acme/websockets/ChatWebSocket.java:18 field-injection
-websockets-quickstart/src/main/java/org/acme/websockets/ChatSocket.java:45 literal-first-in-comparison
 websockets-quickstart/src/main/java/org/acme/websockets/ChatSocket.java:56 system-out-println

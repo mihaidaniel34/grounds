@@ -12,7 +12,8 @@ name: corpus
 #   Projects whose build cannot dump a classpath on a runner are listed, with
 #   the reason, in corpus/classpath-skip.tsv.
 # The no-jars job also runs CI mode under scripted edits (ci_mutations.py).
-# To accept new results, run with `update-baseline` and commit the artifact.
+# To accept new results, run with `update-baseline`: it pushes them as the
+# branch corpus-baseline/<run id> to open a PR from.
 on:
   pull_request:
     paths:
@@ -24,7 +25,7 @@ on:
   workflow_dispatch:
     inputs:
       update-baseline:
-        description: "Upload the current findings as a corpus-baseline artifact"
+        description: "Push the current findings as a corpus-baseline/<run id> branch"
         type: boolean
         default: false
 
@@ -302,28 +303,41 @@ jobs:
             target/corpus/current/stats.tsv
             target/corpus/snapshot.diff
 
+  # pushes the results as a branch, corpus-baseline/<run id>, to open a PR from
+  # (also uploaded as the corpus-baseline artifact)
   baseline:
     needs: [check, check-jdk27, classpath]
     if: always() && github.event_name == 'workflow_dispatch' && inputs.update-baseline
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v5
         with:
           pattern: corpus-*
-          path: results
+          path: ${{ runner.temp }}/results
       - run: |
           mkdir -p corpus/ci corpus/ci-classpath
-          for d in results/corpus-*; do
-            case $d in
-              results/corpus-helidon-jdk21) ;; # not a baseline: JDK 21 results differ
-              results/corpus-cp-*) cp "$d"/current/*.txt corpus/ci-classpath/ ;;
+          for d in "$RUNNER_TEMP"/results/corpus-*; do
+            case ${d##*/} in
+              corpus-helidon-jdk21) ;; # not a baseline: JDK 21 results differ
+              corpus-cp-*) cp "$d"/current/*.txt corpus/ci-classpath/ ;;
               *) cp "$d"/current/*.txt corpus/ci/ ;;
             esac
           done
-          ls corpus/ci corpus/ci-classpath
+          git status --short corpus/ci corpus/ci-classpath
       - uses: actions/upload-artifact@v5
         with:
           name: corpus-baseline
           path: |
             corpus/ci/*.txt
             corpus/ci-classpath/*.txt
+      - name: push the branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add corpus/ci corpus/ci-classpath
+          if git diff --cached --quiet; then echo "baselines unchanged"; exit 0; fi
+          git commit -q -m "corpus: refresh the CI baselines (run ${{ github.run_id }})"
+          git push origin "HEAD:refs/heads/corpus-baseline/${{ github.run_id }}"
