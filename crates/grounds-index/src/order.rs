@@ -27,16 +27,21 @@ pub fn file_graph(index: &Index) -> (Vec<Arc<str>>, Vec<Vec<u32>>) {
         }
     }
 
+    let file_index: FxHashMap<&str, u32> = files.iter().enumerate().map(|(i, (p, _))| (&***p, i as u32)).collect();
+
     // every name resolution may read points to the files declaring it
     let edges = files
         .iter()
         .enumerate()
-        .map(|(i, (_, stub))| {
+        .map(|(i, (path, stub))| {
             let mut out: Vec<u32> = names_resolution_reads(stub)
                 .into_iter()
                 .filter_map(|n| declared_in.get(n))
                 .flatten()
                 .copied()
+                // a class declared in several files (the same class in two modules) belongs to
+                // one of them: this file's nested classes may need an outer class that lives there
+                .chain(stub.classes.iter().filter_map(|c| index.source_file_of(&c.name)).filter(|p| *p != *path).filter_map(|p| file_index.get(&**p).copied()))
                 .filter(|&j| j != i as u32)
                 .collect();
             out.sort_unstable();
@@ -339,6 +344,25 @@ mod tests {
         let edges = [vec![1], vec![2], vec![1]];
         let groups = components(&edges);
         assert_eq!(waves(&groups, &edges), [vec![0], vec![1]]);
+    }
+
+    #[test]
+    fn a_class_declared_twice_points_to_the_file_the_index_keeps() {
+        // the same class in two modules, only one copy with a nested class: resolving
+        // `Dup$Inner` reads `Dup`, which the index may take from the other file
+        let mut checked = false;
+        for (first, second) in [("m1/p/Dup.java", "m2/p/Dup.java"), ("m2/p/Dup.java", "m1/p/Dup.java")] {
+            let with_inner = "package p; public class Dup { static class Inner {} }";
+            let idx = index(&[(first, with_inner), (second, "package p; public class Dup {}")]);
+            let (files, edges) = file_graph(&idx);
+            let at = |p: &str| files.iter().position(|f| &**f == p).unwrap();
+            let kept = at(idx.source_file_of("p.Dup").unwrap());
+            if kept != at(first) {
+                assert!(edges[at(first)].contains(&(kept as u32)), "{edges:?}");
+                checked = true;
+            }
+        }
+        assert!(checked, "the index never kept the copy without the nested class");
     }
 
     #[test]
