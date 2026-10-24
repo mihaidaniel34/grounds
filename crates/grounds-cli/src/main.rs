@@ -18,6 +18,9 @@ enum Cmd {
     Index {
         #[arg(default_value = ".")]
         root: PathBuf,
+        /// Print groups of file resolved together & number of components
+        #[arg(long)]
+        groups: bool,
     },
     /// Analyze files (default: whole project) and print findings.
     Check {
@@ -164,7 +167,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let style = grounds_engine::report::Style::detect(&cli.color);
     match cli.cmd {
-        Cmd::Index { root } => {
+        Cmd::Index { root, groups } => {
             let t = std::time::Instant::now();
             let p = grounds_engine::Project::load(&root)?;
             warn_classpath(&p);
@@ -181,9 +184,22 @@ fn main() -> anyhow::Result<()> {
                 println!("  {f}");
             }
             println!(
-                "timing: discover {:?}, classpath {:?}, stubs {:?}, index {:?}, total {:?}",
-                s.t_discover, s.t_classpath, s.t_stubs, s.t_index, t.elapsed()
+                "timing: discover {:?}, classpath {:?}, stubs {:?}, index {:?}, resolve {:?}, di {:?}, total {:?}",
+                s.t_discover, s.t_classpath, s.t_stubs, s.t_index, s.t_resolve, s.t_di, t.elapsed()
             );
+            if s.resolve.outside > 0 {
+                println!("resolved outside their group: {} (the file graph misses edges)", s.resolve.outside);
+            }
+            if groups {
+                let r = &s.resolve;
+                println!("groups: {} files, {} groups, {} waves", r.files, r.group_sizes.len(), r.waves);
+                println!("largest groups: {:?}", &r.group_sizes[..r.group_sizes.len().min(15)]);
+                let mut count: std::collections::BTreeMap<usize, usize> = Default::default();
+                for &n in &r.group_sizes {
+                    *count.entry(n).or_default() += 1;
+                }
+                println!("size -> count: {count:?}");
+            }
             // resolve everything to measure lazy resolution cost
             let t = std::time::Instant::now();
             let names: Vec<_> = p.index.source_class_names().cloned().collect();

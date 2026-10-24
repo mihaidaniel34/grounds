@@ -7,8 +7,11 @@
 
 use crate::model::*;
 use grounds_syntax::{Node, NodeExt, ParsedFile};
+use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use std::hash::{Hash, Hasher};
+use std::ops::Deref;
+use std::sync::{Arc, OnceLock};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum TypeSyntax {
@@ -199,15 +202,73 @@ pub struct Import {
 }
 
 impl Import {
-    pub fn last(&self) -> &str {
-        self.path.rsplit('.').next().unwrap_or(&self.path)
+    pub fn is_named(&self, name: &str) -> bool {
+        let p = self.path.as_bytes();
+        p.ends_with(name.as_bytes()) && (p.len() == name.len() || p[p.len() - name.len() - 1] == b'.')
+    }
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Imports {
+    list: Vec<Import>,
+    #[serde(skip)]
+    first_named: OnceLock<FxHashMap<Box<str>, u32>>,
+}
+
+impl Imports {
+    pub fn single_named<'a>(&'a self, name: &'a str) -> impl Iterator<Item = &'a Import> + 'a {
+        let first = self.first_named.get_or_init(|| {
+            let mut m = FxHashMap::default();
+            for (i, imp) in self.list.iter().enumerate().filter(|(_, imp)| !imp.on_demand) {
+                let last = imp.path.rsplit('.').next().unwrap_or(&imp.path);
+                m.entry(Box::from(last)).or_insert(i as u32);
+            }
+            m
+        });
+        let start = first.get(name).map_or(self.list.len(), |&i| i as usize);
+        self.list[start..].iter().filter(move |imp| !imp.on_demand && imp.is_named(name))
+    }
+}
+
+impl From<Vec<Import>> for Imports {
+    fn from(list: Vec<Import>) -> Imports {
+        Imports { list, first_named: OnceLock::new() }
+    }
+}
+
+impl Deref for Imports {
+    type Target = [Import];
+    fn deref(&self) -> &[Import] {
+        &self.list
+    }
+}
+
+impl<'a> IntoIterator for &'a Imports {
+    type Item = &'a Import;
+    type IntoIter = std::slice::Iter<'a, Import>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.list.iter()
+    }
+}
+
+impl Default for &Imports {
+    fn default() -> Self {
+        static EMPTY: Imports = Imports { list: Vec::new(), first_named: OnceLock::new() };
+        &EMPTY
+    }
+}
+
+impl Hash for Imports {
+    fn hash<H: Hasher>(&self, h: &mut H) {
+        self.list.hash(h);
     }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct FileStub {
     pub package: Name,
-    pub imports: Vec<Import>,
+    pub imports: Imports,
     pub classes: Vec<RawClass>,
     /// Every simple identifier mentioned in the file (sorted, deduped). Used
     /// for cheap reverse-dependency queries.
@@ -231,6 +292,7 @@ pub fn extract_with(file: &ParsedFile, lombok: &crate::lombok::LombokConfig) -> 
     let src = &*file.text;
     let root = file.root();
     let mut stub = FileStub { package: Arc::from(""), has_syntax_errors: file.has_errors(), ..Default::default() };
+    let mut imports: Vec<Import> = Vec::new();
     let mut module_imports: Vec<Import> = Vec::new();
     for ch in root.kids() {
         match ch.kind() {
@@ -252,14 +314,15 @@ pub fn extract_with(file: &ParsedFile, lombok: &crate::lombok::LombokConfig) -> 
                         // which shadow them (JEP 511)
                         module_imports.extend(module_packages(&path).into_iter().map(|p| Import { path: Arc::from(p), is_static: false, on_demand: true, from_module: true }));
                     } else {
-                        stub.imports.push(Import { path: Arc::from(path.as_str()), is_static, on_demand, from_module: false });
+                        imports.push(Import { path: Arc::from(path.as_str()), is_static, on_demand, from_module: false });
                     }
                 }
             }
             _ => {}
         }
     }
-    stub.imports.extend(module_imports);
+    imports.extend(module_imports);
+    stub.imports = imports.into();
     let pkg = stub.package.clone();
     let mut ex = Extractor { src, classes: Vec::new() };
     for ch in root.kids() {
@@ -1275,4 +1338,36 @@ pub fn extract_anonymous(body: Node, src: &str, pkg: &str, outer: &Name, simple:
     let mut ex = Extractor { src, classes: Vec::new() };
     ex.class_named(body, pkg, Some((outer, ClassKind::Class)), Some(simple));
     ex.classes
+}
+
+#[cfg(test)]
+mod import_tests {
+    use super::*;
+
+    fn import(path: &str) -> Import {
+        Import { path: Arc::from(path), is_static: false, on_demand: false, from_module: false }
+    }
+
+    #[test]
+    fn an_import_is_named_by_its_last_segment() {
+        assert!(import("a.b.C").is_named("C"));
+        assert!(import("C").is_named("C"));
+        assert!(!import("a.b.BC").is_named("C"));
+        assert!(!import("a.b.C").is_named("B"));
+        assert!(!import("a.b.C").is_named("b"));
+    }
+
+    #[test]
+    fn single_imports_are_found_by_name_in_order() {
+        let mut on_demand = import("d");
+        on_demand.on_demand = true;
+        let mut member = import("a.X.Foo");
+        member.is_static = true;
+        let imports = Imports::from(vec![import("c.Bar"), member, on_demand, import("b.Foo")]);
+        let paths = |name| imports.single_named(name).map(|i| &*i.path).collect::<Vec<_>>();
+        assert_eq!(paths("Foo"), ["a.X.Foo", "b.Foo"]);
+        assert_eq!(paths("Bar"), ["c.Bar"]);
+        assert!(paths("d").is_empty());
+        assert!(paths("Baz").is_empty());
+    }
 }

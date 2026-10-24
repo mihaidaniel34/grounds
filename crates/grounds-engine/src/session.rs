@@ -425,7 +425,7 @@ impl Session {
         let may_supply = |name: &str, pkg: &str| {
             stub.imports.iter().any(|i| {
                 if !i.on_demand {
-                    return i.last() == name && (i.is_static || *i.path != *format!("{pkg}.{name}"));
+                    return i.is_named(name) && (i.is_static || *i.path != *format!("{pkg}.{name}"));
                 }
                 *i.path != *pkg && (!jdk || !i.path.starts_with("java.") || idx.class_exists(&format!("{}.{name}", i.path)) || idx.class_exists(&format!("{}${name}", i.path)))
             })

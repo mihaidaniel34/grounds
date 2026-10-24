@@ -56,7 +56,7 @@ fn assertion_class<'t>(cx: &Ctx<'_, 't>, call: Node<'t>) -> Option<Name> {
         }
         if owners.is_empty() {
             for i in cx.fm.stub.imports.iter().filter(|i| i.is_static) {
-                let class = if i.on_demand { &*i.path } else if i.last() == name { i.path.rsplit_once('.').map_or("", |x| x.0) } else { continue };
+                let class = if i.on_demand { &*i.path } else if i.is_named(name) { i.path.rsplit_once('.').map_or("", |x| x.0) } else { continue };
                 match cx.fm.index.binary_name_for_dotted(class) {
                     Some(b) if !i.on_demand || !cx.fm.methods_named(&Ty::class(&b), name).is_empty() => owners.push(b),
                     Some(_) => {}
@@ -234,7 +234,7 @@ fn unresolved_helper_asserts<'t>(c: Node<'t>, name: &str, test: Node<'t>, cx: &C
             && if i.on_demand {
                 cx.fm.index.binary_name_for_dotted(&i.path).is_none_or(|b| !cx.fm.methods_named(&Ty::class(&b), name).is_empty())
             } else {
-                i.last() == name
+                i.is_named(name)
             }
     })
 }
