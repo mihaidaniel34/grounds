@@ -235,58 +235,6 @@
       </div>
     </section>
 
-    <section class="in">
-      <h2><span>What it checks</span><span class="mono">315 rules</span></h2>
-      <ul class="list">
-        <li><a class="row" href="https://github.com/mihaidaniel34/grounds/blob/master/docs/RULES.md">
-          <b>Rules</b>
-          <span class="d">Reimplemented from SonarQube, SpotBugs, PMD, Error Prone and IntelliJ, each citing its equivalents</span>
-          <span class="m">catalog ↗</span>
-        </a></li>
-        <li><div class="row">
-          <b>Dataflow</b>
-          <span class="d">Null dereferences, unclosed resources, unchecked <code>Optional.get()</code>, dead stores</span>
-          <span class="m">CFG</span>
-        </div></li>
-        <li><div class="row">
-          <b>Compile breaks</b>
-          <span class="d">Missing methods and fields, mismatched arguments, and every caller an API change broke in other files</span>
-          <span class="m">javac</span>
-        </div></li>
-        <li><div class="row">
-          <b>Injection</b>
-          <span class="d">Missing, ambiguous and misqualified beans, constructor cycles, name clashes</span>
-          <span class="m">Spring · Micronaut</span>
-        </div></li>
-        <li><div class="row">
-          <b>Lombok</b>
-          <span class="d">Generated constructors, accessors and builders, including the <code>lombok.config</code> keys that change them</span>
-          <span class="m">1.18</span>
-        </div></li>
-      </ul>
-    </section>
-
-    <section class="in">
-      <h2><span>Where it runs</span></h2>
-      <ul class="list">
-        <li><div class="row">
-          <b>Claude Code</b>
-          <span class="d">Hooks check each edit and the end of each turn; the agent sees findings before it moves on</span>
-          <span class="m">grounds hooks</span>
-        </div></li>
-        <li><div class="row">
-          <b>Pull requests</b>
-          <span class="d">Findings on changed lines, plus what the change broke in files it did not touch. SARIF for code scanning</span>
-          <span class="m">grounds changed --base</span>
-        </div></li>
-        <li><div class="row">
-          <b>Terminal</b>
-          <span class="d">The whole project or uncommitted changes, as text, JSON or SARIF</span>
-          <span class="m">grounds check</span>
-        </div></li>
-      </ul>
-    </section>
-
     <section class="in speed">
       <h2><span>Full project check</span><span class="mono">release build, Apple M4 Pro</span></h2>
       <ul class="list">
