@@ -532,10 +532,11 @@ impl Rule for SingletonMutableState {
             return;
         }
         let Some(cls) = cx.fm.class_of_decl(decl) else { return };
+        let lifecycle = lifecycle_methods(cx, decl, &cls.name);
         for d in n.fields("declarator") {
             let Some(name) = d.field("name").map(|x| x.text(cx.src)) else { continue };
             // written outside constructors / init methods?
-            let written_in_method = methods_of(decl).iter().filter(|m| !annotation_names(**m, cx.src).iter().any(|a| matches!(*a, "PostConstruct" | "Autowired" | "Inject" | "Value" | "Resource"))).any(|m| {
+            let written_in_method = methods_of(decl).iter().filter(|m| !lifecycle.contains(m)).any(|m| {
                 let mut assigns = Vec::new();
                 if let Some(b) = m.field("body") {
                     find_kind(b, "assignment_expression", &mut assigns);
@@ -549,6 +550,57 @@ impl Rule for SingletonMutableState {
             if written_in_method {
                 cx.report(d, format!("Field `{name}` of a singleton bean is modified by its methods; this state is shared across requests"));
             }
+        }
+    }
+}
+
+/// Methods of a singleton that run once in its life, not per request: setter
+/// injection, `@PostConstruct`/`@PreDestroy`, the `InitializingBean`/
+/// `Lifecycle`/`*Aware` callbacks, startup event listeners, and private
+/// methods called only from constructors or those.
+fn lifecycle_methods<'t>(cx: &Ctx<'_, 't>, decl: Node<'t>, cls: &str) -> Vec<Node<'t>> {
+    const STARTUP_EVENTS: [&str; 5] = ["ApplicationReadyEvent", "ApplicationStartedEvent", "ContextRefreshedEvent", "StartupEvent", "ServerStartupEvent"];
+    let methods = methods_of(decl);
+    let mut out: Vec<Node<'t>> = methods
+        .iter()
+        .copied()
+        .filter(|m| {
+            let anns = annotation_names(*m, cx.src);
+            let name = m.field("name").map(|n| cx.text(n)).unwrap_or("");
+            let startup_listener = (anns.contains(&"EventListener") || name == "onApplicationEvent")
+                && STARTUP_EVENTS.iter().any(|e| cx.text(*m).split('{').next().unwrap_or("").contains(e));
+            // a callback by name only where the class may implement its contract
+            let contract = match name {
+                "start" | "stop" => Some("org.springframework.context.Lifecycle"),
+                "close" => Some("java.lang.AutoCloseable"),
+                _ => None,
+            };
+            anns.iter().any(|a| matches!(*a, "PostConstruct" | "PreDestroy" | "Autowired" | "Inject" | "Value" | "Resource"))
+                || matches!(name, "afterPropertiesSet" | "destroy" | "afterSingletonsInstantiated" | "setApplicationContext" | "setBeanFactory" | "setEnvironment" | "setServletContext")
+                || contract.is_some_and(|c| !cx.fm.is_subclass(cls, c).is_no())
+                || startup_listener
+        })
+        .collect();
+    // private helpers called only from constructors and the methods above
+    let ctors: Vec<Node<'t>> = members(decl).into_iter().filter(|m| m.kind() == "constructor_declaration").collect();
+    loop {
+        let before = out.len();
+        for m in &methods {
+            if out.contains(m) || !m.has_modifier("private") {
+                continue;
+            }
+            let Some(name) = m.field("name").map(|n| cx.text(n)) else { continue };
+            let callers: Vec<Node<'t>> = decl
+                .descendants()
+                .filter(|c| c.kind() == "method_invocation" && cx.fm.call_name(*c) == Some(name) && c.field("object").is_none_or(|o| o.kind() == "this"))
+                .filter_map(|c| c.ancestors().find(|a| matches!(a.kind(), "method_declaration" | "constructor_declaration" | "lambda_expression" | "class_body")))
+                .collect();
+            if !callers.is_empty() && callers.iter().all(|c| ctors.contains(c) || out.contains(c)) {
+                out.push(*m);
+            }
+        }
+        if out.len() == before {
+            return out;
         }
     }
 }
@@ -935,8 +987,16 @@ impl Rule for InjectionInNonBean {
         if di.bean_of_class(&name).is_some() {
             return;
         }
-        // provided by a @Bean method or used as a configuration/test class
-        if di.beans.iter().any(|b| b.ty.class_name() == Some(&*name)) {
+        // provided by a @Bean method or used as a configuration/test class;
+        // a @Bean method declared to return a supertype may create this class
+        // (`@Bean UserService users() { return new LdapUserService(); }`)
+        if di.beans.iter().any(|b| {
+            b.ty.class_name().is_some_and(|t| t == &*name || matches!(b.source, BeanSource::FactoryMethod(_)) && t != "java.lang.Object" && cx.fm.is_subclass(&name, t).is_yes())
+        }) {
+            return;
+        }
+        // Quarkus Funqy registers the class declaring @Funq functions as a bean
+        if members(n).into_iter().any(|m| m.kind() == "method_declaration" && annotation_names(m, cx.src).contains(&"Funq")) {
             return;
         }
         let cls_anns = annotation_names(n, cx.src);
