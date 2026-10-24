@@ -1,0 +1,842 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>grounds: static analysis for Java, after every edit</title>
+  <meta name="description" content="A static analyzer for Java, written in Rust. Reports bugs, compile breaks and Spring/Micronaut wiring mistakes in changed code in 0.1–0.3 s, without Gradle, Maven or a JVM." />
+  <meta name="theme-color" content="#1b1713" />
+  <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500&family=Geist+Mono:wght@400&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg: #1b1713;
+      --panel: rgba(36, 30, 25, 0.82);
+      --text: #efe8de;
+      --dim: #a99d8e;
+      --faint: #6e6357;
+      --accent: #d6a46c;
+      --error: #e0896b;
+      --rule: rgba(239, 232, 222, 0.08);
+      --sans: 'Instrument Sans', sans-serif;
+      --mono: 'Geist Mono', ui-monospace, monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font: 400 15px/1.6 var(--sans);
+      -webkit-font-smoothing: antialiased;
+    }
+    ::selection { background: var(--accent); color: var(--bg); }
+    a { color: inherit; text-decoration: none; }
+    button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+    :focus-visible { outline: 1px solid var(--accent); outline-offset: 4px; }
+    code { font-family: var(--mono); font-size: 0.86em; }
+
+    .field { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 0; pointer-events: none; }
+
+    main { position: relative; z-index: 1; max-width: 760px; margin: 0 auto; padding: 32px 24px 72px; }
+    .mono { font-family: var(--mono); font-size: 12px; color: var(--faint); }
+
+    /* Entrance */
+    .in { opacity: 0; transform: translateY(6px); transition: opacity .9s ease-out, transform .9s cubic-bezier(.2, .7, .2, 1); }
+    .in.seen { opacity: 1; transform: none; }
+    .words span { display: inline-block; opacity: 0; filter: blur(6px); transform: translateY(8px); animation: rise .9s cubic-bezier(.2, .7, .2, 1) forwards; }
+    @keyframes rise { to { opacity: 1; filter: none; transform: none; } }
+
+    /* Nav */
+    nav { display: flex; justify-content: space-between; align-items: center; }
+    .mark { display: flex; align-items: center; gap: 10px; font-weight: 500; font-size: 15px; letter-spacing: -0.01em; }
+    .mark svg { width: 20px; height: 20px; }
+    .links { display: flex; gap: 22px; }
+    .links a, footer a { transition: color .2s; }
+    .links a:hover, footer a:hover { color: var(--accent); }
+
+    /* Hero */
+    .hero { padding-top: 112px; }
+    h1 { font-size: 44px; line-height: 1.12; font-weight: 500; letter-spacing: -0.025em; max-width: 640px; }
+    h1 .soft { color: var(--dim); }
+    .lede { margin-top: 24px; max-width: 560px; font-size: 18px; line-height: 1.55; color: var(--dim); }
+    .lede b { color: var(--text); font-weight: 500; }
+    .meta { margin-top: 20px; }
+
+    /* Install */
+    .install { margin-top: 40px; border: 1px solid var(--rule); border-radius: 10px; background: var(--panel); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); }
+    .bar { display: flex; justify-content: space-between; align-items: center; padding: 0 8px 0 4px; border-bottom: 1px solid var(--rule); }
+    .tabs { display: flex; }
+    .tabs button { position: relative; padding: 11px 12px; font-family: var(--mono); font-size: 12px; color: var(--faint); transition: color .2s; }
+    .tabs button:hover { color: var(--dim); }
+    .tabs button[aria-selected="true"] { color: var(--text); }
+    .tabs button[aria-selected="true"]::after { content: ''; position: absolute; left: 12px; right: 12px; bottom: -1px; height: 1px; background: var(--accent); }
+    .copy { padding: 6px 8px; font-family: var(--mono); font-size: 12px; color: var(--faint); transition: color .2s; }
+    .copy:hover { color: var(--accent); }
+    .install pre, .code { scrollbar-width: thin; scrollbar-color: rgba(239, 232, 222, 0.12) transparent; }
+    .install pre { padding: 16px 16px 18px; overflow-x: auto; font: 12.5px/1.75 var(--mono); color: var(--dim); }
+    .install pre .p { color: var(--faint); user-select: none; }
+    .next { margin-top: 12px; }
+    .next code { color: var(--dim); font-size: 12px; }
+
+    /* Demo */
+    .demo { margin-top: 20px; border: 1px solid var(--rule); border-radius: 10px; background: var(--panel); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); overflow: hidden; }
+    .demo .bar { padding: 0 8px 0 16px; }
+    .demo .file { font-family: var(--mono); font-size: 12px; color: var(--dim); transition: opacity .3s; }
+    .code { position: relative; padding: 14px 0; overflow-x: auto; font: 12.5px/1.75 var(--mono); transition: opacity .35s; }
+    .ln { display: block; padding: 0 16px; white-space: pre; color: #cfc4b5; transition: background .3s; }
+    .ln::before { content: attr(data-n); display: inline-block; width: 3ch; margin-right: 2ch; text-align: right; color: var(--faint); opacity: .6; }
+    .ln.edit { background: rgba(214, 164, 108, 0.06); }
+    .k { color: #b8906c; }
+    .t { color: #e6d9c6; }
+    .s { color: #a9b58a; }
+    .a { color: #c6a0a8; }
+    .caret { display: inline-block; width: 1px; height: 1.2em; margin-right: -1px; vertical-align: -0.25em; background: var(--accent); animation: blink 1s steps(1) infinite; }
+    @keyframes blink { 50% { opacity: 0; } }
+    .squig {
+      text-decoration: underline wavy var(--error);
+      text-decoration-thickness: 1px;
+      text-underline-offset: 4px;
+      animation: squig-in .5s ease-out;
+    }
+    @keyframes squig-in { from { text-decoration-color: transparent; } }
+    .out { min-height: 156px; padding: 12px 16px 14px; border-top: 1px solid var(--rule); font: 12px/1.8 var(--mono); color: var(--dim); transition: opacity .35s; }
+    .out div { white-space: pre-wrap; padding-left: 2ch; text-indent: -2ch; opacity: 0; transform: translateY(3px); transition: opacity .4s, transform .4s; }
+    .out div.on { opacity: 1; transform: none; }
+    .out .h { color: var(--faint); }
+    .out .e { color: var(--error); }
+    .out .r { color: var(--faint); }
+    .out .w { color: var(--text); }
+    .out .spin { color: var(--faint); }
+    .timing { font-family: var(--mono); font-size: 12px; color: var(--faint); }
+    .timing em { font-style: normal; color: var(--accent); }
+
+    /* Lists */
+    h2 { display: flex; justify-content: space-between; align-items: baseline; margin: 96px 0 10px; font-weight: 400; }
+    h2 span:first-child { color: var(--dim); font-size: 13px; }
+
+    .list { list-style: none; }
+    .list li { border-top: 1px solid var(--rule); }
+    .list li:last-child { border-bottom: 1px solid var(--rule); }
+    .list .row {
+      position: relative;
+      display: grid;
+      grid-template-columns: 170px 1fr auto;
+      gap: 4px 20px;
+      padding: 14px 0;
+      align-items: baseline;
+      transition: opacity .25s;
+    }
+    .list .row::after {
+      content: '';
+      position: absolute;
+      left: 0; right: 0; bottom: -1px;
+      height: 1px;
+      background: var(--accent);
+      transform: scaleX(0);
+      transform-origin: left;
+      transition: transform .45s cubic-bezier(.2, .7, .2, 1);
+    }
+    .list b { font-weight: 500; transition: color .2s; }
+    .list .d { color: var(--dim); }
+    .list .m { font-family: var(--mono); font-size: 12px; color: var(--faint); white-space: nowrap; }
+    .list:hover .row { opacity: .4; }
+    .list .row:hover { opacity: 1; }
+    .list a.row:hover::after { transform: scaleX(1); }
+    .list .row:hover b { color: var(--accent); }
+
+    /* Speed */
+    .speed .row { grid-template-columns: 170px 92px 1fr 64px; align-items: center; }
+    .speed .m.n { text-align: right; }
+    .track { height: 6px; }
+    .fill { width: 0; height: 100%; min-width: 3px; border-radius: 0 4px 4px 0; background: var(--accent); opacity: .75; transition: width 1.4s cubic-bezier(.2, .7, .2, 1); }
+    .speed.seen .fill { width: var(--w); }
+    .speed .time { font-family: var(--mono); font-size: 12px; color: var(--text); text-align: right; }
+    .note { margin-top: 14px; line-height: 1.7; }
+
+    footer { display: flex; justify-content: space-between; margin-top: 112px; }
+    footer .links { gap: 18px; }
+
+    @media (max-width: 640px) {
+      .hero { padding-top: 72px; }
+      h1 { font-size: 34px; }
+      .lede { font-size: 16px; }
+      .links .opt, .demo .file { display: none; }
+      .demo .bar { justify-content: flex-end; }
+      .list .row { grid-template-columns: 1fr auto; }
+      .list .d { grid-column: 1 / -1; grid-row: 2; }
+      .speed .row { grid-template-columns: 1fr 64px; }
+      .speed .m.n { display: none; }
+      .speed .track { grid-column: 1 / -1; grid-row: 2; }
+      footer { flex-direction: column; gap: 10px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      .in, .words span { opacity: 1; transform: none; filter: none; animation: none; transition: none; }
+      .fill { transition: none; }
+      .caret { animation: none; }
+    }
+  </style>
+</head>
+<body>
+  <canvas class="field" aria-hidden="true"></canvas>
+
+  <main>
+    <nav class="in">
+      <a class="mark" href="#">
+        <svg viewBox="0 0 32 32" aria-hidden="true">
+          <g fill="none" stroke-linecap="round" stroke-width="2.4">
+            <path d="M5 10.5c4-2 7.5 1.5 11 0s6-1.5 11 0" stroke="#d6a46c" />
+            <path d="M5 16.5c4-2 7.5 1.5 11 0s6-1.5 11 0" stroke="#a4805c" />
+            <path d="M5 22.5c4-2 7.5 1.5 11 0s6-1.5 11 0" stroke="#6e5a45" />
+          </g>
+        </svg>
+        <span id="wordmark">grounds</span>
+      </a>
+      <div class="links mono">
+        <a href="https://github.com/mihaidaniel34/grounds/blob/master/docs/RULES.md">Rules</a>
+        <a class="opt" href="https://github.com/mihaidaniel34/grounds/releases">Releases</a>
+        <a href="https://github.com/mihaidaniel34/grounds">GitHub</a>
+      </div>
+    </nav>
+
+    <section class="hero">
+      <h1 class="words">Static analysis for Java, <span class="soft">fast enough to run after every edit.</span></h1>
+      <p class="lede in" data-delay="550">
+        grounds reports bugs, compile breaks and Spring or Micronaut wiring mistakes in the code you
+        just changed, in <b>0.1–0.3 seconds</b>. It reads sources and jars directly: no Gradle, Maven or JVM.
+        Written in Rust, for coding agents and CI.
+      </p>
+      <p class="meta mono in" data-delay="650">v0.0.11 · experimental · Apache-2.0</p>
+
+      <div class="install in" data-delay="750">
+        <div class="bar">
+          <div class="tabs" role="tablist" aria-label="Install method">
+            <button role="tab" data-os="mac">macOS</button>
+            <button role="tab" data-os="linux">Linux</button>
+            <button role="tab" data-os="nix">Nix</button>
+            <button role="tab" data-os="cargo">Cargo</button>
+          </div>
+          <button class="copy" type="button">copy</button>
+        </div>
+        <pre id="cmd"></pre>
+      </div>
+      <p class="next mono in" data-delay="800">Then <code>grounds hooks</code> for Claude Code, or <code>grounds check</code> in a project.</p>
+
+      <div class="demo in" data-delay="900" aria-label="Example: findings after an edit">
+        <div class="bar">
+          <span class="file"></span>
+          <div class="tabs" role="tablist" aria-label="Example"></div>
+        </div>
+        <div class="code"></div>
+        <div class="out" aria-live="off"></div>
+      </div>
+    </section>
+
+    <section class="in">
+      <h2><span>What it checks</span><span class="mono">315 rules</span></h2>
+      <ul class="list">
+        <li><a class="row" href="https://github.com/mihaidaniel34/grounds/blob/master/docs/RULES.md">
+          <b>Rules</b>
+          <span class="d">Reimplemented from SonarQube, SpotBugs, PMD, Error Prone and IntelliJ, each citing its equivalents</span>
+          <span class="m">catalog ↗</span>
+        </a></li>
+        <li><div class="row">
+          <b>Dataflow</b>
+          <span class="d">Null dereferences, unclosed resources, unchecked <code>Optional.get()</code>, dead stores</span>
+          <span class="m">CFG</span>
+        </div></li>
+        <li><div class="row">
+          <b>Compile breaks</b>
+          <span class="d">Missing methods and fields, mismatched arguments, and every caller an API change broke in other files</span>
+          <span class="m">javac</span>
+        </div></li>
+        <li><div class="row">
+          <b>Injection</b>
+          <span class="d">Missing, ambiguous and misqualified beans, constructor cycles, name clashes</span>
+          <span class="m">Spring · Micronaut</span>
+        </div></li>
+        <li><div class="row">
+          <b>Lombok</b>
+          <span class="d">Generated constructors, accessors and builders, including the <code>lombok.config</code> keys that change them</span>
+          <span class="m">1.18</span>
+        </div></li>
+      </ul>
+    </section>
+
+    <section class="in">
+      <h2><span>Where it runs</span></h2>
+      <ul class="list">
+        <li><div class="row">
+          <b>Claude Code</b>
+          <span class="d">Hooks check each edit and the end of each turn; the agent sees findings before it moves on</span>
+          <span class="m">grounds hooks</span>
+        </div></li>
+        <li><div class="row">
+          <b>Pull requests</b>
+          <span class="d">Findings on changed lines, plus what the change broke in files it did not touch. SARIF for code scanning</span>
+          <span class="m">grounds changed --base</span>
+        </div></li>
+        <li><div class="row">
+          <b>Terminal</b>
+          <span class="d">The whole project or uncommitted changes, as text, JSON or SARIF</span>
+          <span class="m">grounds check</span>
+        </div></li>
+      </ul>
+    </section>
+
+    <section class="in speed">
+      <h2><span>Full project check</span><span class="mono">release build, Apple M4 Pro</span></h2>
+      <ul class="list">
+        <li><div class="row"><b>spring-petclinic</b><span class="m n">4,297 lines</span><div class="track"><div class="fill" style="--w: 2.1%"></div></div><span class="time" data-v="0.22">0.22 s</span></div></li>
+        <li><div class="row"><b>halo</b><span class="m n">134,807</span><div class="track"><div class="fill" style="--w: 9.2%"></div></div><span class="time" data-v="0.94">0.94 s</span></div></li>
+        <li><div class="row"><b>micronaut-core</b><span class="m n">697,519</span><div class="track"><div class="fill" style="--w: 29.4%"></div></div><span class="time" data-v="3.02">3.02 s</span></div></li>
+        <li><div class="row"><b>thingsboard</b><span class="m n">776,052</span><div class="track"><div class="fill" style="--w: 48.1%"></div></div><span class="time" data-v="4.94">4.94 s</span></div></li>
+        <li><div class="row"><b>camunda</b><span class="m n">2,299,131</span><div class="track"><div class="fill" style="--w: 100%"></div></div><span class="time" data-v="10.26">10.26 s</span></div></li>
+      </ul>
+      <p class="note mono">After an edit, the daemon checks the changed lines in 0.08–0.32 s, process start included.</p>
+    </section>
+
+    <section class="in">
+      <h2><span>How it is tested</span></h2>
+      <ul class="list">
+        <li><a class="row" href="https://github.com/mihaidaniel34/grounds/blob/master/corpus/projects.tsv">
+          <b>21 open-source projects</b>
+          <span class="d">They compile and start, so any compile-break or injection finding on them is a false positive. There are none</span>
+          <span class="m">corpus ↗</span>
+        </a></li>
+        <li><div class="row">
+          <b>Fuzzing against javac</b>
+          <span class="d">24,000 generated overloads, calls and member accesses on every pull request, new seeds nightly</span>
+          <span class="m">CI</span>
+        </div></li>
+        <li><div class="row">
+          <b>Fixtures</b>
+          <span class="d">At least one per rule, with the exact lines that must be reported and nothing else</span>
+          <span class="m">361 files</span>
+        </div></li>
+      </ul>
+      <p class="note mono">Not yet tested on Windows, Kotlin or Android. Bug reports with a snippet are welcome.</p>
+    </section>
+
+    <footer class="mono in">
+      <span>grounds · Apache-2.0</span>
+      <div class="links">
+        <a href="https://github.com/mihaidaniel34/grounds#readme">Documentation</a>
+        <a href="https://github.com/mihaidaniel34/grounds/issues">Issues</a>
+        <a href="https://github.com/mihaidaniel34/grounds">GitHub</a>
+      </div>
+    </footer>
+  </main>
+
+  <script>
+  (() => {
+    const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const $ = (s, el = document) => el.querySelector(s);
+    const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+    const esc = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
+
+    // ---- entrance ---------------------------------------------------------------
+    // headline words rise in one after another; everything else fades in when it scrolls into view
+    {
+      let i = 0;
+      const split = (node) => {
+        for (const child of [...node.childNodes]) {
+          if (child.nodeType === Node.TEXT_NODE) {
+            const frag = document.createDocumentFragment();
+            for (const part of child.textContent.split(/(\s+)/)) {
+              if (!part) continue;
+              if (/^\s+$/.test(part)) { frag.append(part); continue; }
+              const s = document.createElement('span');
+              s.textContent = part;
+              s.style.animationDelay = `${120 + i++ * 45}ms`;
+              frag.append(s);
+            }
+            child.replaceWith(frag);
+          } else {
+            split(child);
+          }
+        }
+      };
+      const h1 = $('h1.words');
+      split(h1);
+      // the wrapper span of the second clause must not animate itself
+      $$('.soft', h1).forEach((s) => { s.style.cssText = 'opacity:1;filter:none;transform:none;animation:none;display:inline'; });
+    }
+
+    const io = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        const el = e.target;
+        setTimeout(() => el.classList.add('seen'), Number(el.dataset.delay || 0));
+        io.unobserve(el);
+      }
+    }, { rootMargin: '0px 0px -8% 0px' });
+    $$('.in').forEach((el) => io.observe(el));
+
+    // the wordmark resolves out of soil glyphs
+    if (!reduce) {
+      const el = $('#wordmark');
+      const text = el.textContent;
+      const glyphs = '.:-=+~';
+      const start = performance.now() + 150;
+      el.style.display = 'inline-block';
+      el.style.minWidth = `${el.getBoundingClientRect().width}px`;
+      const tick = (now) => {
+        const p = Math.max(0, Math.min(1, (now - start) / 800));
+        const solved = Math.floor(p * text.length);
+        el.textContent = [...text].map((c, i) => (i < solved ? c : glyphs[(Math.random() * glyphs.length) | 0])).join('');
+        if (p < 1) requestAnimationFrame(tick);
+      };
+      requestAnimationFrame(tick);
+    }
+
+    // ---- install ----------------------------------------------------------------
+    const repo = 'https://github.com/mihaidaniel34/grounds';
+    const ver = '0.0.11';
+    const binary = (target) => [
+      `v=${ver} t=${target}`,
+      `curl -fsSL ${repo}/releases/download/v$v/grounds-$v-$t.tar.gz | tar -xz`,
+      `sudo mv grounds-$v-$t/grounds /usr/local/bin/`,
+    ];
+    const commands = {
+      mac: binary('$(uname -m | sed s/arm64/aarch64/)-apple-darwin'),
+      linux: binary('$(uname -m)-unknown-linux-musl'),
+      nix: [`nix profile install github:mihaidaniel34/grounds`],
+      cargo: [`cargo install --locked --git ${repo} grounds-cli`],
+    };
+    const cmd = $('#cmd');
+    const copy = $('.install .copy');
+    const pick = (os) => {
+      $$('.install .tabs button').forEach((b) => b.setAttribute('aria-selected', String(b.dataset.os === os)));
+      cmd.innerHTML = commands[os].map((l) => `<span class="p">$ </span>${esc(l)}`).join('\n');
+      cmd.dataset.os = os;
+    };
+    $$('.install .tabs button').forEach((b) => b.addEventListener('click', () => pick(b.dataset.os)));
+    copy.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(commands[cmd.dataset.os].join('\n'));
+        copy.textContent = 'copied';
+      } catch {
+        copy.textContent = 'press ⌘C';
+      }
+      setTimeout(() => (copy.textContent = 'copy'), 1600);
+    });
+    pick(/Linux|X11/.test(navigator.userAgent) && !/Android/.test(navigator.userAgent) ? 'linux' : 'mac');
+
+    // ---- demo -------------------------------------------------------------------
+    // An edit is typed into the file, then grounds' report for it appears below.
+    // Messages are grounds' own wording; the files are spring-petclinic's.
+    const scenarios = [
+      {
+        label: 'null',
+        file: 'Owner.java',
+        first: 96,
+        code: [
+          'public Pet getPet(String name) {',
+          '    Pet found = null;',
+          '    for (Pet pet : getPets()) {',
+          '        if (pet.getName().equalsIgnoreCase(name)) {',
+          '            found = pet;',
+          '        }',
+          '    }',
+          '    return found;',
+          '}',
+        ],
+        edit: { line: 7, to: '    return found.isNew() ? null : found;' },
+        mark: 'found',
+        time: '0.09 s',
+        out: (at) => [
+          `<span class="h">grounds: 1 new problem(s) in changed code (1 errors, 0 warnings, 0 info)</span>`,
+          `<span class="r">Owner.java:${at}:</span> <span class="e">error</span> <span class="r">[null-dereference]</span> <span class="w">\`found\` may be null here</span>`,
+        ],
+      },
+      {
+        label: 'callers',
+        file: 'Owner.java',
+        first: 71,
+        code: [
+          'public void addPet(Pet pet) {',
+          '    if (pet.isNew()) {',
+          '        getPets().add(pet);',
+          '    }',
+          '}',
+        ],
+        edit: { line: 0, to: 'public void adoptPet(Pet pet) {' },
+        time: '0.11 s',
+        out: () => [
+          `<span class="h">grounds: API changes in Owner.java broke 15 place(s) in 6 other file(s) not yet updated:</span>`,
+          `<span class="r">PetController.java:103:9:</span> <span class="w">\`Owner\` has no method \`addPet\`</span>`,
+          `<span class="r">PetController.java:126:9:</span> <span class="w">\`Owner\` has no method \`addPet\`</span>`,
+          `<span class="r">OwnerControllerTests.java:84:9:</span> <span class="w">\`Owner\` has no method \`addPet\`</span>`,
+          `<span class="h">…</span>`,
+        ],
+      },
+      {
+        label: 'beans',
+        file: 'VisitReminders.java',
+        first: 18,
+        code: [
+          '@Service',
+          'public class VisitReminders {',
+          '',
+          '    private final VisitRepository visits;',
+          '',
+          '    public VisitReminders(VisitRepository visits) {',
+          '        this.visits = visits;',
+          '    }',
+        ],
+        edit: { line: 5, to: '    public VisitReminders(VisitRepository visits, SmsGateway sms) {' },
+        mark: 'SmsGateway sms',
+        time: '0.10 s',
+        out: (at) => [
+          `<span class="h">grounds: 1 new problem(s) in changed code (1 errors, 0 warnings, 0 info)</span>`,
+          `<span class="r">VisitReminders.java:${at}:</span> <span class="e">error</span> <span class="r">[bean-not-found]</span> <span class="w">No bean of type \`SmsGateway\` is defined; injection of \`sms\` fails at startup</span>`,
+        ],
+      },
+    ];
+
+    const KW = /^(public|private|final|class|return|if|for|null|new|this|void|static)$/;
+    function hl(text) {
+      let html = '';
+      const re = /("(?:[^"\\]|\\.)*")|(@\w+)|([A-Za-z_]\w*)|([^"@A-Za-z_]+)/g;
+      let m;
+      while ((m = re.exec(text))) {
+        const [tok, str, ann, word] = m;
+        if (str) html += `<span class="s">${esc(tok)}</span>`;
+        else if (ann) html += `<span class="a">${esc(tok)}</span>`;
+        else if (word && KW.test(word)) html += `<span class="k">${tok}</span>`;
+        else if (word && /^[A-Z]/.test(word)) html += `<span class="t">${tok}</span>`;
+        else html += esc(tok);
+      }
+      return html;
+    }
+
+    const demo = $('.demo');
+    const codeEl = $('.code', demo);
+    const outEl = $('.out', demo);
+    const fileEl = $('.file', demo);
+    const tabsEl = $('.tabs', demo);
+    const timing = document.createElement('span');
+    timing.className = 'timing';
+
+    scenarios.forEach((s, i) => {
+      const b = document.createElement('button');
+      b.setAttribute('role', 'tab');
+      b.textContent = s.label;
+      b.addEventListener('click', () => run(i));
+      tabsEl.append(b);
+    });
+
+    const maxLines = Math.max(...scenarios.map((s) => s.code.length));
+    let token = 0;
+    const wait = (ms, my) => new Promise((res, rej) => setTimeout(() => (my === token ? res() : rej()), ms));
+
+    function render(s, lines, edited, caretAt, mark) {
+      codeEl.innerHTML = Array.from({ length: maxLines }, (_, i) => {
+        const text = lines[i];
+        if (text === undefined) return `<span class="ln" data-n=""> </span>`;
+        let body;
+        if (i === edited && caretAt != null) {
+          body = hl(text.slice(0, caretAt)) + '<span class="caret"></span>' + hl(text.slice(caretAt));
+        } else if (i === edited && mark) {
+          const at = text.indexOf(mark);
+          body = hl(text.slice(0, at)) + `<span class="squig">${hl(mark)}</span>` + hl(text.slice(at + mark.length));
+        } else {
+          body = hl(text) || ' ';
+        }
+        return `<span class="ln${i === edited ? ' edit' : ''}" data-n="${s.first + i}">${body}</span>`;
+      }).join('');
+    }
+
+    async function run(index) {
+      const my = ++token;
+      const s = scenarios[index];
+      $$('button', tabsEl).forEach((b, i) => b.setAttribute('aria-selected', String(i === index)));
+      try {
+        codeEl.style.opacity = outEl.style.opacity = fileEl.style.opacity = 0;
+        await wait(reduce ? 0 : 350, my);
+        fileEl.textContent = s.file;
+        const lines = [...s.code];
+        const from = lines[s.edit.line];
+        const to = s.edit.to;
+        outEl.innerHTML = '';
+        render(s, lines, -1);
+        codeEl.style.opacity = outEl.style.opacity = fileEl.style.opacity = 1;
+
+        // type the edit: delete what differs, then insert the new text
+        let pre = 0;
+        while (pre < from.length && from[pre] === to[pre]) pre++;
+        let suf = 0;
+        while (suf < from.length - pre && suf < to.length - pre && from[from.length - 1 - suf] === to[to.length - 1 - suf]) suf++;
+        const tail = from.slice(from.length - suf);
+        if (!reduce) {
+          await wait(900, my);
+          let cur = from;
+          render(s, lines, s.edit.line, from.length - suf);
+          await wait(450, my);
+          for (let n = from.length - suf - pre; n > 0; n--) {
+            cur = from.slice(0, pre + n - 1) + tail;
+            lines[s.edit.line] = cur;
+            render(s, lines, s.edit.line, pre + n - 1);
+            await wait(40, my);
+          }
+          const insert = to.slice(pre, to.length - suf);
+          for (let n = 1; n <= insert.length; n++) {
+            lines[s.edit.line] = to.slice(0, pre) + insert.slice(0, n) + tail;
+            render(s, lines, s.edit.line, pre + n);
+            await wait(38 + Math.random() * 40, my);
+          }
+          await wait(500, my);
+        }
+        lines[s.edit.line] = to;
+        render(s, lines, s.edit.line, null);
+
+        // the post-edit hook runs
+        if (!reduce) {
+          const spin = document.createElement('div');
+          spin.className = 'spin on';
+          outEl.append(spin);
+          for (let f = 0; f < 6; f++) {
+            spin.textContent = `${'-\\|/'[f % 4]} grounds hook post-edit`;
+            await wait(70, my);
+          }
+          spin.remove();
+        }
+
+        const at = s.mark ? `${s.first + s.edit.line}:${to.indexOf(s.mark) + 1}` : '';
+        render(s, lines, s.edit.line, null, s.mark);
+        const rows = s.out(at);
+        for (const html of rows) {
+          const d = document.createElement('div');
+          d.innerHTML = html;
+          outEl.append(d);
+          requestAnimationFrame(() => d.classList.add('on'));
+          await wait(reduce ? 0 : 110, my);
+        }
+        timing.innerHTML = `checked in <em>${s.time}</em>`;
+        const last = document.createElement('div');
+        last.append(timing);
+        outEl.append(last);
+        requestAnimationFrame(() => last.classList.add('on'));
+
+        await wait(reduce ? 60000 : 5200, my);
+        run((index + 1) % scenarios.length);
+      } catch {
+        // superseded by a newer run
+      }
+    }
+
+    // start once the panel is on screen
+    let started = false;
+    new IntersectionObserver(([e]) => {
+      if (e.isIntersecting && !started) { started = true; setTimeout(() => run(0), 900); }
+    }).observe(demo);
+
+    // ---- speed ------------------------------------------------------------------
+    {
+      const speed = $('.speed');
+      new IntersectionObserver(([e], obs) => {
+        if (!e.isIntersecting) return;
+        obs.disconnect();
+        if (reduce) return;
+        $$('.time', speed).forEach((el) => {
+          const v = Number(el.dataset.v);
+          const start = performance.now();
+          const tick = (now) => {
+            const p = Math.min(1, (now - start) / 1400);
+            const k = 1 - Math.pow(1 - p, 3);
+            el.textContent = `${(v * k).toFixed(2)} s`;
+            if (p < 1) requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+        });
+      }, { rootMargin: '0px 0px -12% 0px' }).observe(speed);
+    }
+
+    // ---- backdrop: ASCII strata ---------------------------------------------------
+    // A cross-section of sediment layers traced from a slowly drifting noise field.
+    // Scrolling digs deeper (the ground moves at half the page's speed), the cursor
+    // lifts the layers under it like a fold and lights them, hovering a row lights
+    // a band at its height, and a click sends a tremor outward.
+    const CW = 9, CH = 16;
+    const LAYER = 60;          // mean layer thickness, px
+    const TREMOR_MS = 2200;
+    const INK = '214, 164, 108';
+    const GRAIN = '170, 138, 106';
+
+    const perm = new Uint8Array(512);
+    {
+      const p = [...Array(256).keys()];
+      for (let i = 255; i > 0; i--) {
+        const j = (Math.random() * (i + 1)) | 0;
+        [p[i], p[j]] = [p[j], p[i]];
+      }
+      for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+    }
+    const smooth = (t) => t * t * t * (t * (t * 6 - 15) + 10);
+    const lerp = (a, b, t) => a + (b - a) * t;
+    function grad(h, x, y, z) {
+      h &= 15;
+      const u = h < 8 ? x : y;
+      const v = h < 4 ? y : h === 12 || h === 14 ? x : z;
+      return (h & 1 ? -u : u) + (h & 2 ? -v : v);
+    }
+    function noise(x, y, z) {
+      const X = Math.floor(x) & 255, Y = Math.floor(y) & 255, Z = Math.floor(z) & 255;
+      x -= Math.floor(x); y -= Math.floor(y); z -= Math.floor(z);
+      const u = smooth(x), v = smooth(y), w = smooth(z);
+      const A = perm[X] + Y, AA = perm[A] + Z, AB = perm[A + 1] + Z;
+      const B = perm[X + 1] + Y, BA = perm[B] + Z, BB = perm[B + 1] + Z;
+      return lerp(
+        lerp(lerp(grad(perm[AA], x, y, z), grad(perm[BA], x - 1, y, z), u),
+             lerp(grad(perm[AB], x, y - 1, z), grad(perm[BB], x - 1, y - 1, z), u), v),
+        lerp(lerp(grad(perm[AA + 1], x, y, z - 1), grad(perm[BA + 1], x - 1, y, z - 1), u),
+             lerp(grad(perm[AB + 1], x, y - 1, z - 1), grad(perm[BB + 1], x - 1, y - 1, z - 1), u), v),
+        w);
+    }
+    // stable per-cell randomness for grains, so they don't flicker
+    const hash = (a, b) => {
+      let h = (a * 374761393 + b * 668265263) | 0;
+      h = Math.imul(h ^ (h >>> 13), 1274126177);
+      return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+    };
+
+    const focus = { y: 0, amt: 0, target: 0 };
+    const rowsToLight = $$('.list .row');
+    rowsToLight.forEach((r) => {
+      r.addEventListener('pointerenter', () => {
+        const b = r.getBoundingClientRect();
+        focus.y = b.top + b.height / 2;
+        focus.target = 1;
+      });
+      r.addEventListener('pointerleave', () => (focus.target = 0));
+    });
+
+    const canvas = $('.field');
+    const ctx = canvas.getContext('2d');
+    const mouse = { x: -9999, y: -9999, tx: -9999, ty: -9999 };
+    const tremors = [];
+    let cols = 0, rows = 0, field = new Float32Array(0), last = 0;
+
+    function resize() {
+      const dpr = Math.min(devicePixelRatio || 1, 2);
+      canvas.width = innerWidth * dpr;
+      canvas.height = innerHeight * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.font = '12px "Geist Mono", ui-monospace, monospace';
+      ctx.textBaseline = 'top';
+      cols = Math.ceil(innerWidth / CW) + 2;
+      rows = Math.ceil(innerHeight / CH) + 3;
+    }
+
+    function draw(t) {
+      ctx.clearRect(0, 0, innerWidth, innerHeight);
+      mouse.x += (mouse.tx - mouse.x) * 0.07;
+      mouse.y += (mouse.ty - mouse.y) * 0.07;
+      focus.amt += (focus.target - focus.amt) * 0.1;
+      while (tremors.length && t - tremors[0].t0 > TREMOR_MS) tremors.shift();
+
+      const depth = scrollY * 0.5;
+      const row0 = Math.floor(depth / CH);
+      const shift = depth - row0 * CH;
+      const z = t * 0.00004;
+      const cx = innerWidth / 2;
+      const half = Math.min(400, innerWidth / 2);
+
+      if (field.length !== cols * rows) field = new Float32Array(cols * rows);
+      for (let j = 0; j < rows; j++) {
+        const wy = (row0 + j) * CH;
+        const sy = j * CH - shift;
+        for (let i = 0; i < cols; i++) {
+          const x = i * CW;
+          let d = wy / LAYER
+            + noise(x * 0.0022, wy * 0.0018, z) * 2.4
+            + noise(x * 0.009 + 31, wy * 0.008, z * 1.7) * 0.35;
+          const dx = x - mouse.x, dy = sy - mouse.y;
+          d += Math.exp(-(dx * dx + dy * dy) / 16000) * 0.75;
+          for (const q of tremors) {
+            const age = (t - q.t0) / TREMOR_MS;
+            const r = Math.hypot(x - q.x, sy - q.y) - age * 820;
+            d += Math.sin(r / 22) * Math.exp(-(r * r) / 9000) * (1 - age) * 0.45;
+          }
+          field[j * cols + i] = d;
+        }
+      }
+
+      for (let j = 1; j < rows - 1; j++) {
+        const y = j * CH - shift;
+        const wrow = row0 + j;
+        for (let i = 1; i < cols - 1; i++) {
+          const x = i * CW;
+          const k0 = j * cols + i;
+          const d = field[k0];
+          const gx = (field[k0 + 1] - field[k0 - 1]) * 0.5;
+          const gy = (field[k0 + cols] - field[k0 - cols]) * 0.5;
+          const g = Math.hypot(gx, gy) || 1e-6;
+
+          const layer = Math.floor(d);
+          const frac = d - layer;
+          const dist = Math.min(frac, 1 - frac) / g;     // cells to the nearest layer boundary
+          const edge = Math.min(1, Math.max(0, (Math.abs(x - cx) - half * 0.75) / (half * 0.6)));
+          const fade = 0.1 + 0.9 * edge;                // quieter behind the text column
+          const dxm = x - mouse.x, dym = y - mouse.y;
+          const lamp = Math.exp(-(dxm * dxm + dym * dym) / 26000);
+          const dyf = y - focus.y;
+          const band = focus.amt * Math.exp(-(dyf * dyf) / 2400);
+
+          if (dist < 0.5) {
+            const major = ((layer % 4) + 4) % 4 === 0;
+            const a = Math.atan2(gx * (CH / CW), -gy);
+            const o = ((a % Math.PI) + Math.PI) % Math.PI;
+            const ch = o < Math.PI / 8 || o > (7 * Math.PI) / 8 ? '-'
+              : o < (3 * Math.PI) / 8 ? '\\'
+              : o < (5 * Math.PI) / 8 ? '|'
+              : '/';
+            const k = 1 - dist / 0.5;
+            const alpha = (major ? 0.55 : 0.32) * k * fade + lamp * 0.5 * k + band * 0.7 * k;
+            ctx.fillStyle = `rgba(${INK}, ${alpha.toFixed(3)})`;
+            ctx.fillText(ch, x, y);
+            continue;
+          }
+
+          // each layer has its own texture: empty, silt, sand, gravel, shale
+          const h = hash(i, wrow);
+          const kind = Math.floor(hash(layer, 7) * 5);
+          let ch = '';
+          if (kind === 1 && h < 0.14) ch = '.';
+          else if (kind === 2 && i % 3 === 0 && wrow % 2 === 0) ch = '·';
+          else if (kind === 3 && h < 0.05) ch = h < 0.015 ? 'o' : ':';
+          else if (kind === 4 && h < 0.07) ch = ',';
+          if (!ch) continue;
+          const alpha = (0.12 * fade + lamp * 0.25 + band * 0.25);
+          ctx.fillStyle = `rgba(${GRAIN}, ${alpha.toFixed(3)})`;
+          ctx.fillText(ch, x, y);
+        }
+      }
+    }
+
+    function loop(t) {
+      if (t - last > 1000 / 30) { draw(t); last = t; }
+      requestAnimationFrame(loop);
+    }
+
+    addEventListener('resize', () => { resize(); draw(performance.now()); });
+    addEventListener('pointermove', (e) => { mouse.tx = e.clientX; mouse.ty = e.clientY; });
+    document.addEventListener('pointerleave', () => { mouse.tx = mouse.ty = -9999; });
+    addEventListener('pointerdown', (e) => tremors.push({ x: e.clientX, y: e.clientY, t0: performance.now() }));
+    addEventListener('scroll', () => (focus.target = 0), { passive: true });
+    if (reduce) addEventListener('scroll', () => draw(0), { passive: true });
+
+    resize();
+    document.fonts.ready.then(() => {
+      resize();
+      if (reduce) draw(0);
+      else requestAnimationFrame(loop);
+    });
+  })();
+  </script>
+</body>
+</html>
