@@ -25,6 +25,9 @@ pub struct LoadStats {
     pub t_classpath: Duration,
     pub t_stubs: Duration,
     pub t_index: Duration,
+    pub t_resolve: Duration,
+    pub t_di: Duration,
+    pub resolve: grounds_index::order::ResolveStats,
 }
 
 pub struct Project {
@@ -230,7 +233,13 @@ impl Project {
             let _ = new_cache.save(&workspace.root);
         }
         let (registered, auto_registered) = spring_registrations(&workspace);
+        // resolve every class on all cores before di model asks for them one by one
+        let t = Instant::now();
+        stats.resolve = index.resolve_ordered();
+        stats.t_resolve = t.elapsed();
+        let t = Instant::now();
         let mut di = grounds_di::DiModel::build_with(&index, &registered, &auto_registered);
+        stats.t_di = t.elapsed();
         di.lombok_copies_qualifiers = lombok_copies_qualifiers(&workspace.root);
         di.bean_overriding_allowed = bean_overriding_allowed(&workspace);
         let classpath_warnings = crate::classpath::warnings(&workspace, &config, &index);
@@ -272,6 +281,7 @@ impl Project {
 
     pub fn rebuild_di(&mut self) {
         let (copies, overriding) = (self.di.lombok_copies_qualifiers, self.di.bean_overriding_allowed);
+        self.index.resolve_ordered();
         self.di = grounds_di::DiModel::build_with(&self.index, &self.registered, &self.auto_registered);
         self.di.lombok_copies_qualifiers = copies;
         self.di.bean_overriding_allowed = overriding;

@@ -403,7 +403,7 @@ impl<'t> FileModel<'t> {
                 }
                 let mut out = Vec::new();
                 for imp in self.stub.imports.iter().filter(|i| i.is_static) {
-                    if imp.on_demand || imp.last() == name {
+                    if imp.on_demand || imp.is_named(name) {
                         let cls = if imp.on_demand { imp.path.to_string() } else { imp.path.rsplit_once('.').map(|x| x.0.to_string()).unwrap_or_default() };
                         if let Some(b) = self.index.binary_name_for_dotted(&cls) {
                             out.extend(self.methods_named(&Ty::class(&b), name).into_iter().filter(|m| m.is_static()));

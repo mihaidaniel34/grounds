@@ -132,7 +132,7 @@ impl Rule for UnresolvedMethod {
                 // implicit receiver: every enclosing class must be closed and
                 // static imports must not be able to provide the name
                 for imp in cx.fm.stub.imports.iter().filter(|i| i.is_static) {
-                    if imp.on_demand || imp.last() == name {
+                    if imp.on_demand || imp.is_named(name) {
                         return;
                     }
                 }
@@ -415,7 +415,7 @@ impl Rule for IncompatibleAssignment {
         // variable (`T extends A & B`), methods a static import brings in
         match value.field("object") {
             Some(o) if matches!(cx.type_of(o), Ty::TypeVar(_)) => return,
-            None if cx.fm.stub.imports.iter().any(|i| i.is_static && (i.on_demand || i.last() == &*c.method.name)) => return,
+            None if cx.fm.stub.imports.iter().any(|i| i.is_static && (i.on_demand || i.is_named(&c.method.name))) => return,
             _ => {}
         }
         let rivals = match &c.receiver {
