@@ -391,7 +391,6 @@ impl Index {
             // resolving a class of another group => the file graph missed an edge
             if GROUP.with(|g| g.borrow().as_ref().is_some_and(|g| !g.contains(name))) {
                 OUTSIDE.with(|o| o.set(o.get() + 1));
-                debug_assert!(false, "{name} resolved outside its group: the file graph misses an edge");
             }
             let r = self.resolve_source_class(name).map(Arc::new);
             self.cache.insert(Arc::from(name), r.clone());

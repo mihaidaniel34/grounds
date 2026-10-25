@@ -200,8 +200,6 @@ fn main() -> anyhow::Result<()> {
                 }
                 println!("size -> count: {count:?}");
             }
-            // resolve everything to measure lazy resolution cost
-            let t = std::time::Instant::now();
             let names: Vec<_> = p.index.source_class_names().cloned().collect();
             let mut unknown = 0usize;
             let mut total = 0usize;
@@ -217,7 +215,7 @@ fn main() -> anyhow::Result<()> {
                     }
                 }
             }
-            println!("resolved {} classes in {:?}; param types unknown {}/{}", names.len(), t.elapsed(), unknown, total);
+            println!("param types unknown {}/{} in {} classes", unknown, total, names.len());
         }
         Cmd::TypeStats { root, show_unresolved, causes } => {
             type_stats(&root, show_unresolved)?;
