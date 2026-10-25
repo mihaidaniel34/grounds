@@ -105,6 +105,11 @@ fn names_resolution_reads(stub: &FileStub) -> Vec<&str> {
     for imp in stub.imports.iter().filter(|i| i.is_static || i.on_demand) {
         out.extend(imp.path.split('.'));
     }
+    // import a.Outer.Inner looks inside Outer (Inner may be inherited); the imported
+    // class itself is only checked to exist, like a plain type name
+    for imp in stub.imports.iter().filter(|i| !i.is_static && !i.on_demand) {
+        out.extend(imp.path.rsplit_once('.').map_or("", |(q, _)| q).split('.'));
+    }
     out
 }
 
@@ -344,6 +349,23 @@ mod tests {
         let edges = [vec![1], vec![2], vec![1]];
         let groups = components(&edges);
         assert_eq!(waves(&groups, &edges), [vec![0], vec![1]]);
+    }
+
+    #[test]
+    fn a_single_import_of_a_nested_type_points_to_its_outer_class() {
+        // looking up `Inner` through `import p.Outer.Inner` resolves `Outer`, which
+        // inherits it; a plain `import p.Base` is only checked to exist
+        let idx = index(&[
+            ("p/Base.java", "package p; public class Base { public static class Inner {} }"),
+            ("p/Outer.java", "package p; public class Outer extends Base {}"),
+            ("q/A.java", "package q; import p.Outer.Inner; public class A { Inner f; }"),
+            ("q/B.java", "package q; import p.Base; public class B { Base b; }"),
+        ]);
+        let (files, edges) = file_graph(&idx);
+        assert_eq!(files.iter().map(|f| &**f).collect::<Vec<_>>(), ["p/Base.java", "p/Outer.java", "q/A.java", "q/B.java"]);
+        assert_eq!(edges, [vec![], vec![0], vec![1], vec![]]);
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap();
+        assert_eq!(pool.install(|| idx.resolve_ordered()).outside, 0);
     }
 
     #[test]
