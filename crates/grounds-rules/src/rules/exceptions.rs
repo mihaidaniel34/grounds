@@ -109,7 +109,7 @@ impl Rule for CatchThrowable {
                     let mut calls = Vec::new();
                     find_kind(b, "method_invocation", &mut calls);
                     let propagated = calls.iter().any(|c| {
-                        !is_log_like(*c, cx) && cx.fm.args_of(*c).iter().any(|a| cx.text(*a) == v) && !matches!(cx.fm.call_name(*c), Some("println" | "print" | "printf"))
+                        !is_log_like(*c, cx) && !is_log_level_call_on_unknown(*c, v, cx) && cx.fm.args_of(*c).iter().any(|a| cx.text(*a) == v) && !matches!(cx.fm.call_name(*c), Some("println" | "print" | "printf"))
                     });
                     if propagated {
                         return;
@@ -503,6 +503,31 @@ fn is_log_call<'t>(n: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
     t.class_name().is_some_and(|c| c.contains("Logger") || c.ends_with(".Log")) || matches!(cx.text(o), "log" | "logger" | "LOG" | "LOGGER")
 }
 
+/// `x.error(..)`/`warn`/`info`/`debug`/`trace` on a receiver of unknown type,
+/// typically a logger held elsewhere whose library is not on the classpath
+/// (`Loggers.RAFT.error("..", t)`): a message comes first and the throwable
+/// `v` later. A call on a known type (`Flow.error(e)`), a static call on a
+/// class from a missing jar (`Results.error("..", e)`) or a sink taking just the
+/// throwable (`sink.error(e)`) is not one.
+fn is_log_level_call_on_unknown<'t>(n: Node<'t>, v: &str, cx: &Ctx<'_, 't>) -> bool {
+    if !matches!(cx.fm.call_name(n), Some("error" | "warn" | "info" | "debug" | "trace")) {
+        return false;
+    }
+    let args = cx.fm.args_of(n);
+    if args.len() < 2 || cx.text(args[0]) == v {
+        return false;
+    }
+    let Some(o) = n.field("object") else { return false };
+    // a bare or qualified class name (`Results`, `org.lib.Results`), not a constant (`Loggers.RAFT`)
+    let last = match o.kind() {
+        "identifier" => Some(o),
+        "field_access" => o.field("field"),
+        _ => None,
+    };
+    let class_like = last.is_some_and(|l| cx.text(l).starts_with(|c: char| c.is_ascii_uppercase()) && cx.text(l).chars().any(|c| c.is_ascii_lowercase()));
+    !class_like && cx.type_of(o).is_unknown() && cx.fm.resolve_call(n).is_none()
+}
+
 declare_rule!(LogAndRethrow {
     id: "log-and-rethrow",
     name: "Exception logged and rethrown",
@@ -547,7 +572,9 @@ impl Rule for PrintStackTrace {
             return;
         }
         if let Some(o) = n.field("object") {
-            if is_throwable_expr(cx.fm, o) {
+            // only Throwable declares printStackTrace() in practice, so an unknown
+            // receiver (library jar missing) counts; a known non-Throwable does not
+            if is_throwable_expr(cx.fm, o) || (cx.type_of(o).is_unknown() && cx.fm.resolve_call(n).is_none()) {
                 cx.report(n, "Use a logger instead of `printStackTrace()`");
             }
         }
