@@ -20,6 +20,8 @@ class A {
     Flow n(Subscriber s) {
         try { work(); } catch (Throwable e) { return Flow.error(e); }
         try { work(); } catch (Throwable e) { return Results.error("x", e); }
+        try { work(); } catch (Throwable e) { return org.nolib.Results.error("x", e); }
+        try { work(); } catch (Throwable t) { org.nolib.Loggers.MAIN.warn("x", t); } // expect
         try { work(); } catch (Throwable e) { s.onError(e); }
         try { work(); } catch (Throwable e) { s.error(e); }
         try { work(); } catch (Throwable t) { throw rethrow(t); }

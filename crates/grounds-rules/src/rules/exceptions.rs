@@ -507,7 +507,7 @@ fn is_log_call<'t>(n: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
 /// typically a logger held elsewhere whose library is not on the classpath
 /// (`Loggers.RAFT.error("..", t)`): a message comes first and the throwable
 /// `v` later. A call on a known type (`Flow.error(e)`), a static call on a
-/// class from a missing jar (`Results.error(e)`) or a sink taking just the
+/// class from a missing jar (`Results.error("..", e)`) or a sink taking just the
 /// throwable (`sink.error(e)`) is not one.
 fn is_log_level_call_on_unknown<'t>(n: Node<'t>, v: &str, cx: &Ctx<'_, 't>) -> bool {
     if !matches!(cx.fm.call_name(n), Some("error" | "warn" | "info" | "debug" | "trace")) {
@@ -518,7 +518,13 @@ fn is_log_level_call_on_unknown<'t>(n: Node<'t>, v: &str, cx: &Ctx<'_, 't>) -> b
         return false;
     }
     let Some(o) = n.field("object") else { return false };
-    let class_like = o.kind() == "identifier" && cx.text(o).starts_with(|c: char| c.is_ascii_uppercase()) && cx.text(o).chars().any(|c| c.is_ascii_lowercase());
+    // a bare or qualified class name (`Results`, `org.lib.Results`), not a constant (`Loggers.RAFT`)
+    let last = match o.kind() {
+        "identifier" => Some(o),
+        "field_access" => o.field("field"),
+        _ => None,
+    };
+    let class_like = last.is_some_and(|l| cx.text(l).starts_with(|c: char| c.is_ascii_uppercase()) && cx.text(l).chars().any(|c| c.is_ascii_lowercase()));
     !class_like && cx.type_of(o).is_unknown() && cx.fm.resolve_call(n).is_none()
 }
 
