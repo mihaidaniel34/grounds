@@ -177,6 +177,12 @@ class ConfiguredGuard implements Closeable {
     void use() { }
     @Override public void close() { }
 }
+class SpooledGuard implements Closeable {
+    private final OutputStream spool;
+    SpooledGuard(Closeable c) throws IOException { spool = java.nio.file.Files.newOutputStream(java.nio.file.Paths.get("spool")); }
+    void use() { }
+    @Override public void close() throws IOException { spool.close(); }
+}
 interface HolderFactory {
     Holder makeHolder();
 }
@@ -267,6 +273,10 @@ class Handlers {
     }
     void wrapperOpensInField(Handle h) throws IOException {
         LoggedGuard g = new LoggedGuard(h); // expect
+        g.use();
+    }
+    void wrapperOpensQualified(Handle h) throws IOException {
+        SpooledGuard g = new SpooledGuard(h); // expect
         g.use();
     }
     void wrapperReadsConfig(Handle h) throws IOException {
