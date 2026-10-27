@@ -120,7 +120,7 @@ impl Rule for CatchThrowable {
                     find_kind(b, "assignment_expression", &mut stores);
                     find_kind(b, "variable_declarator", &mut stores);
                     let plain = |s: &Node| s.field("operator").is_none_or(|o| o.text(cx.src) == "="); // not `msg += t`
-                    if stores.iter().any(|s| plain(s) && s.field(if s.kind() == "assignment_expression" { "right" } else { "value" }).is_some_and(|r| r.kind() == "identifier" && r.text(cx.src) == v)) {
+                    if stores.iter().any(|s| plain(s) && s.field(if s.kind() == "assignment_expression" { "right" } else { "value" }).map(|r| r.unparen()).is_some_and(|r| r.kind() == "identifier" && r.text(cx.src) == v)) {
                         return;
                     }
                 }

@@ -1147,7 +1147,10 @@ impl<'a, 't> OptionalPresence<'a, 't> {
     fn chain_root(&self, n: Option<Node<'t>>) -> Option<usize> {
         let n = n?.unparen();
         if n.kind() == "method_invocation" && matches!(self.fm.call_name(n), Some("map" | "filter" | "flatMap")) && self.fm.args_of(n).len() == 1 {
-            return self.chain_root(n.field("object"));
+            let root = self.chain_root(n.field("object"))?;
+            // `o.map((o = other)::equals)` tests the old value, not what `o` holds after
+            let writes = self.fm.args_of(n)[0].descendants().any(|d| local_def(self.fm, d).is_some_and(|(i, _)| i == root));
+            return (!writes).then_some(root);
         }
         self.optional_local(Some(n))
     }

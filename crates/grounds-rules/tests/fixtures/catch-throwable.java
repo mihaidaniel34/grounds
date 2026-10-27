@@ -47,6 +47,8 @@ class A {
         h.handle(invokeException);
         try { work(); } catch (Throwable e) { Throwable stored = e; h.handle(stored); }
         try { work(); } catch (Error e) { log.warn("x", e); error = e; }
+        try { work(); } catch (Throwable t) { error = (t); }
+        try { work(); } catch (Throwable t) { Throwable saved = (t); h.handle(saved); }
         // log-and-continue, or keeping only something derived from it
         String msg = null;
         int count = 0;

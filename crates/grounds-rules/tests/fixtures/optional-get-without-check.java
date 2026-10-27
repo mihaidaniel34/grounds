@@ -115,6 +115,10 @@ class OptionalDerivedChecks {
         }
         return "";
     }
+    String reassignedInChain(Optional<String> o) {
+        if (o.map((o = Optional.<String>empty())::equals).isPresent()) return o.get(); // expect
+        return "";
+    }
     String mapOtherOptional(Optional<String> o, Optional<String> p) {
         if (p.map(String::isEmpty).orElse(false)) return o.get(); // expect
         return "";
