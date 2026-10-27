@@ -435,6 +435,10 @@ impl Flags {
     /// constants or calls `super.close()` (`closed = true;`): it releases
     /// nothing itself.
     pub const RELEASES_NOTHING: u32 = 1 << 28;
+    /// A source class whose constructors or field initializers open a file,
+    /// socket or JDBC connection (`new FileOutputStream(...)`,
+    /// `Files.newBufferedWriter(...)`): it owns a resource of its own.
+    pub const OPENS_RESOURCE: u32 = 1 << 29;
 
     pub fn has(self, f: u32) -> bool {
         self.0 & f != 0

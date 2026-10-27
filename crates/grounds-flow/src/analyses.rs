@@ -910,6 +910,9 @@ impl<'a, 't> ResourceAnalysis<'a, 't> {
             return false;
         }
         let Some(ctor) = self.fm.resolve_call(v) else { return false };
+        if self.opens_own_resource(&ctor.owner) {
+            return false;
+        }
         let raw = self.fm.index.raw_class(&ctor.owner).and_then(|(_, c)| c.methods.iter().find(|m| Some(m.range) == ctor.method.range));
         // every parameter borrows: a `File` or a path may open a resource of its own
         let wraps = !ctor.method.params.is_empty() && ctor.method.params.iter().enumerate().all(|(k, p)| {
@@ -930,7 +933,8 @@ impl<'a, 't> ResourceAnalysis<'a, 't> {
         match e.kind() {
             "field_access" => e.field("object").is_some_and(|o| {
                 let o = o.unparen();
-                matches!(o.kind(), "this" | "super") || self.names_type(o) || self.from_unowned(o, depth)
+                // a holder returned by a call may be fresh (`factory.makeHolder().stream`)
+                matches!(o.kind(), "this" | "super") || self.names_type(o) || (o.kind() != "method_invocation" && self.from_unowned(o, depth))
             }),
             "cast_expression" => e.field("value").is_some_and(|x| self.from_unowned(x, depth)),
             "method_invocation" => {
@@ -956,6 +960,25 @@ impl<'a, 't> ResourceAnalysis<'a, 't> {
             }
             _ => false,
         }
+    }
+
+    /// Does class `n` or a project superclass open a resource of its own in a
+    /// constructor or field initializer?
+    fn opens_own_resource(&self, n: &str) -> bool {
+        let index = self.fm.index;
+        let mut cur: Name = Name::from(n);
+        for _ in 0..16 {
+            if !index.is_source_class(&cur) {
+                return false;
+            }
+            let Some(c) = index.class(&cur) else { return false };
+            if c.flags.has(Flags::OPENS_RESOURCE) {
+                return true;
+            }
+            let Some(s) = c.superclass.as_ref().and_then(|s| s.class_name()) else { return false };
+            cur = Name::from(s);
+        }
+        false
     }
 
     /// `Shared` in `Shared.stream` or `Outer` in `Outer.this.stream`.

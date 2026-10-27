@@ -169,6 +169,21 @@ class Session implements Closeable {
 class Holder {
     InputStream stream;
 }
+interface HolderFactory {
+    Holder makeHolder();
+}
+class AuditedGuard implements Closeable {
+    private final OutputStream audit;
+    AuditedGuard(Closeable c) throws IOException { audit = new FileOutputStream("audit.log"); }
+    void use() { }
+    @Override public void close() throws IOException { audit.close(); }
+}
+class LoggedGuard implements Closeable {
+    private final Writer log = new FileWriter("guard.log");
+    LoggedGuard(Closeable c) throws IOException { }
+    void use() { }
+    @Override public void close() throws IOException { log.close(); }
+}
 class Shared {
     static Handle handle;
 }
@@ -232,6 +247,18 @@ class Handlers {
     void reassignedParam(InputStream in, File f) throws IOException {
         in = new FileInputStream(f);
         Guard g = new Guard(in); // expect
+        g.use();
+    }
+    void fieldOfFreshHolder(HolderFactory factory) {
+        Guard g = new Guard(factory.makeHolder().stream); // expect
+        g.use();
+    }
+    void wrapperOpensInCtor(Handle h) throws IOException {
+        AuditedGuard g = new AuditedGuard(h); // expect
+        g.use();
+    }
+    void wrapperOpensInField(Handle h) throws IOException {
+        LoggedGuard g = new LoggedGuard(h); // expect
         g.use();
     }
     void ownsInner() {

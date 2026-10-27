@@ -921,6 +921,9 @@ impl<'s> Extractor<'s> {
             .map(|tl| tl.kids().into_iter().map(|t| type_syntax(t, src)).collect())
             .unwrap_or_default();
 
+        if node.field("body").is_some_and(|b| opens_resource(b, src)) {
+            flags.set(Flags::OPENS_RESOURCE);
+        }
         let idx = self.classes.len();
         self.classes.push(RawClass {
             name: name.clone(),
@@ -1270,6 +1273,30 @@ fn releases_nothing(body: Node, src: &str) -> bool {
             "method_invocation" => e.text(src).split_whitespace().collect::<String>() == "super.close()",
             _ => false,
         }
+    })
+}
+
+/// Constructors, initializer blocks or field initializers of a class body
+/// that open a file, socket or JDBC connection.
+fn opens_resource(body: Node, src: &str) -> bool {
+    body.kids().into_iter().any(|m| {
+        let init: Vec<Node> = match m.kind() {
+            "constructor_declaration" => m.field("body").into_iter().collect(),
+            "block" => vec![m],
+            "field_declaration" => m.kids_of_kind("variable_declarator").into_iter().filter_map(|d| d.field("value")).collect(),
+            _ => Vec::new(),
+        };
+        init.into_iter().flat_map(|n| std::iter::once(n).chain(n.descendants())).any(|d| match d.kind() {
+            "object_creation_expression" => d.field("type").is_some_and(|t| {
+                let name = t.text(src).rsplit('.').next().unwrap_or("");
+                matches!(name, "FileInputStream" | "FileOutputStream" | "FileReader" | "FileWriter" | "RandomAccessFile" | "Socket" | "ServerSocket" | "ZipFile" | "JarFile")
+            }),
+            "method_invocation" => matches!(
+                (d.field("object").map(|o| o.text(src)), d.field("name").map(|n| n.text(src))),
+                (Some("Files"), Some("newInputStream" | "newOutputStream" | "newBufferedReader" | "newBufferedWriter" | "newByteChannel")) | (Some("DriverManager"), Some("getConnection"))
+            ),
+            _ => false,
+        })
     })
 }
 
