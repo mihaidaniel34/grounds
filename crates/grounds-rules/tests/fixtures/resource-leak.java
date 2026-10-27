@@ -193,6 +193,12 @@ class ConnectedGuard implements Closeable {
         try { connection.close(); } catch (java.sql.SQLException e) { throw new IOException(e); }
     }
 }
+class LinesGuard implements Closeable {
+    private final java.util.stream.Stream<String> lines;
+    LinesGuard(Closeable c) throws IOException { lines = Files.lines(Paths.get("guard.txt")); }
+    void use() { }
+    @Override public void close() { lines.close(); }
+}
 interface HolderFactory {
     Holder makeHolder();
 }
@@ -291,6 +297,10 @@ class Handlers {
     }
     void wrapperKeepsConnection(Handle h) throws java.sql.SQLException {
         ConnectedGuard g = new ConnectedGuard(h); // expect
+        g.use();
+    }
+    void wrapperKeepsLines(Handle h) throws IOException {
+        LinesGuard g = new LinesGuard(h); // expect
         g.use();
     }
     void wrapperReadsConfig(Handle h) throws IOException {

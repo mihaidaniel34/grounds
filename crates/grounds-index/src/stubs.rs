@@ -1295,7 +1295,7 @@ fn opens_resource(body: Node, src: &str) -> bool {
             }),
             "method_invocation" => matches!(
                 (d.field("object").map(|o| o.text(src).rsplit('.').next().unwrap_or("")), d.field("name").map(|n| n.text(src))),
-                (Some("Files"), Some("newInputStream" | "newOutputStream" | "newBufferedReader" | "newBufferedWriter" | "newByteChannel")) | (Some("DriverManager"), Some("getConnection"))
+                (Some("Files"), Some("newInputStream" | "newOutputStream" | "newBufferedReader" | "newBufferedWriter" | "newByteChannel" | "lines" | "list" | "walk" | "find" | "newDirectoryStream")) | (Some("DriverManager"), Some("getConnection"))
             ),
             _ => false,
         })
