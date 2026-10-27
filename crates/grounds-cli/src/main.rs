@@ -711,7 +711,8 @@ fn beans(p: &grounds_engine::Project, ty: Option<&str>, style: report::Style) {
     let di = &p.di;
     let root = p.workspace.root.to_string_lossy().to_string();
     let rel = |f: &Option<std::sync::Arc<str>>| f.as_deref().map(|f| f.strip_prefix(&root).unwrap_or(f).trim_start_matches('/').to_string()).unwrap_or_default();
-    let is_test_file = |f: &Option<std::sync::Arc<str>>| f.as_deref().is_some_and(|f| grounds_engine::workspace::classify(std::path::Path::new(f)) == grounds_engine::workspace::SourceKind::Test);
+    // by source set, as the bean-not-found rule resolves
+    let is_test_file = |f: &Option<std::sync::Arc<str>>| f.as_deref().is_some_and(grounds_engine::workspace::is_test_path);
     let describe = |i: usize| {
         let b = &di.beans[i];
         let how = match &b.source {

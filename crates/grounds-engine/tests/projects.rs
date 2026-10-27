@@ -188,3 +188,54 @@ fn build_output_is_judged_inside_the_project() {
     let _ = std::fs::remove_dir_all(dir.parent().unwrap().parent().unwrap());
     assert_eq!(files, vec!["build/generated/sources/annotationProcessor/java/main/g/G.java", "src/main/java/a/A.java", "src/main/java/com/acme/build/B.java"]);
 }
+
+#[test]
+fn main_sources_of_test_only_modules_are_test_code() {
+    let print = "package app;\npublic class Tool {\n    void run() { System.out.println(\"x\"); }\n}\n";
+    let dir = project(
+        "test-modules",
+        &[
+            ("webserver/tests/grpc/src/main/java/app/Tool.java", print),
+            ("webserver/core/src/main/java/app/Tool.java", print),
+            ("webserver/core/src/main/java/app/tests/Tool.java", &print.replace("package app;", "package app.tests;")),
+            ("testing-utils/src/main/java/app/Tool.java", print),
+        ],
+    );
+    let project = Project::load(&dir).unwrap();
+    let test: Vec<_> = project.workspace.files.iter().filter(|f| f.kind == grounds_engine::workspace::SourceKind::Test).map(|f| f.path.strip_prefix(&project.workspace.root).unwrap().to_string_lossy().to_string()).collect();
+    assert_eq!(test, ["webserver/tests/grpc/src/main/java/app/Tool.java"]);
+    let mut found = findings(&dir, &["system-out-println"]);
+    found.sort();
+    assert_eq!(found, ["testing-utils/src/main/java/app/Tool.java:3 system-out-println", "webserver/core/src/main/java/app/Tool.java:3 system-out-println", "webserver/core/src/main/java/app/tests/Tool.java:3 system-out-println"]);
+}
+
+#[test]
+fn renamed_method_hint_names_the_new_method() {
+    let dir = project(
+        "rename-hint",
+        &[
+            ("src/main/java/app/Client.java", "package app;\npublic class Client {\n    public String fetchAll() { return \"\"; }\n    public String fetchByName(String name) { return name; }\n    public void watch(String name) {}\n}\n"),
+            ("src/main/java/app/Caller.java", "package app;\nclass Caller {\n    String m(Client c) { return c.fetch(\"x\"); }\n}\n"),
+        ],
+    );
+    let mut project = Project::load(&dir).unwrap();
+    project.config.rules.enable = vec!["unresolved-method".into()];
+    let (set, options) = build_ruleset(&project);
+    let files: Vec<_> = project.workspace.files.iter().map(|f| f.path.clone()).collect();
+    let found: Vec<_> = analyze_files(&project, &set, &options, &files).into_iter().map(|f| f.message).collect();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(found, ["`Client` has no method `fetch`; did you mean `fetchByName`?"]);
+}
+
+#[test]
+fn inherited_harness_of_test_only_module_asserts() {
+    let dir = project(
+        "test-module-harness",
+        &[
+            ("tests/support/src/main/java/app/Harness.java", "package app;\npublic abstract class Harness {\n    protected void rewriteRun(String spec) { }\n}\n"),
+            ("tests/support/src/test/java/app/RecipeTest.java", "package app;\nimport org.junit.jupiter.api.Test;\nclass RecipeTest extends Harness {\n    @Test\n    void renames() { rewriteRun(\"a\"); }\n}\n"),
+        ],
+    );
+    let found = findings(&dir, &["test-without-assertion"]);
+    assert!(found.is_empty(), "{found:?}");
+}
