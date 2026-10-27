@@ -226,3 +226,16 @@ fn renamed_method_hint_names_the_new_method() {
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(found, ["`Client` has no method `fetch`; did you mean `fetchByName`?"]);
 }
+
+#[test]
+fn inherited_harness_of_test_only_module_asserts() {
+    let dir = project(
+        "test-module-harness",
+        &[
+            ("tests/support/src/main/java/app/Harness.java", "package app;\npublic abstract class Harness {\n    protected void rewriteRun(String spec) { }\n}\n"),
+            ("tests/support/src/test/java/app/RecipeTest.java", "package app;\nimport org.junit.jupiter.api.Test;\nclass RecipeTest extends Harness {\n    @Test\n    void renames() { rewriteRun(\"a\"); }\n}\n"),
+        ],
+    );
+    let found = findings(&dir, &["test-without-assertion"]);
+    assert!(found.is_empty(), "{found:?}");
+}

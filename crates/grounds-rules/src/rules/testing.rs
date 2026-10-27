@@ -186,13 +186,15 @@ fn call_asserts<'t>(c: Node<'t>, test: Node<'t>, cx: &Ctx<'_, 't>, depth: u32, s
     let Some(m) = resolved else {
         return unqualified && unresolved_helper_asserts(c, name, test, cx, depth, seen);
     };
+    let flagged = m.method.flags.has(Flags::ASSERTS) || m.method.flags.has(Flags::DELEGATES);
     match cx.fm.index.source_file_of(&m.owner) {
         // declared here: follow the body, which may call helpers of other files
         Some(f) if *f == cx.fm.path => m.method.flags.has(Flags::ASSERTS) || depth > 0 && method_decl(cx, &m.method).is_some_and(|d| decl_asserts(d, test, cx, depth - 1, seen)),
         // a test helper of another file, checked when it was indexed; one
         // that delegates to a method inherited from yet another file may
-        // assert there
-        Some(f) if grounds_index::sources::is_test_code(f) => m.method.flags.has(Flags::ASSERTS) || m.method.flags.has(Flags::DELEGATES),
+        // assert there; an unflagged one of a test-only module's `src/main`
+        // is judged like library code below
+        Some(f) if grounds_index::sources::is_test_path(f) || flagged && grounds_index::sources::is_test_code(f) => flagged,
         // library (or main) code: an inherited void harness method asserts
         // (`rewriteRun(...)` from OpenRewrite's RewriteTest); `int compute()`
         // merely computes
