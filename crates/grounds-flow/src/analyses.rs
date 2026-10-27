@@ -900,8 +900,8 @@ impl<'a, 't> ResourceAnalysis<'a, 't> {
         t.class_name().is_some_and(|n| self.fm.is_subclass(n, "java.lang.AutoCloseable").is_yes())
     }
 
-    /// `new ResponseWrapper(response)`: a closeable whose constructor takes a
-    /// closeable or a servlet request/response, built only from parameters,
+    /// `new ResponseWrapper(response)`: a closeable whose constructor takes
+    /// only closeables or servlet requests/responses, built only from parameters,
     /// fields and values obtained from them. Closing it would close the
     /// caller's resource, so this method does not own it.
     fn wraps_unowned(&self, v: Node<'t>) -> bool {
@@ -911,7 +911,8 @@ impl<'a, 't> ResourceAnalysis<'a, 't> {
         }
         let Some(ctor) = self.fm.resolve_call(v) else { return false };
         let raw = self.fm.index.raw_class(&ctor.owner).and_then(|(_, c)| c.methods.iter().find(|m| Some(m.range) == ctor.method.range));
-        let wraps = ctor.method.params.iter().enumerate().any(|(k, p)| {
+        // every parameter borrows: a `File` or a path may open a resource of its own
+        let wraps = !ctor.method.params.is_empty() && ctor.method.params.iter().enumerate().all(|(k, p)| {
             self.is_closeable_type(&p.ty) || is_servlet_message(self.fm, &p.ty) || (p.ty.is_unknown() && raw.and_then(|r| r.params.get(k)).is_some_and(|r| is_servlet_name(&r.ty)))
         });
         if !wraps {
@@ -927,7 +928,10 @@ impl<'a, 't> ResourceAnalysis<'a, 't> {
     fn from_unowned(&self, e: Node<'t>, depth: u32) -> bool {
         let e = e.unparen();
         match e.kind() {
-            "field_access" => true,
+            "field_access" => e.field("object").is_some_and(|o| {
+                let o = o.unparen();
+                matches!(o.kind(), "this" | "super") || self.from_unowned(o, depth)
+            }),
             "cast_expression" => e.field("value").is_some_and(|x| self.from_unowned(x, depth)),
             "method_invocation" => {
                 depth > 0
@@ -945,7 +949,7 @@ impl<'a, 't> ResourceAnalysis<'a, 't> {
                 };
                 let d = &self.fm.binder.decls[i];
                 match d.kind {
-                    LocalKind::Param | LocalKind::LambdaParam => true,
+                    LocalKind::Param | LocalKind::LambdaParam => is_effectively_final(self.fm, i),
                     LocalKind::Local => depth > 0 && is_effectively_final(self.fm, i) && d.decl_node.field("value").is_some_and(|x| self.from_unowned(x, depth - 1)),
                     _ => false,
                 }

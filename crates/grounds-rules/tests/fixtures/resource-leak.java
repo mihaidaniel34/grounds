@@ -161,6 +161,14 @@ class Guard implements Closeable {
     void use() { }
     @Override public void close() { }
 }
+class Session implements Closeable {
+    Session(Closeable parent, File log) { }
+    void use() { }
+    @Override public void close() { }
+}
+class Holder {
+    InputStream stream;
+}
 interface NativeRequest {
     <T> T getNativeResponse(Class<T> type);
 }
@@ -198,6 +206,19 @@ class Handlers {
     }
     void opensFromParam(java.net.URL url) throws IOException {
         Guard g = new Guard(url.openStream()); // expect
+        g.use();
+    }
+    void opensOwnFile(Closeable parent, File log) {
+        Session s = new Session(parent, log); // expect
+        s.use();
+    }
+    void freshHolder() {
+        Guard g = new Guard(new Holder().stream); // expect
+        g.use();
+    }
+    void reassignedParam(InputStream in, File f) throws IOException {
+        in = new FileInputStream(f);
+        Guard g = new Guard(in); // expect
         g.use();
     }
     void ownsInner() {
