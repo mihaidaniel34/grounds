@@ -62,7 +62,10 @@ pub fn in_test_module(path: &Path) -> bool {
         path.to_path_buf()
     };
     let comps: Vec<&str> = rel.components().filter_map(|c| c.as_os_str().to_str()).collect();
-    let Some(src) = comps.iter().rposition(|c| *c == "src") else { return false };
+    // the module's `src/<set>/java`, not a package directory named `src`
+    const LANGS: &[&str] = &["java", "kotlin", "groovy", "scala"];
+    let root = (0..comps.len()).rev().find(|&i| comps[i] == "src" && comps.get(i + 2).is_some_and(|l| LANGS.contains(l)));
+    let Some(src) = root.or_else(|| comps.iter().position(|c| *c == "src")) else { return false };
     comps[..src].iter().any(|c| DIRS.contains(c))
 }
 
@@ -89,6 +92,8 @@ mod tests {
         // production modules: the package or a module name merely containing `test`
         assert!(!test("core/src/main/java/com/x/test/C.java"));
         assert!(!test("core/src/main/java/com/x/tests/C.java"));
+        assert!(!test("core/src/main/java/com/acme/tests/src/C.java"));
+        assert!(!test("core/src/main/java/com/acme/tests/src/main/C.java"));
         assert!(!test("testing-utils/src/main/java/C.java"));
         assert!(!test("test-support/src/main/java/C.java"));
         assert!(!test("contest/src/main/java/C.java"));
