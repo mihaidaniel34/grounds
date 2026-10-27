@@ -1277,7 +1277,8 @@ fn releases_nothing(body: Node, src: &str) -> bool {
 }
 
 /// Constructors, initializer blocks or field initializers of a class body
-/// that open a file, socket or JDBC connection.
+/// that open a file, socket or JDBC connection (not in a try-with-resources
+/// header, which closes it before the constructor returns).
 fn opens_resource(body: Node, src: &str) -> bool {
     body.kids().into_iter().any(|m| {
         let init: Vec<Node> = match m.kind() {
@@ -1286,7 +1287,7 @@ fn opens_resource(body: Node, src: &str) -> bool {
             "field_declaration" => m.kids_of_kind("variable_declarator").into_iter().filter_map(|d| d.field("value")).collect(),
             _ => Vec::new(),
         };
-        init.into_iter().flat_map(|n| std::iter::once(n).chain(n.descendants())).any(|d| match d.kind() {
+        init.into_iter().flat_map(|n| std::iter::once(n).chain(n.descendants())).filter(|d| !d.ancestors().any(|a| a.kind() == "resource_specification")).any(|d| match d.kind() {
             "object_creation_expression" => d.field("type").is_some_and(|t| {
                 let name = t.text(src).rsplit('.').next().unwrap_or("");
                 matches!(name, "FileInputStream" | "FileOutputStream" | "FileReader" | "FileWriter" | "RandomAccessFile" | "Socket" | "ServerSocket" | "ZipFile" | "JarFile")

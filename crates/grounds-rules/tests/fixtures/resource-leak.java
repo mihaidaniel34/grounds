@@ -169,6 +169,14 @@ class Session implements Closeable {
 class Holder {
     InputStream stream;
 }
+class ConfiguredGuard implements Closeable {
+    private final int size;
+    ConfiguredGuard(Closeable c) throws IOException {
+        try (InputStream in = new FileInputStream("guard.properties")) { size = in.read(); }
+    }
+    void use() { }
+    @Override public void close() { }
+}
 interface HolderFactory {
     Holder makeHolder();
 }
@@ -259,6 +267,10 @@ class Handlers {
     }
     void wrapperOpensInField(Handle h) throws IOException {
         LoggedGuard g = new LoggedGuard(h); // expect
+        g.use();
+    }
+    void wrapperReadsConfig(Handle h) throws IOException {
+        ConfiguredGuard g = new ConfiguredGuard(h);
         g.use();
     }
     void ownsInner() {
