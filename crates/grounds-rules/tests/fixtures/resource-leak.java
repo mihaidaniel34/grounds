@@ -183,6 +183,16 @@ class SpooledGuard implements Closeable {
     void use() { }
     @Override public void close() throws IOException { spool.close(); }
 }
+class ConnectedGuard implements Closeable {
+    private java.sql.Connection connection;
+    ConnectedGuard(Closeable c) throws java.sql.SQLException {
+        try (java.sql.Statement s = (this.connection = java.sql.DriverManager.getConnection("jdbc:test")).createStatement()) { s.execute("select 1"); }
+    }
+    void use() { }
+    @Override public void close() throws IOException {
+        try { connection.close(); } catch (java.sql.SQLException e) { throw new IOException(e); }
+    }
+}
 interface HolderFactory {
     Holder makeHolder();
 }
@@ -277,6 +287,10 @@ class Handlers {
     }
     void wrapperOpensQualified(Handle h) throws IOException {
         SpooledGuard g = new SpooledGuard(h); // expect
+        g.use();
+    }
+    void wrapperKeepsConnection(Handle h) throws java.sql.SQLException {
+        ConnectedGuard g = new ConnectedGuard(h); // expect
         g.use();
     }
     void wrapperReadsConfig(Handle h) throws IOException {
