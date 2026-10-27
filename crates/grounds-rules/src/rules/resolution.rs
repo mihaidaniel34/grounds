@@ -48,17 +48,39 @@ fn signatures(ms: &[MethodRef]) -> String {
     v.join(", ")
 }
 
-fn similar_names(c: &ClassInfo, lk: &dyn ClassLookup, name: &str) -> Option<String> {
+/// A method of `c` the caller may have meant by `name`, called with `nargs`
+/// arguments (`None` for a method reference).
+fn similar_names(c: &ClassInfo, lk: &dyn ClassLookup, name: &str, nargs: Option<usize>) -> Option<String> {
     let all = lk.all_methods(&c.this_type());
+    closest_name(name, all.iter().filter(|m| &*m.method.name != "<init>").map(|m| (&*m.method.name, nargs.is_none_or(|k| m.method.accepts_arity(k))))).map(str::to_string)
+}
+
+/// The best candidate `(name, takes the call's arguments)` for `name`: one
+/// that starts with it (`fetch` -> `fetchByName`), then one containing it or
+/// that it starts with, then one within a small edit distance; within each,
+/// one taking the call's arguments, then the closest.
+fn closest_name<'a>(name: &str, cands: impl Iterator<Item = (&'a str, bool)>) -> Option<&'a str> {
     let lname = name.to_ascii_lowercase();
-    let best = all
-        .iter()
-        .map(|m| &*m.method.name)
-        .filter(|n| *n != "<init>")
-        .map(|n| (edit_distance(&lname, &n.to_ascii_lowercase()), n))
-        .filter(|(d, n)| *d <= 2.max(name.len() / 4) && *n != name)
-        .min_by_key(|(d, _)| *d)?;
-    Some(best.1.to_string())
+    cands
+        .filter(|(n, _)| *n != name)
+        .filter_map(|(n, fits)| {
+            let ln = n.to_ascii_lowercase();
+            let d = edit_distance(&lname, &ln);
+            // `get` or `is` is a prefix of half the class
+            let long = lname.len().min(ln.len()) >= 4;
+            let tier = if long && ln.starts_with(&lname) {
+                0
+            } else if long && (ln.contains(&lname) || lname.starts_with(&ln)) {
+                1
+            } else if d <= 2.max(name.len() / 4) {
+                2
+            } else {
+                return None;
+            };
+            Some(((tier, !fits, d, n), n))
+        })
+        .min_by(|a, b| a.0.cmp(&b.0))
+        .map(|(_, n)| n)
 }
 
 fn edit_distance(a: &str, b: &str) -> usize {
@@ -167,14 +189,14 @@ impl Rule for UnresolvedMethod {
                     cx.report(n.field("name").unwrap_or(n), format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)));
                     return;
                 }
-                let hint = similar_names(&ci, cx.fm, name).map(|s| format!("; did you mean `{s}`?")).unwrap_or_default();
+                let hint = similar_names(&ci, cx.fm, name, Some(nargs)).map(|s| format!("; did you mean `{s}`?")).unwrap_or_default();
                 cx.report(n.field("name").unwrap_or(n), format!("Method `{name}` is not defined in `{}` or its enclosing classes{hint}", ci.simple_name()));
                 return;
             }
         };
         let ms = cx.fm.methods_named(&cls.this_type(), name);
         if ms.is_empty() {
-            let hint = similar_names(&cls, cx.fm, name).map(|s| format!("; did you mean `{s}`?")).unwrap_or_default();
+            let hint = similar_names(&cls, cx.fm, name, Some(nargs)).map(|s| format!("; did you mean `{s}`?")).unwrap_or_default();
             cx.report(n.field("name").unwrap_or(n), format!("`{}` has no method `{name}`{hint}", cls.simple_name()));
             return;
         }
@@ -242,7 +264,7 @@ fn check_method_reference<'t>(n: Node<'t>, cx: &mut Ctx<'_, 't>) {
     let mname = cx.text(name);
     let ms = cx.fm.methods_named(&cls.this_type(), mname);
     if ms.is_empty() {
-        let hint = similar_names(&cls, cx.fm, mname).map(|s| format!("; did you mean `{s}`?")).unwrap_or_default();
+        let hint = similar_names(&cls, cx.fm, mname, None).map(|s| format!("; did you mean `{s}`?")).unwrap_or_default();
         cx.report(name, format!("`{}` has no method `{mname}`{hint}", cls.simple_name()));
     } else if let Some(m) = private_elsewhere(cx, n, &cls, mname, &ms, None) {
         cx.report(name, format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)));
@@ -736,4 +758,32 @@ fn implements<'t>(cx: &Ctx<'_, 't>, cls: &ClassInfo, name: &str, arity: usize) -
     }
     // default methods anywhere in the interface closure
     cx.fm.all_supertypes(&cls.this_type()).iter().filter_map(|t| t.class_name()).filter_map(|n| cx.fm.class(n)).any(|c| c.is_interface() && concrete(&c))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::closest_name;
+
+    fn pick<'a>(name: &str, cands: &[(&'a str, bool)]) -> Option<&'a str> {
+        closest_name(name, cands.iter().copied())
+    }
+
+    #[test]
+    fn renamed_method_suggestions() {
+        // a rename that extends the name beats a short edit distance
+        assert_eq!(pick("fetch", &[("watch", true), ("fetchByName", true), ("close", true)]), Some("fetchByName"));
+        assert_eq!(pick("fetchByName", &[("watch", true), ("fetch", true)]), Some("fetch"));
+        assert_eq!(pick("name", &[("getName", true), ("same", true)]), Some("getName"));
+        // the same number of arguments breaks a tie
+        assert_eq!(pick("fetch", &[("fetchAll", false), ("fetchOne", true)]), Some("fetchOne"));
+        assert_eq!(pick("fetch", &[("fetchOne", false), ("fetchAll", true)]), Some("fetchAll"));
+        assert_eq!(pick("lod", &[("lad", false), ("log", true)]), Some("log"));
+        // the edit-distance fallback, case-insensitive
+        assert_eq!(pick("findByID", &[("findById", true), ("save", true)]), Some("findById"));
+        assert_eq!(pick("sav", &[("save", true)]), Some("save"));
+        // short names are no prefix match
+        assert_eq!(pick("is", &[("isEmptyCollection", true)]), None);
+        assert_eq!(pick("getValueOfField", &[("get", true)]), None);
+        assert_eq!(pick("fetch", &[("unrelated", true), ("fetch", true)]), None);
+    }
 }

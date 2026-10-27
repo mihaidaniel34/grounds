@@ -176,6 +176,7 @@ impl Project {
         let t = Instant::now();
         let source_sets = SourceSets::load(root);
         crate::workspace::set_extra_test_sets(config.test_source_sets.iter().cloned().chain(source_sets.test_sets()).collect());
+        crate::workspace::register_project_root(&root.canonicalize().unwrap_or_else(|_| root.to_path_buf()));
         let workspace = Workspace::discover(root, &config.exclude);
         stats.t_discover = t.elapsed();
         stats.files = workspace.files.len();

@@ -704,7 +704,7 @@ impl Session {
                     continue;
                 }
                 seen_files.insert(pb.clone());
-                if classify(&pb) == SourceKind::Test {
+                if crate::workspace::is_test_path(&pb.to_string_lossy()) {
                     for c in stub.classes.iter().filter(|c| c.outer.is_none()) {
                         tests.push(self.impacted_test(&pb, c.name.to_string()));
                     }
@@ -721,7 +721,7 @@ impl Session {
         }
         // tests among the changed files themselves
         for f in &targets {
-            if classify(f) == SourceKind::Test {
+            if crate::workspace::is_test_path(&f.to_string_lossy()) {
                 if let Some(stub) = self.project.index.file(&path_key(f)) {
                     for c in stub.classes.iter().filter(|c| c.outer.is_none()) {
                         tests.push(self.impacted_test(f, c.name.to_string()));

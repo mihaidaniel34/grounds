@@ -373,6 +373,8 @@ filter, which would drop the breaks in unchanged files:
 java_release = 17                     # which JDK API version to check against (default: from the build, else 21)
 exclude = ["**/generated/**"]
 test_source_sets = ["scenarios"]      # besides test/integration/e2e/functional/...
+                                      # (src/main under a tests/, test/, it/, integration-tests/
+                                      # or testing/ module directory is test code too)
 
 [rules]
 disable = ["field-injection", "style"]   # rule ids or categories
