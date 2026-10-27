@@ -930,7 +930,7 @@ impl<'a, 't> ResourceAnalysis<'a, 't> {
         match e.kind() {
             "field_access" => e.field("object").is_some_and(|o| {
                 let o = o.unparen();
-                matches!(o.kind(), "this" | "super") || self.from_unowned(o, depth)
+                matches!(o.kind(), "this" | "super") || self.names_type(o) || self.from_unowned(o, depth)
             }),
             "cast_expression" => e.field("value").is_some_and(|x| self.from_unowned(x, depth)),
             "method_invocation" => {
@@ -956,6 +956,11 @@ impl<'a, 't> ResourceAnalysis<'a, 't> {
             }
             _ => false,
         }
+    }
+
+    /// `Shared` in `Shared.stream` or `Outer` in `Outer.this.stream`.
+    fn names_type(&self, o: Node<'t>) -> bool {
+        o.kind() == "identifier" && self.fm.binder.decl_index_of_ref(o).is_none() && self.fm.index.resolve_simple_type(self.fm.text(o), &self.fm.scope_at(o)).is_some()
     }
 
     fn arg_is_stream_like(&self, a: Node<'t>) -> bool {

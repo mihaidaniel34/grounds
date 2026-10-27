@@ -169,6 +169,9 @@ class Session implements Closeable {
 class Holder {
     InputStream stream;
 }
+class Shared {
+    static Handle handle;
+}
 interface NativeRequest {
     <T> T getNativeResponse(Class<T> type);
 }
@@ -197,6 +200,16 @@ class Handlers {
         out.flush();
         Guard g = new Guard(shared);
         g.use();
+    }
+    void staticField() {
+        Guard g = new Guard(Shared.handle);
+        g.use();
+    }
+    class Inner {
+        void outerField() {
+            Guard g = new Guard(Handlers.this.shared);
+            g.use();
+        }
     }
     void closeableParam(Handle h, InputStream in) {
         Guard g = new Guard(h);
