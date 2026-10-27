@@ -1062,6 +1062,9 @@ impl<'s> Extractor<'s> {
                     if throws_on_false(m, src) {
                         ff.set(Flags::THROWS_ON_FALSE);
                     }
+                    if n.text(src) == "close" && params.is_empty() && m.field("body").is_some_and(|b| releases_nothing(b, src)) {
+                        ff.set(Flags::RELEASES_NOTHING);
+                    }
                     if let Some(b) = m.field("body") {
                         if asserts_directly(b, src) {
                             ff.set(Flags::ASSERTS);
@@ -1248,6 +1251,26 @@ fn always_throws(body: Node) -> bool {
         })
     }
     !returns(body)
+}
+
+/// A `close()` body that only sets fields to constants (`this.closed =
+/// true;`) or calls `super.close()`.
+fn releases_nothing(body: Node, src: &str) -> bool {
+    body.kids().into_iter().all(|st| {
+        if st.kind() != "expression_statement" {
+            return false;
+        }
+        let Some(e) = st.first_kid() else { return false };
+        match e.kind() {
+            "assignment_expression" => {
+                e.field("operator").is_some_and(|o| o.kind() == "=")
+                    && e.field("left").is_some_and(|l| l.kind() == "identifier" || (l.kind() == "field_access" && l.field("object").is_some_and(|o| o.kind() == "this")))
+                    && e.field("right").is_some_and(|r| matches!(r.kind(), "true" | "false" | "null_literal" | "decimal_integer_literal"))
+            }
+            "method_invocation" => e.text(src).split_whitespace().collect::<String>() == "super.close()",
+            _ => false,
+        }
+    })
 }
 
 /// Names of calls that assert in test code: JUnit/TestNG/AssertJ `assert*`,

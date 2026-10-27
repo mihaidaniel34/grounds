@@ -431,6 +431,10 @@ impl Flags {
     /// not declare (inherited from another file), directly or through a helper
     /// of its class: it may assert there.
     pub const DELEGATES: u32 = 1 << 27;
+    /// A source `close()` that only sets its object's own fields to
+    /// constants or calls `super.close()` (`closed = true;`): it releases
+    /// nothing itself.
+    pub const RELEASES_NOTHING: u32 = 1 << 28;
 
     pub fn has(self, f: u32) -> bool {
         self.0 & f != 0
