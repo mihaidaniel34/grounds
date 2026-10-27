@@ -114,6 +114,15 @@ impl Rule for CatchThrowable {
                     if propagated {
                         return;
                     }
+                    // stored for later (`last = t;`, `this.error = t;`, `Throwable e = t;`):
+                    // kept to rethrow or report after the catch
+                    let mut stores = Vec::new();
+                    find_kind(b, "assignment_expression", &mut stores);
+                    find_kind(b, "variable_declarator", &mut stores);
+                    let plain = |s: &Node| s.field("operator").is_none_or(|o| o.text(cx.src) == "="); // not `msg += t`
+                    if stores.iter().any(|s| plain(s) && s.field(if s.kind() == "assignment_expression" { "right" } else { "value" }).map(|r| r.unparen()).is_some_and(|r| r.kind() == "identifier" && r.text(cx.src) == v)) {
+                        return;
+                    }
                 }
                 if enclosing_method_decl(n).is_some_and(|m| is_main_method(m, cx.src) || method_name(m, cx.src) == "run") {
                     return;

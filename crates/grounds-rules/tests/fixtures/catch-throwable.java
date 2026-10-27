@@ -29,6 +29,35 @@ class A {
         try { work(); } catch (Throwable e) { submitForReprocessing("msg", e); }
         return null;
     }
+    // stored for later: rethrown or reported after the catch
+    private Throwable error;
+    void retry() throws Exception {
+        Throwable last = null;
+        for (int i = 0; i < 3; i++) {
+            try { work(); return; } catch (Throwable t) { last = t; }
+        }
+        throw new Exception("All repeated calls failed.", last);
+    }
+    void stores(Failure f, Handler h) {
+        try { work(); } catch (Throwable t) { error = t; }
+        try { work(); } catch (Throwable throwable) { this.error = throwable; }
+        try { work(); } catch (Throwable t) { f.failure = t; }
+        Throwable invokeException = null;
+        try { work(); } catch (Throwable e) { invokeException = e; }
+        h.handle(invokeException);
+        try { work(); } catch (Throwable e) { Throwable stored = e; h.handle(stored); }
+        try { work(); } catch (Error e) { log.warn("x", e); error = e; }
+        try { work(); } catch (Throwable t) { error = (t); }
+        try { work(); } catch (Throwable t) { Throwable saved = (t); h.handle(saved); }
+        // log-and-continue, or keeping only something derived from it
+        String msg = null;
+        int count = 0;
+        try { work(); } catch (Throwable t) { log.warn("x", t); } // expect
+        try { work(); } catch (Throwable t) { count++; } // expect
+        try { work(); } catch (Throwable t) { msg = t.getMessage(); } // expect
+        try { work(); } catch (Throwable t) { msg += t; } // expect
+        try { work(); } catch (Throwable t) { String m = t.toString(); } // expect
+    }
     public static void main(String[] args) {
         try { } catch (Throwable t) { }
     }
@@ -40,3 +69,5 @@ class A {
 class Tracer { static void logError(String m, Throwable t) {} }
 class Holders { static final Sink MAIN = null; }
 class Flow { static Flow error(Throwable t) { return new Flow(); } }
+class Failure { Throwable failure; }
+interface Handler { void handle(Throwable t); }

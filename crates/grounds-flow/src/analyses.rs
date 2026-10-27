@@ -1053,7 +1053,34 @@ pub struct OptionalPresence<'a, 't> {
     pub fm: &'a FileModel<'t>,
 }
 
-pub type PresentFact = FxHashSet<usize>;
+/// Optional locals known present, plus what a boolean local's value says
+/// about them: after `if (expected && o.isEmpty()) throw ..;` the paths
+/// where `expected` is false and those where `o` is present merge into
+/// "`expected` implies `o` present".
+#[derive(Clone, PartialEq, Default, Debug)]
+pub struct PresentFact {
+    present: FxHashSet<usize>,
+    /// boolean locals with a known value on every path here
+    flags: FxHashMap<usize, bool>,
+    /// (flag, value, optional): the optional is present when the flag has that value
+    implied: FxHashSet<(usize, bool, usize)>,
+}
+
+impl PresentFact {
+    pub fn contains(&self, i: &usize) -> bool {
+        self.present.contains(i)
+    }
+
+    fn holds(&self, &(flag, value, o): &(usize, bool, usize)) -> bool {
+        self.present.contains(&o) || self.flags.get(&flag) == Some(&!value) || self.implied.contains(&(flag, value, o))
+    }
+
+    fn kill(&mut self, i: usize) {
+        self.present.remove(&i);
+        self.flags.remove(&i);
+        self.implied.retain(|&(f, _, o)| f != i && o != i);
+    }
+}
 
 impl<'a, 't> OptionalPresence<'a, 't> {
     pub fn optional_local(&self, n: Option<Node<'t>>) -> Option<usize> {
@@ -1088,12 +1115,16 @@ impl<'a, 't> OptionalPresence<'a, 't> {
             "binary_expression" if (op == Some("&&") && truth) || (op == Some("||") && !truth) => {
                 [e.field("left"), e.field("right")].into_iter().flatten().flat_map(|s| self.present_when_in(s, truth, follow_alias)).collect()
             }
-            "method_invocation" if self.fm.args_of(e).is_empty() => {
-                match (self.fm.call_name(e), self.optional_local(e.field("object"))) {
-                    (Some("isPresent"), Some(i)) if truth => vec![i],
-                    (Some("isEmpty"), Some(i)) if !truth => vec![i],
-                    _ => Vec::new(),
-                }
+            "method_invocation" => {
+                let args = self.fm.args_of(e);
+                let proves = match (self.fm.call_name(e), &args[..]) {
+                    (Some("isPresent"), []) => truth,
+                    (Some("isEmpty"), []) => !truth,
+                    // `o.map(f).orElse(false)` is true only when `o` holds a value
+                    (Some("orElse"), [a]) => truth && a.unparen().kind() == "false",
+                    _ => false,
+                };
+                if proves { self.chain_root(e.field("object")).into_iter().collect() } else { Vec::new() }
             }
             // no alias chains; the Optional must still hold the tested value
             "identifier" if follow_alias => {
@@ -1109,6 +1140,30 @@ impl<'a, 't> OptionalPresence<'a, 't> {
             }
             _ => Vec::new(),
         }
+    }
+
+    /// The Optional local a `map`/`filter`/`flatMap` chain starts from: each
+    /// step is empty when its receiver is, so `o.filter(p).isPresent()` proves `o`.
+    fn chain_root(&self, n: Option<Node<'t>>) -> Option<usize> {
+        let n = n?.unparen();
+        if n.kind() == "method_invocation" && matches!(self.fm.call_name(n), Some("map" | "filter" | "flatMap")) && self.fm.args_of(n).len() == 1 {
+            let root = self.chain_root(n.field("object"))?;
+            // `o.map((o = other)::equals)` tests the old value, not what `o` holds after
+            let writes = self.fm.args_of(n)[0].descendants().any(|d| local_def(self.fm, d).is_some_and(|(i, _)| i == root));
+            return (!writes).then_some(root);
+        }
+        self.optional_local(Some(n))
+    }
+
+    /// The boolean local a condition is (`flag`), as the CFG splits `&&`,
+    /// `||` and `!` into separate edges.
+    fn flag_local(&self, c: Node<'t>) -> Option<usize> {
+        let c = c.unparen();
+        if c.kind() != "identifier" {
+            return None;
+        }
+        let i = self.fm.binder.decl_index_of_ref(c)?;
+        matches!(self.fm.binder.decls[i].kind, LocalKind::Local | LocalKind::Param).then_some(i)
     }
 
     /// The boolean a call requires to return, by name: Guava
@@ -1150,17 +1205,31 @@ impl<'a, 't> OptionalPresence<'a, 't> {
 impl<'a, 't> Analysis<'t> for OptionalPresence<'a, 't> {
     type Fact = PresentFact;
     fn bottom(&self) -> PresentFact {
-        FxHashSet::default()
+        PresentFact::default()
     }
     fn boundary(&self) -> PresentFact {
-        FxHashSet::default()
+        PresentFact::default()
     }
     fn join(&self, a: &PresentFact, b: &PresentFact) -> PresentFact {
-        a.intersection(b).copied().collect()
+        let present: FxHashSet<usize> = a.present.intersection(&b.present).copied().collect();
+        let flags = a.flags.iter().filter(|(k, v)| b.flags.get(k) == Some(v)).map(|(k, v)| (*k, *v)).collect();
+        // an implication holds on each side: kept, or newly formed where one
+        // side knows the flag and the other the optional (`!flag || present`)
+        let formed = |x: &PresentFact, y: &PresentFact| -> Vec<(usize, bool, usize)> {
+            x.flags.iter().flat_map(|(&f, &v)| y.present.iter().map(move |&o| (f, !v, o))).collect()
+        };
+        let implied = a.implied.iter().chain(&b.implied).copied().chain(formed(a, b)).chain(formed(b, a))
+            .filter(|t| !present.contains(&t.2) && a.holds(t) && b.holds(t))
+            .collect();
+        PresentFact { present, flags, implied }
     }
-    fn transfer(&self, e: Node<'t>, f: &mut PresentFact) {
-        if let Some((i, _)) = local_def(self.fm, e) {
-            f.remove(&i);
+    fn transfer(&self, e: Node<'t>, fact: &mut PresentFact) {
+        let def = local_def(self.fm, e);
+        if let Some((i, _)) = def {
+            fact.kill(i);
+        }
+        let f = &mut fact.present;
+        if let Some((i, _)) = def {
             // Optional.of(...) is always present
             let v = if e.kind() == "variable_declarator" { e.field("value") } else { e.field("right") };
             if let Some(v) = v {
@@ -1199,8 +1268,17 @@ impl<'a, 't> Analysis<'t> for OptionalPresence<'a, 't> {
             EdgeKind::False(c) => (*c, false),
             _ => return Some(fact.clone()),
         };
+        let flag = self.flag_local(c);
+        // the flag's value is known on every path here: the other edge is never taken
+        if flag.is_some_and(|g| fact.flags.get(&g) == Some(&!truth)) {
+            return None;
+        }
         let mut f = fact.clone();
-        f.extend(self.present_when(c, truth));
+        f.present.extend(self.present_when(c, truth));
+        if let Some(flag) = flag {
+            f.flags.insert(flag, truth);
+            f.present.extend(fact.implied.iter().filter(|&&(g, v, _)| g == flag && v == truth).map(|t| t.2));
+        }
         Some(f)
     }
 }

@@ -90,3 +90,73 @@ class OptionalHoles {
         r.run();
     }
 }
+class OptionalDerivedChecks {
+    String mapOrElseFalse(Optional<String> observed, String desired) {
+        if (observed.map(desired::equals).orElse(false)) {
+            return observed.get();
+        }
+        return "";
+    }
+    String filterPresent(Optional<String> o) {
+        if (o.filter(s -> !s.isEmpty()).isPresent()) return o.get();
+        if (!o.map(String::trim).isEmpty()) return o.get();
+        boolean usable = o.map(String::isEmpty).orElse(false);
+        return usable ? o.get() : "";
+    }
+    String orElseTrue(Optional<String> o) {
+        if (o.map(String::isEmpty).orElse(true)) {
+            return o.get(); // expect
+        }
+        return "";
+    }
+    String orElseFalseNegated(Optional<String> o) {
+        if (!o.map(String::isEmpty).orElse(false)) {
+            return o.get(); // expect
+        }
+        return "";
+    }
+    String reassignedInChain(Optional<String> o) {
+        if (o.map((o = Optional.<String>empty())::equals).isPresent()) return o.get(); // expect
+        return "";
+    }
+    String mapOtherOptional(Optional<String> o, Optional<String> p) {
+        if (p.map(String::isEmpty).orElse(false)) return o.get(); // expect
+        return "";
+    }
+}
+class OptionalCorrelatedFlag {
+    String expected(boolean expected, Optional<String> o) {
+        if (expected && o.isEmpty()) {
+            throw new IllegalStateException("missing");
+        }
+        if (expected && !o.get().isEmpty()) return o.get();
+        return "";
+    }
+    String negatedFlag(boolean lenient, Optional<String> o) {
+        if (!lenient && !o.isPresent()) return "";
+        if (!lenient) return o.get();
+        return "";
+    }
+    String flagWrongValue(boolean expected, Optional<String> o) {
+        if (expected && o.isEmpty()) throw new IllegalStateException();
+        if (!expected) return o.get(); // expect
+        return "";
+    }
+    String flagReassigned(boolean expected, Optional<String> o) {
+        if (expected && o.isEmpty()) throw new IllegalStateException();
+        expected = o.hashCode() > 0;
+        if (expected) return o.get(); // expect
+        return "";
+    }
+    String optionalReassigned(boolean expected, Optional<String> o, Optional<String> other) {
+        if (expected && o.isEmpty()) throw new IllegalStateException();
+        o = other;
+        if (expected) return o.get(); // expect
+        return "";
+    }
+    String noExit(boolean expected, Optional<String> o) {
+        if (expected && o.isEmpty()) System.out.println("missing");
+        if (expected) return o.get(); // expect
+        return "";
+    }
+}
