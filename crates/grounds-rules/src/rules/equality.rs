@@ -612,7 +612,7 @@ impl Rule for EqualsWithoutHashCode {
                     let st = b.kids();
                     st.len() == 1
                         && st[0].kind() == "return_statement"
-                        && st[0].first_kid().map(|x| x.unparen()).is_some_and(|x| x.kind() == "binary_expression" && x.child_by_field_name("operator").is_some_and(|o| o.kind() == "==") && {
+                        && st[0].first_kid().map(|x| x.unparen()).is_some_and(|x| x.kind() == "binary_expression" && x.field("operator").is_some_and(|o| o.kind() == "==") && {
                                 let (l, r) = (x.field("left").map(|k| k.unparen()), x.field("right").map(|k| k.unparen()));
                                 let is_this = |k: Option<Node<'t>>| k.is_some_and(|k| k.kind() == "this");
                                 let is_param = |k: Option<Node<'t>>| k.is_some_and(|k| Some(cx.text(k)) == param);
@@ -1018,7 +1018,7 @@ fn identity_fast_path(n: Node<'_>, l: Node<'_>, r: Node<'_>, src: &str) -> bool 
     // climb through parentheses and && / || to the whole condition
     let mut cond = n;
     while let Some(p) = cond.parent() {
-        let logical = p.kind() == "binary_expression" && matches!(p.child_by_field_name("operator").map(|o| o.kind()), Some("&&" | "||"));
+        let logical = p.kind() == "binary_expression" && matches!(p.field("operator").map(|o| o.kind()), Some("&&" | "||"));
         if p.kind() == "parenthesized_expression" && p.parent().is_some_and(|g| g.kind() != "if_statement") || logical {
             cond = p;
         } else {

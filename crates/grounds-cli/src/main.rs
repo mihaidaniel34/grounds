@@ -543,12 +543,12 @@ fn type_stats(root: &std::path::Path, show: bool) -> anyhow::Result<()> {
                         resolved += 1;
                     } else if show && unresolved.len() < 3 {
                         // only report when the receiver is known
-                        let recv_known = match n.child_by_field_name("object") {
+                        let recv_known = match n.field("object") {
                             None => true,
                             Some(o) => fm.type_of(o).is_known() || fm.is_type_name(o),
                         };
                         if recv_known {
-                            let rt = n.child_by_field_name("object").map(|o| fm.type_of(o).to_string()).unwrap_or_default();
+                            let rt = n.field("object").map(|o| fm.type_of(o).to_string()).unwrap_or_default();
                             let args: Vec<String> = fm.args_of(n).iter().map(|a| fm.type_of(*a).to_string()).collect();
                             unresolved.push(format!("{}:{} recv={} args={:?}: {}", f.path.file_name().unwrap().to_string_lossy(), n.start_position().row + 1, rt, args, fm.text(n).lines().next().unwrap_or("")));
                         }
@@ -609,8 +609,8 @@ fn unresolved_causes(root: &std::path::Path) -> anyhow::Result<()> {
                 if fm.resolve_call(n).is_some() {
                     continue;
                 }
-                let name = n.child_by_field_name("name").map(|x| fm.text(x)).unwrap_or("");
-                let Some(o) = n.child_by_field_name("object").map(|o| o.unparen()) else {
+                let name = n.field("name").map(|x| fm.text(x)).unwrap_or("");
+                let Some(o) = n.field("object").map(|o| o.unparen()) else {
                     *cause.entry("unqualified call (inherited / static import)".into()).or_default() += 1;
                     continue;
                 };

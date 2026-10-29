@@ -2,6 +2,7 @@
 //! MethodMatchers. Rules describe *which* API they care about; the matcher
 //! takes care of resolution, inheritance and static/instance distinctions.
 
+use grounds_syntax::NodeExt;
 use crate::model::{FileModel, ResolvedCall};
 use grounds_index::*;
 use grounds_syntax::Node;
@@ -108,7 +109,7 @@ impl<'t> FileModel<'t> {
     pub fn call_matches(&self, call: Node<'t>, m: &MethodMatcher) -> bool {
         if call.kind() == "method_invocation" && !m.names.is_empty() {
             // cheap name pre-check before resolution
-            match call.child_by_field_name("name") {
+            match call.field("name") {
                 Some(n) if m.names.contains(&self.text(n)) => {}
                 _ => return false,
             }
@@ -125,6 +126,6 @@ impl<'t> FileModel<'t> {
 
     /// Name of the invoked method, without resolution.
     pub fn call_name(&self, call: Node<'t>) -> Option<&'t str> {
-        call.child_by_field_name("name").map(|n| self.text(n))
+        call.field("name").map(|n| self.text(n))
     }
 }

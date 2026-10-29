@@ -349,7 +349,7 @@ pub fn extract_with(file: &ParsedFile, lombok: &crate::lombok::LombokConfig) -> 
     let mut constructed: Vec<Name> = Vec::new();
     grounds_syntax::walk(root, |n| {
         let ty = match n.kind() {
-            "object_creation_expression" => n.child_by_field_name("type"),
+            "object_creation_expression" => n.field("type"),
             "superclass" => n.named_child(0),
             _ => None,
         };
