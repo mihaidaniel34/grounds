@@ -16,6 +16,7 @@ use grounds_classfile::ClassContainer;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::cell::{Cell, RefCell};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// How much of the JDK's API the classpath holds for the project's release.
@@ -220,6 +221,17 @@ pub struct Index {
     /// across modules, e.g. test fixtures).
     defs: FxHashMap<Name, u32>,
     pub generation: u64,
+    // the generation resolve_ordered last filled the cache at
+    resolved_at: AtomicU64,
+    // the groups resolve_ordered last used; None: the next fill resolves everything
+    plan: parking_lot::Mutex<Option<Plan>>,
+}
+
+// file groups in dependency order, and the files edited since without a declaration change
+struct Plan {
+    groups: Vec<Vec<Arc<str>>>,
+    group_of: FxHashMap<Arc<str>, usize>,
+    dirty: Vec<Arc<str>>,
 }
 
 thread_local! {
@@ -270,10 +282,11 @@ impl Drop for Resolving<'_> {
 
 impl Index {
     pub fn new(classpath: Arc<Classpath>) -> Index {
-        Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), generation: 0 }
+        Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), generation: 0, resolved_at: AtomicU64::new(u64::MAX), plan: parking_lot::Mutex::new(None) }
     }
 
     pub fn set_file(&mut self, path: Arc<str>, stub: Arc<FileStub>) {
+        let body_only = self.files.get(&path).is_some_and(|old| old.signature_hash == stub.signature_hash);
         self.remove_file_inner(&path);
         for (i, c) in stub.classes.iter().enumerate() {
             // a class defined in several files resolves to the smallest path,
@@ -294,13 +307,27 @@ impl Index {
                 None => break,
             }
         }
+        let plan = self.plan.get_mut();
+        match plan {
+            // same declarations: only the file's group resolves differently (positions)
+            Some(p) if body_only && p.group_of.contains_key(&path) => {
+                for c in &stub.classes {
+                    self.cache.remove(&c.name);
+                }
+                p.dirty.push(path.clone());
+            }
+            _ => {
+                *plan = None;
+                self.cache.clear();
+            }
+        }
         self.files.insert(path, stub);
-        self.cache.clear();
         self.generation += 1;
     }
 
     pub fn remove_file(&mut self, path: &str) {
         self.remove_file_inner(path);
+        *self.plan.get_mut() = None;
         self.cache.clear();
         self.generation += 1;
     }
@@ -402,6 +429,7 @@ impl Index {
     // files that need each other form a group => 1 thread
     pub fn resolve_ordered(&self) -> crate::order::ResolveStats {
         use rayon::prelude::*;
+        self.cache.clear();
         let (files, edges) = crate::order::file_graph(self);
         let groups = crate::order::components(&edges);
         let waves = crate::order::waves(&groups, &edges);
@@ -411,28 +439,62 @@ impl Index {
         for wave in waves {
             stats.outside += wave
                 .par_iter()
-                .map(|&g| {
-                    // the classes declared in the group's files - a class declared in several files belongs to the file the index uses for it
-                    let mut names: Vec<Name> = Vec::new();
-                    for &f in &groups[g] {
-                        let path = &files[f as usize];
-                        for c in &self.files[path].classes {
-                            if self.classes.get(&c.name).is_some_and(|(p, _)| p == path) {
-                                names.push(c.name.clone());
-                            }
-                        }
-                    }
-                    names.sort();
-                    names.dedup();
-                    let _group = InGroup::enter(names.iter().cloned().collect());
-                    for n in &names {
-                        let _ = self.class(n);
-                    }
-                    OUTSIDE.with(|o| o.get())
-                })
+                .map(|&g| self.resolve_group(groups[g].iter().map(|&f| &files[f as usize])))
                 .sum::<usize>();
         }
+        let groups: Vec<Vec<Arc<str>>> = groups.iter().map(|g| g.iter().map(|&f| files[f as usize].clone()).collect()).collect();
+        let group_of = groups.iter().enumerate().flat_map(|(g, fs)| fs.iter().map(move |f| (f.clone(), g))).collect();
+        *self.plan.lock() = Some(Plan { groups, group_of, dirty: Vec::new() });
+        self.resolved_at.store(self.generation, Ordering::Release);
         stats
+    }
+
+    // resolves the group's classes on this thread, in name order
+    fn resolve_group<'p>(&self, paths: impl Iterator<Item = &'p Arc<str>>) -> usize {
+        // the classes declared in the group's files - a class declared in several files belongs to the file the index uses for it
+        let mut names: Vec<Name> = Vec::new();
+        for path in paths {
+            for c in self.files.get(path).map_or(&[][..], |s| &s.classes) {
+                if self.classes.get(&c.name).is_some_and(|(p, _)| p == path) {
+                    names.push(c.name.clone());
+                }
+            }
+        }
+        names.sort();
+        names.dedup();
+        let _group = InGroup::enter(names.iter().cloned().collect());
+        for n in &names {
+            let _ = self.class(n);
+        }
+        OUTSIDE.with(|o| o.get())
+    }
+
+    // brings the cache up to date the way resolve_ordered fills it: after body-only
+    // edits only their groups again, in dependency order, otherwise everything
+    pub fn ensure_resolved(&self) {
+        if self.resolved_at.load(Ordering::Acquire) == self.generation {
+            return;
+        }
+        let mut plan = self.plan.lock();
+        let Some(p) = plan.as_mut() else {
+            drop(plan);
+            self.resolve_ordered();
+            return;
+        };
+        let mut dirty: Vec<usize> = std::mem::take(&mut p.dirty).iter().filter_map(|f| p.group_of.get(f).copied()).collect();
+        dirty.sort_unstable();
+        dirty.dedup();
+        for &g in &dirty {
+            for path in &p.groups[g] {
+                for c in self.files.get(path).map_or(&[][..], |s| &s.classes) {
+                    self.cache.remove(&c.name);
+                }
+            }
+        }
+        for &g in &dirty {
+            self.resolve_group(p.groups[g].iter());
+        }
+        self.resolved_at.store(self.generation, Ordering::Release);
     }
 
     fn scope_for_raw<'a>(&self, stub: &'a FileStub, raw: &RawClass) -> Scope<'a> {

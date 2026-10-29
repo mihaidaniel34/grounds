@@ -281,7 +281,7 @@ impl Project {
 
     pub fn rebuild_di(&mut self) {
         let (copies, overriding) = (self.di.lombok_copies_qualifiers, self.di.bean_overriding_allowed);
-        self.index.resolve_ordered();
+        self.index.ensure_resolved();
         self.di = grounds_di::DiModel::build_with(&self.index, &self.registered, &self.auto_registered);
         self.di.lombok_copies_qualifiers = copies;
         self.di.bean_overriding_allowed = overriding;

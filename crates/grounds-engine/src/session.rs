@@ -207,6 +207,7 @@ impl Session {
         if any_decl_change || di_stale {
             self.project.rebuild_di();
         }
+        self.project.index.ensure_resolved();
         changed
     }
 
@@ -228,6 +229,7 @@ impl Session {
     }
 
     fn analyze(&self, rules: &RuleSet, files: &[PathBuf]) -> Vec<Finding> {
+        self.project.index.ensure_resolved();
         files
             .par_iter()
             .flat_map_iter(|p| match std::fs::read_to_string(p) {
