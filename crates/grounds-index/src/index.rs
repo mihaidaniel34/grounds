@@ -312,7 +312,9 @@ impl Index {
             // same declarations: only the file's group resolves differently (positions)
             Some(p) if body_only && p.group_of.contains_key(&path) => {
                 for c in &stub.classes {
-                    self.cache.remove(&c.name);
+                    if self.classes.get(&c.name).is_some_and(|(owner, _)| *owner == path) {
+                        self.cache.remove(&c.name);
+                    }
                 }
                 p.dirty.push(path.clone());
             }
@@ -487,7 +489,9 @@ impl Index {
         for &g in &dirty {
             for path in &p.groups[g] {
                 for c in self.files.get(path).map_or(&[][..], |s| &s.classes) {
-                    self.cache.remove(&c.name);
+                    if self.classes.get(&c.name).is_some_and(|(owner, _)| owner == path) {
+                        self.cache.remove(&c.name);
+                    }
                 }
             }
         }
@@ -1062,5 +1066,23 @@ mod resolving_tests {
         });
         assert!(r.is_err());
         assert!(!resolving("p.B"), "left on panic");
+    }
+
+    #[test]
+    fn a_body_only_edit_of_a_duplicate_class_keeps_every_class_resolved() {
+        use crate::stubs::extract;
+        use grounds_syntax::ParsedFile;
+        let stub = |src: &str| Arc::new(extract(&ParsedFile::parse(src)));
+        let mut idx = Index::new(Arc::new(Classpath::empty()));
+        idx.set_file(Arc::from("a/p/B.java"), stub("package p; public class B {}"));
+        idx.set_file(Arc::from("b/p/B.java"), stub("package p; public class B { void m() {} }"));
+        idx.set_file(Arc::from("a/p/C.java"), stub("package p; public class C extends B {}"));
+        idx.resolve_ordered();
+        for (path, src) in [("b/p/B.java", "package p; public class B { void m() { int i = 0; } }"), ("a/p/B.java", "package p; public class B {  }")] {
+            idx.set_file(Arc::from(path), stub(src));
+            idx.ensure_resolved();
+            let missing: Vec<_> = idx.source_class_names().filter(|n| !idx.cache.contains_key(*n)).collect();
+            assert!(missing.is_empty(), "after a body-only edit of {path}: {missing:?}");
+        }
     }
 }
