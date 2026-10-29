@@ -820,7 +820,10 @@ impl<'a, 't> ResourceAnalysis<'a, 't> {
                 }
                 let t = self.fm.type_of(v);
                 let Some(n) = t.class_name() else { return false };
-                if EXEMPT_RESOURCES.iter().any(|e| self.fm.is_subclass(n, e).is_yes()) {
+                if EXEMPT_RESOURCES.iter().any(|e| self.fm.is_subclass(n, e).is_yes()) || self.is_in_memory_stream(n) {
+                    return false;
+                }
+                if self.wraps_unowned(v) {
                     return false;
                 }
                 // wrappers over exempt or escaped streams are not new resources
@@ -863,6 +866,126 @@ impl<'a, 't> ResourceAnalysis<'a, 't> {
         }
     }
 
+    /// A project class extending `java.io.InputStream`/`OutputStream` whose
+    /// `close()` is inherited from there does nothing on close: those
+    /// `close()` methods are empty. An override that only marks the stream
+    /// closed (`closed = true;`) releases nothing either. A class that
+    /// overrides `close()` otherwise or takes a closeable in a constructor,
+    /// anywhere up its project hierarchy, still counts, as does one reaching
+    /// any other library class (e.g. `FilterOutputStream`, `FileOutputStream`).
+    fn is_in_memory_stream(&self, n: &str) -> bool {
+        let index = self.fm.index;
+        let mut cur: Name = Name::from(n);
+        for _ in 0..16 {
+            if matches!(&*cur, "java.io.InputStream" | "java.io.OutputStream") {
+                return true;
+            }
+            if !index.is_source_class(&cur) {
+                return false;
+            }
+            let Some(c) = index.class(&cur) else { return false };
+            if c.methods.iter().any(|m| &*m.name == "close" && m.params.is_empty() && !m.flags.has(Flags::RELEASES_NOTHING)) {
+                return false;
+            }
+            if c.constructors().any(|m| m.params.iter().any(|p| self.is_closeable_type(&p.ty))) {
+                return false;
+            }
+            let Some(s) = c.superclass.as_ref().and_then(|s| s.class_name()) else { return false };
+            cur = Name::from(s);
+        }
+        false
+    }
+
+    fn is_closeable_type(&self, t: &Ty) -> bool {
+        t.class_name().is_some_and(|n| self.fm.is_subclass(n, "java.lang.AutoCloseable").is_yes())
+    }
+
+    /// `new ResponseWrapper(response)`: a closeable whose constructor takes
+    /// only closeables or servlet requests/responses, built only from parameters,
+    /// fields and values obtained from them. Closing it would close the
+    /// caller's resource, so this method does not own it.
+    fn wraps_unowned(&self, v: Node<'t>) -> bool {
+        let args = self.fm.args_of(v);
+        if args.is_empty() {
+            return false;
+        }
+        let Some(ctor) = self.fm.resolve_call(v) else { return false };
+        if self.opens_own_resource(&ctor.owner) {
+            return false;
+        }
+        let raw = self.fm.index.raw_class(&ctor.owner).and_then(|(_, c)| c.methods.iter().find(|m| Some(m.range) == ctor.method.range));
+        // every parameter borrows: a `File` or a path may open a resource of its own
+        let wraps = !ctor.method.params.is_empty() && ctor.method.params.iter().enumerate().all(|(k, p)| {
+            self.is_closeable_type(&p.ty) || is_servlet_message(self.fm, &p.ty) || (p.ty.is_unknown() && raw.and_then(|r| r.params.get(k)).is_some_and(|r| is_servlet_name(&r.ty)))
+        });
+        if !wraps {
+            return false;
+        }
+        args.iter().all(|a| self.from_unowned(*a, 3))
+    }
+
+    /// Is `e` a parameter, a field, or a value read from one (through casts,
+    /// calls on it and effectively final locals holding such a value)? A call
+    /// returning a closeable may open a new one (`url.openStream()`), so it
+    /// does not count.
+    fn from_unowned(&self, e: Node<'t>, depth: u32) -> bool {
+        let e = e.unparen();
+        match e.kind() {
+            "field_access" => e.field("object").is_some_and(|o| {
+                let o = o.unparen();
+                // a holder returned by a call may be fresh (`factory.makeHolder().stream`)
+                matches!(o.kind(), "this" | "super") || self.names_type(o) || (o.kind() != "method_invocation" && self.from_unowned(o, depth))
+            }),
+            "cast_expression" => e.field("value").is_some_and(|x| self.from_unowned(x, depth)),
+            "method_invocation" => {
+                depth > 0
+                    && !self.creates_resource(e)
+                    && !self.is_closeable_type(&self.fm.type_of(e))
+                    && e.field("object").is_some_and(|o| {
+                        let o = o.unparen();
+                        o.kind() == "this" || self.from_unowned(o, depth - 1)
+                    })
+            }
+            "identifier" => {
+                let Some(i) = self.fm.binder.decl_index_of_ref(e) else {
+                    // not a local: a field (types and statics are not values here)
+                    return self.fm.type_of(e).class_name().is_some();
+                };
+                let d = &self.fm.binder.decls[i];
+                match d.kind {
+                    LocalKind::Param | LocalKind::LambdaParam => is_effectively_final(self.fm, i),
+                    LocalKind::Local => depth > 0 && is_effectively_final(self.fm, i) && d.decl_node.field("value").is_some_and(|x| self.from_unowned(x, depth - 1)),
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Does class `n` or a project superclass open a resource of its own in a
+    /// constructor or field initializer?
+    fn opens_own_resource(&self, n: &str) -> bool {
+        let index = self.fm.index;
+        let mut cur: Name = Name::from(n);
+        for _ in 0..16 {
+            if !index.is_source_class(&cur) {
+                return false;
+            }
+            let Some(c) = index.class(&cur) else { return false };
+            if c.flags.has(Flags::OPENS_RESOURCE) {
+                return true;
+            }
+            let Some(s) = c.superclass.as_ref().and_then(|s| s.class_name()) else { return false };
+            cur = Name::from(s);
+        }
+        false
+    }
+
+    /// `Shared` in `Shared.stream` or `Outer` in `Outer.this.stream`.
+    fn names_type(&self, o: Node<'t>) -> bool {
+        o.kind() == "identifier" && self.fm.binder.decl_index_of_ref(o).is_none() && self.fm.index.resolve_simple_type(self.fm.text(o), &self.fm.scope_at(o)).is_some()
+    }
+
     fn arg_is_stream_like(&self, a: Node<'t>) -> bool {
         let t = self.fm.type_of(a);
         match t.class_name() {
@@ -891,6 +1014,20 @@ fn is_wrapper_type(fm: &FileModel, n: &str) -> bool {
     ["java.io.FilterInputStream", "java.io.FilterOutputStream", "java.io.BufferedReader", "java.io.BufferedWriter", "java.io.InputStreamReader", "java.io.OutputStreamWriter", "java.io.PrintWriter", "java.io.PrintStream", "java.io.ObjectInputStream", "java.io.ObjectOutputStream", "java.util.zip.ZipInputStream", "java.util.zip.GZIPInputStream", "java.util.Scanner", "java.io.LineNumberReader", "java.io.PushbackReader"]
         .iter()
         .any(|w| fm.is_subclass(n, w).is_yes())
+}
+
+fn is_servlet_message(fm: &FileModel, t: &Ty) -> bool {
+    t.class_name().is_some_and(|n| {
+        ["javax.servlet.ServletRequest", "javax.servlet.ServletResponse", "jakarta.servlet.ServletRequest", "jakarta.servlet.ServletResponse"]
+            .iter()
+            .any(|s| fm.is_subclass(n, s).is_yes())
+    })
+}
+
+/// A parameter type written as a servlet request or response that does not
+/// resolve (the servlet API is not on the classpath).
+fn is_servlet_name(ts: &TypeSyntax) -> bool {
+    matches!(ts, TypeSyntax::Named(segs) if segs.last().is_some_and(|(n, _)| matches!(&**n, "ServletRequest" | "ServletResponse" | "HttpServletRequest" | "HttpServletResponse")))
 }
 
 impl<'a, 't> Analysis<'t> for ResourceAnalysis<'a, 't> {

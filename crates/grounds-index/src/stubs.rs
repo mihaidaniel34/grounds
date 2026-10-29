@@ -921,6 +921,9 @@ impl<'s> Extractor<'s> {
             .map(|tl| tl.kids().into_iter().map(|t| type_syntax(t, src)).collect())
             .unwrap_or_default();
 
+        if node.field("body").is_some_and(|b| opens_resource(b, src)) {
+            flags.set(Flags::OPENS_RESOURCE);
+        }
         let idx = self.classes.len();
         self.classes.push(RawClass {
             name: name.clone(),
@@ -1061,6 +1064,9 @@ impl<'s> Extractor<'s> {
                     }
                     if throws_on_false(m, src) {
                         ff.set(Flags::THROWS_ON_FALSE);
+                    }
+                    if n.text(src) == "close" && params.is_empty() && m.field("body").is_some_and(|b| releases_nothing(b, src)) {
+                        ff.set(Flags::RELEASES_NOTHING);
                     }
                     if let Some(b) = m.field("body") {
                         if asserts_directly(b, src) {
@@ -1248,6 +1254,52 @@ fn always_throws(body: Node) -> bool {
         })
     }
     !returns(body)
+}
+
+/// A `close()` body that only sets fields to constants (`this.closed =
+/// true;`) or calls `super.close()`.
+fn releases_nothing(body: Node, src: &str) -> bool {
+    body.kids().into_iter().all(|st| {
+        if st.kind() != "expression_statement" {
+            return false;
+        }
+        let Some(e) = st.first_kid() else { return false };
+        match e.kind() {
+            "assignment_expression" => {
+                e.field("operator").is_some_and(|o| o.kind() == "=")
+                    && e.field("left").is_some_and(|l| l.kind() == "identifier" || (l.kind() == "field_access" && l.field("object").is_some_and(|o| o.kind() == "this")))
+                    && e.field("right").is_some_and(|r| matches!(r.kind(), "true" | "false" | "null_literal" | "decimal_integer_literal"))
+            }
+            "method_invocation" => e.text(src).split_whitespace().collect::<String>() == "super.close()",
+            _ => false,
+        }
+    })
+}
+
+/// Constructors, initializer blocks or field initializers of a class body
+/// that open a file, socket or JDBC connection (not as the value of a
+/// try-with-resources resource, which is closed before the constructor
+/// returns).
+fn opens_resource(body: Node, src: &str) -> bool {
+    body.kids().into_iter().any(|m| {
+        let init: Vec<Node> = match m.kind() {
+            "constructor_declaration" => m.field("body").into_iter().collect(),
+            "block" => vec![m],
+            "field_declaration" => m.kids_of_kind("variable_declarator").into_iter().filter_map(|d| d.field("value")).collect(),
+            _ => Vec::new(),
+        };
+        init.into_iter().flat_map(|n| std::iter::once(n).chain(n.descendants())).filter(|d| !d.parent().is_some_and(|p| p.kind() == "resource" && p.field("value") == Some(*d))).any(|d| match d.kind() {
+            "object_creation_expression" => d.field("type").is_some_and(|t| {
+                let name = t.text(src).rsplit('.').next().unwrap_or("");
+                matches!(name, "FileInputStream" | "FileOutputStream" | "FileReader" | "FileWriter" | "RandomAccessFile" | "Socket" | "ServerSocket" | "ZipFile" | "JarFile")
+            }),
+            "method_invocation" => matches!(
+                (d.field("object").map(|o| o.text(src).rsplit('.').next().unwrap_or("")), d.field("name").map(|n| n.text(src))),
+                (Some("Files"), Some("newInputStream" | "newOutputStream" | "newBufferedReader" | "newBufferedWriter" | "newByteChannel" | "lines" | "list" | "walk" | "find" | "newDirectoryStream")) | (Some("DriverManager"), Some("getConnection"))
+            ),
+            _ => false,
+        })
+    })
 }
 
 /// Names of calls that assert in test code: JUnit/TestNG/AssertJ `assert*`,
