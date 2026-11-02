@@ -377,7 +377,7 @@ impl<'t> NodeExt<'t> for Node<'t> {
         ids.contains(&self.kind_id())
     }
     fn descendants(&self) -> Descendants<'t> {
-        Descendants { cursor: self.walk(), depth: 0, started: false }
+        Descendants { cursor: self.walk(), depth: 0, started: false, done: false }
     }
 }
 
@@ -401,11 +401,17 @@ pub struct Descendants<'t> {
     /// depth below the start node; the walk ends when it would leave it
     depth: u32,
     started: bool,
+    /// the walk is over; the cursor is back on the start node and must not
+    /// descend again
+    done: bool,
 }
 
 impl<'t> Descendants<'t> {
     /// Next node in pre-order (any node), or None when the subtree is done.
     fn advance(&mut self) -> Option<Node<'t>> {
+        if self.done {
+            return None;
+        }
         if !self.started {
             self.started = true;
             return Some(self.cursor.node());
@@ -418,6 +424,7 @@ impl<'t> Descendants<'t> {
         }
         loop {
             if self.depth == 0 {
+                self.done = true;
                 return None;
             }
             if self.cursor.goto_next_sibling() {
@@ -441,6 +448,8 @@ impl<'t> Iterator for Descendants<'t> {
         }
     }
 }
+
+impl std::iter::FusedIterator for Descendants<'_> {}
 
 /// Visit all named descendants with the ability to skip subtrees.
 pub fn walk<'t>(root: Node<'t>, mut f: impl FnMut(Node<'t>) -> WalkControl) {
@@ -584,6 +593,19 @@ mod tests {
             WalkControl::Continue
         });
         assert_eq!(n, kinds.len());
+    }
+
+    #[test]
+    fn descendants_stay_exhausted() {
+        let f = ParsedFile::parse("class A { void m() { int x = 1; } }");
+        let all: Vec<_> = f.root().descendants().map(|n| n.id()).collect();
+        let mut it = f.root().descendants();
+        let first: Vec<_> = it.by_ref().take(3).map(|n| n.id()).collect();
+        let rest: Vec<_> = it.by_ref().map(|n| n.id()).collect();
+        assert_eq!([first, rest].concat(), all);
+        for _ in 0..3 {
+            assert!(it.next().is_none());
+        }
     }
 
     #[test]
