@@ -368,3 +368,36 @@ fn classpath_warnings_once_per_session_and_at_session_start() {
     assert!(execute(&mut s, &check(false)).warnings.is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_body_only_edit_resolves_classes_as_a_fresh_load_does() {
+    let dir = std::env::temp_dir().join(format!("grounds-session-order-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, "src/main/java/p/A.java", "package p;\npublic class A extends CA {\n    public static final int X = B.KB;\n    void m() {}\n}\n");
+    write(&dir, "src/main/java/p/CA.java", "package p;\npublic class CA { public static final int KA = 1; }\n");
+    write(&dir, "src/main/java/p/B.java", "package p;\npublic class B extends CB { public static final int Y = A.KA; }\n");
+    write(&dir, "src/main/java/p/CB.java", "package p;\npublic class CB { public static final int KB = 2; }\n");
+    write(&dir, "src/main/java/p/Other.java", "package p;\npublic class Other {\n    void m() {}\n}\n");
+    let classes = |index: &grounds_index::Index| {
+        let _ = index.class("p.B");
+        let mut names: Vec<_> = index.source_class_names().cloned().collect();
+        names.sort();
+        names.iter().map(|n| format!("{:?}", index.class(n))).collect::<Vec<_>>()
+    };
+    let mut s = Session::open(&dir).unwrap();
+    let edits = [
+        ("src/main/java/p/Other.java", "package p;\npublic class Other {\n    void m() { int i = 0; }\n}\n"),
+        ("src/main/java/p/A.java", "package p;\npublic class A extends CA {\n    public static final int X = B.KB;\n    void m() {\n        int i = 0;\n    }\n}\n"),
+    ];
+    for (i, (file, text)) in edits.iter().enumerate() {
+        write(&dir, file, text);
+        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5 * (i as u64 + 1));
+        std::fs::File::options().write(true).open(dir.join(file)).unwrap().set_modified(later).unwrap();
+        s.sync(&[]);
+        let fresh = classes(&grounds_engine::Project::load(&dir).unwrap().index);
+        assert_eq!(classes(&s.project.index), fresh, "after a body-only edit of {file}, the classes must resolve as a fresh load resolves them");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

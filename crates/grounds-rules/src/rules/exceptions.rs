@@ -101,17 +101,7 @@ impl Rule for CatchThrowable {
                 // propagating the throwable (rethrow, wrap, hand to a future/callback/addSuppressed)
                 // is not swallowing it; only logging-and-continuing is the problem
                 if let (Some(b), Some(v)) = (n.field("body"), catch_var_name(n, cx.src)) {
-                    let mut throws = Vec::new();
-                    find_kind(b, "throw_statement", &mut throws);
-                    if throws.iter().any(|t| t.first_kid().is_some_and(|e| e.descendants().any(|d| d.kind() == "identifier" && d.text(cx.src) == v))) {
-                        return;
-                    }
-                    let mut calls = Vec::new();
-                    find_kind(b, "method_invocation", &mut calls);
-                    let propagated = calls.iter().any(|c| {
-                        !is_log_like(*c, cx) && !is_log_level_call_on_unknown(*c, v, cx) && cx.fm.args_of(*c).iter().any(|a| cx.text(*a) == v) && !matches!(cx.fm.call_name(*c), Some("println" | "print" | "printf"))
-                    });
-                    if propagated {
+                    if propagates(b, v, cx, &mut Vec::new()) {
                         return;
                     }
                 }
@@ -124,6 +114,57 @@ impl Rule for CatchThrowable {
             }
         }
     }
+}
+
+/// Does catch body `b` propagate the throwable held in `v`: rethrow or
+/// return it, hand it to a non-logging call, or store it for later
+/// (`last = t;`, `this.error = t;`)? A local of the catch body that copies
+/// it (`Throwable saved = t;`) counts only if that local propagates in turn.
+fn propagates<'t>(b: Node<'t>, v: &str, cx: &Ctx<'_, 't>, seen: &mut Vec<String>) -> bool {
+    seen.push(v.to_string());
+    let mut throws = Vec::new();
+    find_kind(b, "throw_statement", &mut throws);
+    if throws.iter().any(|t| t.first_kid().is_some_and(|e| e.descendants().any(|d| d.kind() == "identifier" && d.text(cx.src) == v))) {
+        return true;
+    }
+    let mut returns = Vec::new();
+    find_kind(b, "return_statement", &mut returns);
+    if returns.iter().any(|r| r.first_kid().map(|e| e.unparen()).is_some_and(|e| e.kind() == "identifier" && e.text(cx.src) == v)) {
+        return true;
+    }
+    let mut calls = Vec::new();
+    find_kind(b, "method_invocation", &mut calls);
+    if calls.iter().any(|c| {
+        !is_log_like(*c, cx) && !is_log_level_call_on_unknown(*c, v, cx) && cx.fm.args_of(*c).iter().any(|a| cx.text(*a) == v) && !matches!(cx.fm.call_name(*c), Some("println" | "print" | "printf"))
+    }) {
+        return true;
+    }
+    let copies_v = |r: Option<Node<'t>>| r.map(|r| r.unparen()).is_some_and(|r| r.kind() == "identifier" && r.text(cx.src) == v);
+    // a copy into a local of the catch body propagates only through that local
+    let mut via_local = |name: &str| !seen.iter().any(|s| s == name) && propagates(b, name, cx, seen);
+    let mut decls = Vec::new();
+    find_kind(b, "variable_declarator", &mut decls);
+    for d in &decls {
+        if copies_v(d.field("value")) && d.field("name").is_some_and(|n| via_local(n.text(cx.src))) {
+            return true;
+        }
+    }
+    let in_body = |n: Node| n.start_byte() >= b.start_byte() && n.end_byte() <= b.end_byte();
+    let mut stores = Vec::new();
+    find_kind(b, "assignment_expression", &mut stores);
+    for st in &stores {
+        // not `msg += t`
+        if !st.field("operator").is_some_and(|o| o.text(cx.src) == "=") || !copies_v(st.field("right")) {
+            continue;
+        }
+        let Some(l) = st.field("left").map(|l| l.unparen()) else { continue };
+        // a field or a local declared outside the catch keeps it for later
+        let body_local = l.kind() == "identifier" && cx.fm.binder.decl_index_of_ref(l).is_some_and(|i| in_body(cx.fm.binder.decls[i].decl_node));
+        if !body_local || via_local(l.text(cx.src)) {
+            return true;
+        }
+    }
+    false
 }
 
 declare_rule!(CatchNullPointer {
