@@ -101,26 +101,7 @@ impl Rule for CatchThrowable {
                 // propagating the throwable (rethrow, wrap, hand to a future/callback/addSuppressed)
                 // is not swallowing it; only logging-and-continuing is the problem
                 if let (Some(b), Some(v)) = (n.field("body"), catch_var_name(n, cx.src)) {
-                    let mut throws = Vec::new();
-                    find_kind(b, "throw_statement", &mut throws);
-                    if throws.iter().any(|t| t.first_kid().is_some_and(|e| e.descendants().any(|d| d.kind() == "identifier" && d.text(cx.src) == v))) {
-                        return;
-                    }
-                    let mut calls = Vec::new();
-                    find_kind(b, "method_invocation", &mut calls);
-                    let propagated = calls.iter().any(|c| {
-                        !is_log_like(*c, cx) && !is_log_level_call_on_unknown(*c, v, cx) && cx.fm.args_of(*c).iter().any(|a| cx.text(*a) == v) && !matches!(cx.fm.call_name(*c), Some("println" | "print" | "printf"))
-                    });
-                    if propagated {
-                        return;
-                    }
-                    // stored for later (`last = t;`, `this.error = t;`, `Throwable e = t;`):
-                    // kept to rethrow or report after the catch
-                    let mut stores = Vec::new();
-                    find_kind(b, "assignment_expression", &mut stores);
-                    find_kind(b, "variable_declarator", &mut stores);
-                    let plain = |s: &Node| s.field("operator").is_none_or(|o| o.text(cx.src) == "="); // not `msg += t`
-                    if stores.iter().any(|s| plain(s) && s.field(if s.kind() == "assignment_expression" { "right" } else { "value" }).map(|r| r.unparen()).is_some_and(|r| r.kind() == "identifier" && r.text(cx.src) == v)) {
+                    if propagates(b, v, cx, 3) {
                         return;
                     }
                 }
@@ -133,6 +114,49 @@ impl Rule for CatchThrowable {
             }
         }
     }
+}
+
+/// Does catch body `b` propagate the throwable held in `v`: rethrow it, hand
+/// it to a non-logging call, or store it for later (`last = t;`,
+/// `this.error = t;`)? A local declared in the catch body that copies it
+/// (`Throwable saved = t;`) counts only if that local propagates in turn.
+fn propagates<'t>(b: Node<'t>, v: &str, cx: &Ctx<'_, 't>, depth: u32) -> bool {
+    let mut throws = Vec::new();
+    find_kind(b, "throw_statement", &mut throws);
+    if throws.iter().any(|t| t.first_kid().is_some_and(|e| e.descendants().any(|d| d.kind() == "identifier" && d.text(cx.src) == v))) {
+        return true;
+    }
+    let mut calls = Vec::new();
+    find_kind(b, "method_invocation", &mut calls);
+    if calls.iter().any(|c| {
+        !is_log_like(*c, cx) && !is_log_level_call_on_unknown(*c, v, cx) && cx.fm.args_of(*c).iter().any(|a| cx.text(*a) == v) && !matches!(cx.fm.call_name(*c), Some("println" | "print" | "printf"))
+    }) {
+        return true;
+    }
+    let mut decls = Vec::new();
+    find_kind(b, "variable_declarator", &mut decls);
+    let local_name = |name: &str| decls.iter().any(|d| d.field("name").is_some_and(|n| n.text(cx.src) == name));
+    let copies_v = |r: Option<Node<'t>>| r.map(|r| r.unparen()).is_some_and(|r| r.kind() == "identifier" && r.text(cx.src) == v);
+    // a copy into a local of the catch body propagates only through that local
+    let via_local = |name: &str| depth > 0 && name != v && propagates(b, name, cx, depth - 1);
+    if decls.iter().any(|d| copies_v(d.field("value")) && d.field("name").is_some_and(|n| via_local(n.text(cx.src)))) {
+        return true;
+    }
+    let mut stores = Vec::new();
+    find_kind(b, "assignment_expression", &mut stores);
+    stores.iter().any(|s| {
+        // not `msg += t`
+        s.field("operator").is_some_and(|o| o.text(cx.src) == "=")
+            && copies_v(s.field("right"))
+            && s.field("left").is_some_and(|l| {
+                let l = l.unparen();
+                if l.kind() == "identifier" && local_name(l.text(cx.src)) {
+                    via_local(l.text(cx.src))
+                } else {
+                    true
+                }
+            })
+    })
 }
 
 declare_rule!(CatchNullPointer {

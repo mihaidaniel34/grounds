@@ -57,6 +57,10 @@ class A {
         try { work(); } catch (Throwable t) { msg = t.getMessage(); } // expect
         try { work(); } catch (Throwable t) { msg += t; } // expect
         try { work(); } catch (Throwable t) { String m = t.toString(); } // expect
+        // a local copy that is only logged swallows it too
+        try { work(); } catch (Throwable t) { Throwable saved = t; log.warn("x", saved); } // expect
+        try { work(); } catch (Throwable t) { Throwable copy; copy = t; log.warn("x", copy); } // expect
+        try { work(); } catch (Throwable t) { Throwable a = t; Throwable b = a; error = b; }
     }
     public static void main(String[] args) {
         try { } catch (Throwable t) { }
