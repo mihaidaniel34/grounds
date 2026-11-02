@@ -101,7 +101,7 @@ impl Rule for CatchThrowable {
                 // propagating the throwable (rethrow, wrap, hand to a future/callback/addSuppressed)
                 // is not swallowing it; only logging-and-continuing is the problem
                 if let (Some(b), Some(v)) = (n.field("body"), catch_var_name(n, cx.src)) {
-                    if propagates(b, v, cx, 3) {
+                    if propagates(b, v, cx, &mut Vec::new()) {
                         return;
                     }
                 }
@@ -116,14 +116,20 @@ impl Rule for CatchThrowable {
     }
 }
 
-/// Does catch body `b` propagate the throwable held in `v`: rethrow it, hand
-/// it to a non-logging call, or store it for later (`last = t;`,
-/// `this.error = t;`)? A local declared in the catch body that copies it
-/// (`Throwable saved = t;`) counts only if that local propagates in turn.
-fn propagates<'t>(b: Node<'t>, v: &str, cx: &Ctx<'_, 't>, depth: u32) -> bool {
+/// Does catch body `b` propagate the throwable held in `v`: rethrow or
+/// return it, hand it to a non-logging call, or store it for later
+/// (`last = t;`, `this.error = t;`)? A local of the catch body that copies
+/// it (`Throwable saved = t;`) counts only if that local propagates in turn.
+fn propagates<'t>(b: Node<'t>, v: &str, cx: &Ctx<'_, 't>, seen: &mut Vec<String>) -> bool {
+    seen.push(v.to_string());
     let mut throws = Vec::new();
     find_kind(b, "throw_statement", &mut throws);
     if throws.iter().any(|t| t.first_kid().is_some_and(|e| e.descendants().any(|d| d.kind() == "identifier" && d.text(cx.src) == v))) {
+        return true;
+    }
+    let mut returns = Vec::new();
+    find_kind(b, "return_statement", &mut returns);
+    if returns.iter().any(|r| r.first_kid().map(|e| e.unparen()).is_some_and(|e| e.kind() == "identifier" && e.text(cx.src) == v)) {
         return true;
     }
     let mut calls = Vec::new();
@@ -133,30 +139,32 @@ fn propagates<'t>(b: Node<'t>, v: &str, cx: &Ctx<'_, 't>, depth: u32) -> bool {
     }) {
         return true;
     }
-    let mut decls = Vec::new();
-    find_kind(b, "variable_declarator", &mut decls);
-    let local_name = |name: &str| decls.iter().any(|d| d.field("name").is_some_and(|n| n.text(cx.src) == name));
     let copies_v = |r: Option<Node<'t>>| r.map(|r| r.unparen()).is_some_and(|r| r.kind() == "identifier" && r.text(cx.src) == v);
     // a copy into a local of the catch body propagates only through that local
-    let via_local = |name: &str| depth > 0 && name != v && propagates(b, name, cx, depth - 1);
-    if decls.iter().any(|d| copies_v(d.field("value")) && d.field("name").is_some_and(|n| via_local(n.text(cx.src)))) {
-        return true;
+    let mut via_local = |name: &str| !seen.iter().any(|s| s == name) && propagates(b, name, cx, seen);
+    let mut decls = Vec::new();
+    find_kind(b, "variable_declarator", &mut decls);
+    for d in &decls {
+        if copies_v(d.field("value")) && d.field("name").is_some_and(|n| via_local(n.text(cx.src))) {
+            return true;
+        }
     }
+    let in_body = |n: Node| n.start_byte() >= b.start_byte() && n.end_byte() <= b.end_byte();
     let mut stores = Vec::new();
     find_kind(b, "assignment_expression", &mut stores);
-    stores.iter().any(|s| {
+    for st in &stores {
         // not `msg += t`
-        s.field("operator").is_some_and(|o| o.text(cx.src) == "=")
-            && copies_v(s.field("right"))
-            && s.field("left").is_some_and(|l| {
-                let l = l.unparen();
-                if l.kind() == "identifier" && local_name(l.text(cx.src)) {
-                    via_local(l.text(cx.src))
-                } else {
-                    true
-                }
-            })
-    })
+        if !st.field("operator").is_some_and(|o| o.text(cx.src) == "=") || !copies_v(st.field("right")) {
+            continue;
+        }
+        let Some(l) = st.field("left").map(|l| l.unparen()) else { continue };
+        // a field or a local declared outside the catch keeps it for later
+        let body_local = l.kind() == "identifier" && cx.fm.binder.decl_index_of_ref(l).is_some_and(|i| in_body(cx.fm.binder.decls[i].decl_node));
+        if !body_local || via_local(l.text(cx.src)) {
+            return true;
+        }
+    }
+    false
 }
 
 declare_rule!(CatchNullPointer {

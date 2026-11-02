@@ -61,6 +61,12 @@ class A {
         try { work(); } catch (Throwable t) { Throwable saved = t; log.warn("x", saved); } // expect
         try { work(); } catch (Throwable t) { Throwable copy; copy = t; log.warn("x", copy); } // expect
         try { work(); } catch (Throwable t) { Throwable a = t; Throwable b = a; error = b; }
+        try { work(); } catch (Throwable t) { Throwable a = t; Throwable b = a; Throwable c = b; Throwable d = c; error = d; }
+        try { work(); } catch (Throwable t) { { Throwable error = null; } error = t; }
+    }
+    Throwable returned() {
+        try { work(); } catch (Throwable t) { Throwable saved = t; return saved; }
+        return null;
     }
     public static void main(String[] args) {
         try { } catch (Throwable t) { }
