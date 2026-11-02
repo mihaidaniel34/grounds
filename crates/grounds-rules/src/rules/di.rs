@@ -90,7 +90,9 @@ fn bean_list(di: &DiModel, idx: &[usize]) -> String {
 /// Run `f` for every injection point declared in this file with its resolution.
 fn for_each_point<'t>(cx: &mut Ctx<'_, 't>, mut f: impl FnMut(&mut Ctx<'_, 't>, Node<'t>, &InjectionPoint, Resolution, &DiModel)) {
     let Some(di) = cx.di else { return };
-    let include_test = cx.is_test();
+    // by source set, as the model marks test beans: the `src/main` of a
+    // test-only module is wired like an application
+    let include_test = grounds_index::sources::is_test_path(&cx.fm.path);
     for (decl, name) in file_classes(cx) {
         for p in di.points_of(&name) {
             let res = di.resolve(cx.fm, p, include_test);

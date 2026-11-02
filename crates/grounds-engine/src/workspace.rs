@@ -42,7 +42,7 @@ pub struct Workspace {
 
 const SKIP_DIRS: &[&str] = &["node_modules", ".git", ".gradle", ".idea", "out", ".grounds", "bin"];
 
-pub use grounds_index::sources::{is_test_set, set_extra_test_sets, source_set_of};
+pub use grounds_index::sources::{in_test_module, is_test_path, is_test_set, register_project_root, set_extra_test_sets, source_set_of};
 
 pub fn classify(path: &Path) -> SourceKind {
     let s = path.to_string_lossy();
@@ -51,6 +51,8 @@ pub fn classify(path: &Path) -> SourceKind {
     }
     match source_set_of(path) {
         Some(set) if is_test_set(set) => SourceKind::Test,
+        // `src/main` of a module that exists only for testing
+        _ if in_test_module(path) => SourceKind::Test,
         _ => SourceKind::Main,
     }
 }
