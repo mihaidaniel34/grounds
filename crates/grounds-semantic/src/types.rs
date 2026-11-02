@@ -321,7 +321,7 @@ impl<'t> FileModel<'t> {
 
     /// All bounds of a type variable visible at `at` (`T extends A & B`).
     pub fn type_var_bounds(&self, name: &str, at: Node<'t>) -> Vec<Ty> {
-        for a in std::iter::once(at).chain(at.ancestors()) {
+        for a in std::iter::once(at).chain(self.ancestors_of(at)) {
             if let Some(tp) = a.field("type_parameters") {
                 for p in tp.kids_of_kind("type_parameter") {
                     if p.kid_of_kind("type_identifier").map(|i| i.text(self.src)) == Some(name) {
@@ -338,7 +338,7 @@ impl<'t> FileModel<'t> {
 
     /// Bound of a type variable visible at `at`.
     pub fn type_var_bound(&self, name: &str, at: Node<'t>) -> Ty {
-        for a in std::iter::once(at).chain(at.ancestors()) {
+        for a in std::iter::once(at).chain(self.ancestors_of(at)) {
             if let Some(tp) = a.field("type_parameters") {
                 for p in tp.kids_of_kind("type_parameter") {
                     if p.kid_of_kind("type_identifier").map(|i| i.text(self.src)) == Some(name) {
@@ -373,7 +373,7 @@ impl<'t> FileModel<'t> {
                 if let Some(i) = self.binder.decl_index_of_ref(n) {
                     return Some(Symbol::Local(i, self.binder.decls[i].clone()));
                 }
-                if let Some(p) = n.parent() {
+                if let Some(p) = self.parent_of(n) {
                     let non_expr = match p.kind() {
                         "method_invocation" => p.field("name") == Some(n),
                         "method_reference" => p.kids().last() == Some(&n) && p.kids().len() > 1,
@@ -529,13 +529,13 @@ impl<'t> FileModel<'t> {
 
     fn compute_expected(&self, n: Node<'t>) -> Ty {
         let mut child = n;
-        let mut p = match n.parent() {
+        let mut p = match self.parent_of(n) {
             Some(p) => p,
             None => return Ty::Unknown,
         };
         while p.kind() == "parenthesized_expression" {
             child = p;
-            p = match p.parent() {
+            p = match self.parent_of(p) {
                 Some(x) => x,
                 None => return Ty::Unknown,
             };
@@ -551,7 +551,7 @@ impl<'t> FileModel<'t> {
                         return self.local_type(i);
                     }
                     // field
-                    if let Some(decl) = p.parent() {
+                    if let Some(decl) = self.parent_of(p) {
                         if let Some(t) = decl.field("type") {
                             let mut ty = self.resolve_type_node(t);
                             if let Some(d) = p.field("dimensions") {
@@ -572,7 +572,7 @@ impl<'t> FileModel<'t> {
                 self.functional_method(&target).map(|m| m.method.ret).filter(|t| !t.mentions_type_var()).unwrap_or(Ty::Unknown)
             }
             "argument_list" => {
-                let Some(call) = p.parent() else { return Ty::Unknown };
+                let Some(call) = self.parent_of(p) else { return Ty::Unknown };
                 let idx = p.kids().iter().position(|k| *k == child).unwrap_or(0);
                 self.param_type_at(call, idx)
             }
@@ -592,13 +592,13 @@ impl<'t> FileModel<'t> {
             "array_creation_expression" => self.type_of(p),
             "switch_rule" | "expression_statement" => {
                 // arrow switch expression arm
-                let sw = p.ancestor_of_kind(&["switch_expression"]);
+                let sw = self.ancestors_of(p).find(|a| a.kind() == "switch_expression");
                 match sw {
-                    Some(sw) if p.kind() == "switch_rule" || p.parent().is_some_and(|pp| pp.kind() == "switch_rule") => self.expected_type(sw),
+                    Some(sw) if p.kind() == "switch_rule" || self.parent_of(p).is_some_and(|pp| pp.kind() == "switch_rule") => self.expected_type(sw),
                     _ => Ty::Unknown,
                 }
             }
-            "yield_statement" => match p.ancestor_of_kind(&["switch_expression"]) {
+            "yield_statement" => match self.ancestors_of(p).find(|a| a.kind() == "switch_expression") {
                 Some(sw) => self.expected_type(sw),
                 None => Ty::Unknown,
             },

@@ -364,6 +364,7 @@ dependencies = [
 name = "grounds-syntax"
 version = "0.0.11"
 dependencies = [
+ "rustc-hash",
  "tree-sitter",
  "tree-sitter-java-orchard",
 ]
