@@ -382,6 +382,30 @@ fn assertj_style_generic_overloads_pick_the_specific_one() {
 }
 
 #[test]
+fn exact_overload_beats_generic_supertype_of_a_non_generic_argument() {
+    // `assertThat(Path)` against `<E> assertThat(Iterable<? extends E>)`:
+    // `Path` is an `Iterable<Path>` with no type arguments of its own, so the
+    // exact overload is surely more specific (40 calls in start.spring.io)
+    let t = types_of(
+        "interface P extends Comparable<P>, Iterable<P> {}
+         class Raw implements Iterable { public java.util.Iterator iterator() { return null; } }
+         class PathA {} class ObjA<T> {} class CmpA<T> {} class RawA {}
+         class A {
+           static PathA assertThat(P p) { return null; }
+           static RawA assertThat(Raw r) { return null; }
+           static <T> ObjA<T> assertThat(T t) { return null; }
+           static <T extends Comparable<? super T>> CmpA<T> assertThat(T t) { return null; }
+           static <E> ObjA<E> assertThat(Iterable<? extends E> l) { return null; }
+           void m(P p, Raw r) {
+             Object a = /*T*/ assertThat(p);
+             Object b = /*T*/ assertThat(r);
+           } }",
+    );
+    // `Raw` reaches `Iterable` only through a raw supertype: unchecked, no proof
+    assert_eq!(t, vec!["PathA", "?unknown"]);
+}
+
+#[test]
 fn generic_overloads_never_claim_a_pick_javac_would_not_make() {
     // erased bounds can rule a generic candidate out, not in: either javac's
     // pick or unknown, never a confident wrong type

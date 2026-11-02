@@ -207,6 +207,7 @@ impl Session {
         if any_decl_change || di_stale {
             self.project.rebuild_di();
         }
+        self.project.index.ensure_resolved();
         changed
     }
 
@@ -228,6 +229,7 @@ impl Session {
     }
 
     fn analyze(&self, rules: &RuleSet, files: &[PathBuf]) -> Vec<Finding> {
+        self.project.index.ensure_resolved();
         files
             .par_iter()
             .flat_map_iter(|p| match std::fs::read_to_string(p) {
@@ -425,7 +427,7 @@ impl Session {
         let may_supply = |name: &str, pkg: &str| {
             stub.imports.iter().any(|i| {
                 if !i.on_demand {
-                    return i.last() == name && (i.is_static || *i.path != *format!("{pkg}.{name}"));
+                    return i.is_named(name) && (i.is_static || *i.path != *format!("{pkg}.{name}"));
                 }
                 *i.path != *pkg && (!jdk || !i.path.starts_with("java.") || idx.class_exists(&format!("{}.{name}", i.path)) || idx.class_exists(&format!("{}${name}", i.path)))
             })
@@ -704,7 +706,7 @@ impl Session {
                     continue;
                 }
                 seen_files.insert(pb.clone());
-                if classify(&pb) == SourceKind::Test {
+                if crate::workspace::is_test_path(&pb.to_string_lossy()) {
                     for c in stub.classes.iter().filter(|c| c.outer.is_none()) {
                         tests.push(self.impacted_test(&pb, c.name.to_string()));
                     }
@@ -721,7 +723,7 @@ impl Session {
         }
         // tests among the changed files themselves
         for f in &targets {
-            if classify(f) == SourceKind::Test {
+            if crate::workspace::is_test_path(&f.to_string_lossy()) {
                 if let Some(stub) = self.project.index.file(&path_key(f)) {
                     for c in stub.classes.iter().filter(|c| c.outer.is_none()) {
                         tests.push(self.impacted_test(f, c.name.to_string()));

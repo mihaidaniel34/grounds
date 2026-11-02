@@ -335,21 +335,10 @@ impl<'a, 't> NullnessAnalysis<'a, 't> {
                 if init.kind() == "identifier" {
                     return out; // no alias chains
                 }
-                let is_and = |n: Node<'t>| n.kind() == "binary_expression" && n.field("operator").is_some_and(|o| o.kind() == "&&");
-                if is_and(init) {
-                    // the true edge implies every conjunct
-                    let mut stack = vec![init];
-                    while let Some(n) = stack.pop() {
-                        let n = n.unparen();
-                        if is_and(n) {
-                            stack.extend(n.field("left"));
-                            stack.extend(n.field("right"));
-                        } else if n.kind() != "identifier" {
-                            out.extend(self.cond_effect(n).into_iter().filter(|e| e.2));
-                        }
-                    }
-                } else {
-                    out = self.cond_effect(init);
+                // the true edge implies every conjunct, the false edge every
+                // disjunct's negation: `boolean empty = q == null || q.isEmpty(); if (!empty) q.peek()`
+                for truth in [true, false] {
+                    out.extend(self.implied_direct(init, truth).into_iter().map(|(j, s)| (j, s, truth)));
                 }
                 // the checked locals must still hold the checked values
                 out.retain(|(j, _, _)| is_effectively_final(self.fm, *j));
@@ -410,6 +399,20 @@ impl<'a, 't> NullnessAnalysis<'a, 't> {
             "unary_expression" if op == Some("!") => e.field("operand").map(|o| self.implied(o, !truth)).unwrap_or_default(),
             "binary_expression" if (op == Some("&&") && truth) || (op == Some("||") && !truth) => {
                 [e.field("left"), e.field("right")].into_iter().flatten().flat_map(|s| self.implied(s, truth)).collect()
+            }
+            _ => self.cond_effect(e).into_iter().filter(|x| x.2 == truth).map(|(i, s, _)| (i, s)).collect(),
+        }
+    }
+
+    /// `implied` without following boolean locals (no alias chains).
+    fn implied_direct(&self, e: Node<'t>, truth: bool) -> Vec<(usize, Nullness)> {
+        let e = e.unparen();
+        let op = e.field("operator").map(|o| o.kind());
+        match e.kind() {
+            "identifier" => Vec::new(),
+            "unary_expression" if op == Some("!") => e.field("operand").map(|o| self.implied_direct(o, !truth)).unwrap_or_default(),
+            "binary_expression" if (op == Some("&&") && truth) || (op == Some("||") && !truth) => {
+                [e.field("left"), e.field("right")].into_iter().flatten().flat_map(|s| self.implied_direct(s, truth)).collect()
             }
             _ => self.cond_effect(e).into_iter().filter(|x| x.2 == truth).map(|(i, s, _)| (i, s)).collect(),
         }
@@ -817,7 +820,10 @@ impl<'a, 't> ResourceAnalysis<'a, 't> {
                 }
                 let t = self.fm.type_of(v);
                 let Some(n) = t.class_name() else { return false };
-                if EXEMPT_RESOURCES.iter().any(|e| self.fm.is_subclass(n, e).is_yes()) {
+                if EXEMPT_RESOURCES.iter().any(|e| self.fm.is_subclass(n, e).is_yes()) || self.is_in_memory_stream(n) {
+                    return false;
+                }
+                if self.wraps_unowned(v) {
                     return false;
                 }
                 // wrappers over exempt or escaped streams are not new resources
@@ -860,6 +866,126 @@ impl<'a, 't> ResourceAnalysis<'a, 't> {
         }
     }
 
+    /// A project class extending `java.io.InputStream`/`OutputStream` whose
+    /// `close()` is inherited from there does nothing on close: those
+    /// `close()` methods are empty. An override that only marks the stream
+    /// closed (`closed = true;`) releases nothing either. A class that
+    /// overrides `close()` otherwise or takes a closeable in a constructor,
+    /// anywhere up its project hierarchy, still counts, as does one reaching
+    /// any other library class (e.g. `FilterOutputStream`, `FileOutputStream`).
+    fn is_in_memory_stream(&self, n: &str) -> bool {
+        let index = self.fm.index;
+        let mut cur: Name = Name::from(n);
+        for _ in 0..16 {
+            if matches!(&*cur, "java.io.InputStream" | "java.io.OutputStream") {
+                return true;
+            }
+            if !index.is_source_class(&cur) {
+                return false;
+            }
+            let Some(c) = index.class(&cur) else { return false };
+            if c.methods.iter().any(|m| &*m.name == "close" && m.params.is_empty() && !m.flags.has(Flags::RELEASES_NOTHING)) {
+                return false;
+            }
+            if c.constructors().any(|m| m.params.iter().any(|p| self.is_closeable_type(&p.ty))) {
+                return false;
+            }
+            let Some(s) = c.superclass.as_ref().and_then(|s| s.class_name()) else { return false };
+            cur = Name::from(s);
+        }
+        false
+    }
+
+    fn is_closeable_type(&self, t: &Ty) -> bool {
+        t.class_name().is_some_and(|n| self.fm.is_subclass(n, "java.lang.AutoCloseable").is_yes())
+    }
+
+    /// `new ResponseWrapper(response)`: a closeable whose constructor takes
+    /// only closeables or servlet requests/responses, built only from parameters,
+    /// fields and values obtained from them. Closing it would close the
+    /// caller's resource, so this method does not own it.
+    fn wraps_unowned(&self, v: Node<'t>) -> bool {
+        let args = self.fm.args_of(v);
+        if args.is_empty() {
+            return false;
+        }
+        let Some(ctor) = self.fm.resolve_call(v) else { return false };
+        if self.opens_own_resource(&ctor.owner) {
+            return false;
+        }
+        let raw = self.fm.index.raw_class(&ctor.owner).and_then(|(_, c)| c.methods.iter().find(|m| Some(m.range) == ctor.method.range));
+        // every parameter borrows: a `File` or a path may open a resource of its own
+        let wraps = !ctor.method.params.is_empty() && ctor.method.params.iter().enumerate().all(|(k, p)| {
+            self.is_closeable_type(&p.ty) || is_servlet_message(self.fm, &p.ty) || (p.ty.is_unknown() && raw.and_then(|r| r.params.get(k)).is_some_and(|r| is_servlet_name(&r.ty)))
+        });
+        if !wraps {
+            return false;
+        }
+        args.iter().all(|a| self.from_unowned(*a, 3))
+    }
+
+    /// Is `e` a parameter, a field, or a value read from one (through casts,
+    /// calls on it and effectively final locals holding such a value)? A call
+    /// returning a closeable may open a new one (`url.openStream()`), so it
+    /// does not count.
+    fn from_unowned(&self, e: Node<'t>, depth: u32) -> bool {
+        let e = e.unparen();
+        match e.kind() {
+            "field_access" => e.field("object").is_some_and(|o| {
+                let o = o.unparen();
+                // a holder returned by a call may be fresh (`factory.makeHolder().stream`)
+                matches!(o.kind(), "this" | "super") || self.names_type(o) || (o.kind() != "method_invocation" && self.from_unowned(o, depth))
+            }),
+            "cast_expression" => e.field("value").is_some_and(|x| self.from_unowned(x, depth)),
+            "method_invocation" => {
+                depth > 0
+                    && !self.creates_resource(e)
+                    && !self.is_closeable_type(&self.fm.type_of(e))
+                    && e.field("object").is_some_and(|o| {
+                        let o = o.unparen();
+                        o.kind() == "this" || self.from_unowned(o, depth - 1)
+                    })
+            }
+            "identifier" => {
+                let Some(i) = self.fm.binder.decl_index_of_ref(e) else {
+                    // not a local: a field (types and statics are not values here)
+                    return self.fm.type_of(e).class_name().is_some();
+                };
+                let d = &self.fm.binder.decls[i];
+                match d.kind {
+                    LocalKind::Param | LocalKind::LambdaParam => is_effectively_final(self.fm, i),
+                    LocalKind::Local => depth > 0 && is_effectively_final(self.fm, i) && d.decl_node.field("value").is_some_and(|x| self.from_unowned(x, depth - 1)),
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Does class `n` or a project superclass open a resource of its own in a
+    /// constructor or field initializer?
+    fn opens_own_resource(&self, n: &str) -> bool {
+        let index = self.fm.index;
+        let mut cur: Name = Name::from(n);
+        for _ in 0..16 {
+            if !index.is_source_class(&cur) {
+                return false;
+            }
+            let Some(c) = index.class(&cur) else { return false };
+            if c.flags.has(Flags::OPENS_RESOURCE) {
+                return true;
+            }
+            let Some(s) = c.superclass.as_ref().and_then(|s| s.class_name()) else { return false };
+            cur = Name::from(s);
+        }
+        false
+    }
+
+    /// `Shared` in `Shared.stream` or `Outer` in `Outer.this.stream`.
+    fn names_type(&self, o: Node<'t>) -> bool {
+        o.kind() == "identifier" && self.fm.binder.decl_index_of_ref(o).is_none() && self.fm.index.resolve_simple_type(self.fm.text(o), &self.fm.scope_at(o)).is_some()
+    }
+
     fn arg_is_stream_like(&self, a: Node<'t>) -> bool {
         let t = self.fm.type_of(a);
         match t.class_name() {
@@ -888,6 +1014,20 @@ fn is_wrapper_type(fm: &FileModel, n: &str) -> bool {
     ["java.io.FilterInputStream", "java.io.FilterOutputStream", "java.io.BufferedReader", "java.io.BufferedWriter", "java.io.InputStreamReader", "java.io.OutputStreamWriter", "java.io.PrintWriter", "java.io.PrintStream", "java.io.ObjectInputStream", "java.io.ObjectOutputStream", "java.util.zip.ZipInputStream", "java.util.zip.GZIPInputStream", "java.util.Scanner", "java.io.LineNumberReader", "java.io.PushbackReader"]
         .iter()
         .any(|w| fm.is_subclass(n, w).is_yes())
+}
+
+fn is_servlet_message(fm: &FileModel, t: &Ty) -> bool {
+    t.class_name().is_some_and(|n| {
+        ["javax.servlet.ServletRequest", "javax.servlet.ServletResponse", "jakarta.servlet.ServletRequest", "jakarta.servlet.ServletResponse"]
+            .iter()
+            .any(|s| fm.is_subclass(n, s).is_yes())
+    })
+}
+
+/// A parameter type written as a servlet request or response that does not
+/// resolve (the servlet API is not on the classpath).
+fn is_servlet_name(ts: &TypeSyntax) -> bool {
+    matches!(ts, TypeSyntax::Named(segs) if segs.last().is_some_and(|(n, _)| matches!(&**n, "ServletRequest" | "ServletResponse" | "HttpServletRequest" | "HttpServletResponse")))
 }
 
 impl<'a, 't> Analysis<'t> for ResourceAnalysis<'a, 't> {
@@ -1050,7 +1190,34 @@ pub struct OptionalPresence<'a, 't> {
     pub fm: &'a FileModel<'t>,
 }
 
-pub type PresentFact = FxHashSet<usize>;
+/// Optional locals known present, plus what a boolean local's value says
+/// about them: after `if (expected && o.isEmpty()) throw ..;` the paths
+/// where `expected` is false and those where `o` is present merge into
+/// "`expected` implies `o` present".
+#[derive(Clone, PartialEq, Default, Debug)]
+pub struct PresentFact {
+    present: FxHashSet<usize>,
+    /// boolean locals with a known value on every path here
+    flags: FxHashMap<usize, bool>,
+    /// (flag, value, optional): the optional is present when the flag has that value
+    implied: FxHashSet<(usize, bool, usize)>,
+}
+
+impl PresentFact {
+    pub fn contains(&self, i: &usize) -> bool {
+        self.present.contains(i)
+    }
+
+    fn holds(&self, &(flag, value, o): &(usize, bool, usize)) -> bool {
+        self.present.contains(&o) || self.flags.get(&flag) == Some(&!value) || self.implied.contains(&(flag, value, o))
+    }
+
+    fn kill(&mut self, i: usize) {
+        self.present.remove(&i);
+        self.flags.remove(&i);
+        self.implied.retain(|&(f, _, o)| f != i && o != i);
+    }
+}
 
 impl<'a, 't> OptionalPresence<'a, 't> {
     pub fn optional_local(&self, n: Option<Node<'t>>) -> Option<usize> {
@@ -1068,20 +1235,138 @@ impl<'a, 't> OptionalPresence<'a, 't> {
     }
 }
 
+impl<'a, 't> OptionalPresence<'a, 't> {
+    /// Optional locals known present when boolean `e` has outcome `truth`:
+    /// `o.isPresent()`, `!o.isEmpty()`, through `!`, `&&` (true), `||`
+    /// (false), and an effectively-final boolean local holding such a test
+    /// (`boolean has = o.isPresent(); if (has) ...`).
+    pub fn present_when(&self, e: Node<'t>, truth: bool) -> Vec<usize> {
+        self.present_when_in(e, truth, true)
+    }
+
+    fn present_when_in(&self, e: Node<'t>, truth: bool, follow_alias: bool) -> Vec<usize> {
+        let e = e.unparen();
+        let op = e.field("operator").map(|o| o.kind());
+        match e.kind() {
+            "unary_expression" if op == Some("!") => e.field("operand").map(|o| self.present_when_in(o, !truth, follow_alias)).unwrap_or_default(),
+            "binary_expression" if (op == Some("&&") && truth) || (op == Some("||") && !truth) => {
+                [e.field("left"), e.field("right")].into_iter().flatten().flat_map(|s| self.present_when_in(s, truth, follow_alias)).collect()
+            }
+            "method_invocation" => {
+                let args = self.fm.args_of(e);
+                let proves = match (self.fm.call_name(e), &args[..]) {
+                    (Some("isPresent"), []) => truth,
+                    (Some("isEmpty"), []) => !truth,
+                    // `o.map(f).orElse(false)` is true only when `o` holds a value
+                    (Some("orElse"), [a]) => truth && a.unparen().kind() == "false",
+                    _ => false,
+                };
+                if proves { self.chain_root(e.field("object")).into_iter().collect() } else { Vec::new() }
+            }
+            // no alias chains; the Optional must still hold the tested value
+            "identifier" if follow_alias => {
+                let Some(i) = self.fm.binder.decl_index_of_ref(e) else { return Vec::new() };
+                let d = &self.fm.binder.decls[i];
+                if d.kind != LocalKind::Local || !is_effectively_final(self.fm, i) {
+                    return Vec::new();
+                }
+                let Some(init) = d.decl_node.field("value") else { return Vec::new() };
+                let mut out = self.present_when_in(init, truth, false);
+                out.retain(|j| is_effectively_final(self.fm, *j));
+                out
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// The Optional local a `map`/`filter`/`flatMap` chain starts from: each
+    /// step is empty when its receiver is, so `o.filter(p).isPresent()` proves `o`.
+    fn chain_root(&self, n: Option<Node<'t>>) -> Option<usize> {
+        let n = n?.unparen();
+        if n.kind() == "method_invocation" && matches!(self.fm.call_name(n), Some("map" | "filter" | "flatMap")) && self.fm.args_of(n).len() == 1 {
+            let root = self.chain_root(n.field("object"))?;
+            // `o.map((o = other)::equals)` tests the old value, not what `o` holds after
+            let writes = self.fm.args_of(n)[0].descendants().any(|d| local_def(self.fm, d).is_some_and(|(i, _)| i == root));
+            return (!writes).then_some(root);
+        }
+        self.optional_local(Some(n))
+    }
+
+    /// The boolean local a condition is (`flag`), as the CFG splits `&&`,
+    /// `||` and `!` into separate edges.
+    fn flag_local(&self, c: Node<'t>) -> Option<usize> {
+        let c = c.unparen();
+        if c.kind() != "identifier" {
+            return None;
+        }
+        let i = self.fm.binder.decl_index_of_ref(c)?;
+        matches!(self.fm.binder.decls[i].kind, LocalKind::Local | LocalKind::Param).then_some(i)
+    }
+
+    /// The boolean a call requires to return, by name: Guava
+    /// `checkArgument`/`checkState`, Spring `Assert.isTrue`/`state`, commons
+    /// `Validate.isTrue`/`validState`, `assertTrue`/`assertFalse`, AssertJ
+    /// `assertThat(b).isTrue()`, Hamcrest `assertThat(b, is(true))`.
+    fn required_condition(&self, call: Node<'t>) -> Option<(Node<'t>, bool)> {
+        let fm = self.fm;
+        let args = fm.args_of(call);
+        let name = fm.call_name(call)?;
+        match name {
+            "checkArgument" | "checkState" | "state" | "validState" | "assertTrue" | "assertFalse" | "isTrue" | "isFalse" if !args.is_empty() => {
+                let want = !matches!(name, "assertFalse" | "isFalse");
+                // JUnit 4 and TestNG: `assertTrue(message, condition)` / `assertTrue(condition, message)`
+                let cond = args.iter().copied().find(|a| !matches!(a.unparen().kind(), "string_literal" | "binary_expression" if fm.type_of(*a).is_string()))?;
+                Some((cond, want))
+            }
+            "isTrue" | "isFalse" => {
+                let root = assert_that_root(fm, call.field("object"))?;
+                Some((fm.args_of(root).first().copied()?, name == "isTrue"))
+            }
+            "assertThat" if args.len() == 2 => {
+                // `is(true)`, `equalTo(false)`, `is(equalTo(true))`
+                let mut m = args[1].unparen();
+                while m.kind() == "method_invocation" && matches!(fm.call_name(m), Some("is" | "equalTo")) && fm.args_of(m).len() == 1 {
+                    m = fm.args_of(m)[0].unparen();
+                }
+                match m.kind() {
+                    "true" => Some((args[0], true)),
+                    "false" => Some((args[0], false)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
 impl<'a, 't> Analysis<'t> for OptionalPresence<'a, 't> {
     type Fact = PresentFact;
     fn bottom(&self) -> PresentFact {
-        FxHashSet::default()
+        PresentFact::default()
     }
     fn boundary(&self) -> PresentFact {
-        FxHashSet::default()
+        PresentFact::default()
     }
     fn join(&self, a: &PresentFact, b: &PresentFact) -> PresentFact {
-        a.intersection(b).copied().collect()
+        let present: FxHashSet<usize> = a.present.intersection(&b.present).copied().collect();
+        let flags = a.flags.iter().filter(|(k, v)| b.flags.get(k) == Some(v)).map(|(k, v)| (*k, *v)).collect();
+        // an implication holds on each side: kept, or newly formed where one
+        // side knows the flag and the other the optional (`!flag || present`)
+        let formed = |x: &PresentFact, y: &PresentFact| -> Vec<(usize, bool, usize)> {
+            x.flags.iter().flat_map(|(&f, &v)| y.present.iter().map(move |&o| (f, !v, o))).collect()
+        };
+        let implied = a.implied.iter().chain(&b.implied).copied().chain(formed(a, b)).chain(formed(b, a))
+            .filter(|t| !present.contains(&t.2) && a.holds(t) && b.holds(t))
+            .collect();
+        PresentFact { present, flags, implied }
     }
-    fn transfer(&self, e: Node<'t>, f: &mut PresentFact) {
-        if let Some((i, _)) = local_def(self.fm, e) {
-            f.remove(&i);
+    fn transfer(&self, e: Node<'t>, fact: &mut PresentFact) {
+        let def = local_def(self.fm, e);
+        if let Some((i, _)) = def {
+            fact.kill(i);
+        }
+        let f = &mut fact.present;
+        if let Some((i, _)) = def {
             // Optional.of(...) is always present
             let v = if e.kind() == "variable_declarator" { e.field("value") } else { e.field("right") };
             if let Some(v) = v {
@@ -1106,16 +1391,10 @@ impl<'a, 't> Analysis<'t> for OptionalPresence<'a, 't> {
                         f.insert(i);
                     }
                 }
-                if matches!(name, "assertTrue" | "assertFalse") {
-                    let want = if name == "assertTrue" { "isPresent" } else { "isEmpty" };
-                    for a in self.fm.args_of(e) {
-                        let a = a.unparen();
-                        if a.kind() == "method_invocation" && self.fm.call_name(a) == Some(want) {
-                            if let Some(i) = self.optional_local(a.field("object")) {
-                                f.insert(i);
-                            }
-                        }
-                    }
+                // calls that return only when a condition holds: `assertTrue(o.isPresent())`,
+                // `checkArgument(o.isPresent(), ..)`, `assertThat(o.isPresent(), is(true))`
+                if let Some((cond, want)) = self.required_condition(e) {
+                    f.extend(self.present_when(cond, want));
                 }
             }
         }
@@ -1126,20 +1405,18 @@ impl<'a, 't> Analysis<'t> for OptionalPresence<'a, 't> {
             EdgeKind::False(c) => (*c, false),
             _ => return Some(fact.clone()),
         };
-        let c = c.unparen();
-        if c.kind() == "method_invocation" {
-            if let Some(i) = self.optional_local(c.field("object")) {
-                match (self.fm.call_name(c), truth) {
-                    (Some("isPresent"), true) | (Some("isEmpty"), false) => {
-                        let mut f = fact.clone();
-                        f.insert(i);
-                        return Some(f);
-                    }
-                    _ => {}
-                }
-            }
+        let flag = self.flag_local(c);
+        // the flag's value is known on every path here: the other edge is never taken
+        if flag.is_some_and(|g| fact.flags.get(&g) == Some(&!truth)) {
+            return None;
         }
-        Some(fact.clone())
+        let mut f = fact.clone();
+        f.present.extend(self.present_when(c, truth));
+        if let Some(flag) = flag {
+            f.flags.insert(flag, truth);
+            f.present.extend(fact.implied.iter().filter(|&&(g, v, _)| g == flag && v == truth).map(|t| t.2));
+        }
+        Some(f)
     }
 }
 

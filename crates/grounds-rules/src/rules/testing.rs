@@ -56,7 +56,7 @@ fn assertion_class<'t>(cx: &Ctx<'_, 't>, call: Node<'t>) -> Option<Name> {
         }
         if owners.is_empty() {
             for i in cx.fm.stub.imports.iter().filter(|i| i.is_static) {
-                let class = if i.on_demand { &*i.path } else if i.last() == name { i.path.rsplit_once('.').map_or("", |x| x.0) } else { continue };
+                let class = if i.on_demand { &*i.path } else if i.is_named(name) { i.path.rsplit_once('.').map_or("", |x| x.0) } else { continue };
                 match cx.fm.index.binary_name_for_dotted(class) {
                     Some(b) if !i.on_demand || !cx.fm.methods_named(&Ty::class(&b), name).is_empty() => owners.push(b),
                     Some(_) => {}
@@ -186,13 +186,15 @@ fn call_asserts<'t>(c: Node<'t>, test: Node<'t>, cx: &Ctx<'_, 't>, depth: u32, s
     let Some(m) = resolved else {
         return unqualified && unresolved_helper_asserts(c, name, test, cx, depth, seen);
     };
+    let flagged = m.method.flags.has(Flags::ASSERTS) || m.method.flags.has(Flags::DELEGATES);
     match cx.fm.index.source_file_of(&m.owner) {
         // declared here: follow the body, which may call helpers of other files
         Some(f) if *f == cx.fm.path => m.method.flags.has(Flags::ASSERTS) || depth > 0 && method_decl(cx, &m.method).is_some_and(|d| decl_asserts(d, test, cx, depth - 1, seen)),
         // a test helper of another file, checked when it was indexed; one
         // that delegates to a method inherited from yet another file may
-        // assert there
-        Some(f) if grounds_index::sources::is_test_path(f) => m.method.flags.has(Flags::ASSERTS) || m.method.flags.has(Flags::DELEGATES),
+        // assert there; an unflagged one of a test-only module's `src/main`
+        // is judged like library code below
+        Some(f) if grounds_index::sources::is_test_path(f) || flagged && grounds_index::sources::is_test_code(f) => flagged,
         // library (or main) code: an inherited void harness method asserts
         // (`rewriteRun(...)` from OpenRewrite's RewriteTest); `int compute()`
         // merely computes
@@ -234,7 +236,7 @@ fn unresolved_helper_asserts<'t>(c: Node<'t>, name: &str, test: Node<'t>, cx: &C
             && if i.on_demand {
                 cx.fm.index.binary_name_for_dotted(&i.path).is_none_or(|b| !cx.fm.methods_named(&Ty::class(&b), name).is_empty())
             } else {
-                i.last() == name
+                i.is_named(name)
             }
     })
 }
@@ -592,6 +594,10 @@ impl Rule for TestClassWithoutTests {
         if !(name.ends_with("Test") || name.ends_with("Tests")) || n.has_modifier("abstract") || n.field("superclass").is_some() {
             return;
         }
+        // JMH benchmarks are often named `*Test` too
+        if n.descendants().any(|d| d.kind() == "method_declaration" && annotation_names(d, cx.src).contains(&"Benchmark")) {
+            return;
+        }
         let has_test = n.descendants().any(|d| d.kind() == "method_declaration" && is_test_method(d, cx.src))
             || n.descendants().any(|d| matches!(d.kind(), "class_declaration") && d != n && annotation_names(d, cx.src).contains(&"Nested"));
         if !has_test && !annotation_names(n, cx.src).iter().any(|a| matches!(*a, "Suite" | "RunWith" | "SelectClasses" | "SelectPackages" | "Cucumber")) {
@@ -638,7 +644,8 @@ impl Rule for DisabledWithoutReason {
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
         let name = n.field("name").map(|x| cx.text(x)).unwrap_or("");
         let simple = name.rsplit('.').next().unwrap_or(name);
-        if !matches!(simple, "Disabled" | "Ignore") {
+        // `@GraphQl.Ignore`, `@JsonIgnore`-like annotations of other libraries
+        if !matches!(simple, "Disabled" | "Ignore") || name.contains('.') && !name.starts_with("org.junit.") {
             return;
         }
         let empty = n.kind() == "marker_annotation" || n.field("arguments").is_some_and(|a| cx.text(a).replace(char::is_whitespace, "") == "(\"\")" || cx.text(a) == "()");

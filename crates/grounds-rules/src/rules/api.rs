@@ -188,10 +188,69 @@ impl Rule for IgnoredFileResult {
         if mock_setup {
             return;
         }
+        if cx.fm.call_matches(e, &QUEUE_OFFER) && unbounded_queue(cx, e.field("object")) {
+            return;
+        }
+        if cx.fm.call_matches(e, &LATCH_AWAIT) && latch_checked_after(cx, e) {
+            return;
+        }
         if cx.fm.call_matches_any(e, &[FILE_OPS, LOCK_TRY, QUEUE_OFFER, LATCH_AWAIT, EXECUTOR_AWAIT]) {
             cx.report(e, format!("The boolean result of `{}()` is ignored; failures go unnoticed", cx.fm.call_name(e).unwrap_or("")));
         }
     }
+}
+
+/// `offer` on a queue without capacity never returns false: a
+/// `PriorityBlockingQueue`, `DelayQueue` or `LinkedTransferQueue`, or a
+/// `LinkedBlockingQueue`/`LinkedBlockingDeque` field or local created without one.
+fn unbounded_queue<'t>(cx: &Ctx<'_, 't>, recv: Option<Node<'t>>) -> bool {
+    let Some(recv) = recv.map(|r| r.unparen()) else { return false };
+    let t = cx.type_of(recv);
+    if matches!(t.class_name(), Some("java.util.concurrent.PriorityBlockingQueue" | "java.util.concurrent.DelayQueue" | "java.util.concurrent.LinkedTransferQueue")) {
+        return true;
+    }
+    let name = match recv.kind() {
+        "identifier" => cx.text(recv),
+        "field_access" if recv.field("object").is_some_and(|o| o.kind() == "this") => recv.field("field").map(|f| cx.text(f)).unwrap_or(""),
+        _ => return false,
+    };
+    // the declarator of that name in this file, written nowhere else
+    let mut inits = cx.fm.root().descendants().filter(|d| d.kind() == "variable_declarator" && d.field("name").is_some_and(|n| cx.text(n) == name));
+    let (Some(d), None) = (inits.next(), inits.next()) else { return false };
+    // and the one the receiver names: not a field when a parameter shadows it
+    let bound = match cx.fm.local_decl(recv).filter(|_| recv.kind() == "identifier") {
+        Some(l) => l.decl_node == d,
+        None => d.parent().is_some_and(|p| p.kind() == "field_declaration"),
+    };
+    if !bound {
+        return false;
+    }
+    let Some(v) = d.field("value").map(|v| v.unparen()).filter(|v| v.kind() == "object_creation_expression") else { return false };
+    let reassigned = cx.fm.root().descendants().any(|a| a.kind() == "assignment_expression" && a.field("left").is_some_and(|l| {
+        let l = l.unparen();
+        cx.text(l) == name || l.kind() == "field_access" && l.field("field").is_some_and(|f| cx.text(f) == name)
+    }));
+    let created = cx.type_of(v);
+    !reassigned
+        && cx.fm.args_of(v).is_empty()
+        && matches!(created.class_name(), Some("java.util.concurrent.LinkedBlockingQueue" | "java.util.concurrent.LinkedBlockingDeque" | "java.util.concurrent.PriorityBlockingQueue" | "java.util.concurrent.LinkedTransferQueue"))
+}
+
+/// A timed `latch.await(..)` whose outcome is checked anyway: polled in a
+/// loop on the latch (`while (latch.getCount() != 0) latch.await(1, SECONDS)`)
+/// or followed by a read of `latch.getCount()` in the same method.
+fn latch_checked_after<'t>(cx: &Ctx<'_, 't>, call: Node<'t>) -> bool {
+    let Some(recv) = call.field("object").map(|r| r.unparen()) else { return false };
+    let r = cx.text(recv);
+    let Some(scope) = call.ancestors().find(|a| matches!(a.kind(), "method_declaration" | "constructor_declaration" | "lambda_expression")) else { return false };
+    let in_loop = call.ancestors().take_while(|a| *a != scope).any(|a| {
+        matches!(a.kind(), "while_statement" | "do_statement" | "for_statement") && a.field("condition").is_some_and(|c| cx.text(c).contains(&format!("{r}.getCount()")))
+    });
+    in_loop
+        || scope.descendants().any(|d| {
+            d.start_byte() >= call.end_byte() && d.kind() == "method_invocation" && cx.fm.call_name(d) == Some("getCount") && d.field("object").is_some_and(|o| cx.text(o.unparen()) == r)
+                && d.parent().is_some_and(|p| p.kind() != "expression_statement")
+        })
 }
 
 const READ_METHODS: MethodMatcher = MethodMatcher::any().named(&["read", "skip"]);

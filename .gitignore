@@ -13,6 +13,8 @@
 !/nix/*.nix
 !/docs/*.md
 !/.github/workflows/*.yml
+!/site/*.html
+!/site/*.svg
 
 !/crates/*/Cargo.toml
 !/crates/*/src/**/*.rs

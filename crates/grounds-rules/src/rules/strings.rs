@@ -592,6 +592,15 @@ impl Rule for LogFormatMismatch {
             if placeholders == 0 && args.len() == 1 && last_is_throwable {
                 return;
             }
+            // one argument too many and the last one's type is unknown (its
+            // jar is missing): it may be the trailing exception
+            let maybe_throwable = |a: Node<'t>| {
+                let t = cx.type_of(a);
+                t.is_unknown() || t.class_name().is_some_and(|c| !cx.fm.is_subclass(c, "java.lang.Throwable").is_no())
+            };
+            if !last_is_throwable && placeholders + 1 == nargs && args.last().is_some_and(|a| maybe_throwable(*a)) {
+                return;
+            }
             cx.report(n, format!("Log message has {placeholders} placeholder(s) but {nargs} argument(s)"));
         }
     }

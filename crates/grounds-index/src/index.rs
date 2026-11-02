@@ -14,8 +14,9 @@ thread_local! {
 use dashmap::DashMap;
 use grounds_classfile::ClassContainer;
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// How much of the JDK's API the classpath holds for the project's release.
@@ -201,7 +202,7 @@ pub struct SourceClassRef {
 #[derive(Clone, Debug, Default)]
 pub struct Scope<'a> {
     pub package: &'a str,
-    pub imports: &'a [Import],
+    pub imports: &'a Imports,
     /// Enclosing classes, innermost first.
     pub enclosing: Vec<Name>,
     /// Type variables in scope.
@@ -220,10 +221,42 @@ pub struct Index {
     /// across modules, e.g. test fixtures).
     defs: FxHashMap<Name, u32>,
     pub generation: u64,
+    // the generation resolve_ordered last filled the cache at
+    resolved_at: AtomicU64,
+    // the groups resolve_ordered last used; None: the next fill resolves everything
+    plan: parking_lot::Mutex<Option<Plan>>,
+}
+
+// file groups in dependency order, and the files edited since without a declaration change
+struct Plan {
+    groups: Vec<Vec<Arc<str>>>,
+    group_of: FxHashMap<Arc<str>, usize>,
+    dirty: Vec<Arc<str>>,
 }
 
 thread_local! {
     static RESOLVING: RefCell<FxHashSet<Name>> = RefCell::new(FxHashSet::default());
+    // while resolve_ordered works on a group on this thread
+    static GROUP: RefCell<Option<FxHashSet<Name>>> = const { RefCell::new(None) };
+    // source classes this thread had to resolve outside its group due to missing graph edges
+    static OUTSIDE: Cell<usize> = const { Cell::new(0) };
+}
+
+// marks this thread as working on one group until dropped, also when resolution panics
+struct InGroup;
+
+impl InGroup {
+    fn enter(classes: FxHashSet<Name>) -> InGroup {
+        GROUP.with(|g| *g.borrow_mut() = Some(classes));
+        OUTSIDE.with(|o| o.set(0));
+        InGroup
+    }
+}
+
+impl Drop for InGroup {
+    fn drop(&mut self) {
+        GROUP.with(|g| *g.borrow_mut() = None);
+    }
 }
 
 /// Marks a class as being resolved on this thread for as long as it lives,
@@ -249,10 +282,11 @@ impl Drop for Resolving<'_> {
 
 impl Index {
     pub fn new(classpath: Arc<Classpath>) -> Index {
-        Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), generation: 0 }
+        Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), generation: 0, resolved_at: AtomicU64::new(u64::MAX), plan: parking_lot::Mutex::new(None) }
     }
 
     pub fn set_file(&mut self, path: Arc<str>, stub: Arc<FileStub>) {
+        let body_only = self.files.get(&path).is_some_and(|old| old.signature_hash == stub.signature_hash);
         self.remove_file_inner(&path);
         for (i, c) in stub.classes.iter().enumerate() {
             // a class defined in several files resolves to the smallest path,
@@ -273,13 +307,29 @@ impl Index {
                 None => break,
             }
         }
+        let plan = self.plan.get_mut();
+        match plan {
+            // same declarations: only the file's group resolves differently (positions)
+            Some(p) if body_only && p.group_of.contains_key(&path) => {
+                for c in &stub.classes {
+                    if self.classes.get(&c.name).is_some_and(|(owner, _)| *owner == path) {
+                        self.cache.remove(&c.name);
+                    }
+                }
+                p.dirty.push(path.clone());
+            }
+            _ => {
+                *plan = None;
+                self.cache.clear();
+            }
+        }
         self.files.insert(path, stub);
-        self.cache.clear();
         self.generation += 1;
     }
 
     pub fn remove_file(&mut self, path: &str) {
         self.remove_file_inner(path);
+        *self.plan.get_mut() = None;
         self.cache.clear();
         self.generation += 1;
     }
@@ -367,11 +417,88 @@ impl Index {
                 return c.clone();
             }
             let _resolving = Resolving::enter(name)?;
+            // resolving a class of another group => the file graph missed an edge
+            if GROUP.with(|g| g.borrow().as_ref().is_some_and(|g| !g.contains(name))) {
+                OUTSIDE.with(|o| o.set(o.get() + 1));
+            }
             let r = self.resolve_source_class(name).map(Arc::new);
             self.cache.insert(Arc::from(name), r.clone());
             return r;
         }
         self.classpath.class(name)
+    }
+
+    // files that need each other form a group => 1 thread
+    pub fn resolve_ordered(&self) -> crate::order::ResolveStats {
+        use rayon::prelude::*;
+        self.cache.clear();
+        let (files, edges) = crate::order::file_graph(self);
+        let groups = crate::order::components(&edges);
+        let waves = crate::order::waves(&groups, &edges);
+        let mut group_sizes: Vec<usize> = groups.iter().map(|g| g.len()).collect();
+        group_sizes.sort_unstable_by(|a, b| b.cmp(a));
+        let mut stats = crate::order::ResolveStats { files: files.len(), waves: waves.len(), group_sizes, outside: 0 };
+        for wave in waves {
+            stats.outside += wave
+                .par_iter()
+                .map(|&g| self.resolve_group(groups[g].iter().map(|&f| &files[f as usize])))
+                .sum::<usize>();
+        }
+        let groups: Vec<Vec<Arc<str>>> = groups.iter().map(|g| g.iter().map(|&f| files[f as usize].clone()).collect()).collect();
+        let group_of = groups.iter().enumerate().flat_map(|(g, fs)| fs.iter().map(move |f| (f.clone(), g))).collect();
+        *self.plan.lock() = Some(Plan { groups, group_of, dirty: Vec::new() });
+        self.resolved_at.store(self.generation, Ordering::Release);
+        stats
+    }
+
+    // resolves the group's classes on this thread, in name order
+    fn resolve_group<'p>(&self, paths: impl Iterator<Item = &'p Arc<str>>) -> usize {
+        // the classes declared in the group's files - a class declared in several files belongs to the file the index uses for it
+        let mut names: Vec<Name> = Vec::new();
+        for path in paths {
+            for c in self.files.get(path).map_or(&[][..], |s| &s.classes) {
+                if self.classes.get(&c.name).is_some_and(|(p, _)| p == path) {
+                    names.push(c.name.clone());
+                }
+            }
+        }
+        names.sort();
+        names.dedup();
+        let _group = InGroup::enter(names.iter().cloned().collect());
+        for n in &names {
+            let _ = self.class(n);
+        }
+        OUTSIDE.with(|o| o.get())
+    }
+
+    // brings the cache up to date the way resolve_ordered fills it: after body-only
+    // edits only their groups again, in dependency order, otherwise everything
+    pub fn ensure_resolved(&self) {
+        if self.resolved_at.load(Ordering::Acquire) == self.generation {
+            return;
+        }
+        let mut plan = self.plan.lock();
+        let Some(p) = plan.as_mut() else {
+            drop(plan);
+            self.resolve_ordered();
+            return;
+        };
+        let mut dirty: Vec<usize> = std::mem::take(&mut p.dirty).iter().filter_map(|f| p.group_of.get(f).copied()).collect();
+        dirty.sort_unstable();
+        dirty.dedup();
+        for &g in &dirty {
+            for path in &p.groups[g] {
+                for c in self.files.get(path).map_or(&[][..], |s| &s.classes) {
+                    if self.classes.get(&c.name).is_some_and(|(owner, _)| owner == path) {
+                        self.cache.remove(&c.name);
+                    }
+                }
+            }
+        }
+        for &g in &dirty {
+            self.resolve_group(p.groups[g].iter());
+        }
+        self.resolved_at.store(self.generation, Ordering::Release);
     }
 
     fn scope_for_raw<'a>(&self, stub: &'a FileStub, raw: &RawClass) -> Scope<'a> {
@@ -599,7 +726,7 @@ impl Index {
             }
             if owner.is_none() {
                 for imp in scope.imports.iter().filter(|i| i.is_static) {
-                    if imp.on_demand || imp.last() == f {
+                    if imp.on_demand || imp.is_named(f) {
                         let cls = if imp.on_demand { imp.path.to_string() } else { imp.path.rsplit_once('.').map(|x| x.0.to_string()).unwrap_or_default() };
                         if let Some(b) = self.binary_name_for_dotted(&cls) {
                             if self.class(&b).is_some_and(|c| c.field(f).is_some()) {
@@ -800,26 +927,24 @@ impl Index {
             }
         }
         // single-type imports
-        for imp in scope.imports.iter().filter(|i| !i.on_demand) {
-            if imp.last() == simple {
-                if imp.is_static {
-                    // static import of a member type
-                    if let Some((cls, _)) = imp.path.rsplit_once('.') {
-                        if let Some(b) = self.binary_name_for_dotted(cls) {
-                            if let Some(n) = self.member_type(&b, simple) {
-                                return Some(n);
-                            }
+        for imp in scope.imports.single_named(simple) {
+            if imp.is_static {
+                // static import of a member type
+                if let Some((cls, _)) = imp.path.rsplit_once('.') {
+                    if let Some(b) = self.binary_name_for_dotted(cls) {
+                        if let Some(n) = self.member_type(&b, simple) {
+                            return Some(n);
                         }
                     }
-                    continue;
                 }
-                if let Some(b) = self.binary_name_for_dotted(&imp.path) {
-                    return Some(b);
-                }
-                // the import shadows same-package and on-demand classes even
-                // when its jar is missing: unknown, never a same-named class
-                return None;
+                continue;
             }
+            if let Some(b) = self.binary_name_for_dotted(&imp.path) {
+                return Some(b);
+            }
+            // the import shadows same-package and on-demand classes even
+            // when its jar is missing: unknown, never a same-named class
+            return None;
         }
         // same package
         let same = if scope.package.is_empty() { simple.to_string() } else { format!("{}.{}", scope.package, simple) };
@@ -941,5 +1066,23 @@ mod resolving_tests {
         });
         assert!(r.is_err());
         assert!(!resolving("p.B"), "left on panic");
+    }
+
+    #[test]
+    fn a_body_only_edit_of_a_duplicate_class_keeps_every_class_resolved() {
+        use crate::stubs::extract;
+        use grounds_syntax::ParsedFile;
+        let stub = |src: &str| Arc::new(extract(&ParsedFile::parse(src)));
+        let mut idx = Index::new(Arc::new(Classpath::empty()));
+        idx.set_file(Arc::from("a/p/B.java"), stub("package p; public class B {}"));
+        idx.set_file(Arc::from("b/p/B.java"), stub("package p; public class B { void m() {} }"));
+        idx.set_file(Arc::from("a/p/C.java"), stub("package p; public class C extends B {}"));
+        idx.resolve_ordered();
+        for (path, src) in [("b/p/B.java", "package p; public class B { void m() { int i = 0; } }"), ("a/p/B.java", "package p; public class B {  }")] {
+            idx.set_file(Arc::from(path), stub(src));
+            idx.ensure_resolved();
+            let missing: Vec<_> = idx.source_class_names().filter(|n| !idx.cache.contains_key(*n)).collect();
+            assert!(missing.is_empty(), "after a body-only edit of {path}: {missing:?}");
+        }
     }
 }

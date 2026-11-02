@@ -18,3 +18,13 @@ class Callbacks {
         client.call(name).doOnError(t -> log.error("failed for {} with cause", name, t));
     }
 }
+class UnknownTrailing {
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(UnknownTrailing.class);
+    // the jar declaring these types is missing: the last argument may be the exception
+    void m(String name, missing.MqttException mx, missing.Result result) {
+        log.warn("connection lost for {}", name, mx);
+        log.error("send failed for {} at {}", name, result.address(), result.cause());
+        log.warn("no placeholder", name, mx); // expect
+        log.warn("one {}", name, "two", mx); // expect
+    }
+}

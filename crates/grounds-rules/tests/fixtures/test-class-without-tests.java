@@ -10,3 +10,6 @@ abstract class BaseTest { }
 class OuterTest {
     @Nested class Inner { @Test void t() { } }
 }
+class RoutingJmhTest {
+    @org.openjdk.jmh.annotations.Benchmark public void route() { }
+}

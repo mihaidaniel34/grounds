@@ -568,7 +568,7 @@ impl<'a> Builder<'a> {
                 // an unresolved annotation keeps its simple name: judge by the imports
                 // (a single-type import of another `Repository` shadows the on-demand one)
                 let imports_jakarta_data = self.index.raw_class(&c.name).is_some_and(|(stub, _)| {
-                    let single = stub.imports.iter().filter(|i| !i.is_static && !i.on_demand && i.last() == "Repository").collect::<Vec<_>>();
+                    let single = stub.imports.iter().filter(|i| !i.is_static && !i.on_demand && i.is_named("Repository")).collect::<Vec<_>>();
                     match single.as_slice() {
                         [] => stub.imports.iter().any(|i| !i.is_static && i.on_demand && &*i.path == "jakarta.data.repository"),
                         [i] => &*i.path == "jakarta.data.repository.Repository",

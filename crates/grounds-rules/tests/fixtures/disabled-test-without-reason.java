@@ -5,3 +5,6 @@ class ATest {
     @Disabled("flaky on CI, see JIRA-123") @Test void b() { }
     @org.junit.Ignore @Test void c() { } // expect
 }
+record Book(String title, @GraphQl.Ignore String internal) {
+}
+

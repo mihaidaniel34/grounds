@@ -424,7 +424,7 @@ impl<'t> FileModel<'t> {
                 }
                 // static imports
                 for imp in self.stub.imports.iter().filter(|i| i.is_static) {
-                    if imp.on_demand || imp.last() == name {
+                    if imp.on_demand || imp.is_named(name) {
                         let cls = if imp.on_demand { imp.path.to_string() } else { imp.path.rsplit_once('.').map(|x| x.0.to_string()).unwrap_or_default() };
                         if let Some(b) = self.index.binary_name_for_dotted(&cls) {
                             if let Some(f) = self.field(&Ty::class(&b), name) {
