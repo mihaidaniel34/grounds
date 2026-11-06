@@ -1,0 +1,4 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+reviews:
+  # assertive: more thorough reviews with more findings (the default "chill" posts fewer)
+  profile: assertive
