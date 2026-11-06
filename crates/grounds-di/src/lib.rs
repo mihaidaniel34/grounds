@@ -256,6 +256,12 @@ fn has_main(c: &ClassInfo) -> bool {
     c.methods_named("main").any(|m| m.flags.is_static() && m.flags.is_public() && m.ret == Ty::Void && matches!(m.params.as_slice(), [p] if matches!(&p.ty, Ty::Array(e) if e.is_string())))
 }
 
+/// MapStruct's `@Mapper`, or an unresolved `@Mapper` (the library is not on
+/// the classpath; a project-defined annotation would resolve).
+pub fn is_mapstruct_mapper(a: &AnnotationInfo) -> bool {
+    &*a.name == "org.mapstruct.Mapper" || (!a.resolved && &*a.name == "Mapper")
+}
+
 /// Whether a `@Mapper` annotation yields a bean: a MapStruct mapper whose
 /// generated `*Impl` is registered by the DI container, or a MyBatis mapper.
 /// Only an explicit `componentModel = "default"` (or
@@ -631,7 +637,7 @@ impl<'a> Builder<'a> {
                 continue;
             }
             if c.is_abstract() {
-                if c.annotations.iter().any(|a| a.simple_name() == "Mapper" && mapper_is_bean(a)) {
+                if c.annotations.iter().any(|a| is_mapstruct_mapper(a) && mapper_is_bean(a)) {
                     let i = self.add_bean(Bean {
                         name: decapitalize(c.simple_name()),
                         aliases: Vec::new(),

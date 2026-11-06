@@ -460,7 +460,7 @@ impl Rule for ComponentOnAbstract {
             }
             // MapStruct generates and registers an implementation of an
             // abstract mapper unless its component model is explicitly "default"
-            if cx.fm.annotations_of(n).iter().any(|a| a.simple_name() == "Mapper" && mapper_is_bean(a)) {
+            if cx.fm.annotations_of(n).iter().any(|a| is_mapstruct_mapper(a) && mapper_is_bean(a)) {
                 return;
             }
             // abstract classes with @Lookup methods are subclassed by Spring
