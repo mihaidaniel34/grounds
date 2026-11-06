@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 // constants the index cannot evaluate: only one naming DEFAULT itself is the default model
 @Mapper(componentModel = Models.DEFAULT_SPRING) abstract class AbstractUnknownSpringConstMapper {}
 @Mapper(componentModel = Unknown.ComponentModel.DEFAULT) abstract class AbstractUnknownDefaultConstMapper {}
+@Mapper(componentModel = (MappingConstants.ComponentModel.DEFAULT)) abstract class AbstractParenDefaultMapper {}
 
 @Service class UsesIfaceString { UsesIfaceString(IfaceStringMapper m) {} }
 @Service class UsesIfaceConst { UsesIfaceConst(IfaceConstMapper m) {} }
@@ -30,5 +31,6 @@ import org.springframework.stereotype.Service;
 @Service class UsesAbstractDefault { UsesAbstractDefault(AbstractDefaultMapper m) {} } // expect
 @Service class UsesAbstractDefaultConst { UsesAbstractDefaultConst(AbstractDefaultConstMapper m) {} } // expect
 @Service class UsesAbstractUnknownDefaultConst { UsesAbstractUnknownDefaultConst(AbstractUnknownDefaultConstMapper m) {} } // expect
+@Service class UsesAbstractParenDefault { UsesAbstractParenDefault(AbstractParenDefaultMapper m) {} } // expect
 
 @org.springframework.boot.autoconfigure.SpringBootApplication class FixtureApp {}
