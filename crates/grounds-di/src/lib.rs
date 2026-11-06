@@ -256,6 +256,17 @@ fn has_main(c: &ClassInfo) -> bool {
     c.methods_named("main").any(|m| m.flags.is_static() && m.flags.is_public() && m.ret == Ty::Void && matches!(m.params.as_slice(), [p] if matches!(&p.ty, Ty::Array(e) if e.is_string())))
 }
 
+/// Whether a `@Mapper` annotation yields a bean: a MapStruct mapper whose
+/// generated `*Impl` is registered by the DI container, or a MyBatis mapper.
+/// Only an explicit `componentModel = "default"` (or
+/// `MappingConstants.ComponentModel.DEFAULT`) rules it out; a missing model
+/// may come from the `mapstruct.defaultComponentModel` compiler option.
+pub fn mapper_is_bean(a: &AnnotationInfo) -> bool {
+    let model = first_string(a, &["componentModel"]).unwrap_or_default();
+    let explicit_default = model == "default" || a.arg("componentModel").is_some_and(|v| matches!(v, AnnotationValue::Expr(e) if e.contains("DEFAULT")));
+    !explicit_default
+}
+
 fn first_string(a: &AnnotationInfo, keys: &[&str]) -> Option<String> {
     for k in keys {
         if let Some(v) = a.arg(k) {
@@ -583,14 +594,7 @@ impl<'a> Builder<'a> {
                         "Repository" | "JdbcRepository" | "MongoRepository" | "R2dbcRepository" if a.name.starts_with("io.micronaut") => source = Some((BeanSource::Repository, Framework::Micronaut)),
                         // Jakarta Data: the implementation is generated at build time (Hibernate, Quarkus, ...)
                         "Repository" if a.name.starts_with("jakarta.data") || (!a.resolved && &*a.name == "Repository" && imports_jakarta_data) => source = Some((BeanSource::Repository, Framework::Jakarta)),
-                        "Mapper" => {
-                            // MapStruct (component model may come from a compiler option) or MyBatis
-                            let model = first_string(a, &["componentModel"]).unwrap_or_default();
-                            let explicit_default = model == "default" || a.arg("componentModel").is_some_and(|v| matches!(v, AnnotationValue::Expr(e) if e.contains("DEFAULT")));
-                            if !explicit_default {
-                                source = Some((BeanSource::Mapper, Framework::Spring));
-                            }
-                        }
+                        "Mapper" if mapper_is_bean(a) => source = Some((BeanSource::Mapper, Framework::Spring)),
                         _ => {}
                     }
                 }
@@ -627,7 +631,7 @@ impl<'a> Builder<'a> {
                 continue;
             }
             if c.is_abstract() {
-                if c.annotations.iter().any(|a| a.simple_name() == "Mapper") {
+                if c.annotations.iter().any(|a| a.simple_name() == "Mapper" && mapper_is_bean(a)) {
                     let i = self.add_bean(Bean {
                         name: decapitalize(c.simple_name()),
                         aliases: Vec::new(),
