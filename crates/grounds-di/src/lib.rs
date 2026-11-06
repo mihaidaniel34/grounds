@@ -278,8 +278,9 @@ pub fn mapper_is_bean(a: &AnnotationInfo) -> bool {
 /// not). Anything else, such as `DEFAULT_SPRING` or a conditional, is not
 /// known to select the default model.
 fn names_default_constant(e: &str) -> bool {
-    let e = e.trim_matches(|c: char| c == '(' || c == ')' || c.is_whitespace());
-    e.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.') && e.rsplit('.').next() == Some("DEFAULT")
+    let e: String = e.chars().filter(|c| !c.is_whitespace()).collect();
+    let e = e.trim_matches(|c| c == '(' || c == ')');
+    e.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$' || c == '.') && e.rsplit('.').next() == Some("DEFAULT")
 }
 
 fn first_string(a: &AnnotationInfo, keys: &[&str]) -> Option<String> {

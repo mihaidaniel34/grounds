@@ -18,6 +18,7 @@ import org.springframework.stereotype.Service;
 @Mapper(componentModel = Unknown.ComponentModel.DEFAULT) abstract class AbstractUnknownDefaultConstMapper {}
 @Mapper(componentModel = (MappingConstants.ComponentModel.DEFAULT)) abstract class AbstractParenDefaultMapper {}
 @Mapper(componentModel = (Flags.ON ? Models.SPRING : Models.DEFAULT)) abstract class AbstractUnknownChoiceMapper {}
+@Mapper(componentModel = (Unknown . Component$Model . DEFAULT)) abstract class AbstractSpacedDefaultMapper {}
 
 @Service class UsesIfaceString { UsesIfaceString(IfaceStringMapper m) {} }
 @Service class UsesIfaceConst { UsesIfaceConst(IfaceConstMapper m) {} }
@@ -34,5 +35,6 @@ import org.springframework.stereotype.Service;
 @Service class UsesAbstractDefaultConst { UsesAbstractDefaultConst(AbstractDefaultConstMapper m) {} } // expect
 @Service class UsesAbstractUnknownDefaultConst { UsesAbstractUnknownDefaultConst(AbstractUnknownDefaultConstMapper m) {} } // expect
 @Service class UsesAbstractParenDefault { UsesAbstractParenDefault(AbstractParenDefaultMapper m) {} } // expect
+@Service class UsesAbstractSpacedDefault { UsesAbstractSpacedDefault(AbstractSpacedDefaultMapper m) {} } // expect
 
 @org.springframework.boot.autoconfigure.SpringBootApplication class FixtureApp {}
