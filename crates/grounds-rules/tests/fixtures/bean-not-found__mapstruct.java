@@ -17,6 +17,7 @@ import org.springframework.stereotype.Service;
 @Mapper(componentModel = Models.DEFAULT_SPRING) abstract class AbstractUnknownSpringConstMapper {}
 @Mapper(componentModel = Unknown.ComponentModel.DEFAULT) abstract class AbstractUnknownDefaultConstMapper {}
 @Mapper(componentModel = (MappingConstants.ComponentModel.DEFAULT)) abstract class AbstractParenDefaultMapper {}
+@Mapper(componentModel = (Flags.ON ? Models.SPRING : Models.DEFAULT)) abstract class AbstractUnknownChoiceMapper {}
 
 @Service class UsesIfaceString { UsesIfaceString(IfaceStringMapper m) {} }
 @Service class UsesIfaceConst { UsesIfaceConst(IfaceConstMapper m) {} }
@@ -25,6 +26,7 @@ import org.springframework.stereotype.Service;
 @Service class UsesIfaceNoModel { UsesIfaceNoModel(IfaceNoModelMapper m) {} }
 @Service class UsesAbstractNoModel { UsesAbstractNoModel(AbstractNoModelMapper m) {} }
 @Service class UsesAbstractUnknownSpringConst { UsesAbstractUnknownSpringConst(AbstractUnknownSpringConstMapper m) {} }
+@Service class UsesAbstractUnknownChoice { UsesAbstractUnknownChoice(AbstractUnknownChoiceMapper m) {} }
 // a default-model mapper is obtained with Mappers.getMapper, not injected
 @Service class UsesIfaceDefault { UsesIfaceDefault(IfaceDefaultMapper m) {} } // expect
 @Service class UsesIfaceDefaultConst { UsesIfaceDefaultConst(IfaceDefaultConstMapper m) {} } // expect

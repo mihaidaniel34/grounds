@@ -269,11 +269,17 @@ pub fn is_mapstruct_mapper(a: &AnnotationInfo) -> bool {
 /// may come from the `mapstruct.defaultComponentModel` compiler option.
 pub fn mapper_is_bean(a: &AnnotationInfo) -> bool {
     let model = first_string(a, &["componentModel"]).unwrap_or_default();
-    // an unevaluated constant counts only when it names DEFAULT itself
-    // (`ComponentModel.DEFAULT`, a static import, parenthesized or not),
-    // not e.g. `DEFAULT_SPRING`
-    let explicit_default = model == "default" || a.arg("componentModel").is_some_and(|v| matches!(v, AnnotationValue::Expr(e) if e.trim_matches(|c: char| c == '(' || c == ')' || c.is_whitespace()).rsplit('.').next().map(str::trim) == Some("DEFAULT")));
+    let explicit_default = model == "default" || a.arg("componentModel").is_some_and(|v| matches!(v, AnnotationValue::Expr(e) if names_default_constant(e)));
     !explicit_default
+}
+
+/// An unevaluated expression that is a plain reference to a constant named
+/// `DEFAULT` (`ComponentModel.DEFAULT`, a static import, parenthesized or
+/// not). Anything else, such as `DEFAULT_SPRING` or a conditional, is not
+/// known to select the default model.
+fn names_default_constant(e: &str) -> bool {
+    let e = e.trim_matches(|c: char| c == '(' || c == ')' || c.is_whitespace());
+    e.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '.') && e.rsplit('.').next() == Some("DEFAULT")
 }
 
 fn first_string(a: &AnnotationInfo, keys: &[&str]) -> Option<String> {
