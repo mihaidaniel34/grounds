@@ -13,6 +13,9 @@ import org.springframework.stereotype.Service;
 @Mapper(componentModel = MappingConstants.ComponentModel.DEFAULT) interface IfaceDefaultConstMapper {}
 @Mapper(componentModel = "default") abstract class AbstractDefaultMapper {}
 @Mapper(componentModel = MappingConstants.ComponentModel.DEFAULT) abstract class AbstractDefaultConstMapper {}
+// constants the index cannot evaluate: only one naming DEFAULT itself is the default model
+@Mapper(componentModel = Models.DEFAULT_SPRING) abstract class AbstractUnknownSpringConstMapper {}
+@Mapper(componentModel = Unknown.ComponentModel.DEFAULT) abstract class AbstractUnknownDefaultConstMapper {}
 
 @Service class UsesIfaceString { UsesIfaceString(IfaceStringMapper m) {} }
 @Service class UsesIfaceConst { UsesIfaceConst(IfaceConstMapper m) {} }
@@ -20,10 +23,12 @@ import org.springframework.stereotype.Service;
 @Service class UsesAbstractConst { UsesAbstractConst(AbstractConstMapper m) {} }
 @Service class UsesIfaceNoModel { UsesIfaceNoModel(IfaceNoModelMapper m) {} }
 @Service class UsesAbstractNoModel { UsesAbstractNoModel(AbstractNoModelMapper m) {} }
+@Service class UsesAbstractUnknownSpringConst { UsesAbstractUnknownSpringConst(AbstractUnknownSpringConstMapper m) {} }
 // a default-model mapper is obtained with Mappers.getMapper, not injected
 @Service class UsesIfaceDefault { UsesIfaceDefault(IfaceDefaultMapper m) {} } // expect
 @Service class UsesIfaceDefaultConst { UsesIfaceDefaultConst(IfaceDefaultConstMapper m) {} } // expect
 @Service class UsesAbstractDefault { UsesAbstractDefault(AbstractDefaultMapper m) {} } // expect
 @Service class UsesAbstractDefaultConst { UsesAbstractDefaultConst(AbstractDefaultConstMapper m) {} } // expect
+@Service class UsesAbstractUnknownDefaultConst { UsesAbstractUnknownDefaultConst(AbstractUnknownDefaultConstMapper m) {} } // expect
 
 @org.springframework.boot.autoconfigure.SpringBootApplication class FixtureApp {}

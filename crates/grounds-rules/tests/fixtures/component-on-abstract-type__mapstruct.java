@@ -12,3 +12,4 @@ import org.springframework.stereotype.Component;
 // the default component model registers nothing
 @Mapper(componentModel = "default") @Component abstract class AbstractDefaultModelMapper {} // expect
 @Mapper(componentModel = MappingConstants.ComponentModel.DEFAULT) @Component abstract class AbstractDefaultConstMapper {} // expect
+@Mapper(componentModel = "default") @Component interface InterfaceDefaultModelMapper {} // expect

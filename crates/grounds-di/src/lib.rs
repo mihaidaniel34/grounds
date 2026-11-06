@@ -269,7 +269,9 @@ pub fn is_mapstruct_mapper(a: &AnnotationInfo) -> bool {
 /// may come from the `mapstruct.defaultComponentModel` compiler option.
 pub fn mapper_is_bean(a: &AnnotationInfo) -> bool {
     let model = first_string(a, &["componentModel"]).unwrap_or_default();
-    let explicit_default = model == "default" || a.arg("componentModel").is_some_and(|v| matches!(v, AnnotationValue::Expr(e) if e.contains("DEFAULT")));
+    // an unevaluated constant counts only when it names DEFAULT itself
+    // (`ComponentModel.DEFAULT`, a static import), not e.g. `DEFAULT_SPRING`
+    let explicit_default = model == "default" || a.arg("componentModel").is_some_and(|v| matches!(v, AnnotationValue::Expr(e) if e.rsplit('.').next().map(str::trim) == Some("DEFAULT")));
     !explicit_default
 }
 
