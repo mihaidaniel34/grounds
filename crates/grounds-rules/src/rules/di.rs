@@ -435,7 +435,7 @@ declare_rule!(ComponentOnAbstract {
     severity: Warning,
     sources: ["intellij:SpringJavaComponentInspection"],
     kinds: ["class_declaration", "interface_declaration"],
-    description: "Spring's @Component/@Service/@Controller on an abstract class or plain interface creates no bean: component scanning skips abstract types. Annotate the concrete implementation. (Not reported for jakarta @Singleton: Micronaut generates implementations for introduction advice and inherits scopes from interfaces.)",
+    description: "Spring's @Component/@Service/@Controller on an abstract class or plain interface creates no bean: component scanning skips abstract types. Annotate the concrete implementation. (Not reported for jakarta @Singleton: Micronaut generates implementations for introduction advice and inherits scopes from interfaces. Not reported for MapStruct @Mapper types unless componentModel is explicitly \"default\": MapStruct generates and registers the implementation.)",
 });
 
 impl Rule for ComponentOnAbstract {
@@ -455,7 +455,17 @@ impl Rule for ComponentOnAbstract {
         }
         if let Some(a) = names.iter().find(|a| matches!(**a, "Component" | "Service" | "Controller" | "RestController")) {
             // Spring Data / Micronaut Data interfaces annotated @Repository are fine
-            if n.kind() == "interface_declaration" && names.iter().any(|x| matches!(*x, "Repository" | "Client" | "FeignClient" | "Mapper" | "JdbcRepository")) {
+            if n.kind() == "interface_declaration" && names.iter().any(|x| matches!(*x, "Repository" | "Client" | "FeignClient" | "JdbcRepository")) {
+                return;
+            }
+            // MyBatis and MapStruct mapper interfaces get a generated
+            // implementation, except a MapStruct one with the default model
+            if n.kind() == "interface_declaration" && cx.fm.annotations_of(n).iter().any(|a| a.simple_name() == "Mapper" && mapper_is_bean(a)) {
+                return;
+            }
+            // MapStruct generates and registers an implementation of an
+            // abstract mapper unless its component model is explicitly "default"
+            if cx.fm.annotations_of(n).iter().any(|a| is_mapstruct_mapper(a) && mapper_is_bean(a)) {
                 return;
             }
             // abstract classes with @Lookup methods are subclassed by Spring
