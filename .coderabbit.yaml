@@ -1,0 +1,7 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# keep every setting from the CodeRabbit dashboard; this file only overrides
+# what it sets below
+inheritance: true
+reviews:
+  # assertive: more thorough reviews with more findings (the default "chill" posts fewer)
+  profile: assertive
