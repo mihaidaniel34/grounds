@@ -8,6 +8,19 @@ class A {
     }
     String other() { return null; }
 }
+class TriState {
+    @interface Nullable { }
+    // null = not cached, empty = cached as absent
+    @Nullable Optional<String> cached(String k) { return null; }
+    String use(String k) {
+        Optional<String> hit = cached(k);
+        if (hit == null) return "miss";
+        if (cached(k) != null) return "hit";
+        Optional<String> later;
+        later = cached(k);
+        return later == null ? "miss" : later.orElse("");
+    }
+}
 class Sentinels {
     static class Slot { volatile java.util.Optional<String> resolved; }
     void record(Slot slot) {

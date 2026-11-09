@@ -115,7 +115,9 @@ impl<'t> FileModel<'t> {
             }
         }
         match self.select_method(call) {
-            Some(c) => m.matches_resolved(self, &c),
+            // a guessed overload may be another class's method altogether
+            // (`wait(future)` declared by a superclass next to `Object.wait(long)`)
+            Some(c) => !c.ambiguous && m.matches_resolved(self, &c),
             None => false,
         }
     }

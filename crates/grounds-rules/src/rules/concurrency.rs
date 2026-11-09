@@ -205,6 +205,24 @@ impl Rule for SyncOnNonFinalField {
         let Some(e) = lock_expr(n) else { return };
         if let Some(f) = cx.fm.field_ref(e) {
             if !f.field.flags.is_final() && f.field.range.is_some() {
+                // a private field written only in constructors (or by its
+                // initializer) never changes: the lock object is stable
+                if f.field.flags.is_private() {
+                    let reassigned = cx.fm.root().descendants().any(|a| {
+                        let target = match a.kind() {
+                            "assignment_expression" => a.field("left"),
+                            "update_expression" => a.first_kid(),
+                            _ => None,
+                        };
+                        target.is_some_and(|t| {
+                            cx.fm.field_ref(t.unparen()).is_some_and(|g| g.field.range == f.field.range && g.owner == f.owner)
+                                && !a.ancestors().take_while(|x| !grounds_syntax::is_type_declaration(x.kind())).any(|x| x.kind() == "constructor_declaration")
+                        })
+                    });
+                    if !reassigned {
+                        return;
+                    }
+                }
                 cx.report(e, format!("Locking on non-final field `{}`; it may be reassigned", f.field.name));
             }
         }

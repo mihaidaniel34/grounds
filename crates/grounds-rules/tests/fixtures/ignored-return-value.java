@@ -9,6 +9,9 @@ class A {
         d.plusDays(1); // expect
         l.contains("x"); // expect
         s = s.trim();
+        char[] buf = new char[4];
+        Character.toChars(65, buf, 0);
+        Character.toChars(65); // expect
         sb.append("x");
         l.add("y");
         o.ifPresent(System.out::println);

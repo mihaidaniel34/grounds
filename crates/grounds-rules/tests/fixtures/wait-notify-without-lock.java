@@ -12,3 +12,11 @@ class A {
     public void wake() { notifyAll(); }
     public void caller() { synchronized (this) { wake(); } }
 }
+abstract class Waits {
+    public <V> V wait(java.util.concurrent.Future<V> f) throws Exception { return f.get(); }
+}
+class NotTheMonitor extends Waits {
+    private com.unknown.Service service;
+    // `wait(Future)` of the superclass, an argument of unknown type: not Object.wait(long)
+    public void process() throws Exception { wait(service.remove()); }
+}

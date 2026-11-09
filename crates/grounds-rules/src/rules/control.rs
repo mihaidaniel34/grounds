@@ -648,6 +648,7 @@ impl Rule for InfiniteLoop {
             _ => n.field("condition").and_then(|c| c.first_kid()).is_some_and(|c| cx.fm.constant_value(c) == Some(Constant::Bool(true))),
         };
         if !always {
+            self.stuck_condition(n, cx);
             return;
         }
         let Some(body) = n.field("body") else { return };
@@ -662,6 +663,47 @@ impl Rule for InfiniteLoop {
             }
             cx.report(n.child(0).unwrap_or(n), "This loop has no break, return or throw; it never terminates");
         }
+    }
+}
+
+impl InfiniteLoop {
+    /// `while (i < n) { total += a[i]; }`: the condition reads only locals,
+    /// none of them is written anywhere in the loop, and nothing leaves it.
+    /// Locals cannot change behind the loop's back, so once entered it spins.
+    fn stuck_condition<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
+        if !matches!(n.kind(), "while_statement" | "do_statement") {
+            return;
+        }
+        let (Some(cond), Some(body)) = (n.field("condition"), n.field("body")) else { return };
+        let mut locals = Vec::new();
+        for d in cond.descendants() {
+            match d.kind() {
+                "identifier" => match cx.fm.local_ref(d) {
+                    Some(i) => locals.push(i),
+                    None => return,
+                },
+                "method_invocation" | "field_access" | "array_access" | "assignment_expression" | "update_expression" | "object_creation_expression" | "this" | "lambda_expression" | "switch_expression" => return,
+                _ => {}
+            }
+        }
+        if locals.is_empty() || loop_has_exit(body, cx.src) {
+            return;
+        }
+        let range = n.byte_range();
+        let written = locals.iter().any(|&i| {
+            cx.fm.binder.uses[i].iter().any(|u| {
+                range.contains(&u.start_byte())
+                    && u.parent_unparen().is_some_and(|p| match p.kind() {
+                        "assignment_expression" => p.field("left").map(|l| l.unparen()) == Some(*u),
+                        "update_expression" => true,
+                        _ => false,
+                    })
+            })
+        });
+        if written {
+            return;
+        }
+        cx.report(n.child(0).unwrap_or(n), "Nothing in this loop changes its condition or leaves it; once entered it never terminates");
     }
 }
 
@@ -695,6 +737,20 @@ impl Rule for LoopExecutesOnce {
         find_kind(body, "continue_statement", &mut cont);
         if !cont.is_empty() {
             return;
+        }
+        // "the first one, if any": `for (P p : loader) { return p.get(); }`,
+        // `while (rs.next()) { return rs.getLong(1); }`
+        if last.kind() == "return_statement" {
+            let cursor_step = n.kind() == "while_statement"
+                && n.field("condition").is_some_and(|c| {
+                    let c = c.first_kid().map(|k| k.unparen()).unwrap_or(c);
+                    is_call_named(c, cx.src, &["next", "hasNext", "hasMoreElements", "hasMoreTokens", "find", "hasNextLine"])
+                });
+            if n.kind() == "enhanced_for_statement" || cursor_step {
+                // usually meant, sometimes a loop that should have gone on
+                cx.report_with_severity(n.child(0).unwrap_or(n), Severity::Info, "The loop body always ends with `return`; only the first element is ever looked at");
+                return;
+            }
         }
         cx.report(n.child(0).unwrap_or(n), format!("The loop body always ends with `{}`; it runs at most once", last.kind().trim_end_matches("_statement")));
     }

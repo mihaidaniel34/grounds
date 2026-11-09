@@ -52,7 +52,12 @@ fn looks_like_secret_value(v: &str) -> bool {
     // looks like a key name rather than a value: "db.password", "X-Api-Token",
     // "AccessKey.Create", ".certPrivateKeyPassword", "provisionDeviceSecret"
     let word_chars = v.chars().all(|c| c.is_ascii_alphabetic() || c == '.' || c == '-' || c == '_');
-    if word_chars && (v.contains('.') || v.contains('-')) {
+    if word_chars && (v.contains('.') || v.contains('-') || v.contains('_')) {
+        return false;
+    }
+    // a query-string or form fragment ("&client_secret=", "?grant_type="), or
+    // an i18n label ("$t('password')")
+    if v.ends_with('=') || v.starts_with('&') || v.starts_with('?') || v.starts_with("$t(") {
         return false;
     }
     let humps = v.chars().zip(v.chars().skip(1)).filter(|(a, b)| a.is_ascii_lowercase() && b.is_ascii_uppercase()).count();

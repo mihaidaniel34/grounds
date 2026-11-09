@@ -338,7 +338,8 @@ impl Rule for IdenticalOperands {
             if cx.fm.call_name(n) == Some("equals") {
                 let args = cx.fm.args_of(n);
                 if let (Some(o), 1) = (n.field("object"), args.len()) {
-                    if o.kind() != "super" && same_pure_expr(o, args[0], cx.src) {
+                    // an equals-contract test checks reflexivity on purpose
+                    if o.kind() != "super" && !cx.is_test() && same_pure_expr(o, args[0], cx.src) {
                         cx.report(n, "Object compared with itself via `equals()`");
                     }
                 }
@@ -898,9 +899,22 @@ impl Rule for OptionalNullComparison {
                 if from_map(other.unparen()) {
                     return;
                 }
+                // `@Nullable Optional<T> lookup()`: null is a third state by
+                // contract ("not cached" next to "cached as absent")
+                let nullable_call = |v: Node<'t>| {
+                    let v = v.unparen();
+                    v.kind() == "method_invocation" && cx.fm.select_method(v).is_some_and(|c| c.method.annotations.iter().any(|a| matches!(a.simple_name(), "Nullable" | "CheckForNull")))
+                };
+                if nullable_call(other) {
+                    return;
+                }
                 if let Some(i) = cx.fm.local_ref(other.unparen()) {
                     let d = &cx.fm.binder.decls[i];
-                    if d.decl_node.field("value").is_some_and(from_field) {
+                    if d.decl_node.field("value").is_some_and(|v| from_field(v) || nullable_call(v)) {
+                        return;
+                    }
+                    // assigned from such a call later on
+                    if cx.fm.binder.uses[i].iter().any(|u| u.parent_unparen().is_some_and(|p| p.kind() == "assignment_expression" && p.field("left").map(|l| l.unparen()) == Some(*u) && p.field("right").is_some_and(nullable_call))) {
                         return;
                     }
                 }
@@ -910,7 +924,8 @@ impl Rule for OptionalNullComparison {
             }
             "return_statement" => {
                 if let Some(v) = n.first_kid() {
-                    if is_null_literal(v) && is_optional(&cx.fm.return_type_at(n)) {
+                    let nullable_by_contract = n.ancestors().find(|a| matches!(a.kind(), "method_declaration" | "lambda_expression")).is_some_and(|m| m.kind() == "method_declaration" && annotation_names(m, cx.src).iter().any(|a| matches!(*a, "Nullable" | "CheckForNull")));
+                    if is_null_literal(v) && !nullable_by_contract && is_optional(&cx.fm.return_type_at(n)) {
                         let fix = Fix::replace("Return Optional.empty()", v, "java.util.Optional.empty()");
                         cx.report_fix(n, "Method returning Optional returns null; return `Optional.empty()`", fix);
                     }

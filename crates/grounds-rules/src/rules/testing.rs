@@ -594,6 +594,12 @@ impl Rule for TestClassWithoutTests {
         if !(name.ends_with("Test") || name.ends_with("Tests")) || n.has_modifier("abstract") || n.field("superclass").is_some() {
             return;
         }
+        // tests inherited from a contract interface (`default` methods with
+        // @Test), an SPI implementation living in the test tree, or a base
+        // class other test classes extend
+        if n.field("interfaces").is_some() || cx.fm.class_of_decl(n).is_some_and(|c| !cx.fm.index.direct_source_subclasses(&c.name).is_empty()) {
+            return;
+        }
         // JMH benchmarks are often named `*Test` too
         if n.descendants().any(|d| d.kind() == "method_declaration" && annotation_names(d, cx.src).contains(&"Benchmark")) {
             return;
@@ -733,7 +739,25 @@ fn invocations<'t>(n: Node<'t>, cx: &Ctx<'_, 't>) -> usize {
         "lambda_expression" | "class_body" | "catch_clause" => 0,
         // its message is still evaluated
         "method_invocation" if cx.fm.call_name(n) == Some("fail") => n.kids().into_iter().map(|k| invocations(k, cx)).sum(),
+        // Mockito stubbing sets the scene, it is not the call under test
+        "method_invocation" if stubbing_root(n, cx) => 0,
+        // `new ArrayList<>()` for an argument does not throw
+        "object_creation_expression" if cx.type_of(n).class_name().is_some_and(|c| c.starts_with("java.util.")) => n.kids().into_iter().map(|k| invocations(k, cx)).sum(),
         "method_invocation" | "object_creation_expression" => 1,
         _ => n.kids().into_iter().map(|k| invocations(k, cx)).sum(),
+    }
+}
+
+/// `when(x.y()).thenThrow(e)`, `doThrow(e).when(x).y()`, `given(..).willReturn(..)`.
+fn stubbing_root<'t>(n: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+    let mut cur = n;
+    loop {
+        if cur.kind() != "method_invocation" {
+            return false;
+        }
+        match cur.field("object") {
+            Some(o) => cur = o.unparen(),
+            None => return matches!(cx.fm.call_name(cur), Some("when" | "given" | "doThrow" | "doReturn" | "doNothing" | "doAnswer" | "lenient" | "willThrow" | "willReturn")),
+        }
     }
 }

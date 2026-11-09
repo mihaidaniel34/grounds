@@ -63,6 +63,8 @@ fn pure_method(cx: &Ctx, c: &grounds_semantic::ResolvedCall) -> bool {
     match owner {
         "java.lang.String" => !matches!(name, "getChars" | "getBytes" | "intern" | "hashCode"),
         "java.math.BigInteger" | "java.math.BigDecimal" => true,
+        // `Character.toChars(cp, dst, i)` writes into `dst`
+        "java.lang.Character" if name == "toChars" && c.method.params.len() == 3 => false,
         "java.lang.Integer" | "java.lang.Long" | "java.lang.Double" | "java.lang.Float" | "java.lang.Short" | "java.lang.Byte" | "java.lang.Boolean" | "java.lang.Character" => {
             !matches!(name, "getInteger" | "getLong" | "getBoolean" | "decode" | "parseInt" | "parseLong" | "valueOf")
         }
@@ -556,6 +558,7 @@ impl Rule for ModifyCollectionInForeach {
         if !is_subtype_any(cx.fm, &cx.type_of(coll), &["java.util.Collection", "java.util.Map"]) {
             return;
         }
+        let mut uncertain = false;
         // concurrent collections allow modification
         let ct_ty = cx.type_of(coll);
         if ct_ty.class_name().is_some_and(|c| c.starts_with("java.util.concurrent.")) {
@@ -571,7 +574,24 @@ impl Rule for ModifyCollectionInForeach {
                     && cx.type_of(v).class_name().is_some_and(|c| c.starts_with("java.util.") && !c.starts_with("java.util.concurrent."))
             });
             if !known_plain {
-                return;
+                // a `List`/`Set`/`Map` of unseen origin: nearly always a plain
+                // one, so still worth a warning unless something says concurrent
+                let hint = |t: &str| t.contains("Concurrent") || t.contains("CopyOnWrite") || t.contains("synchronized");
+                let is_local = cx.fm.local_ref(coll.unparen()).is_some();
+                if !is_local && cx.fm.field_ref(coll.unparen()).is_none() {
+                    return;
+                }
+                // any declaration or assignment of that name in the file
+                let name = cx.text(coll.unparen());
+                let name = name.strip_prefix("this.").unwrap_or(name).to_string();
+                let concurrent = cx.fm.root().descendants().filter(|d| d.kind() == "variable_declarator" || d.kind() == "assignment_expression").any(|d| {
+                    let target = d.field("name").or_else(|| d.field("left")).map(|x| cx.text(x));
+                    target.is_some_and(|t| t == name || t.strip_prefix("this.") == Some(&name)) && hint(cx.text(d))
+                });
+                if concurrent {
+                    return;
+                }
+                uncertain = true;
             }
         }
         let ct = normalized(coll, cx.src);
@@ -604,6 +624,28 @@ impl Rule for ModifyCollectionInForeach {
                 }
             }
             if c.ancestors().take_while(|a| *a != body).any(|a| a.kind() == "return_statement") {
+                continue;
+            }
+            // ... or leaving it further down the same path (`remove(x); log(); break;`)
+            let leaves_later = c.ancestors().take_while(|a| *a != body).chain(std::iter::once(body)).any(|a| {
+                let mut sib = a.next_named_sibling();
+                while let Some(s) = sib {
+                    if matches!(s.kind(), "break_statement" | "return_statement" | "throw_statement") || (s.kind() == "continue_statement" && s.kid_of_kind("identifier").is_some()) {
+                        return true;
+                    }
+                    sib = s.next_named_sibling();
+                }
+                false
+            });
+            if uncertain {
+                if leaves_later {
+                    continue;
+                }
+                // replacing a value keeps the structure; only size changes count here
+                if !matches!(name, "add" | "remove" | "clear" | "addAll" | "removeAll" | "removeIf") {
+                    continue;
+                }
+                cx.report_with_severity(c, Severity::Warning, format!("`{name}()` modifies the collection being iterated; unless it is a concurrent collection this throws ConcurrentModificationException"));
                 continue;
             }
             cx.report(c, format!("`{name}()` modifies the collection being iterated; this throws ConcurrentModificationException"));
@@ -1259,7 +1301,14 @@ impl Rule for StreamCountComparison {
             return;
         }
         let l = l.unparen();
-        if is_call_named(l, cx.src, &["count"]) && l.field("object").is_some_and(|o| is_subtype_any(cx.fm, &cx.type_of(o), &["java.util.stream.BaseStream"])) && matches!(cx.fm.int_value(r), Some(0) | Some(1)) {
+        // an existence test only: `count() == 1` asks for exactly one, and
+        // `limit(n).count()` stops early
+        let existence = match (op(n), cx.fm.int_value(r)) {
+            (">" | "!=" | "==", Some(0)) | (">=", Some(1)) => true,
+            _ => false,
+        };
+        let bounded = l.field("object").is_some_and(|o| is_call_named(o.unparen(), cx.src, &["limit"]));
+        if existence && !bounded && is_call_named(l, cx.src, &["count"]) && l.field("object").is_some_and(|o| is_subtype_any(cx.fm, &cx.type_of(o), &["java.util.stream.BaseStream"])) {
             cx.report(n, "Use `anyMatch()`/`findAny()` instead of counting the whole stream");
         }
     }

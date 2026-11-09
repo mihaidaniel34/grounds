@@ -244,6 +244,13 @@ impl Rule for UnusedPrivateMethod {
                             called = true;
                             break;
                         }
+                        // another overload was picked for an argument whose type
+                        // is unknown (its jar is missing): this one may be the target
+                        let args = cx.fm.args_of(occ);
+                        if args.len() == param_count(n) && args.iter().any(|a| !cx.type_of(*a).is_known()) {
+                            called = true;
+                            break;
+                        }
                     }
                     // unresolved calls with the same name and arity might be ours
                     None => {

@@ -465,6 +465,21 @@ impl Rule for OddCheckWithRemainder {
                         if at.ends_with(".size()") || at.ends_with(".length") || at.ends_with(".length()") || at.starts_with("Math.abs(") {
                             return;
                         }
+                        // a local counting up from a non-negative literal (`for (int i = 0; ...; i++)`)
+                        let counts_up = cx.fm.local_ref(a.unparen()).is_some_and(|i| {
+                            let d = &cx.fm.binder.decls[i];
+                            d.decl_node.field("value").is_some_and(|v| cx.fm.int_value(v).is_some_and(|k| k >= 0))
+                                && cx.fm.binder.uses[i].iter().all(|u| match u.parent_unparen() {
+                                    Some(p) if p.kind() == "update_expression" => cx.text(p).contains("++"),
+                                    Some(p) if p.kind() == "assignment_expression" && p.field("left").map(|l| l.unparen()) == Some(*u) => {
+                                        p.field("operator").is_some_and(|o| o.kind() == "+=") && p.field("right").is_some_and(|r| cx.fm.int_value(r).is_some_and(|k| k >= 0))
+                                    }
+                                    _ => true,
+                                })
+                        });
+                        if counts_up {
+                            return;
+                        }
                         let neg = if op(n) == "==" { "!=" } else { "==" };
                         let fix = Fix::replace("Compare with 0", n, format!("{} {neg} 0", cx.text(rem)));
                         cx.report_fix(n, "`% 2 == 1` fails for negative numbers; compare the remainder with 0", fix);
