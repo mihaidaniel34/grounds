@@ -38,6 +38,14 @@ impl std::fmt::Debug for ClassContainer {
 /// the part listed before the limit would depend on the file system's order.
 pub const DIR_LIMIT: usize = 200_000;
 
+/// Linked directories followed below a directory of classes. Each costs a
+/// resolution of its real path, and where links lead into each other without
+/// forming a cycle (`/sys`: every device links to its class, which links to
+/// every device) the same directories are reached by countless paths: `/`
+/// took 40 s on a CI runner to reach [`DIR_LIMIT`] that way. Build tools link
+/// a handful of output directories.
+pub const LINKED_DIR_LIMIT: usize = 1_000;
+
 /// Release character used by ct.sym directory names: 8, 9, A=10, B=11, ...
 pub fn ct_sym_release_char(release: u32) -> char {
     match release {
@@ -109,7 +117,8 @@ impl ClassContainer {
     }
 
     /// As [`ClassContainer::class_names`]; None for a directory with more
-    /// than `limit` files and directories below it.
+    /// than `limit` files and directories below it, or more than
+    /// [`LINKED_DIR_LIMIT`] linked directories.
     pub fn class_names_within(&self, limit: usize) -> Option<Vec<String>> {
         let keep = |n: &str| !n.ends_with("module-info") && !n.ends_with("package-info");
         Some(match self {
@@ -145,7 +154,7 @@ impl ClassContainer {
                 };
                 let top = std::rc::Rc::new(Above { real: root.canonicalize().unwrap_or_else(|_| root.clone()), up: None });
                 let mut todo = vec![(root.clone(), top)];
-                let mut seen = 0usize;
+                let (mut seen, mut linked) = (0usize, 0usize);
                 while let Some((d, above)) = todo.pop() {
                     let Ok(rd) = std::fs::read_dir(&d) else { continue };
                     for e in rd.flatten() {
@@ -158,6 +167,12 @@ impl ClassContainer {
                         let Ok(kind) = e.file_type() else { continue };
                         let link = kind.is_symlink();
                         if kind.is_dir() || (link && p.is_dir()) {
+                            if link {
+                                linked += 1;
+                                if linked > LINKED_DIR_LIMIT {
+                                    return None;
+                                }
+                            }
                             let real = if link { p.canonicalize().ok() } else { Some(above.real.join(e.file_name())) };
                             if let Some(real) = real.filter(|r| !within(r, Some(&above))) {
                                 todo.push((p, std::rc::Rc::new(Above { real, up: Some(above.clone()) })));
@@ -300,6 +315,25 @@ mod tests {
         names.sort();
         // (`q/r/top` is `p` again, and its `toq` would be `q` inside `q`)
         assert_eq!(names, ["a/A", "p/A", "q/r/top/A", "z/A"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_directory_with_too_many_linked_directories_is_not_listed() {
+        // `/` on Linux: `/sys` is links leading into each other, and each one followed costs
+        // the resolution of its real path
+        let dir = std::env::temp_dir().join(format!("grounds-classdir-links-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("p")).unwrap();
+        std::fs::write(dir.join("p/A.class"), b"").unwrap();
+        std::fs::create_dir_all(dir.join("links")).unwrap();
+        for i in 0..super::LINKED_DIR_LIMIT {
+            std::os::unix::fs::symlink("../p", dir.join(format!("links/l{i}"))).unwrap();
+        }
+        let c = super::ClassContainer::open_dir(&dir);
+        assert_eq!(c.class_names().len(), super::LINKED_DIR_LIMIT + 1, "at the limit every path is listed");
+        std::os::unix::fs::symlink("../p", dir.join("links/one-more")).unwrap();
+        assert_eq!(c.class_names_within(super::DIR_LIMIT), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
