@@ -217,6 +217,12 @@ pub struct Scope<'a> {
     /// The local and anonymous classes among `enclosing`, which the index
     /// does not hold.
     pub local_classes: Vec<LocalClassScope>,
+    /// A name that a supertype which is not resolved may declare as a member
+    /// type is unknown, unless an enclosing class, a single-type import or
+    /// java.lang provides it. Set for names in code; declarations lowered for
+    /// the whole project keep the package's or an on-demand import's class
+    /// (the wiring model counts on their types).
+    pub unknown_if_inherited: bool,
 }
 
 /// What a local or anonymous class brings into scope in its body.
@@ -646,7 +652,7 @@ impl Index {
                 None => None,
             };
         }
-        Scope { package: &stub.package, imports: &stub.imports, enclosing, type_vars, local_types: Vec::new(), local_classes: Vec::new() }
+        Scope { package: &stub.package, imports: &stub.imports, enclosing, type_vars, local_types: Vec::new(), local_classes: Vec::new(), unknown_if_inherited: false }
     }
 
     pub fn scope_for_class<'a>(&'a self, name: &str) -> Option<Scope<'a>> {
@@ -1135,12 +1141,17 @@ impl Index {
         // an enclosing class inherits from a class that is not resolved: the
         // name may be a member type it inherits, which would shadow the
         // package and on-demand imports
-        if uncertain {
+        // same package
+        let same = if scope.package.is_empty() { simple.to_string() } else { format!("{}.{}", scope.package, simple) };
+        if uncertain && scope.unknown_if_inherited {
+            // java.lang is kept unless the package or an on-demand import has
+            // the name too, which would shadow it
+            if self.class_exists(&same) || self.resolve_on_demand(simple, scope).is_some() {
+                return None;
+            }
             let jl = format!("java.lang.{simple}");
             return self.class_exists(&jl).then(|| Arc::from(jl.as_str()));
         }
-        // same package
-        let same = if scope.package.is_empty() { simple.to_string() } else { format!("{}.{}", scope.package, simple) };
         if self.class_exists(&same) {
             // a same-package class from another module (a test fixture in a
             // module this one does not depend on) loses to an on-demand

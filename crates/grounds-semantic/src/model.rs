@@ -442,7 +442,7 @@ impl<'t> FileModel<'t> {
         // inside the block that declares it (JLS 6.4.1)
         let local_types = locals.into_iter().map(|(s, b, (a, e))| (s.clone(), b.clone(), ranges.iter().filter(|(x, y)| a <= x && y <= e).count())).collect();
         let local_classes = enclosing.iter().filter_map(|e| self.local_class_scope(e)).collect();
-        Scope { package: &self.stub.package, imports: &self.stub.imports, enclosing, type_vars, local_types, local_classes }
+        Scope { package: &self.stub.package, imports: &self.stub.imports, enclosing, type_vars, local_types, local_classes, unknown_if_inherited: true }
     }
 
     /// Resolve a type syntax node in the scope where it appears.

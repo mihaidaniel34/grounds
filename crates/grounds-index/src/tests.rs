@@ -359,20 +359,30 @@ fn a_test_class_is_not_imported_into_main_sources_or_another_module() {
 
 #[test]
 fn an_unresolved_supertype_may_declare_any_member_type() {
+    let in_code = |idx: &Index, class: &str, simple: &str| {
+        let mut scope = idx.scope_for_class(class).unwrap();
+        scope.unknown_if_inherited = true;
+        idx.resolve_simple_type(simple, &scope).map(|n| n.to_string())
+    };
     // lib.DataSource is not on the classpath: `Attribute` may be its member type
     let idx = index_of(&[
         ("p/Attribute.java", "package p; enum Attribute { NAME }"),
         ("p/Ds.java", "package p; import lib.DataSource; import java.util.List; class Ds implements DataSource { static class Inner { } }"),
         ("p/Plain.java", "package p; class Plain { }"),
+        ("p/Module.java", "package p; interface Module { }"),
         ("p/Sub.java", "package p; class Sub extends Ds { }"),
     ]);
-    assert_eq!(simple_in(&idx, "p.Ds", "Attribute"), None);
-    assert_eq!(simple_in(&idx, "p.Sub", "Attribute"), None, "through a project superclass too");
+    assert_eq!(in_code(&idx, "p.Ds", "Attribute"), None);
+    assert_eq!(in_code(&idx, "p.Sub", "Attribute"), None, "through a project superclass too");
     // what is known stays known: member types, single-type imports, java.lang
-    assert_eq!(simple_in(&idx, "p.Ds", "Inner").as_deref(), Some("p.Ds$Inner"));
-    assert_eq!(simple_in(&idx, "p.Ds", "List").as_deref(), Some("java.util.List"));
-    assert_eq!(simple_in(&idx, "p.Ds", "String").as_deref(), Some("java.lang.String"));
-    assert_eq!(simple_in(&idx, "p.Plain", "Attribute").as_deref(), Some("p.Attribute"));
+    assert_eq!(in_code(&idx, "p.Ds", "Inner").as_deref(), Some("p.Ds$Inner"));
+    assert_eq!(in_code(&idx, "p.Ds", "List").as_deref(), Some("java.util.List"));
+    assert_eq!(in_code(&idx, "p.Ds", "String").as_deref(), Some("java.lang.String"));
+    // a same-package class would shadow java.lang's
+    assert_eq!(in_code(&idx, "p.Ds", "Module"), None);
+    assert_eq!(in_code(&idx, "p.Plain", "Attribute").as_deref(), Some("p.Attribute"));
+    // declarations lowered for the whole project keep the package's class
+    assert_eq!(simple_in(&idx, "p.Ds", "Attribute").as_deref(), Some("p.Attribute"));
 }
 
 #[test]
