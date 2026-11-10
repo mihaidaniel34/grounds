@@ -178,7 +178,7 @@ def main():
         # that the walk asks the daemon and no checkout lands in its load.
         changed(grounds, d, None, True)
         deadline = time.monotonic() + TIMEOUT
-        while "running" not in subprocess.run([grounds, "daemon", "--root", d, "--status"], capture_output=True, text=True).stdout:
+        while not subprocess.run([grounds, "daemon", "--root", d, "--status"], capture_output=True, text=True).stdout.startswith("running:"):
             if time.monotonic() > deadline:
                 raise RuntimeError(f"the daemon did not come up in {TIMEOUT:.0f} s")
             time.sleep(0.2)

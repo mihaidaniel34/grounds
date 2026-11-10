@@ -206,12 +206,18 @@ pub fn path_key(p: &Path) -> Arc<str> {
 
 impl Project {
     pub fn load(root: &Path) -> anyhow::Result<Project> {
+        // before grounds.toml is read: it is one of the files that may be
+        // written while the load runs
+        let began = std::time::SystemTime::now();
         let config = Config::load(root)?;
-        Self::load_with(root, config)
+        Self::load_from(root, config, began)
     }
 
     pub fn load_with(root: &Path, config: Config) -> anyhow::Result<Project> {
-        let load_began = std::time::SystemTime::now();
+        Self::load_from(root, config, std::time::SystemTime::now())
+    }
+
+    fn load_from(root: &Path, config: Config, load_began: std::time::SystemTime) -> anyhow::Result<Project> {
         let mut stats = LoadStats::default();
         let t = Instant::now();
         let source_sets = SourceSets::load(root);

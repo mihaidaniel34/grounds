@@ -218,13 +218,26 @@ impl Session {
         // load it. (Without
         // this a daemon kept the layout it started with: after a module was
         // added or renamed its files counted as the root module's.)
-        if self.config.iter().any(|(p, old)| std::fs::metadata(p).and_then(|m| m.modified()).ok() != *old) {
+        let time_of = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+        if self.config.iter().any(|(p, old)| time_of(p) != *old) {
             let root = self.root().to_path_buf();
+            // the files' times before the load begins: one that is the same
+            // afterwards was not written during the load, so the load read
+            // the content that time belongs to
+            let before: FxHashMap<PathBuf, Option<SystemTime>> = self.config.iter().map(|(p, _)| (p.clone(), time_of(p))).collect();
             if let Ok(project) = Project::load(&root) {
                 // warnings already shown are not shown again for the same state
                 let shown = self.warned.then(|| self.project.classpath_warnings.clone());
                 *self = Session::from_project(project);
                 self.warned = shown.is_some_and(|w| w == self.project.classpath_warnings);
+                // (without this a recent time would stay untrusted, and every
+                // request within the margin would load the project again)
+                for (p, noted) in &mut self.config {
+                    let now = time_of(p);
+                    if before.get(p) == Some(&now) {
+                        *noted = now;
+                    }
+                }
             }
         }
         let mut stale: Vec<PathBuf> = Vec::new();

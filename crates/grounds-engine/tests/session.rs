@@ -443,6 +443,10 @@ fn a_changed_build_file_reloads_the_project() {
     write(&dir, "grounds.toml", "exclude = [\"lib/**\"]\n");
     s.sync(&[]);
     assert_eq!(s.project.config.exclude, ["lib/**"]);
+    // one reload settles it: the next request, moments later, loads nothing
+    let loaded = s.project.load_began;
+    s.sync(&[]);
+    assert_eq!(s.project.load_began, loaded, "a configuration file just written must not reload the project on every request");
     assert_eq!(module_of(&s, "lib/src/main/java/demo/Lib.java"), None, "the excluded file is gone, as in a fresh load");
 
     // a registration file that did not exist: Spring's imports of the app module
