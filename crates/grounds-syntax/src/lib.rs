@@ -390,7 +390,13 @@ impl<'t> NodeExt<'t> for Node<'t> {
         Some(p)
     }
     fn modifiers(&self) -> Option<Node<'t>> {
-        self.kid_of_kind("modifiers")
+        // the grammar puts `modifiers` first: looking no further than the
+        // first named child that is not a comment keeps this constant on a
+        // class body of a million members (suppression checks ask it of
+        // every ancestor of every finding)
+        let mut c = self.walk();
+        let first = self.named_children(&mut c).find(|n| !is_comment_node(n));
+        first.filter(|n| n.kind() == "modifiers")
     }
     fn has_modifier(&self, keyword: &str) -> bool {
         match self.modifiers() {
