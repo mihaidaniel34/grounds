@@ -36,22 +36,25 @@ pub struct Session {
 /// times: the files that decide its modules, classpath, settings and beans.
 /// - build files and `lombok.config` of the root and of every module;
 /// - `grounds.toml`, the classpath dumps, the source sets a dump recorded and
-///   the classpath entries named in the configuration;
+///   every jar on the classpath (a snapshot jar is rebuilt in place);
 /// - per module, Spring's registration files and `application*` settings,
 ///   and the directories they sit in, whose own times change when a file is
 ///   added or removed.
 ///
 /// Listed whether they exist or not, so that one appearing counts as a
-/// change. Not followed: the jars a classpath dump lists and the modules'
-/// build outputs (they change with every build, and the dump is rewritten
-/// when dependencies do), and a `lombok.config` created later in a package
-/// directory that had none.
+/// change. Not followed: class directories on the classpath (a build writes
+/// into them without touching the directory itself, and the project's own
+/// classes are read from source anyway), and a `lombok.config` created later
+/// in a package directory that had none.
 fn config_files(project: &Project) -> Vec<(PathBuf, Option<SystemTime>)> {
     let ws = &project.workspace;
     let cfg = &project.config;
     let at_root = |p: &PathBuf| if p.is_absolute() { p.clone() } else { ws.root.join(p) };
     let mut paths: Vec<PathBuf> = ["grounds.toml", ".grounds/config.toml", ".grounds/classpath.txt", ".grounds/source-sets.txt"].iter().map(|n| ws.root.join(n)).collect();
     paths.extend(cfg.classpath.files.iter().chain(&cfg.classpath.entries).map(at_root));
+    // the jars in use, and those a dump lists that are not there (yet)
+    let listed = crate::classpath::classpath_files(ws, cfg).into_iter().flat_map(|f| crate::classpath::read_list(&f));
+    paths.extend(project.classpath_entries.iter().cloned().chain(listed).filter(|e| !e.is_dir()));
     let mut dirs: Vec<&Path> = vec![&ws.root];
     dirs.extend(ws.modules.iter().map(|m| m.dir.as_path()));
     for d in dirs {

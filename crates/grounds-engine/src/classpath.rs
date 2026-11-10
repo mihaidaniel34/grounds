@@ -32,7 +32,7 @@ pub(crate) fn classpath_files(ws: &Workspace, cfg: &Config) -> Vec<PathBuf> {
 }
 
 /// Entries of a classpath file: one per line or `:`-separated.
-fn read_list(f: &Path) -> Vec<PathBuf> {
+pub(crate) fn read_list(f: &Path) -> Vec<PathBuf> {
     let Ok(text) = std::fs::read_to_string(f) else { return Vec::new() };
     text.lines().flat_map(|l| l.split(':')).map(str::trim).filter(|p| !p.is_empty() && !p.starts_with('#')).map(PathBuf::from).collect()
 }

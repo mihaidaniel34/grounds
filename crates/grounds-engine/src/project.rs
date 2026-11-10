@@ -45,6 +45,8 @@ pub struct Project {
     pub auto_registered: Vec<String>,
     /// Classpath problems found at load (missing, stale, too few jars).
     pub classpath_warnings: Vec<crate::classpath::Warning>,
+    /// The jars and class directories the classpath was built from.
+    pub classpath_entries: Vec<PathBuf>,
 }
 
 /// Class names registered through Spring's META-INF files in any module, and
@@ -249,7 +251,7 @@ impl Project {
         di.lombok_copies_qualifiers = lombok_copies_qualifiers(&workspace.root);
         di.bean_overriding_allowed = bean_overriding_allowed(&workspace);
         let classpath_warnings = crate::classpath::warnings(&workspace, &config, &index);
-        Ok(Project { config, workspace, index, stats, di, source_sets, lombok, registered, auto_registered, classpath_warnings })
+        Ok(Project { config, workspace, index, stats, di, source_sets, lombok, registered, auto_registered, classpath_warnings, classpath_entries: entries })
     }
 
     pub fn source_kind(&self, path: &Path) -> SourceKind {

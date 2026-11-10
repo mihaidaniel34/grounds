@@ -458,5 +458,15 @@ fn a_changed_build_file_reloads_the_project() {
     s.sync(&[]);
     let warnings: Vec<String> = s.project.classpath_warnings.iter().map(|w| w.to_string()).collect();
     assert!(warnings.iter().any(|w| w.contains("classpath.txt")), "the dump is read once it exists: {warnings:?}");
+
+    // the jar it lists appears (a dependency built later): a class from it is known
+    assert!(!s.project.index.class_exists("lib.Dep"));
+    write(&dir, "libs/src/lib/Dep.java", "package lib;\npublic class Dep {}\n");
+    let javac = Command::new("javac").arg("-d").arg(dir.join("libs/classes")).arg(dir.join("libs/src/lib/Dep.java")).status();
+    let jar = Command::new("jar").arg("cf").arg(dir.join("libs/some.jar")).arg("-C").arg(dir.join("libs/classes")).arg("lib").status();
+    if javac.is_ok_and(|s| s.success()) && jar.is_ok_and(|s| s.success()) {
+        s.sync(&[]);
+        assert!(s.project.index.class_exists("lib.Dep"), "the jar is read once it is there");
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
