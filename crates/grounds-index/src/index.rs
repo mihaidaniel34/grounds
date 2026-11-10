@@ -1080,10 +1080,12 @@ impl Index {
     }
 
     fn resolve_on_demand(&self, simple: &str, scope: &Scope) -> Option<Name> {
+        // the file the scope belongs to, for what its module can see
+        let here = scope.enclosing.last().and_then(|e| self.source_file_of(e));
         let lookup = |imp: &Import| -> Option<Name> {
             if self.package_exists(&imp.path) && !imp.is_static {
                 let c = format!("{}.{}", imp.path, simple);
-                if self.class_exists(&c) {
+                if self.class_exists(&c) && self.importable(&c, &imp.path, scope.package, here.map(|h| &**h)) {
                     return Some(Arc::from(c.as_str()));
                 }
             }
@@ -1102,6 +1104,25 @@ impl Index {
             }
         }
         found
+    }
+
+    /// Whether an on-demand import of `pkg` imports the top-level class `c`
+    /// into a file of package `from` (at path `here`): only accessible types
+    /// are imported (JLS 7.5.2, 6.6.1), so not a class that is not public in
+    /// another package. A class of a test source set is not visible from
+    /// main sources, nor from another module.
+    fn importable(&self, c: &str, pkg: &str, from: &str, here: Option<&str>) -> bool {
+        if pkg != from {
+            let flags = self.raw_class(c).map(|(_, r)| r.flags).or_else(|| self.classpath.class(c).map(|k| k.flags));
+            if flags.is_some_and(|f| !f.is_public()) {
+                return false;
+            }
+        }
+        let is_test = |p: &str| p.contains("/src/test/") || p.starts_with("src/test/");
+        match (self.source_file_of(c), here) {
+            (Some(f), Some(h)) if is_test(f) => is_test(h) && module_dir(f) == module_dir(h),
+            _ => true,
+        }
     }
 
     /// All source classes whose direct supertypes include `name`.

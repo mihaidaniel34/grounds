@@ -308,3 +308,38 @@ fn manifold_runtime_imports_mark_their_module_as_extended() {
     idx.set_file(Arc::from("/r/c/src/main/java/e/MyStringExt.java"), Arc::new(extract(&pf)));
     assert!(idx.language_extended("/r/b/src/main/java/q/C.java"));
 }
+
+fn simple_in(idx: &Index, class: &str, simple: &str) -> Option<String> {
+    let scope = idx.scope_for_class(class).unwrap();
+    idx.resolve_simple_type(simple, &scope).map(|n| n.to_string())
+}
+
+#[test]
+fn an_on_demand_import_imports_only_accessible_classes() {
+    // JLS 7.5.2: a.Node is package-private, so b sees no `Node` from `a.*`
+    let idx = index_of(&[
+        ("a/Graph.java", "package a; public class Graph { } class Node { }"),
+        ("a/Edge.java", "package a; public class Edge { }"),
+        ("a/Other.java", "package a; class Other { }"),
+        ("b/Viewer.java", "package b; import a.*; import lib.graph.*; class Viewer { }"),
+        ("a/Same.java", "package a; import a.*; class Same { }"),
+    ]);
+    assert_eq!(simple_in(&idx, "b.Viewer", "Node"), None);
+    assert_eq!(simple_in(&idx, "b.Viewer", "Edge").as_deref(), Some("a.Edge"));
+    assert_eq!(simple_in(&idx, "a.Same", "Other").as_deref(), Some("a.Other"));
+}
+
+#[test]
+fn a_test_class_is_not_imported_into_main_sources_or_another_module() {
+    let idx = index_of(&[
+        ("m/src/test/java/a/Node.java", "package a; public class Node { }"),
+        ("m/src/main/java/a/Graph.java", "package a; public class Graph { }"),
+        ("m/src/main/java/b/Main.java", "package b; import a.*; class Main { }"),
+        ("m/src/test/java/b/MainTest.java", "package b; import a.*; class MainTest { }"),
+        ("n/src/test/java/c/OtherTest.java", "package c; import a.*; class OtherTest { }"),
+    ]);
+    assert_eq!(simple_in(&idx, "b.Main", "Node"), None);
+    assert_eq!(simple_in(&idx, "b.MainTest", "Node").as_deref(), Some("a.Node"));
+    assert_eq!(simple_in(&idx, "c.OtherTest", "Node"), None);
+    assert_eq!(simple_in(&idx, "b.Main", "Graph").as_deref(), Some("a.Graph"));
+}
