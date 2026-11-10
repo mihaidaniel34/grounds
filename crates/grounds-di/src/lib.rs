@@ -221,6 +221,11 @@ pub struct DiModel {
     /// instance may be of any subtype (`Store store()` may return a
     /// `RedisStore`), so they may provide subtypes of that type too.
     unseen_producers: Vec<(Name, bool)>,
+    /// Beans a replacement that is not certain (conditional, in another
+    /// module, in test sources) may remove, and whether every such
+    /// replacement is in test sources: a constructor cycle through one is
+    /// not certain where the replacement may apply.
+    possibly_replaced: Vec<(usize, bool)>,
 }
 
 /// Imports that show wiring through a container or mechanism the model does
@@ -1426,8 +1431,8 @@ impl<'a> Builder<'a> {
         // sources (a @MockBean method replaces the bean in its own test
         // only) leaves the replaced bean possibly present: it satisfies
         // injections but makes nothing ambiguous.
-        // (replaced class, module of the replacement, certain)
-        let mut replaced: Vec<(Name, String, bool)> = Vec::new();
+        // (replaced class, module of the replacement, certain, in test sources)
+        let mut replaced: Vec<(Name, String, bool, bool)> = Vec::new();
         for n in &names {
             let Some(c) = self.index.class(n) else { continue };
             let file = c.source_file().unwrap_or("");
@@ -1441,23 +1446,24 @@ impl<'a> Builder<'a> {
                         if let Some(AnnotationValue::Class(t)) = a.arg(k) {
                             if let Some(tn) = t.class_name() {
                                 let certain = !is_test_path(file) && !class_conditional && !site_conditional;
-                                replaced.push((Arc::from(tn), module.clone(), certain));
+                                replaced.push((Arc::from(tn), module.clone(), certain, is_test_path(file)));
                             }
                         }
                     }
                 }
             }
         }
-        for b in &mut self.model.beans {
+        for (i, b) in self.model.beans.iter_mut().enumerate() {
             if b.source != BeanSource::Component {
                 continue;
             }
             let module = b.file.as_deref().map(module_of).unwrap_or("");
-            for (_, m, certain) in replaced.iter().filter(|(r, _, _)| *r == b.declaring_class) {
+            for (_, m, certain, in_tests) in replaced.iter().filter(|(r, _, _, _)| *r == b.declaring_class) {
                 if *certain && m == module {
                     b.autowire_candidate = false;
                 } else {
                     b.conditional = true;
+                    self.model.possibly_replaced.push((i, *in_tests));
                 }
             }
         }
@@ -1911,6 +1917,12 @@ impl DiModel {
             }
             if let Resolution::Unique(b) = self.resolve(lk, p, false) {
                 let bean = &self.beans[b];
+                // a bean a replacement may remove is only possibly present
+                // (a test's replacement applies to test points only)
+                let in_tests = p.file.as_deref().is_some_and(is_test_path);
+                if self.possibly_replaced.iter().any(|&(i, tests_only)| i == b && (in_tests || !tests_only)) {
+                    continue;
+                }
                 if bean.source == BeanSource::Component {
                     out.push((p.owner.clone(), bean.declaring_class.clone(), pi));
                 }
@@ -2745,5 +2757,62 @@ mod tests {
         // what the composed annotation does not carry is not invented
         assert!(matches!(point_resolution(&idx, &m, "other"), Resolution::QualifierNotFound { .. }));
         assert!(matches!(point_resolution(&idx, &m, "valve"), Resolution::Ambiguous(_)));
+    }
+
+    #[test]
+    fn a_bean_a_replacement_may_remove_makes_no_definite_cycle() {
+        // A -> Port, and the @Primary DefaultPort -> A, but a conditional
+        // replacement of DefaultPort provides Port without dependencies
+        let files = |replacement: (&'static str, &'static str)| {
+            vec![
+                JSR330[0], JSR330[1], JSR330[2],
+                ("src/main/java/app/A.java", "package app; import jakarta.inject.*; import io.micronaut.context.annotation.*;
+                 interface Port {}
+                 @Singleton class A { @Inject A(Port port) {} }
+                 @Singleton @Primary class DefaultPort implements Port { @Inject DefaultPort(A a) {} }"),
+                replacement,
+            ]
+        };
+        let edge = |m: &DiModel, from: &str, to: &str| m.ctor_edges.iter().any(|(a, b, _)| &**a == from && &**b == to);
+        let (_, m) = model(&files(("src/main/java/app/Remote.java", "package app; import jakarta.inject.*; import io.micronaut.context.annotation.*;
+             @Singleton @Requires(property = \"remote\") @Replaces(DefaultPort.class) class RemotePort implements Port {}")));
+        assert!(edge(&m, "app.DefaultPort", "app.A"));
+        assert!(!edge(&m, "app.A", "app.DefaultPort"), "{:?}", m.ctor_edges);
+        // a test's replacement leaves production as it is: the cycle stays
+        let (_, m) = model(&files(("src/test/java/app/Remote.java", "package app; import jakarta.inject.*; import io.micronaut.context.annotation.*;
+             @Singleton @Replaces(DefaultPort.class) class RemotePort implements Port {}")));
+        assert!(edge(&m, "app.A", "app.DefaultPort") && edge(&m, "app.DefaultPort", "app.A"), "{:?}", m.ctor_edges);
+    }
+
+    #[test]
+    fn a_bean_a_replacement_may_remove_makes_nothing_ambiguous_and_clashes_with_no_name() {
+        let replacement = ("src/main/java/app/Remote.java", "package app; import jakarta.inject.*; import io.micronaut.context.annotation.*;
+             @Singleton @Requires(property = \"remote\") @Replaces(DefaultPort.class) class Remote {}");
+        let ports = |extra: Option<(&'static str, &'static str)>| {
+            let mut files = vec![
+                JSR330[0], JSR330[1], JSR330[2],
+                ("src/main/java/app/A.java", "package app; import jakarta.inject.*;
+                 interface Port {}
+                 @Singleton class DefaultPort implements Port {}
+                 @Singleton class OtherPort implements Port {}
+                 @Singleton class A { @Inject A(Port port) {} }"),
+            ];
+            files.extend(extra);
+            let (idx, m) = model(&files);
+            point_resolution(&idx, &m, "port")
+        };
+        assert!(matches!(ports(None), Resolution::Ambiguous(_)));
+        assert_eq!(ports(Some(replacement)), Resolution::Unknown);
+        let conflicts = |extra: Option<(&'static str, &'static str)>| {
+            let mut files = vec![
+                ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication class App {}"),
+                ("src/main/java/app/a/Exporter.java", "package app.a; @org.springframework.stereotype.Component public class Exporter {}"),
+                ("src/main/java/app/b/Exporter.java", "package app.b; @org.springframework.stereotype.Component public class Exporter {}"),
+            ];
+            files.extend(extra);
+            model(&files).1.name_conflicts().len()
+        };
+        assert_eq!(conflicts(None), 1);
+        assert_eq!(conflicts(Some(("src/main/java/app/Remote.java", "package app; @org.springframework.stereotype.Component @io.micronaut.context.annotation.Requires(property = \"remote\") @io.micronaut.context.annotation.Replaces(app.a.Exporter.class) class Remote {}"))), 0);
     }
 }
