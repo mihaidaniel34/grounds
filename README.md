@@ -60,8 +60,11 @@ leaves tests for the end of the task.
   annotations, `getter.noIsPrefix`, `builder.className`, `log.fieldName`,
   `fieldNameConstants.*`). A class that carries any other Lombok annotation
   (`@Delegate`, `@Accessors`, ...), or extends or is nested in one, is open
-  to the compile-break rules: they say nothing about its members. The list
-  of fully modelled annotations is `IMPLEMENTED` in
+  to the compile-break rules: they say nothing about its members. So is a
+  class using a modelled annotation in a way the model does not cover
+  (`@Getter(lazy = true)`, `@Singular` on Guava collections, a
+  `lombok.config` key such as `singular.useGuava`). The modelled
+  annotations are listed as `IMPLEMENTED` in
   `crates/grounds-index/src/lombok.rs`.
 
 "Bean not found" is only reported for injection points whose type is

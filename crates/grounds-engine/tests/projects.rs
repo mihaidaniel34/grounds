@@ -394,3 +394,24 @@ fn lombok_builder_fields_and_field_name_constants_across_files() {
     let found = findings(&dir, COMPILE);
     assert_eq!(found, ["src/main/java/app/Job.java:20 unresolved-field", "src/main/java/app/Query.java:3 unresolved-field"]);
 }
+
+#[test]
+fn a_reset_lombok_config_key_and_an_imported_include_are_modelled() {
+    // a module's lombok.config sets useGuava back to its default, so Tag is
+    // modelled; `@Include` imported from FieldNameConstants counts. Checked
+    // with javac and Lombok 1.18.36: only Uses.java:4 is rejected
+    let dir = project(
+        "lombok-config-reset",
+        &[
+            ("lombok.config", "config.stopBubbling = true\nlombok.singular.useGuava = true\n"),
+            ("sub/lombok.config", "lombok.singular.useGuava = false\n"),
+            (
+                "sub/src/main/java/app/Tag.java",
+                "package app;\nimport lombok.Builder;\nimport lombok.Singular;\nimport lombok.experimental.FieldNameConstants;\nimport lombok.experimental.FieldNameConstants.Include;\nimport java.util.List;\n@Builder\n@FieldNameConstants(onlyExplicitlyIncluded = true)\npublic class Tag {\n    @Include\n    private String label;\n    @Singular\n    private List<String> aliases;\n}\n",
+            ),
+            ("sub/src/main/java/app/Uses.java", "package app;\nclass Uses {\n    String a() { return Tag.Fields.label; }\n    Tag b() { return Tag.builder().alias(\"x\").weight(2).build(); }\n}\n"),
+        ],
+    );
+    let found = findings(&dir, COMPILE);
+    assert_eq!(found, ["sub/src/main/java/app/Uses.java:4 unresolved-method"]);
+}

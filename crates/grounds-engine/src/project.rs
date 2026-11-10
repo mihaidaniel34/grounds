@@ -136,6 +136,9 @@ impl LombokConfigs {
             dir = d.parent();
         }
         let mut cfg = LombokConfig::default();
+        // the unmodelled keys whose effective value is not their default: a
+        // nearer config setting one back to its default, or clearing it, counts
+        let mut unmodelled: Vec<&str> = Vec::new();
         for entries in chain.into_iter().rev() {
             for (k, op, v) in entries {
                 let truthy = v.eq_ignore_ascii_case("true");
@@ -169,14 +172,17 @@ impl LombokConfigs {
                             "lombok.log.fieldisstatic" => truthy,
                             _ => false,
                         };
+                        unmodelled.retain(|u| *u != k);
                         if !default {
-                            cfg.unmodelled = true;
+                            unmodelled.push(k);
                         }
                     }
+                    (k, "clear") => unmodelled.retain(|u| *u != k),
                     _ => {}
                 }
             }
         }
+        cfg.unmodelled = !unmodelled.is_empty();
         cfg
     }
 

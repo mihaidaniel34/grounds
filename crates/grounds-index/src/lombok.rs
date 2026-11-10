@@ -321,7 +321,7 @@ pub fn apply_all_with(classes: &mut Vec<RawClass>, imports: &[Import], cfg: &Lom
     let imported = imports.iter().any(|i| i.path.starts_with("lombok"));
     let mut extra = Vec::new();
     for c in classes.iter_mut() {
-        extra.extend(apply_one(c, imported, cfg));
+        extra.extend(apply_one(c, imported, imports, cfg));
         if members_unknown(c, imports, cfg) {
             c.flags.set(Flags::MEMBERS_UNKNOWN);
         }
@@ -363,10 +363,10 @@ pub fn apply_all_with(classes: &mut Vec<RawClass>, imports: &[Import], cfg: &Lom
 }
 
 pub fn apply(c: &mut RawClass) {
-    let _ = apply_one(c, true, &LombokConfig::default());
+    let _ = apply_one(c, true, &[], &LombokConfig::default());
 }
 
-fn apply_one(c: &mut RawClass, imported: bool, cfg: &LombokConfig) -> Vec<RawClass> {
+fn apply_one(c: &mut RawClass, imported: bool, imports: &[Import], cfg: &LombokConfig) -> Vec<RawClass> {
     let anns = c.annotations.clone();
     let has = |s: &str| anns.iter().find(|a| is_lombok(a, s, imported));
     // Lombok annotations may sit on the class, a field or only a
@@ -704,7 +704,7 @@ fn apply_one(c: &mut RawClass, imported: bool, cfg: &LombokConfig) -> Vec<RawCla
     // @FieldNameConstants: a nested `Fields` class (or enum) with a constant
     // per field
     if let Some(a) = has("FieldNameConstants") {
-        generated.extend(field_name_constants(c, a, &fields, cfg));
+        generated.extend(field_name_constants(c, a, &fields, imports, cfg));
     }
     generated
 }
@@ -952,7 +952,7 @@ fn super_builder_classes(c: &mut RawClass, b: &RawAnnotation, items: &[Item], cf
 /// `lombok.fieldNameConstants.uppercase` names the constants `CREATE_TIME`.
 /// `level` sets the type's access (`NONE`: nothing is generated). A
 /// hand-written type of that name is completed (see `apply_all_with`).
-fn field_name_constants(c: &RawClass, a: &RawAnnotation, fields: &[RawField], cfg: &LombokConfig) -> Option<RawClass> {
+fn field_name_constants(c: &RawClass, a: &RawAnnotation, fields: &[RawField], imports: &[Import], cfg: &LombokConfig) -> Option<RawClass> {
     let level = match a.arg("level") {
         Some(RawAnnValue::Name(n)) => n.rsplit('.').next().unwrap_or("").to_string(),
         _ => "PUBLIC".to_string(),
@@ -967,7 +967,10 @@ fn field_name_constants(c: &RawClass, a: &RawAnnotation, fields: &[RawField], cf
     let as_enum = a.bool_arg("asEnum") == Some(true);
     let only_explicit = a.bool_arg("onlyExplicitlyIncluded") == Some(true);
     let inner = str_arg(a, "innerTypeName").filter(|s| !s.is_empty()).or_else(|| cfg.field_name_constants_type.clone().filter(|s| !s.is_empty())).unwrap_or_else(|| "Fields".to_string());
-    let marked = |f: &RawField, which: &str| f.annotations.iter().any(|x| x.name.ends_with(&format!("FieldNameConstants.{which}")));
+    // `@FieldNameConstants.Include`, or `@Include` imported from it
+    let marked = |f: &RawField, which: &str| {
+        f.annotations.iter().any(|x| x.name.ends_with(&format!("FieldNameConstants.{which}")) || processor_annotation(x, imports).is_some_and(|q| q == format!("lombok.experimental.FieldNameConstants.{which}")))
+    };
     let ty = TypeSyntax::Named(vec![(Arc::from(c.simple_name()), vec![]), (Arc::from(inner.as_str()), vec![])]);
     let mut out_fields = Vec::new();
     for f in fields {
