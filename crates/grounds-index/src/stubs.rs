@@ -319,7 +319,16 @@ pub fn extract_with(file: &ParsedFile, lombok: &crate::lombok::LombokConfig) -> 
         match ch.kind() {
             "package_declaration" => {
                 if let Some(n) = ch.kids().into_iter().find(|k| matches!(k.kind(), "identifier" | "scoped_identifier")) {
-                    stub.package = Arc::from(strip_ws(n.text(src)).as_str());
+                    let name = strip_ws(n.text(src));
+                    // A file cut off in `package a.x.x.x...` (half a million
+                    // segments): the index keeps every prefix of a package
+                    // name, which is quadratic, and took minutes and all the
+                    // memory there was. Such a file declares nothing that can
+                    // be named: no stub, and it counts as unreadable.
+                    if name.split('.').nth(crate::index::MAX_NAME_SEGMENTS).is_some() {
+                        return FileStub { package: Arc::from(""), has_syntax_errors: true, ..Default::default() };
+                    }
+                    stub.package = Arc::from(name.as_str());
                 }
             }
             "import_declaration" => {
@@ -623,17 +632,32 @@ pub fn fold_unary(op: &str, v: Constant) -> Option<Constant> {
     }
 }
 
+/// Longest string constant folded, in bytes: a class file holds constant
+/// strings of up to 65,535 bytes, so longer ones are compile errors.
+pub const MAX_CONSTANT_STRING: usize = 1 << 20;
+
 /// Binary operator on constants, with Java's semantics: `int` arithmetic
 /// wraps at 32 bits, mixed operands promote to `long`/`double`, and a shift
 /// takes the type of its left operand and masks the distance to 5 or 6 bits.
 pub fn fold_binary(op: &str, l: &Constant, r: &Constant) -> Option<Constant> {
     use Constant::*;
     if op == "+" {
-        if let (Str(a), b) = (l, r) {
-            return Some(Str(Arc::from(format!("{}{}", a, const_to_string(b)).as_str())));
-        }
-        if let (a, Str(b)) = (l, r) {
-            return Some(Str(Arc::from(format!("{}{}", const_to_string(a), b).as_str())));
+        if matches!(l, Str(_)) || matches!(r, Str(_)) {
+            fn part(c: &Constant) -> std::borrow::Cow<'_, str> {
+                match c {
+                    Str(s) => std::borrow::Cow::Borrowed(&**s),
+                    c => std::borrow::Cow::Owned(const_to_string(c)),
+                }
+            }
+            let (a, b) = (part(l), part(r));
+            // not a constant past the class file limit (javac: "constant
+            // string too long"), checked before joining: constants defined
+            // twice by the previous one over 50 classes (`K2.S = K1.S + K1.S`)
+            // reached 2^50 bytes
+            if a.len().saturating_add(b.len()) > MAX_CONSTANT_STRING {
+                return None;
+            }
+            return Some(Str(Arc::from(format!("{a}{b}").as_str())));
         }
     }
     let integral = |c: &Constant| matches!(c, Int(_) | Long(_) | Char(_));
@@ -811,21 +835,23 @@ pub fn type_syntax(n: Node, src: &str) -> TypeSyntax {
 }
 
 fn scoped_segments(n: Node, src: &str, segs: &mut Vec<(Name, Vec<TypeSyntax>)>) {
-    match n.kind() {
-        "type_identifier" | "identifier" => segs.push((Arc::from(n.text(src)), Vec::new())),
-        "generic_type" => {
-            if let TypeSyntax::Named(s) = type_syntax(n, src) {
-                segs.extend(s);
-            }
-        }
-        "scoped_type_identifier" | "scoped_identifier" => {
-            for k in n.kids() {
-                if !matches!(k.kind(), "annotation" | "marker_annotation") {
-                    scoped_segments(k, src, segs);
+    // a loop, not recursion: a file cut mid-edit can leave a qualified name
+    // of a million segments (`throws x.x.x...`), which overflowed the stack
+    let mut stack = vec![n];
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            "type_identifier" | "identifier" => segs.push((Arc::from(n.text(src)), Vec::new())),
+            "generic_type" => {
+                if let TypeSyntax::Named(s) = type_syntax(n, src) {
+                    segs.extend(s);
                 }
             }
+            "scoped_type_identifier" | "scoped_identifier" => {
+                // children in source order: pushed reversed
+                stack.extend(n.kids().into_iter().filter(|k| !matches!(k.kind(), "annotation" | "marker_annotation")).rev());
+            }
+            _ => {}
         }
-        _ => {}
     }
 }
 

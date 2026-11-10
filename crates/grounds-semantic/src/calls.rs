@@ -172,7 +172,7 @@ struct Capture {
 /// Type variables of a method inferred from argument types, and whether the
 /// arguments surely fit.
 #[derive(Clone, Debug, Default)]
-struct Inference {
+pub(crate) struct Inference {
     /// resolved variables; a captured one is bound to its capture's bound
     bindings: Vec<(Name, Ty)>,
     captures: Vec<Capture>,
@@ -200,6 +200,12 @@ struct Inference {
     guess: bool,
     /// variables an invariant argument gives in part (`Map<K, List<?>>`)
     partial: Vec<(Name, Ty)>,
+}
+
+impl crate::model::Unknowable for Inference {
+    fn unknown() -> Self {
+        Inference::unknown()
+    }
 }
 
 impl Inference {
@@ -2318,6 +2324,20 @@ impl<'t> FileModel<'t> {
     /// Inference of `m`'s type variables from the non-lambda arguments,
     /// each typed with the selected parameter as target.
     fn partial_inference(&self, call: Node<'t>, m: &MethodInfo) -> Inference {
+        // memoized per call and method: each level of nested generic calls
+        // (`is(is(is(1)))`) asked for its argument's inference four times,
+        // so 12 levels took a minute
+        if let Some((_, inf)) = self.partials.borrow().get(&call.id()).and_then(|v| v.iter().find(|(k, _)| k == m)) {
+            return inf.clone();
+        }
+        let (inf, clean) = self.clean(|| self.partial_inference_uncached(call, m));
+        if clean {
+            self.partials.borrow_mut().entry(call.id()).or_default().push((m.clone(), inf.clone()));
+        }
+        inf
+    }
+
+    fn partial_inference_uncached(&self, call: Node<'t>, m: &MethodInfo) -> Inference {
         self.guard(call.id(), TAG_PARTIAL, Inference::unknown(), || {
             let args = self.args_of(call);
             let mut params = Vec::new();
