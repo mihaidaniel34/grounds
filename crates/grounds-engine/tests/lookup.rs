@@ -25,8 +25,13 @@ fn project(name: &str, files: &[(&str, &str)]) -> PathBuf {
 
 /// `path:line rule` of every finding of the compile-break rules, sorted.
 fn findings(dir: &Path) -> Vec<String> {
+    findings_of(dir, COMPILE)
+}
+
+/// `path:line rule` of every finding of `rules`, sorted.
+fn findings_of(dir: &Path, rules: &[&str]) -> Vec<String> {
     let mut project = Project::load(dir).unwrap();
-    project.config.rules.enable = COMPILE.iter().map(|s| s.to_string()).collect();
+    project.config.rules.enable = rules.iter().map(|s| s.to_string()).collect();
     let (set, options) = build_ruleset(&project);
     let files: Vec<_> = project.workspace.files.iter().map(|f| f.path.clone()).collect();
     let mut out: Vec<String> = analyze_files(&project, &set, &options, &files).into_iter().map(|f| format!("{}:{} {}", f.path, f.line, f.rule)).collect();
@@ -261,4 +266,24 @@ fn a_variant_class_is_seen_in_headers_of_its_own_set() {
         ],
     );
     assert_eq!(findings(&dir), vec!["app/src/fdroid/java/p/Broken.java:4 unresolved-method".to_string()]);
+}
+
+#[test]
+fn a_class_declared_in_two_modules_is_judged_inside_its_own_files() {
+    if !has_jdk() {
+        return;
+    }
+    // a starter for two framework versions: the same class in two modules,
+    // each implementing an interface of its framework (no jars here). Which
+    // copy other files see is uncertain; inside its own file, `String` is
+    // still java.lang's
+    let body = "    String f(String s) {\n        return s.replaceAll(\"_\", \".\");\n    }\n}\n";
+    let dir = project(
+        "copies-own-file",
+        &[
+            ("starter/src/main/java/p/Post.java", &format!("package p;\nimport fw.v4.Hook;\npublic class Post implements Hook {{\n{body}")),
+            ("starter-3/src/main/java/p/Post.java", &format!("package p;\nimport fw.v3.Hook;\npublic class Post implements Hook {{\n{body}")),
+        ],
+    );
+    assert_eq!(findings_of(&dir, &["replaceall-with-literal"]), vec!["starter-3/src/main/java/p/Post.java:5 replaceall-with-literal".to_string(), "starter/src/main/java/p/Post.java:5 replaceall-with-literal".to_string()]);
 }

@@ -1325,6 +1325,19 @@ impl Index {
         all
     }
 
+    /// Whether the copies of `owner` code in `scope` may read disagree about
+    /// a member type `simple`: some declare it and some do not, or their
+    /// supertypes differ.
+    fn copies_disagree(&self, owner: &str, simple: &str, scope: &Scope) -> bool {
+        let copies = self.copies_read(owner, Some(scope));
+        if copies.len() < 2 {
+            return false;
+        }
+        let direct = format!("{owner}${simple}");
+        let declaring = copies.iter().filter(|(st, _)| st.classes.iter().any(|c| *c.name == *direct)).count();
+        (declaring > 0 && declaring < copies.len()) || !copies.windows(2).all(|w| w[0].1.superclass == w[1].1.superclass && w[0].1.interfaces == w[1].1.interfaces)
+    }
+
     fn member_type_rec(&self, owner: &str, simple: &str, seen: &mut FxHashSet<Name>, depth: u32, scope: Option<&Scope>) -> MemberType {
         if depth > 20 {
             return MemberType::Unknown;
@@ -1465,8 +1478,9 @@ impl Index {
             }
             match self.member_lookup(e, simple, Some(scope)) {
                 MemberType::Found(n) => return Some(n),
-                // copies of a class declared twice disagree: not an import's class either
-                MemberType::Unknown if self.copies.contains_key(&**e) => return None,
+                // copies of a class declared twice disagree: not an import's class
+                // either (an unresolved supertype is the case below)
+                MemberType::Unknown if self.copies_disagree(e, simple, scope) => return None,
                 MemberType::Unknown => uncertain = true,
                 MemberType::NotFound => {}
             }
