@@ -22,9 +22,24 @@ pub fn read_text(path: impl AsRef<Path>) -> io::Result<String> {
     Ok(text)
 }
 
+/// The bytes of a regular file, refused as `read_text` refuses (for hashing
+/// what may not be text: a jar on the classpath).
+pub fn read_bytes(path: impl AsRef<Path>) -> io::Result<Vec<u8>> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
+    let path = path.as_ref();
+    let mut f = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(path)?;
+    if !f.metadata()?.is_file() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{} is not a regular file", path.display())));
+    }
+    let mut bytes = Vec::new();
+    f.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::read_text;
+    use super::{read_bytes, read_text};
 
     #[test]
     fn only_regular_files_are_read() {
@@ -41,6 +56,9 @@ mod tests {
         }
         assert!(read_text("/dev/zero").is_err());
         assert!(read_text(&dir).is_err());
+        assert!(read_bytes("/dev/zero").is_err());
+        assert!(read_bytes(&dir).is_err());
+        assert_eq!(read_bytes(dir.join("a.txt")).unwrap(), b"x");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

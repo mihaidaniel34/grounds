@@ -158,6 +158,28 @@ fn a_file_with_a_constant_cut_off_at_the_nesting_bound_is_not_judged() {
 }
 
 #[test]
+fn a_daemon_session_stamps_pipes_and_devices_without_reading_them() {
+    // A session stamps its configuration files, with a hash of the content
+    // while their time is recent: a named pipe just made, or a device the
+    // classpath dump lists, would block or never end a plain read.
+    let dir = project("stamp-fifo", &[("src/main/java/p/B.java", "package p;\nclass B {}\n"), (".grounds/classpath.txt", "/dev/zero\n")]);
+    if !std::process::Command::new("mkfifo").arg(dir.join("lombok.config")).status().is_ok_and(|s| s.success()) {
+        return;
+    }
+    let d = dir.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut s = grounds_engine::session::Session::open(&d).unwrap();
+        s.sync(&[]);
+        std::fs::write(d.join("src/main/java/p/B.java"), "package p;\nclass B { void m() {} }\n").unwrap();
+        s.sync(&[]);
+        let _ = tx.send(());
+    });
+    assert!(rx.recv_timeout(Duration::from_secs(60)).is_ok(), "a session blocked on a pipe or a device");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn a_package_name_of_half_a_million_segments_is_not_indexed() {
     // found by scripts/fuzz_robust.py (seed 2 case 456 once the fixtures it
     // draws from changed): a file cut off in `package a.x.x.x...`. The index
@@ -190,5 +212,45 @@ fn a_launcher_handed_deeply_nested_sources_is_not_a_crash() {
     let dir = project("nested-sources", &[("src/main/java/p/Main.java", &launcher), ("src/main/java/p/B.java", "package p;\nclass B { void m() { ;; } }\n")]);
     let fs = check(&dir, &["stray-semicolon", "bean-not-found"]);
     assert!(fs.iter().any(|f| f.path.ends_with("p/B.java")), "{fs:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_source_file_replaced_by_a_pipe_is_refused_and_not_taken_as_read() {
+    // fsutil refuses a pipe; for a source file the session already knows,
+    // that is a read that failed: no stub, and tried again at every sync
+    // until a read succeeds, never a stamp that vouches for it
+    let dir = project("source-fifo", &[("src/main/java/p/B.java", "package p;\nclass B {}\n"), ("src/main/java/p/Pipe.java", "package p;\nclass Pipe {}\n")]);
+    // old times: nothing here loads the project again, which would not list the pipe at all
+    let old = std::time::SystemTime::now() - Duration::from_secs(3600);
+    for f in ["grounds.toml", "src/main/java/p/B.java"] {
+        std::fs::File::options().write(true).open(dir.join(f)).unwrap().set_modified(old).unwrap();
+    }
+    // (as the session names it: on macOS the temporary directory is reached through the /var symlink)
+    let pipe = dir.canonicalize().unwrap().join("src/main/java/p/Pipe.java");
+    let d = dir.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut s = grounds_engine::session::Session::open(&d).unwrap();
+        assert!(s.project.index.class_exists("p.Pipe"));
+        std::fs::remove_file(d.join("src/main/java/p/Pipe.java")).unwrap();
+        assert!(std::process::Command::new("mkfifo").arg(d.join("src/main/java/p/Pipe.java")).status().unwrap().success());
+        s.sync(&[]);
+        let first = (s.project.index.class_exists("p.Pipe"), s.unread_files());
+        s.sync(&[]);
+        let second = s.unread_files();
+        // a regular file again
+        std::fs::remove_file(d.join("src/main/java/p/Pipe.java")).unwrap();
+        std::fs::write(d.join("src/main/java/p/Pipe.java"), "package p;\nclass Pipe {}\n").unwrap();
+        s.sync(&[]);
+        let _ = tx.send((first, second, s.project.index.class_exists("p.Pipe"), s.unread_files()));
+    });
+    let got = rx.recv_timeout(Duration::from_secs(60));
+    assert!(got.is_ok(), "a session blocked on a pipe");
+    let ((stub, unread), still, back, none) = got.unwrap();
+    assert!(!stub, "no stub for a file that cannot be read, as a fresh load");
+    assert_eq!(unread, [pipe.clone()]);
+    assert_eq!(still, [pipe], "still unread at the next sync");
+    assert!(back && none.is_empty(), "read once it can be");
     let _ = std::fs::remove_dir_all(&dir);
 }
