@@ -43,12 +43,18 @@ pub struct Binder<'t> {
     pub by_name_node: FxHashMap<usize, usize>,
     /// decl index -> uses
     pub uses: Vec<Vec<Node<'t>>>,
+    /// References to a local of an enclosing method from inside a class body
+    /// (anonymous, local or member class): the identifier and the classes
+    /// crossed, innermost first. A field the class inherits shadows the local
+    /// (JLS 6.4.1), which only the class hierarchy can tell.
+    pub crossed: Vec<(Node<'t>, Vec<Node<'t>>)>,
 }
 
 enum Frame<'t> {
     Vars(Vec<(&'t str, usize)>),
-    /// Class boundary: member fields with these names shadow outer locals.
-    Barrier(Vec<&'t str>),
+    /// Class boundary: member fields with these names shadow outer locals;
+    /// the class's declaration (or anonymous body) node.
+    Barrier(Vec<&'t str>, Option<Node<'t>>),
 }
 
 struct State<'t, 's> {
@@ -105,18 +111,21 @@ where
         }
     }
 
-    fn lookup(&self, name: &str) -> Option<usize> {
+    /// The local `name` refers to, and the classes crossed to reach it.
+    fn lookup(&self, name: &str) -> Option<(usize, Vec<Node<'t>>)> {
+        let mut crossed = Vec::new();
         for f in self.stack.iter().rev() {
             match f {
                 Frame::Vars(v) => {
                     if let Some((_, i)) = v.iter().rev().find(|(n, _)| *n == name) {
-                        return Some(*i);
+                        return Some((*i, crossed));
                     }
                 }
-                Frame::Barrier(fields) => {
+                Frame::Barrier(fields, class) => {
                     if fields.contains(&name) {
                         return None;
                     }
+                    crossed.extend(*class);
                 }
             }
         }
@@ -125,10 +134,47 @@ where
 
     fn reference(&mut self, ident: Node<'t>) {
         let name = ident.text(self.src);
-        if let Some(i) = self.lookup(name) {
+        if let Some((i, crossed)) = self.lookup(name) {
             self.b.refs.insert(ident.id(), i);
             self.b.uses[i].push(ident);
+            if !crossed.is_empty() {
+                self.b.crossed.push((ident, crossed));
+            }
         }
+    }
+
+    /// Put declared locals back in scope, in the innermost frame.
+    fn bring_into_scope(&mut self, decls: &[usize]) {
+        for &i in decls {
+            let name = self.b.decls[i].name;
+            if let Some(Frame::Vars(v)) = self.stack.iter_mut().rev().find(|f| matches!(f, Frame::Vars(_))) {
+                v.push((name, i));
+            }
+        }
+    }
+
+    /// Visit the condition of an `if` or `while` in a scope of its own, and
+    /// return the pattern variables it introduces when true and when false
+    /// (JLS 6.3.1).
+    fn condition(&mut self, cond: Option<Node<'t>>) -> (Vec<usize>, Vec<usize>) {
+        let Some(cond) = cond else { return (Vec::new(), Vec::new()) };
+        let first = self.b.decls.len();
+        self.push();
+        self.visit(cond);
+        self.pop();
+        let (mut when_true, mut when_false) = (Vec::new(), Vec::new());
+        for i in first..self.b.decls.len() {
+            let d = &self.b.decls[i];
+            if d.kind != LocalKind::Pattern {
+                continue;
+            }
+            match introduced_when(d.decl_node, cond) {
+                Some(true) => when_true.push(i),
+                Some(false) => when_false.push(i),
+                None => {}
+            }
+        }
+        (when_true, when_false)
     }
 
     fn visit_kids(&mut self, n: Node<'t>) {
@@ -185,7 +231,8 @@ where
                 }
             }
         }
-        self.stack.push(Frame::Barrier(names));
+        let class = body.and_then(|b| if b.kind() == "class_body" && b.parent().is_some_and(|p| matches!(p.kind(), "object_creation_expression" | "enum_constant")) { Some(b) } else { b.parent() });
+        self.stack.push(Frame::Barrier(names, class));
     }
 
     fn bind_pattern(&mut self, p: Node<'t>) {
@@ -226,7 +273,7 @@ where
                 self.class_barrier(n.field("body"));
                 // record components are fields of the record
                 if n.kind() == "record_declaration" {
-                    if let Some(Frame::Barrier(names)) = self.stack.last_mut() {
+                    if let Some(Frame::Barrier(names, _)) = self.stack.last_mut() {
                         if let Some(ps) = n.field("parameters") {
                             for p in ps.kids() {
                                 if let Some(nm) = p.field("name") {
@@ -327,6 +374,45 @@ where
                     }
                 }
                 // local class declarations inside handled by "class_declaration"
+            }
+            // pattern variables of the condition are in scope where it is
+            // true or false, and after the statement when the other branch
+            // cannot complete normally (JLS 6.3.1, 6.3.2)
+            "if_statement" => {
+                let (when_true, when_false) = self.condition(n.field("condition"));
+                let then = n.field("consequence");
+                let alt = n.field("alternative");
+                self.push();
+                self.bring_into_scope(&when_true);
+                if let Some(t) = then {
+                    self.visit(t);
+                }
+                self.pop();
+                if let Some(e) = alt {
+                    self.push();
+                    self.bring_into_scope(&when_false);
+                    self.visit(e);
+                    self.pop();
+                }
+                if then.is_some_and(|t| !completes_normally(t)) {
+                    self.bring_into_scope(&when_false);
+                }
+                if alt.is_some_and(|e| !completes_normally(e)) {
+                    self.bring_into_scope(&when_true);
+                }
+            }
+            "while_statement" => {
+                let (when_true, when_false) = self.condition(n.field("condition"));
+                self.push();
+                self.bring_into_scope(&when_true);
+                if let Some(b) = n.field("body") {
+                    self.visit(b);
+                }
+                self.pop();
+                let breaks = n.field("body").is_some_and(|b| b.descendants().any(|d| d.kind() == "break_statement"));
+                if !breaks {
+                    self.bring_into_scope(&when_false);
+                }
             }
             "for_statement" => {
                 self.push();
@@ -480,6 +566,48 @@ where
                 _ => self.visit(m),
             }
         }
+    }
+}
+
+/// Whether the pattern variable declared at `decl` is introduced by `cond`
+/// when it is true, when it is false, or neither (JLS 6.3.1): through
+/// parentheses, `!`, the operands of `&&` (when true) and of `||` (when false).
+fn introduced_when(decl: Node, cond: Node) -> Option<bool> {
+    let mut when = true;
+    let mut cur = decl;
+    // from a pattern up to its `instanceof`
+    while !matches!(cur.kind(), "instanceof_expression") {
+        cur = cur.parent()?;
+    }
+    while cur != cond {
+        let p = cur.parent()?;
+        match p.kind() {
+            "parenthesized_expression" => {}
+            "unary_expression" if p.field("operator").is_some_and(|o| o.kind() == "!") => when = !when,
+            "binary_expression" => match p.field("operator").map(|o| o.kind()) {
+                Some("&&") if when => {}
+                Some("||") if !when => {}
+                _ => return None,
+            },
+            _ => return None,
+        }
+        cur = p;
+    }
+    Some(when)
+}
+
+/// Whether a statement can complete normally, roughly (JLS 14.22): not when it
+/// is a `return`, `throw`, `break`, `continue` or `yield`, a block ending with
+/// one, or an `if` whose branches both cannot.
+fn completes_normally(s: Node) -> bool {
+    match s.kind() {
+        "return_statement" | "throw_statement" | "break_statement" | "continue_statement" | "yield_statement" => false,
+        "block" => s.kids().into_iter().rfind(|k| !matches!(k.kind(), "line_comment" | "block_comment")).is_none_or(completes_normally),
+        "if_statement" => match (s.field("consequence"), s.field("alternative")) {
+            (Some(t), Some(e)) => completes_normally(t) || completes_normally(e),
+            _ => true,
+        },
+        _ => true,
     }
 }
 

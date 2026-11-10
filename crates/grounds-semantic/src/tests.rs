@@ -1261,3 +1261,36 @@ fn only_accessible_members_are_candidates() {
         class Use { Object f(Set<?> s) { return /*C*/Tup.of(s); } Object g(Engine e) { return /*C*/e.make(1); } }";
     assert_eq!(calls_of(src), vec!["Outer.sites()", "Engine.make(java.lang.Integer)", "Tup.of(java.lang.Object[])", "Engine.make(java.lang.Number)"]);
 }
+
+#[test]
+fn an_inherited_field_shadows_an_outer_local() {
+    let src = "
+        class Plan { protected String live; private Integer hidden; }
+        class T {
+            Object f() {
+                Integer live = 1; Integer hidden = 2; Integer other = 3;
+                Object a = new Plan() { Object g() { return /*T*/ live; } Object h() { return /*T*/ hidden; } };
+                Object b = new lib.Missing() { Object g() { return /*T*/ live; } };
+                Object c = new Object() { Object g() { return /*T*/ other; } };
+                return /*T*/ live;
+            }
+        }";
+    assert_eq!(types_of(src), vec!["java.lang.String", "java.lang.Integer", "?unknown", "java.lang.Integer", "java.lang.Integer"]);
+}
+
+#[test]
+fn pattern_variables_are_scoped_by_their_condition() {
+    let src = "
+        class U { int n; }
+        class T {
+            String v;
+            boolean check(Object x) { return true; }
+            void f(Object o) {
+                if (o instanceof U v && check(/*T*/ v)) { Object a = /*T*/ v; } else { Object b = /*T*/ v; }
+                Object c = /*T*/ v;
+                if (!(o instanceof U v)) { return; }
+                Object d = /*T*/ v;
+            }
+        }";
+    assert_eq!(types_of(src), vec!["U", "U", "java.lang.String", "java.lang.String", "U"]);
+}
