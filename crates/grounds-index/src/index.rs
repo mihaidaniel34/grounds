@@ -1132,6 +1132,18 @@ impl Index {
         }
         // same package
         let same = if scope.package.is_empty() { simple.to_string() } else { format!("{}.{}", scope.package, simple) };
+        // the default package of another directory is not compiled with this
+        // file (test inputs compiled one directory at a time): its class is
+        // no candidate, and a name found nowhere else is unknown
+        let elsewhere = scope.package.is_empty() && self.classes.contains_key(simple) && {
+            match self.default_package_visible(simple, scope) {
+                Some(visible) => !visible,
+                None => return None,
+            }
+        };
+        if elsewhere {
+            return self.resolve_on_demand(simple, scope).or_else(|| Some(Arc::from(format!("java.lang.{simple}").as_str())).filter(|jl| self.class_exists(jl)));
+        }
         if self.class_exists(&same) {
             // a same-package class from another module (a test fixture in a
             // module this one does not depend on) loses to an on-demand
@@ -1155,6 +1167,36 @@ impl Index {
             return Some(Arc::from(jl.as_str()));
         }
         None
+    }
+
+    /// Whether the default-package class `simple` is declared in the
+    /// directory of the code in `scope`: that of the files declaring its
+    /// top-level class, or, in a class header, of the file whose imports the
+    /// scope reads. Visible when the file cannot be told. None when copies of
+    /// either class sit in directories that only partly match.
+    fn default_package_visible(&self, simple: &str, scope: &Scope) -> Option<bool> {
+        let dir = |f: &str| f.rfind(['/', '\\']).map_or("", |i| &f[..i]).to_string();
+        let dirs = |name: &str| -> Vec<String> {
+            let files: Vec<&Arc<str>> = match self.copies.get(name) {
+                Some(files) => files.iter().collect(),
+                None => self.source_file_of(name).into_iter().collect(),
+            };
+            files.into_iter().map(|f| dir(f)).collect()
+        };
+        let here: Vec<String> = match scope.enclosing.last() {
+            Some(top) => dirs(&top[..top.find('$').unwrap_or(top.len())]),
+            None => self.files.iter().filter(|(_, st)| st.package.is_empty() && std::ptr::eq(&st.imports, scope.imports)).map(|(f, _)| dir(f)).collect(),
+        };
+        let there = dirs(simple);
+        if here.is_empty() {
+            return Some(true);
+        }
+        let shared = here.iter().filter(|d| there.contains(d)).count();
+        match shared {
+            0 => Some(false),
+            n if n == here.len() => Some(true),
+            _ => None,
+        }
     }
 
     fn resolve_on_demand(&self, simple: &str, scope: &Scope) -> Option<Name> {

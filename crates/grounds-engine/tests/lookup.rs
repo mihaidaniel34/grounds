@@ -105,3 +105,26 @@ fn member_types_of_a_class_declared_twice_come_from_the_copy_read() {
     );
     assert_eq!(findings(&dir), vec!["b/WebTest.java:3 unresolved-method".to_string(), "two/src/test/java/example/PetTest.java:3 unresolved-method".to_string()]);
 }
+
+#[test]
+fn a_default_package_class_is_seen_only_from_its_own_directory() {
+    if !has_jdk() {
+        return;
+    }
+    let dir = project(
+        "default-package",
+        &[
+            // checker-framework: test inputs compiled one directory at a time
+            ("tests/calledmethods/Use.java", "import java.io.*;\n\nclass Use {\n    void f(Closeable r) throws IOException { r.close(); }\n    void g(Error e) { new Error(\"boom\"); }\n}\n"),
+            ("tests/issue141/Closeable.java", "interface Closeable {}\n"),
+            ("tests/issue820/Error.java", "class Error {}\n"),
+            // javacc: a Node that JJTree generates in each example, one written out
+            ("examples/Interpreter/Node.java", "public interface Node {\n    void interpret();\n}\n"),
+            ("examples/Transformer/SimpleNode.java", "public class SimpleNode implements Node {\n    public void jjtOpen() {}\n}\n"),
+            // the same directory still compiles together
+            ("examples/Interpreter/ASTStart.java", "public class ASTStart implements Node {\n    public void interpret() {}\n    void run(Node n) { n.interpret(); n.noSuchMethod(); }\n}\n"),
+            ("examples/Interpreter/ASTEnd.java", "public class ASTEnd implements Node {\n}\n"),
+        ],
+    );
+    assert_eq!(findings(&dir), vec!["examples/Interpreter/ASTEnd.java:1 unimplemented-abstract-method".to_string(), "examples/Interpreter/ASTStart.java:3 unresolved-method".to_string()]);
+}
