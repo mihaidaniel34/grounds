@@ -472,8 +472,9 @@ struct Builder<'a> {
     /// (class, method) pairs that produce a bean
     produced: rustc_hash::FxHashSet<(Name, Name)>,
     /// project annotations named by scan filters (`includeFilters`,
-    /// @MapperScan's annotationClass): they register what they annotate
-    filter_annotations: rustc_hash::FxHashSet<String>,
+    /// @MapperScan's annotationClass): they register what they annotate,
+    /// in tests only when every such filter is in test sources
+    filter_annotations: FxHashMap<String, bool>,
     /// a @MapperScan the model could not expand (placeholders, @MapperScans,
     /// a MapperScannerConfigurer set up in code), in main sources and only
     /// in test sources
@@ -669,7 +670,9 @@ impl<'a> Builder<'a> {
     /// to register anything are classified; everything else is not: a
     /// library annotation from a jar we do not have may be a stereotype
     /// through its meta-annotations, or a library may scan for it.
-    fn unclassified(&mut self, a: &AnnotationInfo, stub: Option<&FileStub>, on_method: bool, depth: u32) -> bool {
+    /// (`tests`: judged for test points, where scan filters declared in
+    /// test sources apply too)
+    fn unclassified(&mut self, a: &AnnotationInfo, stub: Option<&FileStub>, on_method: bool, depth: u32, tests: bool) -> bool {
         let defining = if on_method { self.factory_annotation(a, 0) } else { self.stereotype(a, 0).is_some() };
         if defining || Self::conditional(std::slice::from_ref(a)) {
             return false;
@@ -683,7 +686,7 @@ impl<'a> Builder<'a> {
             stub.and_then(|st| st.imports.iter().find(|i| !i.is_static && !i.on_demand && i.is_named(&a.name)).map(|i| i.path.to_string()))
         };
         let Some(q) = qualified else { return true };
-        if self.filter_annotations.contains(&q) {
+        if self.filter_annotations.get(&q).is_some_and(|only_tests| tests || !only_tests) {
             return true;
         }
         // a project annotation: what its own annotations are
@@ -699,7 +702,7 @@ impl<'a> Builder<'a> {
             if metas.iter().any(|m| self.stereotype(m, depth + 1).is_some() || self.factory_annotation(m, depth + 1)) {
                 return true;
             }
-            return metas.iter().any(|m| self.unclassified(m, meta_stub.as_deref(), on_method, depth + 1));
+            return metas.iter().any(|m| self.unclassified(m, meta_stub.as_deref(), on_method, depth + 1, tests));
         }
         !inert_annotation(&q)
     }
@@ -722,7 +725,9 @@ impl<'a> Builder<'a> {
                 continue;
             }
             let anns = c.annotations.clone();
-            let unknown = anns.iter().any(|a| self.unclassified(a, stub.as_deref(), false, 0));
+            let unknown = anns.iter().any(|a| self.unclassified(a, stub.as_deref(), false, 0, is_test));
+            // (only through a scan filter declared in test sources)
+            let unknown_in_tests = !unknown && !is_test && anns.iter().any(|a| self.unclassified(a, stub.as_deref(), false, 0, true));
             // a stereotype on a concrete class that is still no bean, for a
             // reason the model does not know
             let stereotyped = !c.is_abstract() && anns.iter().any(|a| self.stereotype(a, 0).is_some());
@@ -734,7 +739,7 @@ impl<'a> Builder<'a> {
             let assignable: Vec<bool> = if concrete { self.filter_types.iter().filter(|(t, _)| self.index.is_subclass(n, t).is_yes()).map(|(_, t)| *t).collect() } else { Vec::new() };
             if unknown || stereotyped || main_scan || (!is_test && assignable.iter().any(|t| !t)) {
                 unseen.push((n.clone(), is_test));
-            } else if (test_scan && (c.is_interface() || concrete)) || !assignable.is_empty() {
+            } else if (test_scan && (c.is_interface() || concrete)) || !assignable.is_empty() || unknown_in_tests {
                 unseen.push((n.clone(), true));
             }
         }
@@ -761,7 +766,7 @@ impl<'a> Builder<'a> {
                 }
                 let Some(ret) = m.ret.class_name() else { continue };
                 let anns = m.annotations.clone();
-                if self.is_factory_method(m) || anns.iter().any(|a| self.unclassified(a, stub.as_deref(), true, 0)) {
+                if self.is_factory_method(m) || anns.iter().any(|a| self.unclassified(a, stub.as_deref(), true, 0, is_test)) {
                     producers.push((Arc::from(ret), is_test));
                 }
             }
@@ -772,6 +777,15 @@ impl<'a> Builder<'a> {
         producers.dedup();
         self.model.unseen = unseen;
         self.model.unseen_producers = producers;
+    }
+
+    /// Annotations a scan filter names; one declared in main sources
+    /// registers everywhere.
+    fn add_filter_annotations(&mut self, names: impl IntoIterator<Item = String>, in_tests: bool) {
+        for n in names {
+            let only_tests = self.filter_annotations.entry(n).or_insert(in_tests);
+            *only_tests &= in_tests;
+        }
     }
 
     fn add_bean(&mut self, b: Bean) -> usize {
@@ -897,7 +911,7 @@ impl<'a> Builder<'a> {
                 }
                 mapper_pkgs.extend(pkgs.into_iter().map(|p| (p, in_tests)));
                 if let Some(v) = a.arg("annotationClass") {
-                    self.filter_annotations.extend(v.values().into_iter().filter_map(|x| if let AnnotationValue::Class(t) = x { t.class_name().map(str::to_string) } else { None }));
+                    self.add_filter_annotations(v.values().into_iter().filter_map(|x| if let AnnotationValue::Class(t) = x { t.class_name().map(str::to_string) } else { None }), in_tests);
                 }
             }
             if c.annotations.iter().any(|a| a.simple_name() == "MapperScans") {
@@ -936,7 +950,7 @@ impl<'a> Builder<'a> {
                     };
                     let classes: Vec<String> = ["classes", "value"].iter().flat_map(|k| f.arg(k).map(|v| v.values()).unwrap_or_default()).filter_map(|x| if let AnnotationValue::Class(t) = x { t.class_name().map(str::to_string) } else { None }).collect();
                     match kind.as_deref() {
-                        Some("ANNOTATION") => self.filter_annotations.extend(classes),
+                        Some("ANNOTATION") => self.add_filter_annotations(classes, in_tests),
                         Some("ASSIGNABLE_TYPE") => self.filter_types.extend(classes.into_iter().map(|t| (Arc::from(t.as_str()), in_tests))),
                         _ => {
                             if in_tests { self.opaque_filter_in_tests = true } else { self.opaque_filter = true }
@@ -2814,5 +2828,28 @@ mod tests {
         };
         assert_eq!(conflicts(None), 1);
         assert_eq!(conflicts(Some(("src/main/java/app/Remote.java", "package app; @org.springframework.stereotype.Component @io.micronaut.context.annotation.Requires(property = \"remote\") @io.micronaut.context.annotation.Replaces(app.a.Exporter.class) class Remote {}"))), 0);
+    }
+
+    #[test]
+    fn an_annotation_filter_registers_in_its_own_source_set() {
+        let app = ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication class App {}");
+        let port = ("src/main/java/app/Port.java", "package app; public interface Port {}");
+        let uses = ("src/main/java/app/Uses.java", "package app; import org.springframework.stereotype.*; @Service class Uses { Uses(Port port) {} }");
+        let test_uses = ("src/test/java/app/TestUses.java", "package app; import org.springframework.stereotype.*; @Service class TestUses { TestUses(Port testPort) {} }");
+        let tagged = ("src/main/java/app/Tagged.java", "package app; public @interface Tagged {}");
+        let impl_ = ("src/main/java/app/PortImpl.java", "package app; @Tagged class PortImpl implements Port {}");
+        let resolve = |scan: (&'static str, &'static str), name: &str| {
+            let (idx, m) = model(&[app, port, uses, test_uses, tagged, impl_, scan]);
+            point_resolution(&idx, &m, name)
+        };
+        let filter = "package app; import org.springframework.context.annotation.*; @Configuration @ComponentScan(includeFilters = @ComponentScan.Filter(Tagged.class)) class Scan {}";
+        let mapper = "package app; @org.mybatis.spring.annotation.MapperScan(value = \"app.none\", annotationClass = Tagged.class) class Scan {}";
+        for scan in [filter, mapper] {
+            // a scan in test sources registers PortImpl in tests only
+            assert_eq!(resolve(("src/test/java/app/Scan.java", scan), "port"), Resolution::NotFound, "{scan}");
+            assert_eq!(resolve(("src/test/java/app/Scan.java", scan), "testPort"), Resolution::Unknown, "{scan}");
+        }
+        // in main sources, everywhere
+        assert_eq!(resolve(("src/main/java/app/Scan.java", filter), "port"), Resolution::Unknown);
     }
 }
