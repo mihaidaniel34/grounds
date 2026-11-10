@@ -393,7 +393,10 @@ impl<'t> FileModel<'t> {
                 while let Some(c) = cur {
                     if let Some(cn) = self.class_names.get(&c.id()) {
                         if let Some(ci) = self.class(cn) {
-                            let ms = self.methods_named(&ci.this_type(), name);
+                            // only members of the class: not a private method of
+                            // a supertype (JLS 8.2), which leaves the search to go
+                            // on outward (JLS 15.12.1)
+                            let ms: Vec<MethodRef> = self.members(self.methods_named(&ci.this_type(), name), cn, call).into_iter().filter(|m| !m.method.flags.is_private() || m.owner == *cn).collect();
                             if !ms.is_empty() {
                                 return (ms, Some(ci.this_type()), false);
                             }
@@ -406,7 +409,7 @@ impl<'t> FileModel<'t> {
                     if imp.on_demand || imp.is_named(name) {
                         let cls = if imp.on_demand { imp.path.to_string() } else { imp.path.rsplit_once('.').map(|x| x.0.to_string()).unwrap_or_default() };
                         if let Some(b) = self.index.binary_name_for_dotted(&cls) {
-                            out.extend(self.methods_named(&Ty::class(&b), name).into_iter().filter(|m| m.is_static()));
+                            out.extend(self.members(self.methods_named(&Ty::class(&b), name), &b, call).into_iter().filter(|m| m.is_static()));
                         }
                     }
                 }
@@ -417,11 +420,11 @@ impl<'t> FileModel<'t> {
                     let Some(c) = self.enclosing_class(call) else { return (Vec::new(), None, false) };
                     let mut out = Vec::new();
                     if let Some(st) = &c.superclass {
-                        out = self.methods_named(st, name);
+                        out = self.members_of(st, name, call);
                     }
                     if out.is_empty() {
                         for i in &c.interfaces {
-                            out.extend(self.methods_named(i, name));
+                            out.extend(self.members_of(i, name, call));
                         }
                     }
                     return (out, c.superclass.clone(), false);
@@ -436,7 +439,7 @@ impl<'t> FileModel<'t> {
                 }
                 if matches!(obj.kind(), "identifier" | "field_access" | "scoped_identifier") {
                     if let Some(Symbol::Type(t)) = self.symbol(obj) {
-                        let ms = self.methods_named(&Ty::class(&t), name);
+                        let ms = self.members_of(&Ty::class(&t), name, call);
                         let statics: Vec<MethodRef> = ms.iter().filter(|m| m.is_static()).cloned().collect();
                         return (if statics.is_empty() { ms } else { statics }, None, true);
                     }
@@ -444,7 +447,7 @@ impl<'t> FileModel<'t> {
                 let rt = self.type_of(obj);
                 if let Ty::TypeVar(ref v) = rt {
                     for b in self.type_var_bounds(v, call) {
-                        let ms = self.methods_named(&b, name);
+                        let ms = self.members_of(&b, name, call);
                         if !ms.is_empty() {
                             return (ms, Some(b), false);
                         }
@@ -464,9 +467,33 @@ impl<'t> FileModel<'t> {
                     }
                     return (ms, Some(rt), false);
                 }
-                (self.methods_named(&rt, name), Some(rt), false)
+                (self.members_of(&rt, name, call), Some(rt), false)
             }
         }
+    }
+
+    /// The methods named `name` that are members of `ty` and accessible at
+    /// `call` (see `members`).
+    fn members_of(&self, ty: &Ty, name: &str, call: Node<'t>) -> Vec<MethodRef> {
+        let ms = self.methods_named(ty, name);
+        match ty.class_name() {
+            Some(c) => self.members(ms, c, call),
+            None => ms,
+        }
+    }
+
+    /// Of methods found on class `of`, the ones a call at `call` may select:
+    /// a static method of an interface is not inherited (JLS 8.4.8), so it is
+    /// a member of that interface only; a private method is accessible only
+    /// within its top-level class (JLS 6.6.1), and an inaccessible method is
+    /// not potentially applicable (JLS 15.12.2.1).
+    fn members(&self, ms: Vec<MethodRef>, of: &str, call: Node<'t>) -> Vec<MethodRef> {
+        let top = |n: &str| -> String { n.split('$').next().unwrap_or(n).to_string() };
+        let here = self.enclosing_class_name(call).map(|c| top(&c));
+        ms.into_iter()
+            .filter(|m| !(m.is_static() && m.owner_kind == ClassKind::Interface && &*m.owner != of))
+            .filter(|m| !m.method.flags.is_private() || here.as_deref().is_none_or(|h| top(&m.owner) == h))
+            .collect()
     }
 
     fn fit(&self, param: &Ty, arg: &ArgShape) -> Fit {

@@ -1245,3 +1245,19 @@ fn member_types_of_anonymous_and_local_classes() {
         }";
     assert_eq!(types_of(src), vec!["Call.Listener", "Call.Listener", "T.2Loc.Part", "T.2Loc.Part", "Resolver.Listener"]);
 }
+
+#[test]
+fn only_accessible_members_are_candidates() {
+    let src = "
+        import java.util.*;
+        class Base { static class A { } private static A sites() { return null; } }
+        class Outer {
+            static class B { }
+            private static B sites() { return null; }
+            static class Inner extends Base { Object f() { return /*C*/sites(); } }
+        }
+        abstract class Tup extends AbstractList<Object> { static Tup of(Object... e) { return null; } }
+        class Engine { public Object make(Number n) { return null; } private String make(Integer i) { return null; } String own() { return /*C*/make(1); } }
+        class Use { Object f(Set<?> s) { return /*C*/Tup.of(s); } Object g(Engine e) { return /*C*/e.make(1); } }";
+    assert_eq!(calls_of(src), vec!["Outer.sites()", "Engine.make(java.lang.Integer)", "Tup.of(java.lang.Object[])", "Engine.make(java.lang.Number)"]);
+}
