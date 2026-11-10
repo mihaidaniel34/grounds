@@ -484,15 +484,18 @@ impl<'t> FileModel<'t> {
 
     /// Of methods found on class `of`, the ones a call at `call` may select:
     /// a static method of an interface is not inherited (JLS 8.4.8), so it is
-    /// a member of that interface only; a private method is accessible only
-    /// within its top-level class (JLS 6.6.1), and an inaccessible method is
-    /// not potentially applicable (JLS 15.12.2.1).
+    /// a member of that interface only; a private method is a member only of
+    /// the class declaring it and accessible only within its top-level class
+    /// (JLS 8.2, 6.6.1), and an inaccessible method is not potentially
+    /// applicable (JLS 15.12.2.1).
     fn members(&self, ms: Vec<MethodRef>, of: &str, call: Node<'t>) -> Vec<MethodRef> {
         let top = |n: &str| -> String { n.split('$').next().unwrap_or(n).to_string() };
         let here = self.enclosing_class_name(call).map(|c| top(&c));
         ms.into_iter()
             .filter(|m| !(m.is_static() && m.owner_kind == ClassKind::Interface && &*m.owner != of))
-            .filter(|m| !m.method.flags.is_private() || here.as_deref().is_none_or(|h| top(&m.owner) == h))
+            // a private method is not inherited either (JLS 8.2): only one the
+            // searched type declares itself
+            .filter(|m| !m.method.flags.is_private() || (&*m.owner == of && here.as_deref().is_none_or(|h| top(&m.owner) == h)))
             .collect()
     }
 
@@ -2480,9 +2483,16 @@ impl<'t> FileModel<'t> {
             [one] => Some(*one),
             several => {
                 let fits = |m: &MethodRef| -> Tri {
-                    // an unbound receiver takes the first parameter
+                    // an unbound receiver takes the first parameter, which must
+                    // be of the referenced type
                     let skip = usize::from(is_type && !m.is_static());
-                    sam.params[skip..].iter().zip(&m.method.params).fold(Tri::Yes, |acc, (s, p)| {
+                    let receiver = if skip == 1 {
+                        let st = sam.params[0].ty.upper_bound();
+                        if st.mentions_type_var() || recv_ty.mentions_type_var() { Tri::Unknown } else { self.is_assignable(&st, &recv_ty) }
+                    } else {
+                        Tri::Yes
+                    };
+                    sam.params[skip..].iter().zip(&m.method.params).fold(receiver, |acc, (s, p)| {
                         let st = s.ty.upper_bound();
                         acc.and(if st.mentions_type_var() || p.ty.mentions_type_var() { Tri::Unknown } else { self.is_assignable(&st, &p.ty) })
                     })

@@ -1197,8 +1197,9 @@ impl Index {
     /// Whether an on-demand import of `pkg` imports the top-level class `c`
     /// into a file of package `from` (at path `here`): only accessible types
     /// are imported (JLS 7.5.2, 6.6.1), so not a class that is not public in
-    /// another package. A class of a test source set is not visible from
-    /// main sources, nor from another module.
+    /// another package. A class of a test source set (`test`, `integrationTest`,
+    /// `testFixtures`...) is not visible from main sources, nor from another
+    /// module.
     fn importable(&self, c: &str, pkg: &str, from: &str, here: Option<&str>) -> bool {
         if pkg != from {
             let flags = self.raw_class(c).map(|(_, r)| r.flags).or_else(|| self.classpath.class(c).map(|k| k.flags));
@@ -1206,7 +1207,7 @@ impl Index {
                 return false;
             }
         }
-        let is_test = |p: &str| p.contains("/src/test/") || p.starts_with("src/test/");
+        let is_test = crate::sources::is_test_path;
         match (self.source_file_of(c), here) {
             (Some(f), Some(h)) if is_test(f) => is_test(h) && module_dir(f) == module_dir(h),
             _ => true,

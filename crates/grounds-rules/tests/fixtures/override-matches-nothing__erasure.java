@@ -47,3 +47,18 @@ class NotOverrides<T extends Date> extends Adapter<T> {
     @Override void write(StringBuilder out, Number value) { } // expect
     @Override void write(String out, Date value) { } // expect
 }
+
+class Clash<T extends Date> extends Adapter<Date> {
+    @Override void write(StringBuilder out, Date value) { }
+}
+
+class NoClashOverride<T extends Date> extends Adapter<Object> {
+    @Override void write(StringBuilder out, Object value) { }
+    // write(T) erases to write(Date): an overload, not an override
+    @Override void write(StringBuilder out, T value) { } // expect
+}
+
+class ClashOverride<T extends Date> extends Adapter<Date> {
+    @Override void write(StringBuilder out, Date value) { }
+    @Override void write(StringBuilder out, T value) { } // expect
+}

@@ -36,4 +36,19 @@ class PatternScope {
         }
         type.stop();
     }
+
+    void loopWithSwitch(Object o, int n) {
+        while (!(o instanceof UnitType type)) {
+            switch (n) { default: break; }
+            o = new UnitType();
+        }
+        type.stop();
+    }
+
+    void elseLoops(Object o) {
+        if (!(o instanceof UnitType type)) {
+            while (true) { }
+        }
+        type.stop();
+    }
 }

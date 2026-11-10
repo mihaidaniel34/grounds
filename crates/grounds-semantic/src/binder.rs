@@ -426,7 +426,7 @@ where
                 if let Some(b) = n.field("body") {
                     self.visit_with(b, &when_true);
                 }
-                let breaks = n.field("body").is_some_and(|b| b.descendants().any(|d| d.kind() == "break_statement"));
+                let breaks = breaks_out_of(n);
                 if !breaks {
                     self.bring_into_scope(&when_false);
                 }
@@ -625,8 +625,38 @@ fn completes_normally(s: Node) -> bool {
             (Some(t), Some(e)) => completes_normally(t) || completes_normally(e),
             _ => true,
         },
+        // `while (true)`, `do ... while (true)`, `for (;;)` without a break out
+        "while_statement" | "do_statement" | "for_statement" => {
+            let forever = match s.field("condition") {
+                None => s.kind() == "for_statement",
+                Some(c) => c.unparen().kind() == "true",
+            };
+            !forever || breaks_out_of(s)
+        }
         _ => true,
     }
+}
+
+/// Whether a `break` in the body of `loop_` may leave it: an unlabeled one
+/// not inside a nested loop or switch, or any labeled one.
+fn breaks_out_of(loop_: Node) -> bool {
+    let Some(body) = loop_.field("body") else { return false };
+    body.descendants().filter(|d| d.kind() == "break_statement").any(|b| {
+        if b.kid_of_kind("identifier").is_some() {
+            return true;
+        }
+        let mut cur = b.parent();
+        while let Some(a) = cur {
+            if a == loop_ {
+                return true;
+            }
+            if matches!(a.kind(), "while_statement" | "do_statement" | "for_statement" | "enhanced_for_statement" | "switch_block" | "switch_expression") {
+                return false;
+            }
+            cur = a.parent();
+        }
+        false
+    })
 }
 
 impl<'t> Binder<'t> {

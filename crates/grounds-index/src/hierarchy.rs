@@ -492,7 +492,8 @@ pub trait ClassLookup {
     fn merge_inherited(&self, mut out: Vec<MethodRef>) -> Vec<MethodRef> {
         let key = |m: &MethodRef| -> Option<Vec<Ty>> {
             let ps: Vec<Ty> = m.method.params.iter().map(|p| p.ty.erasure()).collect();
-            (!m.is_static() && !m.method.is_constructor() && m.method.type_params.is_empty() && !ps.iter().any(|p| p.has_unknown())).then_some(ps)
+            // a private or static method is not inherited: never in a group
+            (!m.is_static() && !m.method.flags.is_private() && !m.method.is_constructor() && m.method.type_params.is_empty() && !ps.iter().any(|p| p.has_unknown())).then_some(ps)
         };
         let mut i = 0;
         while i < out.len() {

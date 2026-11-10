@@ -777,14 +777,14 @@ fn same_erasure(m: &MethodInfo, cls: &ClassInfo, sup: &MethodInfo, map: &[(Name,
         .map(|p| TypeParam { name: p.name.clone(), bounds: p.bounds.iter().map(|b| apply_subst(b, map)).collect() })
         .chain(cls.type_params.iter().cloned())
         .collect();
-    let own_vars: Vec<TypeParam> = m.type_params.iter().chain(&cls.type_params).cloned().collect();
     // a type variable of the supertype method substituted by `map` would be wrong
     let shadow: Vec<(Name, Ty)> = map.iter().filter(|(k, _)| !sup.type_params.iter().any(|p| p.name == *k)).cloned().collect();
     sup.params.len() == m.params.len()
         && sup.params.iter().zip(&m.params).all(|(a, b)| {
+            // the overrider's own signature against the erased one: `m(T)`
+            // with `T extends Date` does not override `m(Date)` (a clash)
             let x = erase(&apply_subst(&a.ty, &shadow), &sup_vars, 0);
-            let y = erase(&b.ty, &own_vars, 0);
-            !x.has_unknown() && x == y
+            !x.has_unknown() && x == b.ty
         })
 }
 

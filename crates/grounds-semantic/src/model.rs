@@ -141,8 +141,13 @@ impl<'t> FileModel<'t> {
             for c in classes {
                 let Some(cn) = self.class_names.get(&c.id()).cloned() else { continue };
                 let Some(ci) = self.class(&cn) else { break };
-                // a private field of a supertype is not inherited
-                if self.field(&ci.this_type(), name).is_some_and(|f| !f.field.flags.is_private() || f.owner == cn) {
+                // a private field of a supertype is not inherited, nor a
+                // package-private one of another package (JLS 8.2)
+                let package = |n: &str| n.split('$').next().unwrap_or(n).rsplit_once('.').map(|(p, _)| p.to_string()).unwrap_or_default();
+                let inherited = |f: &FieldRef| {
+                    f.owner == cn || (!f.field.flags.is_private() && (f.field.flags.is_public() || f.field.flags.has(Flags::PROTECTED) || package(&f.owner) == package(&cn)))
+                };
+                if self.field(&ci.this_type(), name).is_some_and(|f| inherited(&f)) {
                     is_field = true;
                     break;
                 }

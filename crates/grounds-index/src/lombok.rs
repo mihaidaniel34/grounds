@@ -193,20 +193,32 @@ fn members_unknown(c: &RawClass, imports: &[Import], cfg: &LombokConfig) -> bool
 }
 
 /// The annotations Lombok takes for "non-null" (`NONNULL_ANNOTATIONS` of
-/// Lombok 1.18.36): a field carrying one is required by
+/// Lombok 1.18.36, read from its `HandlerUtil`): a field carrying one is required by
 /// `@RequiredArgsConstructor`.
 const NON_NULL: &[&str] = &[
-    "androidx.annotation.NonNull",
     "android.annotation.NonNull",
     "android.support.annotation.NonNull",
-    "com.sun.istack.internal.NotNull",
+    "android.support.annotation.RecentlyNonNull",
+    "androidx.annotation.NonNull",
+    "androidx.annotation.RecentlyNonNull",
+    "com.android.annotations.NonNull",
+    "com.google.firebase.database.annotations.NotNull",
+    "com.mongodb.lang.NonNull",
+    "com.sun.istack.NotNull",
+    "com.unboundid.util.NotNull",
     "edu.umd.cs.findbugs.annotations.NonNull",
+    "io.micrometer.core.lang.NonNull",
+    "io.reactivex.annotations.NonNull",
+    "io.reactivex.rxjava3.annotations.NonNull",
     "jakarta.annotation.Nonnull",
     "javax.annotation.Nonnull",
+    "libcore.util.NonNull",
     "lombok.NonNull",
+    "org.checkerframework.checker.nullness.compatqual.NonNullDecl",
+    "org.checkerframework.checker.nullness.compatqual.NonNullType",
     "org.checkerframework.checker.nullness.qual.NonNull",
+    "org.codehaus.commons.nullanalysis.NotNull",
     "org.eclipse.jdt.annotation.NonNull",
-    "org.eclipse.jgit.annotations.NonNull",
     "org.jetbrains.annotations.NotNull",
     "org.jmlspecs.annotation.NonNull",
     "org.jspecify.annotations.NonNull",
@@ -220,7 +232,7 @@ const NON_NULL: &[&str] = &[
 /// imported under that name, as before.
 fn non_null(a: &RawAnnotation, imports: &[Import]) -> bool {
     let simple = a.simple_name();
-    if !matches!(simple, "NonNull" | "NotNull" | "Nonnull") {
+    if !matches!(simple, "NonNull" | "NotNull" | "Nonnull" | "RecentlyNonNull" | "NonNullDecl" | "NonNullType") {
         return false;
     }
     if a.name.contains('.') {

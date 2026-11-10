@@ -413,7 +413,10 @@ fn inherited_override_equivalent_methods_keep_the_one_a_call_selects() {
          class Cache implements Data { }
          abstract class AbstractManager implements Manager { public Cache data() { return null; } }
          abstract class Holder<H> extends AbstractManager { }
-         class User extends Holder<String> implements Manager { }",
+         class User extends Holder<String> implements Manager { }
+         interface Impl { private Object help() { return null; } }
+         interface Api { String help(); }
+         interface Helped extends Impl, Api { }",
     )]);
     let ret = |cls: &str, m: &str| {
         let ms = idx.methods_named(&Ty::class(cls), m);
@@ -426,6 +429,9 @@ fn inherited_override_equivalent_methods_keep_the_one_a_call_selects() {
     assert_eq!(ret("p.Both", "name"), "?unknown");
     // the abstract method is still the one found once implemented
     assert_eq!(idx.all_methods(&Ty::class("p.User")).iter().filter(|m| &*m.method.name == "data").count(), 1);
+    // a private interface method is not inherited, and is no rival
+    let ms = idx.methods_named(&Ty::class("p.Helped"), "help");
+    assert!(ms.iter().any(|m| &*m.owner == "p.Api" && m.method.ret.to_string() == "java.lang.String"), "{ms:?}");
 }
 
 #[test]
