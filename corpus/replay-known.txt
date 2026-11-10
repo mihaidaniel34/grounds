@@ -1,4 +1,4 @@
 # Compile or wiring breaks that scripts/replay.py reports at commits of a
 # corpus project's main line and that were read and found right: the commit
 # really did not build. One per line: project, commit (12 characters),
-# path:line, rule.
+# path:line, rule. A line is matched whole: no comment after the entry.

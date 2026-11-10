@@ -42,6 +42,7 @@ report is not in --known.
 
 import argparse
 import json
+import math
 import os
 import subprocess
 import sys
@@ -119,6 +120,10 @@ def main():
     a = ap.parse_args()
     if a.commits < 1:
         ap.error("--commits must be at least 1")
+    if a.budget is not None and not (math.isfinite(a.budget) and a.budget > 0):
+        ap.error("--budget must be a positive number of seconds")
+    if not a.timeout > 0:
+        ap.error("--timeout must be a positive number of seconds")
     TIMEOUT = a.timeout
     d = os.path.abspath(a.dir)
     grounds = os.path.abspath(a.grounds)
@@ -138,7 +143,12 @@ def main():
     line = git(d, "rev-list", "--first-parent", head).split()
     java = lambda parent, commit: git(d, "diff", "--name-only", parent, commit, "--", "*.java").split()
     restore = lambda: git(d, "checkout", "-q", "--no-overwrite-ignore", *(["--detach", head] if back == head else [back]))
-    steps_back = [i for i in range(len(line) - 1) if java(line[i + 1], line[i])][:a.commits]
+    steps_back = []
+    for i in range(len(line) - 1):  # no further back than needed: a full clone has a long history
+        if java(line[i + 1], line[i]):
+            steps_back.append(i)
+            if len(steps_back) == a.commits:
+                break
     fit = len(steps_back)
     if a.budget is not None and steps_back:
         # what the newest step costs from scratch; the daemon's answer costs about as much
