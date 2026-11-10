@@ -250,7 +250,11 @@ impl Session {
         // this a daemon kept the layout it started with: after a module was
         // added or renamed its files counted as the root module's.)
         let time_of = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
-        let differs = self.config.iter().any(|(p, old)| time_of(p) != *old);
+        // one look at the files' times decides both whether to load and what
+        // the load is compared with: a write between two looks would count
+        // as seen all along
+        let now: Vec<Option<SystemTime>> = self.config.iter().map(|(p, _)| time_of(p)).collect();
+        let differs = self.config.iter().zip(&now).any(|((_, old), now)| now != old);
         let due = match self.config_trust {
             ConfigTrust::Sure => false,
             ConfigTrust::Unread => true,
@@ -262,7 +266,7 @@ impl Session {
             // the files' times before the load begins: one that is the same
             // afterwards was not written during the load, unless a write
             // shared its time
-            let before: FxHashMap<PathBuf, Option<SystemTime>> = self.config.iter().map(|(p, _)| (p.clone(), time_of(p))).collect();
+            let before: FxHashMap<PathBuf, Option<SystemTime>> = self.config.iter().zip(now).map(|((p, _), now)| (p.clone(), now)).collect();
             if let Ok(project) = Project::load(&root) {
                 // warnings already shown are not shown again for the same state
                 let shown = self.warned.then(|| self.project.classpath_warnings.clone());
