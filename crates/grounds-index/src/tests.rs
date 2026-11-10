@@ -386,3 +386,34 @@ fn an_inherited_member_type_comes_before_the_class_own_name() {
     assert_eq!(b.superclass.as_ref().unwrap().to_string(), "P.Q.B");
     assert_eq!(simple_in(&idx, "S", "S").as_deref(), Some("S"));
 }
+
+#[test]
+fn inherited_override_equivalent_methods_keep_the_one_a_call_selects() {
+    let idx = index_of(&[(
+        "p/T.java",
+        "package p;
+         interface Model { Model setPrefix(String p); }
+         interface Prefixed<R> { R setPrefix(String p); }
+         interface Ont extends Model, Prefixed<Ont> { }
+         interface Named { CharSequence name(); }
+         interface Titled { Comparable<String> name(); }
+         interface Both extends Named, Titled { }
+         interface Data { }
+         interface Manager { Data data(); }
+         class Cache implements Data { }
+         abstract class AbstractManager implements Manager { public Cache data() { return null; } }
+         abstract class Holder<H> extends AbstractManager { }
+         class User extends Holder<String> implements Manager { }",
+    )]);
+    let ret = |cls: &str, m: &str| {
+        let ms = idx.methods_named(&Ty::class(cls), m);
+        assert_eq!(ms.len(), 1, "{cls}.{m}: {ms:?}");
+        ms[0].method.ret.to_string()
+    };
+    assert_eq!(ret("p.Ont", "setPrefix"), "p.Ont");
+    assert_eq!(ret("p.User", "data"), "p.Cache");
+    // neither return type is a subtype of the other: unknown
+    assert_eq!(ret("p.Both", "name"), "?unknown");
+    // the abstract method is still the one found once implemented
+    assert_eq!(idx.all_methods(&Ty::class("p.User")).iter().filter(|m| &*m.method.name == "data").count(), 1);
+}

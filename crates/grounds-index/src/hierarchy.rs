@@ -384,16 +384,73 @@ pub trait ClassLookup {
         }
     }
 
+    /// All supertypes including `ty` itself, each before its own supertypes
+    /// (breadth first otherwise), with the names of the types in the list
+    /// that are its proper subtypes.
+    fn supertypes_ordered(&self, ty: &Ty) -> Vec<(Ty, FxHashSet<Name>)> {
+        // the closure, breadth first, with its edges
+        let mut types: Vec<Ty> = Vec::new();
+        let mut index: rustc_hash::FxHashMap<Name, usize> = rustc_hash::FxHashMap::default();
+        let mut edges: Vec<Vec<Name>> = Vec::new();
+        let mut q = VecDeque::new();
+        q.push_back(ty.clone());
+        while let Some(t) = q.pop_front() {
+            let Some(n) = t.class_name() else { continue };
+            if index.contains_key(n) || types.len() > 200 {
+                continue;
+            }
+            index.insert(Arc::from(n), types.len());
+            let direct = self.direct_supertypes(&t);
+            edges.push(direct.iter().filter_map(|d| d.class_name().map(Arc::<str>::from)).collect());
+            q.extend(direct);
+            types.push(t);
+        }
+        // Kahn's algorithm: a type once all its subtypes in the list are placed
+        let mut pending = vec![0usize; types.len()];
+        for es in &edges {
+            for e in es {
+                if let Some(&k) = index.get(e) {
+                    pending[k] += 1;
+                }
+            }
+        }
+        let mut subs: Vec<FxHashSet<Name>> = vec![FxHashSet::default(); types.len()];
+        let mut ready: std::collections::BTreeSet<usize> = (0..types.len()).filter(|&k| pending[k] == 0).collect();
+        let mut order = Vec::with_capacity(types.len());
+        while let Some(k) = ready.pop_first() {
+            order.push(k);
+            let mut below = subs[k].clone();
+            below.insert(Arc::from(types[k].class_name().unwrap_or("")));
+            for e in &edges[k] {
+                if let Some(&s) = index.get(e) {
+                    subs[s].extend(below.iter().cloned());
+                    pending[s] -= 1;
+                    if pending[s] == 0 {
+                        ready.insert(s);
+                    }
+                }
+            }
+        }
+        // a cycle (broken code) leaves types unplaced: breadth first
+        order.extend((0..types.len()).filter(|k| !order.contains(k)).collect::<Vec<_>>());
+        let mut types: Vec<Option<Ty>> = types.into_iter().map(Some).collect();
+        order.into_iter().map(|k| (types[k].take().unwrap(), std::mem::take(&mut subs[k]))).collect()
+    }
+
     /// Methods named `name` visible on `ty` (declared and inherited), most
-    /// derived first; overridden methods are removed.
+    /// derived first; overridden methods are removed. A method overrides
+    /// another only from a subtype of the other's class (JLS 8.4.8.1); of
+    /// override-equivalent methods inherited from unrelated supertypes, the
+    /// one a call selects is kept (JLS 8.4.8.4, 15.12.2.5).
     fn methods_named(&self, ty: &Ty, name: &str) -> Vec<MethodRef> {
         let mut out: Vec<MethodRef> = Vec::new();
-        let mut sups = self.all_supertypes(ty);
+        let mut sups = self.supertypes_ordered(ty);
         let is_iface = ty.class_name().and_then(|n| self.class(n)).is_some_and(|c| c.is_interface());
-        if is_iface && !sups.iter().any(|t| t.is_class("java.lang.Object")) {
-            sups.push(Ty::object());
+        if is_iface && !sups.iter().any(|(t, _)| t.is_class("java.lang.Object")) {
+            let all: FxHashSet<Name> = sups.iter().filter_map(|(t, _)| t.class_name().map(Arc::<str>::from)).collect();
+            sups.push((Ty::object(), all));
         }
-        for st in sups {
+        for (st, below) in sups {
             let Ty::Class { name: cn, args } = &st else { continue };
             let Some(c) = self.class(cn) else { continue };
             let map = substitution(&c, args);
@@ -403,7 +460,7 @@ pub trait ClassLookup {
                 // methods of one class are distinct overloads; an unknown
                 // parameter type cannot prove an override either
                 let overridden = out.iter().any(|o| {
-                    o.owner != *cn
+                    below.contains(&o.owner)
                         && match is_subsignature(&o.method, m, &c, args) {
                             Tri::Yes => true,
                             Tri::No => false,
@@ -419,13 +476,77 @@ pub trait ClassLookup {
                 out.push(MethodRef { owner: cn.clone(), method: sm, owner_kind: c.kind, owner_flags: c.flags });
             }
         }
+        self.merge_inherited(out)
+    }
+
+    /// Of instance methods with the same erased parameters inherited from
+    /// supertypes that do not override each other, keep the one a call
+    /// selects: the one that is not abstract, else the one whose return type
+    /// is a subtype of the others' (JLS 8.4.8.4, 15.12.2.5); when none is,
+    /// its return type is unknown.
+    fn merge_inherited(&self, mut out: Vec<MethodRef>) -> Vec<MethodRef> {
+        let key = |m: &MethodRef| -> Option<Vec<Ty>> {
+            let ps: Vec<Ty> = m.method.params.iter().map(|p| p.ty.erasure()).collect();
+            (!m.is_static() && !m.method.is_constructor() && m.method.type_params.is_empty() && !ps.iter().any(|p| p.has_unknown())).then_some(ps)
+        };
+        let mut i = 0;
+        while i < out.len() {
+            let Some(k) = key(&out[i]) else {
+                i += 1;
+                continue;
+            };
+            let group: Vec<usize> = (i..out.len()).filter(|&j| j == i || (out[j].owner != out[i].owner && key(&out[j]).as_ref() == Some(&k) && out[j].method.is_varargs() == out[i].method.is_varargs())).collect();
+            if group.len() < 2 {
+                i += 1;
+                continue;
+            }
+            let abstract_ = |m: &MethodRef| m.method.flags.is_abstract();
+            let concrete: Vec<usize> = group.iter().copied().filter(|&j| !abstract_(&out[j])).collect();
+            let keep = match concrete.as_slice() {
+                [one] => Some(*one),
+                [] => group.iter().copied().find(|&j| group.iter().all(|&o| o == j || self.return_substitutable(&out[j].method.ret, &out[o].method.ret))),
+                // several defaults (or a class method and defaults): javac's
+                // choice depends on rules not modelled here
+                _ => None,
+            };
+            let mut kept = out[keep.unwrap_or(i)].clone();
+            if keep.is_none() {
+                kept.method.ret = Ty::Unknown;
+            }
+            for &j in group.iter().rev() {
+                out.remove(j);
+            }
+            out.insert(i, kept);
+            i += 1;
+        }
         out
+    }
+
+    /// Whether return type `a` may stand for `b`: the same type, or a
+    /// subtype for reference types (JLS 8.4.8.3).
+    fn return_substitutable(&self, a: &Ty, b: &Ty) -> bool {
+        if a == b {
+            return true;
+        }
+        match (a, b) {
+            (Ty::Class { name: x, args: xa }, Ty::Class { name: y, .. }) => {
+                if x == y {
+                    return false;
+                }
+                // generic: the arguments must agree through the supertype
+                match self.as_super(a, y) {
+                    Some(v) => xa.iter().all(|t| !t.has_unknown()) && v == *b || (b.args().is_empty() && self.is_subclass(x, y).is_yes()),
+                    None => false,
+                }
+            }
+            _ => false,
+        }
     }
 
     /// Every method on `ty` including inherited ones (overrides removed).
     fn all_methods(&self, ty: &Ty) -> Vec<MethodRef> {
         let mut out: Vec<MethodRef> = Vec::new();
-        for st in self.all_supertypes(ty) {
+        for (st, _) in self.supertypes_ordered(ty) {
             let Ty::Class { name: cn, args } = &st else { continue };
             let Some(c) = self.class(cn) else { continue };
             let map = substitution(&c, args);
@@ -434,6 +555,8 @@ pub trait ClassLookup {
                     continue;
                 }
                 let sm = subst_method(m, &map);
+                // also a method of an unrelated supertype with the same
+                // signature: one entry per signature, the most derived first
                 let dup = out.iter().any(|o| {
                     o.owner != *cn
                         && match is_subsignature(&o.method, m, &c, args) {
