@@ -574,7 +574,7 @@ struct Pom {
 }
 
 #[derive(Default)]
-struct PomCache {
+pub(crate) struct PomCache {
     poms: HashMap<PathBuf, Option<Pom>>,
 }
 
@@ -613,8 +613,13 @@ impl PomCache {
         self.compiler(&parent, key, depth + 1)
     }
 
+    /// The in-repository parent pom of a pom.
+    pub(crate) fn parent_of(&mut self, path: &Path) -> Option<PathBuf> {
+        self.load(path)?.parent.clone()
+    }
+
     /// Resolve `${name}` references against the pom's properties.
-    fn resolve(&mut self, path: &Path, value: &str) -> Option<String> {
+    pub(crate) fn resolve(&mut self, path: &Path, value: &str) -> Option<String> {
         let mut v = value.trim().to_string();
         for _ in 0..10 {
             let Some(i) = v.find("${") else { return Some(v) };

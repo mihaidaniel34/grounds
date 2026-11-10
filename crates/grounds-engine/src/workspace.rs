@@ -239,19 +239,24 @@ pub fn modules_built_against_own_release(ws: &Workspace) -> Vec<PathBuf> {
     let mut artifacts: Vec<String> = Vec::new();
     let mut out: Vec<PathBuf> = Vec::new();
 
-    // Maven: the coordinates of every pom, then dependencies on one of them at another version
+    // Maven: the coordinates of every pom, then dependencies on one of them
+    // at a version not shown to be the sibling's own
     struct Pom {
+        path: PathBuf,
         dir: PathBuf,
         version: Option<String>,
+        parent_version: Option<String>,
+        group: Option<String>,
+        artifact: Option<String>,
         deps: Vec<(String, String, Option<String>)>,
+        /// dependencyManagement entries: (group, artifact, version)
+        managed: Vec<(String, String, String)>,
     }
     let mut poms: Vec<Pom> = Vec::new();
-    // the version each artifact of the repository has: (group, artifact, version)
-    let mut versions: Vec<(String, String, Option<String>)> = Vec::new();
-    // versions set in dependencyManagement anywhere in the repository: (group, artifact, version)
-    let mut managed: Vec<(String, String, String)> = Vec::new();
+    let mut cache = crate::java_release::PomCache::default();
     for m in ws.modules.iter().filter(|m| m.build_system == BuildSystem::Maven && !fixture(&m.dir)) {
-        let Some(text) = read(&m.dir.join("pom.xml")) else { continue };
+        let path = m.dir.join("pom.xml");
+        let Some(text) = read(&path) else { continue };
         let text = strip_comments(&text, "", "<!--", "-->");
         let parent = element(&text, "parent").unwrap_or("").to_string();
         let mut own = text.clone();
@@ -266,14 +271,17 @@ pub fn modules_built_against_own_release(ws: &Workspace) -> Vec<PathBuf> {
         }
         let group = element(&own, "groupId").or_else(|| element(&parent, "groupId")).map(str::to_string);
         let version = element(&own, "version").or_else(|| element(&parent, "version")).map(str::to_string);
-        if let (Some(g), Some(a)) = (group, element(&own, "artifactId")) {
-            versions.push((g.clone(), a.to_string(), version.clone()));
+        let artifact = element(&own, "artifactId").map(str::to_string);
+        if let (Some(g), Some(a)) = (group.clone(), artifact.as_deref()) {
             groups.push(g);
             artifacts.push(a.to_string());
         }
-        for dm in elements(&text, "dependencyManagement") {
-            managed.extend(elements(dm, "dependency").into_iter().filter_map(|d| Some((element(d, "groupId")?.to_string(), element(d, "artifactId")?.to_string(), element(d, "version")?.to_string()))));
-        }
+        // profiles' too: whether one is active is the build's business
+        let managed = elements(&text, "dependencyManagement")
+            .into_iter()
+            .flat_map(|dm| elements(dm, "dependency"))
+            .filter_map(|d| Some((element(d, "groupId")?.to_string(), element(d, "artifactId")?.to_string(), element(d, "version")?.to_string())))
+            .collect();
         let mut main = text.clone();
         for block in ["dependencyManagement", "profiles", "build"] {
             let (open, close) = (format!("<{block}>"), format!("</{block}>"));
@@ -290,18 +298,63 @@ pub fn modules_built_against_own_release(ws: &Workspace) -> Vec<PathBuf> {
             .filter(|d| element(d, "scope") != Some("runtime"))
             .filter_map(|d| Some((element(d, "groupId")?.to_string(), element(d, "artifactId")?.to_string(), element(d, "version").map(str::to_string))))
             .collect();
-        poms.push(Pom { dir: m.dir.clone(), version, deps });
+        poms.push(Pom { path, dir: m.dir.clone(), version, parent_version: element(&parent, "version").map(str::to_string), group, artifact, deps, managed });
     }
+    // `${...}` resolved against a pom's properties and its parents'; None
+    // when a reference cannot be resolved
+    let resolve = |cache: &mut crate::java_release::PomCache, pom: &Pom, value: &str| -> Option<String> {
+        let mut v = value.trim().to_string();
+        for (names, with) in [(&["${project.version}", "${pom.version}", "${version}"][..], &pom.version), (&["${project.parent.version}", "${parent.version}"][..], &pom.parent_version), (&["${project.groupId}", "${pom.groupId}", "${groupId}"][..], &pom.group)] {
+            for n in names {
+                if v.contains(n) {
+                    v = v.replace(n, with.as_deref()?);
+                }
+            }
+        }
+        if v.contains("${") { cache.resolve(&pom.path, &v) } else { Some(v) }
+    };
+    // the reactor siblings: (group, artifact, version), resolved
+    let mut siblings: Vec<(Option<String>, String, Option<String>)> = Vec::new();
     for pom in &poms {
-        let old = pom.deps.iter().any(|(g, a, v)| {
+        let (Some(g), Some(a)) = (&pom.group, &pom.artifact) else { continue };
+        let v = pom.version.as_deref().and_then(|v| resolve(&mut cache, pom, v));
+        siblings.push((resolve(&mut cache, pom, g), a.clone(), v));
+    }
+    let index_of = |path: &Path| poms.iter().position(|p| p.path == path || p.path.canonicalize().ok().as_deref() == Some(path));
+    for pom in &poms {
+        // the dependencyManagement that may apply: this pom's and its parents', all of them
+        let mut chain = vec![pom];
+        let mut cur = pom.path.clone();
+        for _ in 0..10 {
+            let Some(parent) = cache.parent_of(&cur) else { break };
+            let Some(i) = parent.canonicalize().ok().and_then(|p| index_of(&p)) else { break };
+            chain.push(&poms[i]);
+            cur = parent;
+        }
+        let mut old = false;
+        for (g, a, v) in &pom.deps {
+            let g = resolve(&mut cache, pom, g);
             // a sibling at its own version comes from the reactor, built from the sources
-            let Some((_, _, own_version)) = versions.iter().find(|(og, oa, _)| og == g && oa == a) else { return false };
-            // without its own version, the one dependencyManagement sets
-            let v = v.as_deref().or_else(|| managed.iter().find(|(mg, ma, _)| mg == g && ma == a).map(|(_, _, mv)| mv.as_str()));
-            let literal = v.filter(|v| !v.contains("${"));
-            let current = own_version.as_deref().or(pom.version.as_deref());
-            literal.is_some_and(|v| Some(v) != current)
-        });
+            let Some((_, _, own_version)) = siblings.iter().find(|(sg, sa, _)| sa == a && sg.is_some() && *sg == g) else { continue };
+            let own_version = own_version.clone().or_else(|| pom.version.as_deref().and_then(|v| resolve(&mut cache, pom, v)));
+            let candidates: Vec<Option<String>> = match v {
+                Some(v) => vec![resolve(&mut cache, pom, v)],
+                None => {
+                    let mut c = Vec::new();
+                    for decl in &chain {
+                        for (mg, ma, mv) in &decl.managed {
+                            if ma == a && resolve(&mut cache, decl, mg) == g {
+                                c.push(resolve(&mut cache, decl, mv));
+                            }
+                        }
+                    }
+                    c
+                }
+            };
+            if candidates.iter().any(|c| c.is_none() || *c != own_version) {
+                old = true;
+            }
+        }
         if old {
             out.push(pom.dir.clone());
         }
@@ -563,6 +616,44 @@ mod tests {
         assert_eq!(found, vec!["compat", "gr/app", "gr/lib"]);
         let ws = Workspace::discover(&dir.join("gr"), &[]);
         assert!(!modules_built_against_own_release(&ws).contains(&ws.root));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_managed_version_counts_and_properties_are_resolved_before_comparing() {
+        let dir = std::env::temp_dir().join(format!("grounds-own-release-5-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let write = |rel: &str, text: &str| {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        let found = |root: &Path| -> Vec<String> {
+            let ws = Workspace::discover(root, &[]);
+            let mut v: Vec<String> = modules_built_against_own_release(&ws).iter().map(|d| d.strip_prefix(&ws.root).unwrap().to_string_lossy().to_string()).collect();
+            v.sort();
+            v
+        };
+        let managed = |v: &str| format!("<dependencyManagement><dependencies><dependency><groupId>g</groupId><artifactId>core</artifactId><version>{v}</version></dependency></dependencies></dependencyManagement>");
+        let uses_core = "<dependencies><dependency><groupId>g</groupId><artifactId>core</artifactId></dependency></dependencies>";
+        let child = |dir: &str, parent: &str, rest: &str| format!("<project><parent><groupId>g</groupId><artifactId>{parent}</artifactId><version>3</version><relativePath>../pom.xml</relativePath></parent><artifactId>{dir}</artifactId>{rest}</project>");
+        // the root manages core at its own version 3, a child overrides to 2
+        write("m/pom.xml", &format!("<project><groupId>g</groupId><artifactId>root</artifactId><version>3</version>{}</project>", managed("3")));
+        write("m/core/pom.xml", &child("core", "root", ""));
+        write("m/same/pom.xml", &child("same", "root", uses_core));
+        write("m/old/pom.xml", &child("old", "root", &(managed("2") + uses_core)));
+        assert_eq!(found(&dir.join("m")), vec!["old"]);
+        // ${revision}: resolved before the reactor version is compared
+        write("r/pom.xml", "<project><groupId>g</groupId><artifactId>root</artifactId><version>${revision}</version><properties><revision>3</revision><old>2</old></properties></project>");
+        let dep = |a: &str, v: &str| format!("<dependencies><dependency><groupId>g</groupId><artifactId>{a}</artifactId><version>{v}</version></dependency></dependencies>");
+        let rchild = |a: &str, rest: &str| format!("<project><parent><groupId>g</groupId><artifactId>root</artifactId><version>${{revision}}</version></parent><artifactId>{a}</artifactId>{rest}</project>");
+        write("r/core/pom.xml", &rchild("core", ""));
+        write("r/explicit/pom.xml", &rchild("explicit", &dep("core", "3")));
+        write("r/project/pom.xml", &rchild("project", &dep("core", "${project.version}")));
+        write("r/property/pom.xml", &rchild("property", &dep("core", "${old}")));
+        write("r/unknown/pom.xml", &rchild("unknown", &dep("core", "${somewhere.else}")));
+        write("r/literal/pom.xml", &rchild("literal", &dep("core", "2")));
+        assert_eq!(found(&dir.join("r")), vec!["literal", "property", "unknown"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
