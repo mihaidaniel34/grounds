@@ -22,9 +22,10 @@ about (the daemon still has to follow what they do to build files).
 
 With --budget SECONDS the newest commit is asked about once first, to see
 what a step costs on this project, and N is lowered to what fits: the walk
-is of the newest commits either way. Should it still run over, it stops
-asking and says how many commits were left. A single `grounds changed` that
-takes longer than --timeout (default 900 s) is a failure. The checkout is put back on the
+is of the newest commits either way, and every commit chosen is asked
+about, also when the walk then takes longer than estimated. A single
+`grounds changed` that takes longer than --timeout (default 900 s) is a
+failure. The checkout is put back on the
 branch or commit it was at. Uncommitted changes to tracked files are refused,
 and a checkout that would overwrite an ignored file stops the run; all the
 same, run it on a checkout made for the purpose. With a shallow checkout only
@@ -97,8 +98,7 @@ def difference(a, b):
 def summary(path):
     with open(path) as fh:
         st = json.load(fh)["stats"]
-    cut = f" (stopped by the time budget, {st['left']} left)" if st.get("left") else ""
-    print(f"replay: {st['commits']} commits{cut}, daemon differs from a fresh run on {st['differs']}, "
+    print(f"replay: {st['commits']} commits, daemon differs from a fresh run on {st['differs']}, "
           f"compile-break reports on {st['reported']} ({st['known']} known)")
     return 0
 
@@ -110,7 +110,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("dir")
     ap.add_argument("--commits", type=int, default=30, help="commits that change a Java file")
-    ap.add_argument("--budget", type=float, help="seconds of asking to fit the walk into")
+    ap.add_argument("--budget", type=float, help="seconds of asking to size the walk for")
     ap.add_argument("--timeout", type=float, default=TIMEOUT, help="seconds one `grounds changed` may take")
     ap.add_argument("--grounds", default=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                                       "target", "release", "grounds"))
@@ -158,8 +158,7 @@ def main():
     start = steps_back[fit - 1] + 1 if steps_back else 0
     line = line[:start + 1]
     line.reverse()  # oldest first; line[0] is only a starting point
-    steps, stats = [], {"commits": 0, "skipped": 0, "differs": 0, "reported": 0, "known": 0, "left": 0}
-    began = time.monotonic()
+    steps, stats = [], {"commits": 0, "skipped": 0, "differs": 0, "reported": 0, "known": 0}
     failed = False
     subprocess.run([grounds, "daemon", "--root", d, "--stop"], capture_output=True)
     try:
@@ -167,9 +166,6 @@ def main():
         changed(grounds, d, None, True)  # the daemon loads the project as of the first commit
         for parent, commit in zip(line, line[1:]):
             touched = java(parent, commit)
-            if touched and a.budget is not None and time.monotonic() - began > a.budget:
-                stats["left"] += 1
-                continue
             git(d, *move, commit)
             if not touched:
                 stats["skipped"] += 1
@@ -205,8 +201,6 @@ def main():
     finally:
         subprocess.run([grounds, "daemon", "--root", d, "--stop"], capture_output=True)
         restore()
-    if stats["left"]:
-        print(f"{project}: time budget of {a.budget:.0f} s used up, {stats['left']} commits with Java changes not asked about")
     print(f"{project}: {stats['commits']} commits replayed ({stats['skipped']} without Java changes), "
           f"daemon differs on {stats['differs']}, compile-break reports on {stats['reported']} ({stats['known']} known)")
     if a.out:

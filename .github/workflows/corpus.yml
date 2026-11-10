@@ -114,8 +114,9 @@ jobs:
       # that has followed the commits must answer `changed --base` as a run
       # from scratch does, and a commit of the main line built, so neither may
       # report a compile or wiring break. The last 15 commits with Java
-      # changes among the 60 fetched, for at most seven minutes of asking;
-      # a report that was read and found right is listed in corpus/replay-known.txt.
+      # changes among the 60 fetched, fewer on a project where that many
+      # would take over seven minutes; a report that was read and found right
+      # is listed in corpus/replay-known.txt.
       - name: replay
         run: python3 -I scripts/replay.py "$CORPUS_DIR/${{ matrix.project }}" --grounds bin/grounds --commits 15 --budget 420 --known corpus/replay-known.txt --out target/corpus/replay.json
         env:
