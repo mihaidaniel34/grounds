@@ -814,6 +814,62 @@ impl Rule for SerialVersionUidModifiers {
     }
 }
 
+/// Annotations whose field a dependency-injection container fills with a
+/// value it makes serializable (or rejects at deployment).
+const INJECTED_BY_CONTAINER: &[&str] = &[
+    "jakarta.inject.Inject",
+    "javax.inject.Inject",
+    "jakarta.ejb.EJB",
+    "javax.ejb.EJB",
+    "jakarta.persistence.PersistenceContext",
+    "javax.persistence.PersistenceContext",
+    "jakarta.persistence.PersistenceUnit",
+    "javax.persistence.PersistenceUnit",
+];
+
+/// CDI normal scopes (and the JSF and JTA ones built on them): their beans
+/// are injected as client proxies.
+const CDI_NORMAL_SCOPES: &[&str] = &[
+    "jakarta.enterprise.context.ApplicationScoped",
+    "javax.enterprise.context.ApplicationScoped",
+    "jakarta.enterprise.context.RequestScoped",
+    "javax.enterprise.context.RequestScoped",
+    "jakarta.enterprise.context.SessionScoped",
+    "javax.enterprise.context.SessionScoped",
+    "jakarta.enterprise.context.ConversationScoped",
+    "javax.enterprise.context.ConversationScoped",
+    "jakarta.faces.view.ViewScoped",
+    "javax.faces.view.ViewScoped",
+    "jakarta.faces.flow.FlowScoped",
+    "javax.faces.flow.FlowScoped",
+    "jakarta.transaction.TransactionScoped",
+    "javax.transaction.TransactionScoped",
+];
+
+/// Does the class, or a superclass declared in the project, implement a
+/// Serializable interface itself? A class that is Serializable only because
+/// a library superclass is (`JPanel`, `JsonFactory`) was not written to be
+/// serialized, and its fields say nothing about a bug.
+fn serializable_by_declaration<'t>(cx: &Ctx<'_, 't>, cls: &ClassInfo) -> bool {
+    let mut cur = Some(cls.name.clone());
+    let mut depth = 0;
+    while let Some(name) = cur.take() {
+        let Some(c) = cx.fm.class(&name) else { return false };
+        if !c.is_source() {
+            return false;
+        }
+        if c.interfaces.iter().filter_map(|i| i.class_name()).any(|i| cx.fm.is_subclass(i, "java.io.Serializable").is_yes()) {
+            return true;
+        }
+        depth += 1;
+        if depth > 32 {
+            return false;
+        }
+        cur = c.superclass.as_ref().and_then(|s| s.class_name()).map(|s| s.into());
+    }
+    false
+}
+
 declare_rule!(NonSerializableField {
     id: "non-serializable-field",
     name: "Non-transient non-serializable field in a Serializable class",
@@ -839,6 +895,18 @@ impl Rule for NonSerializableField {
         if cls.methods.iter().any(|m| matches!(&*m.name, "writeObject" | "writeReplace" | "writeExternal")) {
             return;
         }
+        // Serializable only through a library superclass (a Swing component,
+        // a Jackson factory): nothing says the class is ever serialized
+        if !serializable_by_declaration(cx, &cls) {
+            return;
+        }
+        // a container fills injected fields: CDI injects serializable client
+        // proxies of normal-scoped beans and refuses to deploy a passivating
+        // bean with a dependency that is not passivation capable; EJB and
+        // persistence-context references are serializable proxies too
+        if cx.fm.annotations_of(n).iter().any(|a| INJECTED_BY_CONTAINER.iter().any(|f| a.is(f))) {
+            return;
+        }
         let Some(t) = n.field("type") else { return };
         let ty = cx.fm.resolve_type_node(t);
         let Some(tn) = ty.class_name() else { return };
@@ -847,6 +915,11 @@ impl Rule for NonSerializableField {
             return;
         }
         let Some(tc) = cx.fm.class(tn) else { return };
+        // a normal-scoped CDI bean is only ever referenced through its
+        // container-made client proxy, which is serializable
+        if tc.annotations.iter().any(|a| CDI_NORMAL_SCOPES.iter().any(|f| a.is(f))) {
+            return;
+        }
         // interfaces and non-final classes may have serializable implementations
         if tc.is_interface() || (!tc.flags.is_final() && !tc.is_enum() && !tc.is_record() && tc.is_abstract()) {
             return;
