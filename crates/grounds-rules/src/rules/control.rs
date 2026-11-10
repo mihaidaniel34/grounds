@@ -639,7 +639,7 @@ declare_rule!(InfiniteLoop {
     severity: Warning,
     sources: ["sonar:S2189", "spotbugs:IL_INFINITE_LOOP"],
     kinds: ["while_statement", "for_statement", "do_statement"],
-    description: "A `while (true)`/`for (;;)` loop with no break, return, throw or exit never terminates; the code after it is unreachable and the thread hangs.",
+    description: "A `while (true)`/`for (;;)` loop with no break, return, throw or exit never terminates; the code after it is unreachable and the thread hangs. So does a `while`/`do` loop whose condition reads only local variables that nothing in the loop changes.",
 });
 
 impl Rule for InfiniteLoop {
