@@ -243,7 +243,9 @@ def case_syntax(rng, seeds):
             d = m(rng, d, seeds)
         names.append("+".join(m.__name__[2:] for m in muts))
         pkg, cls = package_and_name(rng.choice(seeds) if not d else d)
-        sub = pkg.replace(".", "/") if pkg and rng.random() < 0.7 else "p"
+        # a mutation can make the "package" a million segments long
+        cls = cls if len(cls) <= 60 else "X"
+        sub = pkg.replace(".", "/") if pkg and len(pkg) <= 120 and rng.random() < 0.7 else "p"
         files[f"src/main/java/{sub}/{cls}{'' if k == 0 else k}.java"] = d
     return " ".join(names), {"files": files}
 
