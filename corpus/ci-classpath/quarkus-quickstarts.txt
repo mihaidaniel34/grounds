@@ -98,7 +98,6 @@ hibernate-reactive-stateless-quickstart/src/main/java/org/acme/hibernate/reactiv
 hibernate-search-orm-elasticsearch-quickstart/src/main/java/org/acme/hibernate/search/elasticsearch/LibraryResource.java:116 trim-isempty
 hibernate-search-orm-elasticsearch-quickstart/src/main/java/org/acme/hibernate/search/elasticsearch/LibraryResource.java:30 field-injection
 hibernate-search-orm-elasticsearch-quickstart/src/main/java/org/acme/hibernate/search/elasticsearch/LibraryResource.java:33 field-injection
-hibernate-search-standalone-elasticsearch-quickstart/src/main/java/org/acme/hibernate/search/elasticsearch/LibraryResource.java:133 equals-incompatible-types
 hibernate-search-standalone-elasticsearch-quickstart/src/main/java/org/acme/hibernate/search/elasticsearch/LibraryResource.java:34 field-injection
 infinispan-client-quickstart/src/main/java/org/acme/infinispan/client/InfinispanGreetingResource.java:15 field-injection
 jms-quickstart/src/main/java/org/acme/jms/PriceConsumer.java:24 field-injection
