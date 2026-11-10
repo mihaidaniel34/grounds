@@ -1192,4 +1192,3 @@ src/test/java/org/apache/commons/lang3/util/FluentBitSetTest.java:531 assert-tru
 src/test/java/org/apache/commons/lang3/util/FluentBitSetTest.java:532 assert-true-with-comparison
 src/test/java/org/apache/commons/lang3/util/FluentBitSetTest.java:590 assertion-argument-order
 src/test/java/org/apache/commons/lang3/util/FluentBitSetTest.java:616 cognitive-complexity
-src/test/resources/org/apache/commons/lang3/reflect/testbed9/PrivateInterfaceLabels.java:29 unused-private-method
