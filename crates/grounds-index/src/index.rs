@@ -371,13 +371,8 @@ impl Index {
             }
             *self.defs.entry(c.name.clone()).or_insert(0) += 1;
         }
-        let mut p: &str = &stub.package;
-        loop {
+        for p in package_and_parents(&stub.package) {
             *self.packages.entry(Arc::from(p)).or_insert(0) += 1;
-            match p.rfind('.') {
-                Some(j) => p = &p[..j],
-                None => break,
-            }
         }
         let plan = self.plan.get_mut();
         match plan {
@@ -430,17 +425,12 @@ impl Index {
                     }
                 }
             }
-            let mut p: &str = &old.package;
-            loop {
+            for p in package_and_parents(&old.package) {
                 if let Some(cnt) = self.packages.get_mut(p) {
                     *cnt -= 1;
                     if *cnt == 0 {
                         self.packages.remove(p);
                     }
-                }
-                match p.rfind('.') {
-                    Some(j) => p = &p[..j],
-                    None => break,
                 }
             }
         }
@@ -1248,6 +1238,15 @@ impl ClassLookup for Index {
     }
 }
 
+/// A package and its parent packages: all of them for any real package, but
+/// for one of absurd depth (half a million segments in a file that does not
+/// compile) only itself and its 255 outermost parents. Each is stored as a
+/// copy of a prefix, so all of them would take memory quadratic in its length.
+fn package_and_parents(package: &str) -> impl Iterator<Item = &str> {
+    let parents = package.match_indices('.').take(255).map(move |(j, _)| &package[..j]);
+    std::iter::once(package).chain(parents)
+}
+
 /// The module directory of a source file: the path before the `src` of its
 /// source set (`<module>/src/<set>/java/...`), else before its last `/src/`.
 /// Not the first `/src/`: the checkout itself may sit below one.
@@ -1354,6 +1353,14 @@ mod resolving_tests {
         idx.set_file(Arc::from("/w/src/r/b/src/main/java/p/B.java"), stub(b));
         assert_eq!(pick(&idx, "/w/src/r/b/src/test/java/p/T.java").as_deref(), Some("/w/src/r/b/src/main/java/p/B.java"));
         assert_eq!(pick(&idx, "/w/src/r/c/src/test/java/p/T.java"), None);
+    }
+
+    #[test]
+    fn a_package_and_its_parents() {
+        assert_eq!(package_and_parents("a.b.c").collect::<Vec<_>>(), ["a.b.c", "a", "a.b"]);
+        assert_eq!(package_and_parents("").collect::<Vec<_>>(), [""]);
+        let deep = "x.".repeat(400_000) + "y";
+        assert_eq!(package_and_parents(&deep).count(), 256);
     }
 
     #[test]
