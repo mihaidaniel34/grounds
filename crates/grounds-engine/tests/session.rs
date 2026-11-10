@@ -522,17 +522,19 @@ fn a_second_write_at_the_same_time_is_read() {
     let dir = std::env::temp_dir().join(format!("grounds-session-sametime-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let now = std::time::SystemTime::now();
-    let long_ago = now - std::time::Duration::from_secs(3600);
+    let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
     // the build file is old, so nothing here loads the project again
     write_at(&dir, "build.gradle", "plugins { id 'java' }\n", long_ago);
-    write_at(&dir, "src/main/java/demo/Api.java", "package demo;\npublic class Api {\n    public void first() {}\n}\n", now);
+    write_at(&dir, "src/main/java/demo/Api.java", "package demo;\npublic class Api {}\n", long_ago);
     let methods = |s: &Session| {
         let api = s.project.index.source_class_names().find(|n| n.ends_with("Api")).cloned().unwrap();
         format!("{:?}", s.project.index.class(&api))
     };
     let mut s = Session::open(&dir).unwrap();
     let loaded = s.project.load_began;
+    // (the time is taken after the load, however long that took: the writes below are recent at each sync)
+    let now = std::time::SystemTime::now();
+    write_at(&dir, "src/main/java/demo/Api.java", "package demo;\npublic class Api {\n    public void first() {}\n}\n", now);
     s.sync(&[]);
     assert!(methods(&s).contains("first"));
     // read, and then written again within the same tick: the time says nothing

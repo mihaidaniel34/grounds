@@ -177,8 +177,17 @@ def main():
         # daemon loads in the background. Wait until it answers itself, so
         # that the walk asks the daemon and no checkout lands in its load.
         changed(grounds, d, None, True)
+        # (each asking gets what is left of the time: a daemon that has its
+        # socket and is still loading keeps the status command waiting)
         deadline = time.monotonic() + TIMEOUT
-        while not subprocess.run([grounds, "daemon", "--root", d, "--status"], capture_output=True, text=True).stdout.startswith("running:"):
+        while True:
+            left = deadline - time.monotonic()
+            try:
+                status = subprocess.run([grounds, "daemon", "--root", d, "--status"], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=max(left, 0.1)).stdout
+            except subprocess.TimeoutExpired:
+                status = ""
+            if status.startswith("running:") and time.monotonic() <= deadline:
+                break
             if time.monotonic() > deadline:
                 raise RuntimeError(f"the daemon did not come up in {TIMEOUT:.0f} s")
             time.sleep(0.2)
