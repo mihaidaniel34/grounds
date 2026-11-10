@@ -9,6 +9,7 @@ pub mod lombok;
 pub mod model;
 pub mod order;
 pub mod sources;
+pub mod startup;
 pub mod stubs;
 
 pub use hierarchy::{ClassLookup, FieldRef, MethodRef, Tri};

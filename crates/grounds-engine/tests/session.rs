@@ -573,3 +573,63 @@ fn a_configuration_file_written_twice_at_the_same_time_is_read() {
     assert_eq!(s.project.load_began, loaded);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A launcher whose body starts `Solo` or `Pair` (names of one length: the
+/// edit moves nothing); `Pair` imports two
+/// configurations with a bean of the same name.
+fn launcher_project(dir: &Path, started: &str) {
+    write(dir, "build.gradle", "plugins { id 'java' }\n");
+    write(dir, "src/main/java/app/Solo.java", "package app;\n@org.springframework.context.annotation.Configuration\npublic class Solo {}\n");
+    write(dir, "src/main/java/app/Pair.java", "package app;\n@org.springframework.context.annotation.Configuration\n@org.springframework.context.annotation.Import({B.class, C.class})\npublic class Pair {}\n");
+    write(dir, "src/main/java/app/B.java", "package app;\n@org.springframework.context.annotation.Configuration\npublic class B {\n    @org.springframework.context.annotation.Bean\n    public Object job() { return null; }\n}\n");
+    write(dir, "src/main/java/app/C.java", "package app;\n@org.springframework.context.annotation.Configuration\npublic class C {\n    @org.springframework.context.annotation.Bean\n    public Object job() { return null; }\n}\n");
+    write(dir, "src/main/java/launch/Main.java", &launcher(started));
+    // written long ago: a session does not read them again as just written
+    let past = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    for f in ["build.gradle", "src/main/java/app/Solo.java", "src/main/java/app/Pair.java", "src/main/java/app/B.java", "src/main/java/app/C.java", "src/main/java/launch/Main.java"] {
+        std::fs::File::options().write(true).open(dir.join(f)).unwrap().set_modified(past).unwrap();
+    }
+}
+
+fn launcher(started: &str) -> String {
+    format!("package launch;\nimport app.*;\nimport org.springframework.boot.SpringApplication;\npublic class Main {{\n    public static void main(String[] args) {{\n        SpringApplication.run({started}.class, args);\n    }}\n}}\n")
+}
+
+#[test]
+fn a_body_only_edit_of_a_launcher_rebuilds_the_contexts() {
+    let dir = std::env::temp_dir().join(format!("grounds-session-launcher-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    launcher_project(&dir, "Solo");
+    let mut s = Session::open(&dir).unwrap();
+    assert!(s.project.di.name_conflicts().is_empty());
+    // a body-only edit: no declaration changes, no bean in the file
+    write(&dir, "src/main/java/launch/Main.java", &launcher("Pair"));
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+    std::fs::File::options().write(true).open(dir.join("src/main/java/launch/Main.java")).unwrap().set_modified(later).unwrap();
+    s.sync(&[]);
+    let fresh = grounds_engine::Project::load(&dir).unwrap();
+    assert_eq!(fresh.di.name_conflicts().len(), 1);
+    assert_eq!(s.project.di.name_conflicts().len(), 1, "the warm session must see the launcher's new start as a fresh load does");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_comparison_with_a_base_sees_the_base_s_launcher() {
+    let repo = std::env::temp_dir().join(format!("grounds-session-launcher-base-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&repo);
+    launcher_project(&repo, "Solo");
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "init"]);
+    git(&repo, &["checkout", "-qb", "feature"]);
+    write(&repo, "src/main/java/launch/Main.java", &launcher("Pair"));
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "start Pair"]);
+    let mut s = Session::open(&repo).unwrap();
+    let mb = grounds_engine::git::merge_base(&repo, "main").unwrap();
+    let opts = CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: Some(mb) };
+    let r = s.check(&opts);
+    let conflicts: Vec<&str> = r.pending.iter().chain(r.findings.iter()).filter(|f| f.rule == "bean-name-conflict").map(|f| f.path.as_str()).collect();
+    assert!(!conflicts.is_empty(), "the clash the change introduces is new: {:?} / {:?}", r.pending, r.findings);
+    let _ = std::fs::remove_dir_all(&repo);
+}
