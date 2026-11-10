@@ -329,6 +329,8 @@ struct Builder<'a> {
     /// memo: annotation name -> is stereotype / qualifier
     stereo: FxHashMap<Name, Option<Framework>>,
     qualifier_ann: FxHashMap<Name, bool>,
+    /// memo: annotation name -> makes a method a factory method
+    factory_ann: FxHashMap<Name, bool>,
     /// classes registered through META-INF files
     registered: rustc_hash::FxHashSet<String>,
     /// the auto-configurations among them
@@ -383,6 +385,32 @@ impl<'a> Builder<'a> {
         });
         self.stereo.insert(ann.name.clone(), r);
         r
+    }
+
+    /// Does the annotation make a method a factory method: `@Bean`,
+    /// `@Produces`, a JSR-330 scope, or a project annotation carrying one of
+    /// them (`@QueueBean` meta-annotated `@Singleton @Bean`), as the
+    /// containers read them through meta-annotations?
+    fn factory_annotation(&mut self, ann: &AnnotationInfo, depth: u32) -> bool {
+        if BEAN_METHOD_ANNOTATIONS.iter().any(|b| ann.is(b)) {
+            return true;
+        }
+        if let Some(r) = self.factory_ann.get(&ann.name) {
+            return *r;
+        }
+        let n = &*ann.name;
+        let r = depth <= 4
+            && ann.resolved
+            && !n.starts_with("java.")
+            && self.index.class(n).filter(|c| c.kind == ClassKind::Annotation).is_some_and(|c| {
+                c.annotations.iter().any(|m| &*m.name != n && (m.is("jakarta.inject.Scope") || m.is("javax.inject.Scope") || self.factory_annotation(m, depth + 1)))
+            });
+        self.factory_ann.insert(ann.name.clone(), r);
+        r
+    }
+
+    fn is_factory_method(&mut self, m: &MethodInfo) -> bool {
+        !m.is_constructor() && m.annotations.iter().any(|a| self.factory_annotation(a, 0))
     }
 
     fn is_custom_qualifier(&mut self, ann: &AnnotationInfo) -> bool {
@@ -741,7 +769,7 @@ impl<'a> Builder<'a> {
             // a class with @Bean methods but no recognized stereotype may still be
             // registered (an annotation from a missing jar, spring.factories,
             // auto-configuration imports, programmatic registration)
-            let bean_methods = c.methods.iter().any(|m| m.annotations.iter().any(|a| BEAN_METHOD_ANNOTATIONS.iter().any(|b| a.is(b))));
+            let bean_methods = c.methods.iter().any(|m| self.is_factory_method(m));
             // ... with evidence: an annotation we could not resolve (a stereotype
             // from a missing jar) or a listing in META-INF registration files;
             // a plain class with a leftover @Bean method is not a bean
@@ -825,8 +853,8 @@ impl<'a> Builder<'a> {
                 if base_anns.iter().any(|a| self.stereotype(a, 0).is_some()) {
                     break;
                 }
-                let is_factory = |m: &MethodInfo| m.annotations.iter().any(|a| BEAN_METHOD_ANNOTATIONS.iter().any(|b| a.is(b)));
                 for m in &sc.methods {
+                    let m_factory = self.is_factory_method(m);
                     match factory_methods.iter_mut().find(|x| same_sig(x, m)) {
                         // Spring registers the superclass's @Bean methods on the
                         // subclass and calls the override: an override without
@@ -834,7 +862,7 @@ impl<'a> Builder<'a> {
                         Some(x) => {
                             // (the override's own annotations, @Primary or a
                             // qualifier, stay)
-                            if is_factory(m) && !is_factory(x) {
+                            if m_factory && !self.is_factory_method(x) {
                                 let missing: Vec<AnnotationInfo> = m.annotations.iter().filter(|a| !x.annotations.iter().any(|o| o.name == a.name)).cloned().collect();
                                 x.annotations.extend(missing);
                             }
@@ -848,7 +876,7 @@ impl<'a> Builder<'a> {
                 }
             }
             for m in &factory_methods {
-                if m.is_constructor() || !m.annotations.iter().any(|a| BEAN_METHOD_ANNOTATIONS.iter().any(|b| a.is(b))) {
+                if !self.is_factory_method(m) {
                     continue;
                 }
                 if m.ret == Ty::Void || m.ret.is_unknown() {
@@ -1081,6 +1109,7 @@ impl DiModel {
             model: DiModel::default(),
             stereo: FxHashMap::default(),
             qualifier_ann: FxHashMap::default(),
+            factory_ann: FxHashMap::default(),
             registered: registered.iter().cloned().collect(),
             auto_registered: auto_registered.iter().cloned().collect(),
         };
@@ -1967,5 +1996,35 @@ mod tests {
         )]);
         let test_props = m.beans.iter().position(|b| b.name == "testProps").expect("bean from the inherited @Bean method");
         assert_eq!(point_resolution(&idx, &m, "p"), Resolution::Unique(test_props));
+    }
+
+    #[test]
+    fn factory_methods_are_recognized_through_meta_annotations() {
+        // a project annotation carrying @Singleton and @Bean (Micronaut) or
+        // @Bean (Spring) makes the annotated factory method produce a bean,
+        // as it makes an annotated class one
+        let (idx, m) = model(&[
+            JSR330[0], JSR330[1], JSR330[2],
+            ("src/main/java/app/Channel.java", "package app; import io.micronaut.context.annotation.Bean; import jakarta.inject.Singleton;
+             @Singleton @Bean(preDestroy = \"close\") public @interface Channel {}"),
+            ("src/main/java/app/Plain.java", "package app; public @interface Plain {}"),
+            ("src/main/java/app/A.java", "package app; import jakarta.inject.*; import io.micronaut.context.annotation.Factory;
+             interface Pipe {}
+             interface Hose {}
+             @Factory class Pipes { @Channel Pipe pipe() { return null; } @Plain Hose hose() { return null; } }
+             @Singleton class Uses { @Inject Uses(Pipe pipe, Hose hose) {} }"),
+        ]);
+        assert!(matches!(point_resolution(&idx, &m, "pipe"), Resolution::Unique(_)));
+        // an annotation carrying neither makes no bean
+        assert_eq!(point_resolution(&idx, &m, "hose"), Resolution::NotFound);
+        let (idx, m) = model(&[
+            ("src/main/java/app/Exported.java", "package app; @org.springframework.context.annotation.Bean public @interface Exported {}"),
+            ("src/main/java/app/A.java", "package app; import org.springframework.stereotype.*; import org.springframework.context.annotation.*;
+             interface Pipe {}
+             @Configuration class Pipes { @Exported Pipe pipe() { return null; } }
+             @Service class Uses { Uses(Pipe pipe) {} }
+             @org.springframework.boot.autoconfigure.SpringBootApplication class App {}"),
+        ]);
+        assert!(matches!(point_resolution(&idx, &m, "pipe"), Resolution::Unique(_)));
     }
 }
