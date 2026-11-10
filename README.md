@@ -26,9 +26,10 @@ leaves tests for the end of the task.
   in those tools. By category: 115 bug, 58 style, 38 bad practice,
   23 performance, 23 concurrency, 22 security, 20 framework, 14 testing,
   5 complexity. Full list: [docs/RULES.md](docs/RULES.md). Style and
-  security rules and the null-dereference check do not run on test
-  sources: tests are there to run, and they use self-signed certificates
-  or a null pointer that just fails the test on purpose.
+  security rules and the null-dereference and null-passed-to-nonnull-parameter
+  checks do not run on test sources: tests are there to run, and they use
+  self-signed certificates, a null pointer that just fails the test, or a
+  null passed on purpose to check that it is rejected.
 - **Dataflow:** null dereferences (with `@Nullable` and null checks), unclosed
   resources, unchecked `Optional.get()`, dead stores. The control flow graph
   works at expression level and models `finally` and exceptions.

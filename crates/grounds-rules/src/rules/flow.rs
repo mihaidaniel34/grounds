@@ -703,6 +703,10 @@ declare_rule!(NullPassedToNonNull {
     severity: Error,
     maturity: Preview,
     tier: Edit,
+    // tests pass null on purpose: to check that it is rejected (by bean
+    // validation, a precondition, a method that throws anyway) or for a
+    // collaborator the tested path never uses
+    scope: Main,
     sources: ["spotbugs:NP_NONNULL_PARAM_VIOLATION", "errorprone:NullAway", "intellij:ConstantConditions"],
     kinds: ["method_invocation", "object_creation_expression"],
     description: "The parameter is annotated as non-null, but the call passes a `null` literal.",
@@ -728,7 +732,8 @@ impl Rule for NullPassedToNonNull {
                 continue;
             }
             if let Some(p) = c.method.params.get(i) {
-                if p.annotations.iter().any(is_nonnull_annotation) {
+                // null is the only value of `Void`
+                if p.annotations.iter().any(is_nonnull_annotation) && p.ty.class_name() != Some("java.lang.Void") {
                     cx.report(*a, format!("`null` passed to non-null parameter `{}`", p.name));
                 }
             }

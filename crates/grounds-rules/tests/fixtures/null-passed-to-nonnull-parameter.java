@@ -47,3 +47,11 @@ class JUnit4MessageOverload {
         org.junit.Assert.assertThrows(NullPointerException.class, () -> take(null));
     }
 }
+class VoidConfig {
+    void initialize(@NonNull Void config) {}
+    void configure(@NonNull Object config) {}
+    void start() {
+        initialize(null);
+        configure(null); // expect
+    }
+}
