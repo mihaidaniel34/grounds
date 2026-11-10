@@ -448,7 +448,9 @@ where
                     self.visit_with(b, &when_true);
                 }
                 // in scope after the loop unless a break may leave it
-                self.bring_into_scope_if(&when_false, breaks_out_of(n).map(|b| !b));
+                // JLS 6.3.2.3: no reachable break that targets the loop, even
+                // one a finally keeps from leaving it
+                self.bring_into_scope_if(&when_false, breaks_targeting(n, false).map(|b| !b));
                 self.visit_rest(n, &["condition", "body"]);
             }
             "for_statement" => {
@@ -672,12 +674,12 @@ fn completes_normally(s: Node) -> Option<bool> {
         // (or a continue) to reach the condition. A condition other than a
         // literal may still be constant: unknown.
         "while_statement" | "for_statement" => match loop_condition(s) {
-            Some(true) => breaks_out_of(s),
+            Some(true) => breaks_targeting(s, true),
             Some(false) => Some(true),
             None => None,
         },
         "do_statement" => {
-            let breaks = breaks_out_of(s);
+            let breaks = breaks_targeting(s, true);
             if breaks == Some(true) {
                 return Some(true);
             }
@@ -726,12 +728,12 @@ fn loop_condition(s: Node) -> Option<bool> {
     }
 }
 
-/// Whether a `break` in the body of `loop_` leaves it (JLS 14.15, 14.20.2):
-/// Some(true) for an unlabeled one that targets this loop and gets out
-/// through every `finally` in between, None when that cannot be told (a
-/// labeled break, a `finally` that may not complete), Some(false) when no
-/// break leaves it.
-fn breaks_out_of(loop_: Node) -> Option<bool> {
+/// Whether a `break` in the body of `loop_` targets it (JLS 14.15), and with
+/// `leaving`, also gets out through every `finally` in between (14.20.2):
+/// Some(true) for an unlabeled one that does, None when that cannot be told
+/// (a labeled break, a `finally` that may not complete), Some(false) when
+/// none does.
+fn breaks_targeting(loop_: Node, leaving: bool) -> Option<bool> {
     let Some(body) = loop_.field("body") else { return Some(false) };
     let mut unknown = false;
     for b in body.descendants().filter(|d| d.kind() == "break_statement") {
@@ -752,7 +754,7 @@ fn breaks_out_of(loop_: Node) -> Option<bool> {
             if matches!(a.kind(), "while_statement" | "do_statement" | "for_statement" | "enhanced_for_statement" | "switch_block" | "switch_expression") {
                 break;
             }
-            if matches!(a.kind(), "try_statement" | "try_with_resources_statement") {
+            if leaving && matches!(a.kind(), "try_statement" | "try_with_resources_statement") {
                 let finally = a.kid_of_kind("finally_clause");
                 let inside_finally = finally.is_some_and(|f| f == prev);
                 if let (Some(f), false) = (finally.and_then(|f| f.kid_of_kind("block")), inside_finally) {

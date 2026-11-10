@@ -117,3 +117,17 @@ class LoopRules {
         s.ok(); // expect
     }
 }
+
+class BreakTargetsLoop {
+    Bad s;
+
+    // a reachable break targets the while: `s` after it is the field
+    // (JLS 6.3.2.3), though the finally keeps the break from leaving
+    void test(Object o) {
+        while (!(o instanceof Good s)) {
+            try { break; } finally { return; }
+        }
+        s.other();
+        s.ok(); // expect
+    }
+}
