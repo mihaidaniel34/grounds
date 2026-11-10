@@ -186,3 +186,37 @@ fn package_private_jdk_classes_are_not_visible() {
     assert!(cp.contains("java.awt.Container$AccessibleAWTContainer"));
     assert!(cp.class_names().all(|n| cp.contains(n)));
 }
+
+#[test]
+fn constants_defined_by_each_other_across_classes_are_bounded() {
+    // found by scripts/fuzz_robust.py: each class hop restarted the depth
+    // bound, so a cycle overflowed the stack and a chain doubling at each
+    // class took 2^n steps. Run on a 2 MiB stack like a rayon worker.
+    std::thread::Builder::new()
+        .stack_size(2 << 20)
+        .spawn(|| {
+            let idx = index_of(&[
+                ("A.java", "package p; class A { static final int X = B.Y * 2 + A.X; }"),
+                ("B.java", "package p; class B { static final int Y = A.X + 1; }"),
+            ]);
+            assert_eq!(idx.class("p.A").unwrap().field("X").unwrap().constant, None);
+            assert_eq!(idx.class("p.B").unwrap().field("Y").unwrap().constant, None);
+
+            let srcs: Vec<(String, String)> = (0..80)
+                .map(|i| {
+                    let init = if i == 0 { "1".to_string() } else { format!("K{p}.V + K{p}.V", p = i - 1) };
+                    (format!("K{i}.java"), format!("package p; class K{i} {{ static final int V = {init}; }}"))
+                })
+                .collect();
+            let files: Vec<(&str, &str)> = srcs.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+            let idx = index_of(&files);
+            let t = std::time::Instant::now();
+            // a short chain is still evaluated
+            assert_eq!(idx.class("p.K10").unwrap().field("V").unwrap().constant, Some(Constant::Int(1024)));
+            let _ = idx.class("p.K79").unwrap().field("V").unwrap().constant.clone();
+            assert!(t.elapsed() < std::time::Duration::from_secs(10), "{:?}", t.elapsed());
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
