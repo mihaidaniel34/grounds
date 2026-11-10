@@ -140,7 +140,6 @@ yudao-framework/yudao-spring-boot-starter-excel/src/main/java/cn/iocoder/yudao/f
 yudao-framework/yudao-spring-boot-starter-excel/src/test/java/cn/iocoder/yudao/framework/excel/core/convert/MultiDictConvertTest.java:168 assert-true-with-comparison
 yudao-framework/yudao-spring-boot-starter-excel/src/test/java/cn/iocoder/yudao/framework/excel/core/convert/MultiDictConvertTest.java:178 assert-true-with-comparison
 yudao-framework/yudao-spring-boot-starter-excel/src/test/java/cn/iocoder/yudao/framework/excel/core/convert/MultiDictConvertTest.java:227 assert-true-with-comparison
-yudao-framework/yudao-spring-boot-starter-job/src/main/java/cn/iocoder/yudao/framework/quartz/core/handler/JobHandlerInvoker.java:57 catch-throwable
 yudao-framework/yudao-spring-boot-starter-job/src/main/java/cn/iocoder/yudao/framework/quartz/core/util/CronUtils.java:17 utility-class-instantiable
 yudao-framework/yudao-spring-boot-starter-job/src/main/java/cn/iocoder/yudao/framework/quartz/core/util/CronUtils.java:42 lost-stack-trace
 yudao-framework/yudao-spring-boot-starter-monitor/src/main/java/cn/iocoder/yudao/framework/tracer/core/util/TracerFrameworkUtils.java:14 utility-class-instantiable
@@ -167,8 +166,6 @@ yudao-framework/yudao-spring-boot-starter-security/src/main/java/cn/iocoder/yuda
 yudao-framework/yudao-spring-boot-starter-security/src/main/java/cn/iocoder/yudao/framework/security/config/YudaoWebSecurityConfigurerAdapter.java:155 unused-private-method
 yudao-framework/yudao-spring-boot-starter-security/src/main/java/cn/iocoder/yudao/framework/security/core/handler/AccessDeniedHandlerImpl.java:11 unused-import
 yudao-framework/yudao-spring-boot-starter-security/src/main/java/cn/iocoder/yudao/framework/security/core/handler/AccessDeniedHandlerImpl.java:20 unused-import
-yudao-framework/yudao-spring-boot-starter-security/src/main/java/cn/iocoder/yudao/framework/security/core/handler/AccessDeniedHandlerImpl.java:37 log-placeholder-mismatch
-yudao-framework/yudao-spring-boot-starter-security/src/main/java/cn/iocoder/yudao/framework/security/core/handler/AuthenticationEntryPointImpl.java:30 log-placeholder-mismatch
 yudao-framework/yudao-spring-boot-starter-security/src/main/java/cn/iocoder/yudao/framework/security/core/util/SecurityFrameworkUtils.java:24 private-constructor-class-not-final
 yudao-framework/yudao-spring-boot-starter-test/src/main/java/cn/iocoder/yudao/framework/test/core/util/AssertUtils.java:22 utility-class-instantiable
 yudao-framework/yudao-spring-boot-starter-test/src/main/java/cn/iocoder/yudao/framework/test/core/util/RandomUtils.java:10 unused-import
@@ -205,17 +202,6 @@ yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/fra
 yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/config/YudaoWebAutoConfiguration.java:112 permissive-cors
 yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/filter/CacheRequestBodyWrapper.java:32 default-charset
 yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/filter/CacheRequestBodyWrapper.java:67 empty-method
-yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:126 log-placeholder-mismatch
-yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:137 log-placeholder-mismatch
-yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:146 log-placeholder-mismatch
-yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:171 log-placeholder-mismatch
-yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:185 log-placeholder-mismatch
-yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:201 log-placeholder-mismatch
-yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:211 log-placeholder-mismatch
-yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:233 log-placeholder-mismatch
-yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:244 log-placeholder-mismatch
-yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:255 log-placeholder-mismatch
-yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:266 log-placeholder-mismatch
 yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:344 catch-throwable
 yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:385 cognitive-complexity
 yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/xss/core/clean/JsoupXssCleaner.java:48 commented-out-code
@@ -578,7 +564,6 @@ yudao-module-bpm/src/test/java/cn/iocoder/yudao/module/bpm/framework/flowable/co
 yudao-module-bpm/src/test/java/cn/iocoder/yudao/module/bpm/framework/flowable/core/candidate/strategy/user/BpmTaskCandidateRoleStrategyTest.java:18 disabled-test-without-reason
 yudao-module-bpm/src/test/java/cn/iocoder/yudao/module/bpm/framework/flowable/core/candidate/strategy/user/BpmTaskCandidateUserStrategyTest.java:13 disabled-test-without-reason
 yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/controller/admin/statistics/vo/funnel/CrmStatisticsBusinessInversionRateSummaryByDateRespVO.java:6 unused-import
-yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/dal/mysql/product/CrmProductCategoryMapper.java:19 infinite-recursion
 yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/dal/redis/RedisKeyConstants.java:8 constant-interface
 yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/enums/DictTypeConstants.java:8 constant-interface
 yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/enums/ErrorCodeConstants.java:10 constant-interface
@@ -616,7 +601,6 @@ yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/controller/admin/stoc
 yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/dal/dataobject/product/ErpProductUnitDO.java:5 unused-import
 yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/dal/dataobject/product/ErpProductUnitDO.java:6 unused-import
 yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/dal/dataobject/stock/ErpStockOutDO.java:39 todo-comment
-yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/dal/mysql/product/ErpProductCategoryMapper.java:19 infinite-recursion
 yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/dal/redis/RedisKeyConstants.java:8 constant-interface
 yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/enums/DictTypeConstants.java:8 constant-interface
 yudao-module-erp/src/main/java/cn/iocoder/yudao/module/erp/enums/ErpAuditStatus.java:12 todo-comment
@@ -784,9 +768,6 @@ yudao-module-hrm/src/main/java/cn/iocoder/yudao/module/hrm/dal/dataobject/employ
 yudao-module-hrm/src/main/java/cn/iocoder/yudao/module/hrm/dal/dataobject/performance/plan/HrmPerformancePlanDO.java:132 non-serializable-field
 yudao-module-hrm/src/main/java/cn/iocoder/yudao/module/hrm/dal/dataobject/performance/plan/HrmPerformancePlanDO.java:150 non-serializable-field
 yudao-module-hrm/src/main/java/cn/iocoder/yudao/module/hrm/dal/dataobject/performance/plan/HrmPerformancePlanDO.java:197 non-serializable-field
-yudao-module-hrm/src/main/java/cn/iocoder/yudao/module/hrm/dal/mysql/attendance/record/HrmAttendanceClockMapper.java:24 infinite-recursion
-yudao-module-hrm/src/main/java/cn/iocoder/yudao/module/hrm/dal/mysql/attendance/record/HrmAttendanceLeaveMapper.java:23 infinite-recursion
-yudao-module-hrm/src/main/java/cn/iocoder/yudao/module/hrm/dal/mysql/employee/info/HrmEmployeeMapper.java:50 infinite-recursion
 yudao-module-hrm/src/main/java/cn/iocoder/yudao/module/hrm/dal/mysql/salary/config/HrmSalaryTaxRuleMapper.java:17 missing-override
 yudao-module-hrm/src/main/java/cn/iocoder/yudao/module/hrm/dal/redis/RedisKeyConstants.java:8 constant-interface
 yudao-module-hrm/src/main/java/cn/iocoder/yudao/module/hrm/enums/DictTypeConstants.java:6 constant-interface
@@ -979,7 +960,6 @@ yudao-module-infra/src/main/java/cn/iocoder/yudao/module/infra/controller/admin/
 yudao-module-infra/src/main/java/cn/iocoder/yudao/module/infra/controller/admin/demo/demo03/normal/vo/Demo03StudentNormalRespVO.java:27 todo-comment
 yudao-module-infra/src/main/java/cn/iocoder/yudao/module/infra/dal/dataobject/demo/demo01/Demo01ContactDO.java:38 todo-comment
 yudao-module-infra/src/main/java/cn/iocoder/yudao/module/infra/dal/dataobject/demo/demo03/Demo03StudentDO.java:38 todo-comment
-yudao-module-infra/src/main/java/cn/iocoder/yudao/module/infra/dal/mysql/demo/demo02/Demo02CategoryMapper.java:19 infinite-recursion
 yudao-module-infra/src/main/java/cn/iocoder/yudao/module/infra/enums/DictTypeConstants.java:8 constant-interface
 yudao-module-infra/src/main/java/cn/iocoder/yudao/module/infra/enums/ErrorCodeConstants.java:10 constant-interface
 yudao-module-infra/src/main/java/cn/iocoder/yudao/module/infra/framework/file/core/client/db/DBFileClient.java:48 collection-method-returns-null
@@ -1036,8 +1016,6 @@ yudao-module-iot/yudao-module-iot-biz/src/main/java/cn/iocoder/yudao/module/iot/
 yudao-module-iot/yudao-module-iot-biz/src/main/java/cn/iocoder/yudao/module/iot/dal/dataobject/thingmodel/model/dataType/ThingModelDateOrTextDataSpecs.java:1 package-naming
 yudao-module-iot/yudao-module-iot-biz/src/main/java/cn/iocoder/yudao/module/iot/dal/dataobject/thingmodel/model/dataType/ThingModelNumericDataSpec.java:1 package-naming
 yudao-module-iot/yudao-module-iot-biz/src/main/java/cn/iocoder/yudao/module/iot/dal/dataobject/thingmodel/model/dataType/ThingModelStructDataSpecs.java:1 package-naming
-yudao-module-iot/yudao-module-iot-biz/src/main/java/cn/iocoder/yudao/module/iot/dal/mysql/device/IotDeviceModbusConfigMapper.java:23 infinite-recursion
-yudao-module-iot/yudao-module-iot-biz/src/main/java/cn/iocoder/yudao/module/iot/dal/mysql/thingmodel/IotThingModelMapper.java:31 infinite-recursion
 yudao-module-iot/yudao-module-iot-biz/src/main/java/cn/iocoder/yudao/module/iot/dal/redis/RedisKeyConstants.java:10 constant-interface
 yudao-module-iot/yudao-module-iot-biz/src/main/java/cn/iocoder/yudao/module/iot/enums/DictTypeConstants.java:8 utility-class-instantiable
 yudao-module-iot/yudao-module-iot-biz/src/main/java/cn/iocoder/yudao/module/iot/enums/ErrorCodeConstants.java:10 constant-interface
@@ -1204,8 +1182,6 @@ yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/
 yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/udp/handler/upstream/IotUdpUpstreamHandler.java:142 exception-message-only-logged
 yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/udp/handler/upstream/IotUdpUpstreamHandler.java:148 exception-message-only-logged
 yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/udp/handler/upstream/IotUdpUpstreamHandler.java:301 unused-parameter
-yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/udp/handler/upstream/IotUdpUpstreamHandler.java:366 log-placeholder-mismatch
-yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/udp/manager/IotUdpSessionManager.java:125 log-placeholder-mismatch
 yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/websocket/IotWebSocketProtocol.java:155 log-and-rethrow
 yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/websocket/handler/downstream/IotWebSocketDownstreamHandler.java:46 throw-generic-exception
 yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/websocket/handler/upstream/IotWebSocketUpstreamHandler.java:102 cognitive-complexity
@@ -1334,8 +1310,6 @@ yudao-module-iot/yudao-module-iot-gateway/src/test/java/cn/iocoder/yudao/module/
 yudao-module-iot/yudao-module-iot-gateway/src/test/java/cn/iocoder/yudao/module/iot/gateway/protocol/websocket/IotGatewaySubDeviceWebSocketProtocolIntegrationTest.java:53 disabled-test-without-reason
 yudao-module-iot/yudao-module-iot-gateway/src/test/java/cn/iocoder/yudao/module/iot/gateway/protocol/websocket/IotGatewaySubDeviceWebSocketProtocolIntegrationTest.java:91 test-without-assertion
 yudao-module-mall/yudao-module-product/src/main/java/cn/iocoder/yudao/module/product/dal/dataobject/spu/ProductSpuDO.java:148 todo-comment
-yudao-module-mall/yudao-module-product/src/main/java/cn/iocoder/yudao/module/product/dal/mysql/brand/ProductBrandMapper.java:25 infinite-recursion
-yudao-module-mall/yudao-module-product/src/main/java/cn/iocoder/yudao/module/product/dal/mysql/category/ProductCategoryMapper.java:20 infinite-recursion
 yudao-module-mall/yudao-module-product/src/main/java/cn/iocoder/yudao/module/product/dal/mysql/spu/ProductSpuMapper.java:57 missing-override
 yudao-module-mall/yudao-module-product/src/main/java/cn/iocoder/yudao/module/product/enums/DictTypeConstants.java:8 constant-interface
 yudao-module-mall/yudao-module-product/src/main/java/cn/iocoder/yudao/module/product/enums/ErrorCodeConstants.java:10 constant-interface
@@ -1382,7 +1356,6 @@ yudao-module-mall/yudao-module-promotion/src/main/java/cn/iocoder/yudao/module/p
 yudao-module-mall/yudao-module-promotion/src/main/java/cn/iocoder/yudao/module/promotion/dal/dataobject/coupon/CouponDO.java:55 todo-comment
 yudao-module-mall/yudao-module-promotion/src/main/java/cn/iocoder/yudao/module/promotion/dal/dataobject/coupon/CouponTemplateDO.java:177 todo-comment
 yudao-module-mall/yudao-module-promotion/src/main/java/cn/iocoder/yudao/module/promotion/dal/dataobject/coupon/CouponTemplateDO.java:61 todo-comment
-yudao-module-mall/yudao-module-promotion/src/main/java/cn/iocoder/yudao/module/promotion/dal/mysql/kefu/KeFuMessageMapper.java:30 infinite-recursion
 yudao-module-mall/yudao-module-promotion/src/main/java/cn/iocoder/yudao/module/promotion/enums/ErrorCodeConstants.java:10 constant-interface
 yudao-module-mall/yudao-module-promotion/src/main/java/cn/iocoder/yudao/module/promotion/enums/MessageTemplateConstants.java:8 constant-interface
 yudao-module-mall/yudao-module-promotion/src/main/java/cn/iocoder/yudao/module/promotion/enums/WebSocketMessageTypeConstants.java:8 constant-interface
@@ -1810,7 +1783,6 @@ yudao-module-mes/src/main/java/cn/iocoder/yudao/module/mes/dal/dataobject/wm/pro
 yudao-module-mes/src/main/java/cn/iocoder/yudao/module/mes/dal/dataobject/wm/sn/MesWmSnDO.java:49 todo-comment
 yudao-module-mes/src/main/java/cn/iocoder/yudao/module/mes/dal/mysql/dv/machinery/MesDvMachineryMapper.java:3 unused-import
 yudao-module-mes/src/main/java/cn/iocoder/yudao/module/mes/dal/mysql/dv/machinery/MesDvMachineryTypeMapper.java:27 missing-override
-yudao-module-mes/src/main/java/cn/iocoder/yudao/module/mes/dal/mysql/pro/process/MesProProcessMapper.java:29 infinite-recursion
 yudao-module-mes/src/main/java/cn/iocoder/yudao/module/mes/dal/mysql/qc/defect/MesQcDefectMapper.java:37 missing-override
 yudao-module-mes/src/main/java/cn/iocoder/yudao/module/mes/dal/mysql/qc/indicator/MesQcIndicatorMapper.java:37 missing-override
 yudao-module-mes/src/main/java/cn/iocoder/yudao/module/mes/dal/mysql/qc/template/MesQcTemplateMapper.java:37 missing-override
@@ -2028,8 +2000,6 @@ yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/dal/dataobject/notify
 yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/dal/mysql/channel/PayChannelMapper.java:10 unused-import
 yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/dal/mysql/channel/PayChannelMapper.java:6 unused-import
 yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/dal/mysql/channel/PayChannelMapper.java:8 unused-import
-yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/dal/mysql/order/PayOrderMapper.java:30 infinite-recursion
-yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/dal/mysql/refund/PayRefundMapper.java:62 infinite-recursion
 yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/dal/mysql/wallet/PayWalletRechargeMapper.java:8 unused-import
 yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/dal/mysql/wallet/PayWalletTransactionMapper.java:11 unused-import
 yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/dal/mysql/wallet/PayWalletTransactionMapper.java:13 unused-import
@@ -2063,7 +2033,6 @@ yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/framework/pay/core/cl
 yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/service/channel/PayChannelServiceImpl.java:85 nested-ternary
 yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/service/demo/PayDemoOrderServiceImpl.java:229 unused-parameter
 yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/service/demo/PayDemoWithdrawServiceImpl.java:155 nested-ternary
-yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/service/notify/PayNotifyServiceImpl.java:212 catch-throwable
 yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/service/notify/PayNotifyServiceImpl.java:246 throw-generic-exception
 yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/service/order/PayOrderServiceImpl.java:515 catch-throwable
 yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/service/order/PayOrderServiceImpl.java:595 catch-throwable
@@ -2211,8 +2180,6 @@ yudao-module-system/src/main/java/cn/iocoder/yudao/module/system/controller/app/
 yudao-module-system/src/main/java/cn/iocoder/yudao/module/system/controller/app/dict/vo/AppDictDataRespVO.java:9 unused-import
 yudao-module-system/src/main/java/cn/iocoder/yudao/module/system/dal/dataobject/notify/NotifyMessageDO.java:14 unused-import
 yudao-module-system/src/main/java/cn/iocoder/yudao/module/system/dal/dataobject/notify/NotifyMessageDO.java:5 unused-import
-yudao-module-system/src/main/java/cn/iocoder/yudao/module/system/dal/mysql/dept/DeptMapper.java:15 infinite-recursion
-yudao-module-system/src/main/java/cn/iocoder/yudao/module/system/dal/mysql/permission/MenuMapper.java:22 infinite-recursion
 yudao-module-system/src/main/java/cn/iocoder/yudao/module/system/dal/redis/RedisKeyConstants.java:10 constant-interface
 yudao-module-system/src/main/java/cn/iocoder/yudao/module/system/enums/DictTypeConstants.java:8 constant-interface
 yudao-module-system/src/main/java/cn/iocoder/yudao/module/system/enums/ErrorCodeConstants.java:10 constant-interface
@@ -2260,7 +2227,6 @@ yudao-module-system/src/test/java/cn/iocoder/yudao/module/system/service/dept/De
 yudao-module-system/src/test/java/cn/iocoder/yudao/module/system/service/mail/MailSendServiceImplTest.java:59 disabled-test-without-reason
 yudao-module-system/src/test/java/cn/iocoder/yudao/module/system/service/mail/MailSendServiceImplTest.java:60 test-without-assertion
 yudao-module-system/src/test/java/cn/iocoder/yudao/module/system/service/tenant/TenantServiceImplTest.java:121 test-without-assertion
-yudao-module-wms/src/main/java/cn/iocoder/yudao/module/wms/dal/mysql/md/merchant/WmsMerchantMapper.java:30 infinite-recursion
 yudao-module-wms/src/main/java/cn/iocoder/yudao/module/wms/enums/DictTypeConstants.java:8 constant-interface
 yudao-module-wms/src/main/java/cn/iocoder/yudao/module/wms/enums/ErrorCodeConstants.java:10 constant-interface
 yudao-module-wms/src/main/java/cn/iocoder/yudao/module/wms/enums/md/WmsMerchantTypeEnum.java:22 public-static-mutable-container

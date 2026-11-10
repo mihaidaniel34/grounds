@@ -359,6 +359,12 @@ impl Rule for InfiniteRecursion {
             return;
         }
         let range = m.range;
+        // a supertype we cannot see may declare another overload of this name
+        // that the call picks instead (MyBatis `selectList(Wrapper)` under
+        // `selectList(ReqVO)`); then only arguments typed exactly as our own
+        // parameters prove the self call: an applicable overload more
+        // specific than ours would need the same erasure, i.e. be ours
+        let open = cx.fm.enclosing_class(n).is_none_or(|c| !cx.fm.hierarchy_complete(&c.name));
         let cfg = cx.cfg(n);
         // blocks containing a self call (implicit or `this.` receiver)
         let is_self_call = |e: Node<'t>| -> bool {
@@ -380,6 +386,9 @@ impl Rule for InfiniteRecursion {
                 matches!(a.unparen().kind(), "lambda_expression" | "method_reference") && pty.is_none_or(|t| cx.fm.functional_method(&t).is_none())
             });
             if lambda_misfit {
+                return false;
+            }
+            if open && (args.len() != m.params.len() || args.iter().zip(&m.params).any(|(a, p)| cx.type_of(*a).erasure() != p.ty.erasure())) {
                 return false;
             }
             // with an argument of unknown type the call may target another overload
