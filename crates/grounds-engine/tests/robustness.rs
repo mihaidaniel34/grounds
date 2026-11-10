@@ -175,3 +175,20 @@ fn a_package_name_of_half_a_million_segments_is_not_indexed() {
     assert!(fs.iter().any(|f| f.path.ends_with("p/B.java")), "{fs:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_launcher_handed_deeply_nested_sources_is_not_a_crash() {
+    // the reader of application starts followed nested array initializers
+    // recursively: 100,000 of them in a SpringApplication.run overflowed the
+    // stack. Past its bound the start is uncertain; the other file is checked.
+    let n = 100_000;
+    let launcher = format!(
+        "package p;\nimport org.springframework.boot.SpringApplication;\npublic class Main {{ public static void main(String[] args) {{ SpringApplication.run(new Class<?>[] {}Main.class{}, args); }} }}\n",
+        "{".repeat(n),
+        "}".repeat(n)
+    );
+    let dir = project("nested-sources", &[("src/main/java/p/Main.java", &launcher), ("src/main/java/p/B.java", "package p;\nclass B { void m() { ;; } }\n")]);
+    let fs = check(&dir, &["stray-semicolon", "bean-not-found"]);
+    assert!(fs.iter().any(|f| f.path.ends_with("p/B.java")), "{fs:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

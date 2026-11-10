@@ -55,14 +55,14 @@ const CONTEXT_TYPES: &[(&str, &[&str])] = &[
 /// Calls on a builder, an application or a context that add sources.
 const ADDS_SOURCES: &[&str] = &["sources", "register", "addPrimarySources"];
 
-/// Calls known not to change which classes the context is started from or
-/// how it treats them (overriding, scanning and parent contexts do).
+/// Calls known not to add a bean or a source, nor to change how the context
+/// treats its classes. Anything else (initializers, listeners, properties,
+/// profiles, the environment, `setSources`, ...) can, so it makes the start
+/// open.
 const NEUTRAL: &[&str] = &[
-    "run", "build", "properties", "profiles", "web", "bannerMode", "logStartupInfo", "headless", "initializers", "listeners", "lazyInitialization",
-    "registerShutdownHook", "setWebApplicationType", "setBannerMode", "setAdditionalProfiles", "setDefaultProperties", "setLogStartupInfo", "setHeadless",
-    "setLazyInitialization", "setRegisterShutdownHook", "addListeners", "addInitializers", "setEnvironment", "environment", "refresh", "start", "close",
-    "getBean", "getEnvironment", "setMainApplicationClass", "main", "applicationStartup", "setApplicationStartup", "banner", "setBanner", "setEnvironmentPrefix",
-    "environmentPrefix", "addBootstrapRegistryInitializer", "setAddCommandLineProperties", "setAddConversionService", "setKeepAlive",
+    "run", "build", "web", "setWebApplicationType", "bannerMode", "setBannerMode", "banner", "setBanner", "logStartupInfo", "setLogStartupInfo",
+    "headless", "setHeadless", "registerShutdownHook", "setRegisterShutdownHook", "refresh", "start", "close", "getBean", "getEnvironment",
+    "setMainApplicationClass", "main", "applicationStartup", "setApplicationStartup", "setKeepAlive",
 ];
 
 /// Methods a servlet container or Spring Boot calls on an initializer.
@@ -93,30 +93,34 @@ fn static_run(imports: &Imports) -> bool {
     imports.iter().any(|i| i.is_static && (&*i.path == "org.springframework.boot.SpringApplication.run" || (i.on_demand && &*i.path == "org.springframework.boot.SpringApplication")))
 }
 
+/// How deeply nested an argument may be before the reader gives up on it.
+const MAX_DEPTH: usize = 64;
+
 /// The class names of an argument that is a class literal or an array of
-/// them; None for anything else.
+/// them; None for anything else, or for nesting deeper than `MAX_DEPTH`.
 fn literals(arg: Node, src: &str) -> Option<Vec<Name>> {
+    nested_literals(arg, src, 0)
+}
+
+fn nested_literals(arg: Node, src: &str, depth: usize) -> Option<Vec<Name>> {
+    if depth > MAX_DEPTH {
+        return None;
+    }
+    let all = |list: Vec<Node>| -> Option<Vec<Name>> {
+        let mut out = Vec::new();
+        for e in list {
+            out.extend(nested_literals(e, src, depth + 1)?);
+        }
+        Some(out)
+    };
     match arg.kind() {
         "class_literal" => {
             let t = arg.kids().into_iter().next()?;
             Some(vec![Arc::from(strip(t.text(src)).as_str())])
         }
-        "array_creation_expression" => {
-            let init = arg.field("value")?;
-            let mut out = Vec::new();
-            for e in init.kids() {
-                out.extend(literals(e, src)?);
-            }
-            Some(out)
-        }
-        "array_initializer" => {
-            let mut out = Vec::new();
-            for e in arg.kids() {
-                out.extend(literals(e, src)?);
-            }
-            Some(out)
-        }
-        "parenthesized_expression" => literals(arg.kids().into_iter().next()?, src),
+        "array_creation_expression" => all(arg.field("value")?.kids()),
+        "array_initializer" => all(arg.kids()),
+        "parenthesized_expression" => nested_literals(arg.kids().into_iter().next()?, src, depth + 1),
         _ => None,
     }
 }
@@ -242,12 +246,27 @@ fn declaration<'t>(id: Node<'t>, src: &str) -> Option<Node<'t>> {
     None
 }
 
+fn is_string(t: Node, src: &str) -> bool {
+    matches!(strip(t.text(src)).as_str(), "String" | "java.lang.String")
+}
+
+/// `main(String[] args)`, judged by the parameter's type node: modifiers and
+/// annotations, `String... args` and `String args[]` are all a main.
 fn is_main(m: Node, src: &str) -> bool {
     m.field("name").is_some_and(|n| n.text(src) == "main")
         && m.modifiers().is_some_and(|mods| mods.text(src).split_whitespace().any(|w| w == "static"))
         && m.field("parameters").is_some_and(|ps| {
             let ps: Vec<Node> = ps.kids().into_iter().filter(|k| matches!(k.kind(), "formal_parameter" | "spread_parameter")).collect();
-            ps.len() == 1 && strip(ps[0].text(src)).starts_with("String")
+            let [p] = ps.as_slice() else { return false };
+            if p.kind() == "spread_parameter" {
+                return p.field("type").is_some_and(|t| is_string(t, src));
+            }
+            let Some(t) = p.field("type") else { return false };
+            if t.kind() == "array_type" {
+                return t.field("element").is_some_and(|e| is_string(e, src)) && t.field("dimensions").is_some_and(|d| strip(d.text(src)) == "[]");
+            }
+            // String args[]
+            is_string(t, src) && p.field("dimensions").is_some_and(|d| strip(d.text(src)) == "[]")
         })
 }
 
@@ -348,7 +367,22 @@ pub fn extract(root: Node, src: &str, imports: &Imports) -> Startups {
             r.follow(g, id);
         }
     }
-    let mut out = Startups { calls: Vec::new(), uncertain: outside };
+    // a builder, application or context held in a variable or field the
+    // reader did not see created (`b = Bootstrap.builder()`): what it is
+    // started from is unknown
+    let mut unfollowed = false;
+    for d in root.descendants().filter(|n| matches!(n.kind(), "local_variable_declaration" | "field_declaration")) {
+        if !d.field("type").is_some_and(|t| spring_type(t.text(src), imports)) {
+            continue;
+        }
+        if d.kind() == "local_variable_declaration" && !in_reach(d) {
+            continue;
+        }
+        if d.fields("declarator").iter().any(|v| !r.vars.contains_key(&v.id())) {
+            unfollowed = true;
+        }
+    }
+    let mut out = Startups { calls: Vec::new(), uncertain: outside || unfollowed };
     for g in r.groups {
         if g.uncertain {
             out.uncertain = true;
@@ -471,5 +505,59 @@ mod tests {
                 protected Class<?>[] getRootConfigClasses() { return new Class<?>[] { A.class, app.B.class }; }
                 protected Class<?>[] getServletConfigClasses() { return null; } }";
         assert_eq!(calls(s), (vec![vec!["A".to_string(), "app.B".to_string()]], false));
+    }
+
+    #[test]
+    fn main_is_recognised_whatever_its_parameter_modifiers() {
+        // S18
+        for params in ["final String[] args", "String... args", "@SuppressWarnings(\"x\") final String[] args", "String args[]", "final java.lang.String[] args"] {
+            let s = format!("package app; import org.springframework.boot.SpringApplication;
+                public class App {{ public static void main({params}) {{ SpringApplication.run(App.class); }} }}");
+            assert_eq!(calls(&s), (vec![vec!["App".to_string()]], false), "{params}");
+        }
+    }
+
+    #[test]
+    fn calls_that_can_add_a_bean_or_a_source_make_a_start_open() {
+        // S19: callbacks, listeners and properties can register beans or
+        // turn on overriding, a profile, lazy initialisation
+        for call in [
+            "app.addInitializers(ctx -> ctx.getBeanFactory().registerSingleton(\"special\", new Object()));",
+            "app.addListeners(e -> {});",
+            "app.setDefaultProperties(java.util.Map.of(\"spring.main.allow-bean-definition-overriding\", \"true\"));",
+            "app.setAdditionalProfiles(\"x\");",
+            "app.setLazyInitialization(true);",
+            "app.setSources(java.util.Set.of(\"other\"));",
+        ] {
+            let s = format!("package l; import org.springframework.boot.SpringApplication;
+                public class Main {{ public static void main(String[] args) {{ SpringApplication app = new SpringApplication(A.class); {call} app.run(args); }} }}");
+            let st = read(&s);
+            assert!(st.calls.len() == 1 && st.calls[0].open, "{call}: {st:?}");
+        }
+        let s = "package l; import org.springframework.boot.builder.SpringApplicationBuilder;
+            public class Main { public static void main(String[] args) { new SpringApplicationBuilder(A.class).initializers(c -> {}).run(args); } }";
+        let st = read(s);
+        assert!(st.calls.len() == 1 && st.calls[0].open, "{st:?}");
+    }
+
+    #[test]
+    fn a_builder_from_a_helper_is_uncertain() {
+        // S21
+        let s = "package l; import org.springframework.boot.builder.SpringApplicationBuilder;
+            public class Main { public static void main(String[] args) { SpringApplicationBuilder b = Bootstrap.builder(); b.sources(Other.class); b.run(args); } }";
+        assert_eq!(calls(s), (vec![], true));
+        let s = "package l; import org.springframework.boot.builder.SpringApplicationBuilder;
+            public class Main { static SpringApplicationBuilder b = Bootstrap.builder(); public static void main(String[] args) { b.run(args); } }";
+        assert_eq!(calls(s), (vec![], true));
+    }
+
+    #[test]
+    fn deeply_nested_sources_are_uncertain_not_a_crash() {
+        // S20: 100,000 nested array initializers
+        let n = 100_000;
+        let s = format!("package l; import org.springframework.boot.SpringApplication;
+            public class Main {{ public static void main(String[] args) {{ SpringApplication.run(new Class<?>[] {}A.class{}, args); }} }}", "{".repeat(n), "}".repeat(n));
+        let st = std::thread::Builder::new().stack_size(8 << 20).spawn(move || read(&s)).unwrap().join().expect("no stack overflow");
+        assert!(st.calls.is_empty() && st.uncertain, "{st:?}");
     }
 }
