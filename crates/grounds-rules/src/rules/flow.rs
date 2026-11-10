@@ -78,14 +78,17 @@ impl Rule for NullDereference {
 /// Does `call` run on every path from its position to `deref`? It must not
 /// sit in a branch, loop body, case, catch block or lambda that the
 /// dereference is not also inside (`if (x != null) consume(x); x.length()`).
-fn runs_on_every_path_to<'t>(call: Node<'t>, deref: Node<'t>) -> bool {
+/// `null_branch(if, branch)` names the branches only the null paths take
+/// (`if (x == null) require(x);`): the call needs to run on those alone.
+fn runs_on_every_path_to<'t>(call: Node<'t>, deref: Node<'t>, null_branch: impl Fn(Node<'t>, Node<'t>) -> bool) -> bool {
     let mut child = call;
     for a in call.ancestors() {
         if deref.ancestors().any(|d| d == a) {
             return true;
         }
         let conditional = match a.kind() {
-            "if_statement" | "ternary_expression" => a.field("condition") != Some(child),
+            "if_statement" => a.field("condition") != Some(child) && !null_branch(a, child),
+            "ternary_expression" => a.field("condition") != Some(child),
             "binary_expression" => matches!(op(a), "&&" | "||") && a.field("right") == Some(child),
             "while_statement" | "enhanced_for_statement" | "do_statement" => a.field("body") == Some(child),
             // the body and the update of a for may run zero times
@@ -132,6 +135,22 @@ fn maybe_null_unknown<'t>(cx: &Ctx<'_, 't>, callable: Node<'t>, i: usize, deref:
             last_check = null_check(*r).then_some(*r);
         }
     }
+    // the branch of an `if (x == null)` / `if (x != null) ... else` that
+    // only null takes
+    let null_branch = |ifs: Node<'t>, branch: Node<'t>| {
+        ifs.field("condition").map(|c| c.unparen()).is_some_and(|c| {
+            c.kind() == "binary_expression"
+                && lr(c).is_some_and(|(l, rr)| {
+                    let (l, rr) = (l.unparen(), rr.unparen());
+                    (is_null_literal(l) && cx.fm.local_ref(rr) == Some(i)) || (is_null_literal(rr) && cx.fm.local_ref(l) == Some(i))
+                })
+                && match op(c) {
+                    "==" => ifs.field("consequence") == Some(branch),
+                    "!=" => ifs.field("alternative") == Some(branch),
+                    _ => false,
+                }
+        })
+    };
     // handed to a call
     let handed = refs.iter().any(|r| {
         r.start_byte() >= last
@@ -140,7 +159,7 @@ fn maybe_null_unknown<'t>(cx: &Ctx<'_, 't>, callable: Node<'t>, i: usize, deref:
                 a.kind() == "argument_list"
                     && a.parent().is_some_and(|call| {
                         !call.descendants().any(|d| d == deref)
-                            && runs_on_every_path_to(call, deref)
+                            && runs_on_every_path_to(call, deref, &null_branch)
                             && !(call.kind() == "method_invocation"
                                 && (super::exceptions::is_log_like(call, cx) || matches!(cx.fm.call_name(call), Some("println" | "print" | "printf" | "format" | "valueOf"))))
                     })

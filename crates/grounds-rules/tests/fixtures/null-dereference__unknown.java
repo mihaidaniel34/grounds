@@ -11,6 +11,15 @@ class Unknown {
         require(item, "item");
         return item.name() + label;
     }
+    // validated on the null path only: null cannot reach the dereference
+    String validatedWhenNull(@Nullable Item item) {
+        if (item == null) require(item, "item");
+        return item.name();
+    }
+    String validatedInElse(@Nullable Item item) {
+        if (item != null) { log("ok"); } else { require(item, "item"); }
+        return item.name();
+    }
     // under a condition that does not involve the variable
     String correlatedKey(@Nullable Item item, java.util.Map<String, Item> byName, String name) {
         if (byName.containsKey(name)) {
@@ -89,6 +98,16 @@ class Unknown {
     }
     String caught(@Nullable Item item) {
         try { require(item, "item"); } catch (IllegalArgumentException e) { }
+        return item.name(); // expect
+    }
+    // still reported: an earlier call in the try may throw before the validation
+    String throwsFirst(@Nullable Item item, java.nio.file.Path path) {
+        try { java.nio.file.Files.readString(path); require(item, "item"); } catch (java.io.IOException e) { }
+        return item.name(); // expect
+    }
+    // still reported: the validation is on the non-null branch
+    String validatedWhenNotNull(@Nullable Item item) {
+        if (item != null) { require(item, "item"); } else { log("none"); }
         return item.name(); // expect
     }
     // still reported: the variable is only logged

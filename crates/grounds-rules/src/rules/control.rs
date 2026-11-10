@@ -1336,7 +1336,11 @@ impl Rule for ForLoopWrongVariable {
                 d.kind() == "method_invocation"
                     && d.field("object").is_some_and(|o| o.unparen().kind() == "identifier" && o.unparen().text(cx.src) == c)
                     // queries that do not move it
-                    && !matches!(cx.fm.call_name(d), Some("hasNext" | "hasPrevious" | "nextIndex" | "previousIndex" | "hasMoreElements" | "hasMoreTokens" | "countTokens" | "hasNextLine" | "hasNextInt" | "isEmpty" | "size" | "toString" | "hashCode" | "equals"))
+                    && !cx.fm.call_name(d).is_some_and(|m| {
+                        // `hasNext`, and Scanner's `hasNextInt`, `hasNextLine`, ...
+                        m.starts_with("hasNext")
+                            || matches!(m, "hasPrevious" | "nextIndex" | "previousIndex" | "hasMoreElements" | "hasMoreTokens" | "countTokens" | "isEmpty" | "size" | "toString" | "hashCode" | "equals")
+                    })
             })
         };
         if counters.iter().any(|c| cond_vars.contains(c) && advanced_by_call(c)) {

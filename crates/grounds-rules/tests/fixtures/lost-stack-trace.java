@@ -78,6 +78,23 @@ class InputErrors {
         // neither takes a charset name: only getBytes("UTF-8") can throw
         try { java.nio.charset.StandardCharsets.UTF_8.encode(s); new String(b, 0, b.length); return s.getBytes("UTF-8"); } catch (java.io.UnsupportedEncodingException e) { throw new IllegalStateException("no UTF-8"); }
     }
+    // a call that takes a string but no charset name does not count
+    byte[] number(int value) {
+        try { return Integer.toString(value).getBytes("UTF-8"); } catch (java.io.UnsupportedEncodingException e) { throw new IllegalStateException("no UTF-8"); }
+    }
+    java.security.Key loadKey(String name) throws java.security.NoSuchAlgorithmException { return null; }
+    void plainHelper(String name) { }
+    void withPlainHelper(String name) {
+        try { java.security.MessageDigest.getInstance("SHA-256"); plainHelper(name); } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException("failed"); }
+    }
+    // still lost: another call in the try declares the caught exception
+    void withKey(String name) {
+        try { java.security.MessageDigest.getInstance("SHA-256"); loadKey(name); } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException("failed"); } // expect
+    }
+    // still lost: a call the analysis cannot resolve may throw it too
+    void withUnknown(String name) {
+        try { java.security.MessageDigest.getInstance("SHA-256"); missing.Keys.load(name); } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException("failed"); } // expect
+    }
     // still lost: SHA-256 is guaranteed for MessageDigest, not for Mac
     javax.crypto.Mac mac() {
         try { java.security.MessageDigest.getInstance("SHA-256"); return javax.crypto.Mac.getInstance("SHA-256"); } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException("failed"); } // expect

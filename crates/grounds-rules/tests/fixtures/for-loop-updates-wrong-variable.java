@@ -40,3 +40,15 @@ class IteratorOnlyObserved {
         }
     }
 }
+class ScannerOnlyObserved {
+    void m(java.io.File file) throws java.io.IOException {
+        int count = 0;
+        // Scanner's hasNextXxx queries read ahead without consuming
+        for (java.util.Scanner sc = new java.util.Scanner(file); sc.hasNextDouble(); count++) { // expect
+            if (sc.hasNextDouble()) System.out.println(count);
+        }
+        for (java.util.Scanner sc = new java.util.Scanner(file); sc.hasNextDouble(); count++) {
+            System.out.println(sc.nextDouble());
+        }
+    }
+}

@@ -51,3 +51,11 @@ class PartlyInjected implements Serializable {
     @jakarta.inject.Inject
     PartlyInjected(Plain p) { }
 }
+// an @Inject constructor that builds the value itself: not what the container gave
+@jakarta.faces.view.ViewScoped
+class BuildsItself implements Serializable {
+    private Probe built; // expect
+    private Probe checked;
+    @jakarta.inject.Inject
+    BuildsItself(Probe injected) { built = new Probe(); checked = java.util.Objects.requireNonNull(injected); }
+}

@@ -924,6 +924,24 @@ const INJECTED_BY_CONTAINER: &[&str] = &[
     "javax.persistence.PersistenceUnit",
 ];
 
+/// Is `value` a parameter of the constructor `ctor`, as given or through a
+/// null check (`Objects.requireNonNull(p)`, `checkNotNull(p)`)? What the
+/// container injects; `new Probe()` is a plain object.
+fn from_injected_parameter<'t>(ctor: Node<'t>, value: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+    let params: Vec<&str> = ctor
+        .field("parameters")
+        .map(|ps| ps.kids().into_iter().filter(|p| p.kind() == "formal_parameter").filter_map(|p| p.field("name")).map(|x| cx.text(x)).collect())
+        .unwrap_or_default();
+    let v = value.unparen();
+    match v.kind() {
+        "identifier" => params.contains(&cx.text(v)),
+        "method_invocation" if matches!(cx.fm.call_name(v), Some("requireNonNull" | "checkNotNull")) => {
+            cx.fm.args_of(v).first().is_some_and(|a| a.unparen().kind() == "identifier" && params.contains(&cx.text(a.unparen())))
+        }
+        _ => false,
+    }
+}
+
 /// CDI scopes whose beans may be passivated: the container checks at
 /// deployment that every injected dependency is passivation capable.
 const CDI_PASSIVATING_SCOPES: &[&str] = &[
@@ -1043,7 +1061,7 @@ impl Rule for NonSerializableField {
                                     let l = l.unparen();
                                     let target = if l.kind() == "field_access" { l.field("field") } else { Some(l) };
                                     target.is_some_and(|t| names.contains(&cx.text(t)))
-                                })
+                                }) && x.field("right").is_some_and(|r| from_injected_parameter(*m, r, cx))
                             })
                     })
                 });

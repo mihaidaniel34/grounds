@@ -487,10 +487,28 @@ impl Rule for LostStackTrace {
                 .collect();
             // a `getInstance` of another class in the try may throw too
             let other_getinstance = calls.iter().any(|c| c.kind() == "method_invocation" && cx.fm.call_name(*c) == Some("getInstance") && !digest_calls.contains(c));
+            // any other call in the try that may throw the caught exception
+            // (or a supertype or subtype of it); an unresolved one may
+            let others_may_throw = |caught: &str| {
+                calls.iter().any(|c| {
+                    !charset_calls.contains(c)
+                        && !digest_calls.contains(c)
+                        && match cx.fm.select_method(*c) {
+                            None => true,
+                            Some(m) => {
+                                m.ambiguous
+                                    || m.method.throws.iter().any(|th| match th.class_name() {
+                                        None => true,
+                                        Some(tn) => tn == caught || !cx.fm.is_subclass(caught, tn).is_no() || !cx.fm.is_subclass(tn, caught).is_no(),
+                                    })
+                            }
+                        }
+                })
+            };
             let impossible = !caught.is_empty()
                 && caught.iter().all(|t| match t.class_name() {
-                    Some("java.io.UnsupportedEncodingException") => !charset_calls.is_empty() && charset_calls.iter().all(|c| literal_in(*c, STANDARD_CHARSETS)),
-                    Some("java.security.NoSuchAlgorithmException") => !digest_calls.is_empty() && !other_getinstance && digest_calls.iter().all(|c| literal_in(*c, STANDARD_DIGESTS)),
+                    Some(c @ "java.io.UnsupportedEncodingException") => !charset_calls.is_empty() && !others_may_throw(c) && charset_calls.iter().all(|c| literal_in(*c, STANDARD_CHARSETS)),
+                    Some(c @ "java.security.NoSuchAlgorithmException") => !digest_calls.is_empty() && !other_getinstance && !others_may_throw(c) && digest_calls.iter().all(|c| literal_in(*c, STANDARD_DIGESTS)),
                     _ => false,
                 });
             if impossible {
