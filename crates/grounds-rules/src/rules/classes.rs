@@ -275,8 +275,38 @@ impl Rule for StaticWriteFromInstance {
         if n.ancestors().any(|a| a.kind() == "lambda_expression") {
             return;
         }
+        // a container callback that runs once, at startup or shutdown, of a
+        // singleton: publishing it (or a setting) into a static accessor
+        // (`SpringContextHolder.context = ctx`) is the usual idiom
+        if is_lifecycle_callback(m, cx) {
+            return;
+        }
         cx.report(n, format!("Static field `{}` is written from an instance method", f.field.name));
     }
+}
+
+/// Is the method a callback a container runs once in a bean's life: JSR-250
+/// `@PostConstruct`/`@PreDestroy`, setter injection (`@Autowired`, `@Inject`,
+/// `@Value`, `@Resource`), a `@Bean` factory, a CDI or Spring startup
+/// observer, or a Spring `*Aware`/`InitializingBean`/`DisposableBean`/
+/// `BeanFactoryPostProcessor` callback?
+fn is_lifecycle_callback<'t>(m: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+    let anns = annotation_names(m, cx.src);
+    if anns.iter().any(|a| matches!(*a, "PostConstruct" | "PreDestroy" | "Autowired" | "Inject" | "Value" | "Resource" | "Bean")) {
+        return true;
+    }
+    // `void onStart(@Observes StartupEvent e)`
+    let observer = m.field("parameters").is_some_and(|ps| ps.kids().iter().any(|p| has_annotation_named(*p, cx.src, "Observes") || has_annotation_named(*p, cx.src, "ObservesAsync")));
+    let name = m.field("name").map(|x| cx.text(x)).unwrap_or("");
+    let aware = matches!(
+        name,
+        "setApplicationContext" | "setBeanFactory" | "setEnvironment" | "setServletContext" | "setEmbeddedValueResolver" | "setResourceLoader" | "afterPropertiesSet" | "afterSingletonsInstantiated" | "destroy" | "postProcessBeanFactory"
+    ) && owning_type_decl(m).and_then(|d| cx.fm.class_of_decl(d)).is_some_and(|c| {
+        ["org.springframework.beans.factory.Aware", "org.springframework.beans.factory.InitializingBean", "org.springframework.beans.factory.DisposableBean", "org.springframework.beans.factory.SmartInitializingSingleton", "org.springframework.beans.factory.config.BeanFactoryPostProcessor"]
+            .iter()
+            .any(|i| !cx.fm.is_subclass(&c.name, i).is_no())
+    });
+    observer || aware
 }
 
 declare_rule!(ConstructorCallsOverridable {

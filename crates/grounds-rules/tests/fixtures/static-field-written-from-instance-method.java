@@ -9,3 +9,17 @@ class A {
     synchronized void safe() { count = 1; }
     A() { }
 }
+class ContextHolder implements org.springframework.context.ApplicationContextAware {
+    private static org.springframework.context.ApplicationContext context;
+    private static String secret;
+    private static int requests;
+    // container callbacks that run once in a singleton's life
+    public void setApplicationContext(org.springframework.context.ApplicationContext ctx) { context = ctx; }
+    @jakarta.annotation.PostConstruct
+    void init() { secret = "x"; }
+    @org.springframework.beans.factory.annotation.Value("${app.secret}")
+    void setSecret(String s) { secret = s; }
+    // still reported: runs on every call
+    void handle() { requests++; } // expect
+    void setContext(org.springframework.context.ApplicationContext ctx) { context = ctx; } // expect
+}
