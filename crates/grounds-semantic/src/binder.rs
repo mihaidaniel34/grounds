@@ -141,6 +141,7 @@ where
         let Some(ps) = params else { return };
         for p in ps.kids() {
             match p.kind() {
+                "formal_parameter" if grounds_index::stubs::is_receiver_parameter(p, self.src) => {}
                 "formal_parameter" => {
                     let is_final = p.has_modifier("final");
                     if let Some(n) = p.field("name") {

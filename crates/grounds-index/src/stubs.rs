@@ -845,12 +845,21 @@ pub fn type_params(n: Option<Node>, src: &str) -> Vec<RawTypeParam> {
         .collect()
 }
 
+/// An explicit receiver parameter, `void m(@A Foo this)`. It only carries
+/// type annotations and is not a parameter (JLS 8.4). tree-sitter parses the
+/// annotated form as a `formal_parameter` named `this` (the unannotated one,
+/// and `Outer.this`, as a `receiver_parameter`).
+pub fn is_receiver_parameter(p: Node, src: &str) -> bool {
+    p.kind() == "receiver_parameter" || (p.kind() == "formal_parameter" && p.field("name").is_some_and(|n| n.text(src) == "this"))
+}
+
 pub fn formal_params(n: Option<Node>, src: &str) -> (Vec<RawParam>, bool) {
     let mut out = Vec::new();
     let mut varargs = false;
     let Some(n) = n else { return (out, false) };
     for p in n.kids() {
         match p.kind() {
+            "formal_parameter" if is_receiver_parameter(p, src) => {}
             "formal_parameter" => {
                 let mut ty = p.field("type").map(|t| type_syntax(t, src)).unwrap_or(TypeSyntax::Unknown);
                 if let Some(d) = p.field("dimensions") {
@@ -1386,7 +1395,7 @@ fn calls_other(body: Node, methods: &[RawMethod], src: &str) -> bool {
 
 /// `void check(boolean ok, ...) { if (!ok) throw ...; ... }`
 fn throws_on_false(m: Node, src: &str) -> bool {
-    let Some(first) = m.field("parameters").and_then(|p| p.kids().into_iter().find(|k| k.kind() == "formal_parameter")) else { return false };
+    let Some(first) = m.field("parameters").and_then(|p| p.kids().into_iter().find(|k| k.kind() == "formal_parameter" && !is_receiver_parameter(*k, src))) else { return false };
     if first.field("type").map(|t| t.text(src)) != Some("boolean") {
         return false;
     }

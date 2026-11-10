@@ -274,3 +274,22 @@ fn lombok_classes_with_unmodelled_annotations_are_marked_open() {
         assert!(open(n), "{n} not open");
     }
 }
+
+#[test]
+fn a_receiver_parameter_is_not_a_parameter() {
+    // JLS 8.4: `@A R this` and `R.this` only carry type annotations
+    let idx = index_of(&[(
+        "R.java",
+        "package p; class R {
+           boolean ok(@A R this, int x) { return true; }
+           boolean plain(R this) { return true; }
+           class I { I(@A R R.this, int y) {} }
+         }",
+    )]);
+    let r = idx.class("p.R").unwrap();
+    let ok = r.methods_named("ok").next().unwrap();
+    assert_eq!(ok.params.iter().map(|p| &*p.name).collect::<Vec<_>>(), ["x"]);
+    assert!(r.methods_named("plain").next().unwrap().params.is_empty());
+    let i = idx.class("p.R$I").unwrap();
+    assert_eq!(i.methods_named("<init>").next().map(|m| m.params.len()), Some(1));
+}
