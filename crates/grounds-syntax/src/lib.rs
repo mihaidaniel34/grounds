@@ -211,6 +211,9 @@ fn fixup_when_identifiers(text: &str, mut out: Option<Vec<u8>>) -> Option<Vec<u8
     // starts a guard
     let mut in_case_label = false;
     let mut after_pattern = false;
+    // parentheses open inside the label: `case Box(String when) when ...`
+    // names a record component `when`; only a `when` outside them is a guard
+    let mut parens = 0usize;
     let mut i = 0;
     while i < n {
         if !code[i] || b[i].is_ascii_whitespace() {
@@ -224,10 +227,13 @@ fn fixup_when_identifiers(text: &str, mut out: Option<Vec<u8>>) -> Option<Vec<u8
                 i += 1;
             }
             let w = &b[start..i];
-            let guard = in_case_label && after_pattern && w == b"when";
+            let guard = in_case_label && after_pattern && parens == 0 && w == b"when";
             after_pattern = w != b"case";
             match w {
-                b"case" => in_case_label = true,
+                b"case" => {
+                    in_case_label = true;
+                    parens = 0;
+                }
                 b"when" if guard => {
                     in_case_label = false;
                     after_pattern = false;
@@ -247,6 +253,8 @@ fn fixup_when_identifiers(text: &str, mut out: Option<Vec<u8>>) -> Option<Vec<u8
         }
         after_pattern = c == b')';
         match c {
+            b'(' if in_case_label => parens += 1,
+            b')' if in_case_label => parens = parens.saturating_sub(1),
             b';' | b'{' | b'}' => in_case_label = false,
             b':' if b.get(i + 1) != Some(&b':') && (i == 0 || b[i - 1] != b':') => in_case_label = false,
             b'-' if b.get(i + 1) == Some(&b'>') => in_case_label = false,
@@ -772,6 +780,16 @@ mod when_tests {
         let src = "class T { int f(Object o) { return switch (o) { case when<T>(Object w) when w != null -> 1; case when w -> 2; default -> 3; }; } }";
         let pf = ParsedFile::parse(src);
         assert_eq!(pf.root().descendants().filter(|n| n.kind() == "guard").count(), 1, "{}", pf.root().to_sexp());
+    }
+
+    #[test]
+    fn a_record_component_named_when_is_a_name() {
+        // cubic review on #65: the component used to end the label, so the
+        // real guard was taken for a name
+        let src = "class T { int f(Object o) { return switch (o) { case Box(String when) when when.isEmpty() -> 1; default -> 0; }; } }";
+        let pf = ParsedFile::parse(src);
+        assert_eq!(errors(src), 0, "{}", pf.root().to_sexp());
+        assert_eq!(pf.root().descendants().filter(|n| n.kind() == "guard").count(), 1);
     }
 
     #[test]

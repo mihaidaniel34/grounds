@@ -124,6 +124,21 @@ fn constants_that_refer_to_each_other_are_not_constants() {
 }
 
 #[test]
+fn a_chain_of_constants_across_classes_is_constant() {
+    // C0.V = C1.V; ... C40.V = 7: longer than the 32-level evaluation budget,
+    // still a constant: past the budget, resolve_constant_name falls back to
+    // the constant of the lowered class, which has a budget of its own
+    let n = 40;
+    let mut src = String::from("package c; class Chain {");
+    for i in 0..n {
+        src.push_str(&format!(" static class C{i} {{ static final int V = C{}.V; }}", i + 1));
+    }
+    src.push_str(&format!(" static class C{n} {{ static final int V = 7; }} }}"));
+    let idx = index_of(&[("Chain.java", &src)]);
+    assert_eq!(idx.class("c.Chain$C0").unwrap().field("V").unwrap().constant, Some(Constant::Int(7)));
+}
+
+#[test]
 fn constants_that_refer_to_themselves_by_simple_name_terminate() {
     // does not compile (forward references), but is a state between edits
     let idx = index_of(&[("F.java", "package f; class F { static final int A = B + B + B + B; static final int B = A + A + A + A; static final int C = 7; }")]);

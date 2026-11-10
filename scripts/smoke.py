@@ -88,12 +88,17 @@ def fetch(p, d, keep):
             time.sleep(5 * attempt)
         if git(d, "init", "-q").returncode:
             return "git init failed"
-        r = git(d, "fetch", "-q", "--depth", "1", "--no-tags", p["url"], p["commit"], timeout=1800)
-        if r.returncode == 0:
-            r = git(d, "-c", "advice.detachedHead=false", "checkout", "-q", "--detach", "FETCH_HEAD", timeout=1800)
+        try:
+            r = git(d, "fetch", "-q", "--depth", "1", "--no-tags", p["url"], p["commit"], timeout=1800)
             if r.returncode == 0:
-                return None
-        err = (r.stderr or "").strip()[-500:]
+                r = git(d, "-c", "advice.detachedHead=false", "checkout", "-q", "--detach", "FETCH_HEAD", timeout=1800)
+                if r.returncode == 0:
+                    return None
+            err = (r.stderr or "").strip()[-500:]
+        except subprocess.TimeoutExpired as e:
+            err = f"git timed out after {e.timeout} s"
+            shutil.rmtree(d, ignore_errors=True)
+            os.makedirs(d)
     return f"fetch failed: {err}"
 
 
@@ -351,7 +356,11 @@ def main():
     def fetch_into(k):
         p = todo[k]
         t0 = time.monotonic()
-        fetched[k] = (fetch(p, os.path.join(a.dir, p["name"]), a.keep), time.monotonic() - t0)
+        try:
+            err = fetch(p, os.path.join(a.dir, p["name"]), a.keep)
+        except Exception as e:  # noqa: BLE001 - any error is this project's fetch failure, not the run's
+            err = f"fetch failed: {e!r}"
+        fetched[k] = (err, time.monotonic() - t0)
 
     results = []
     nxt = threading.Thread(target=fetch_into, args=(0,)) if todo else None
