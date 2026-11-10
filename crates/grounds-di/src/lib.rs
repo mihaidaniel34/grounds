@@ -246,15 +246,36 @@ const MICRONAUT_BEAN_ANNOTATIONS: &[&str] = &[
     "io.micronaut.context.annotation.EachProperty",
 ];
 
+/// CDI bean-defining annotations: the built-in scopes, the Faces and
+/// transaction scopes (normal scopes), and the stereotypes @Model and
+/// OmniFaces's own. Project annotations meta-annotated @NormalScope or
+/// @Stereotype are found through their meta-annotations.
 const JAKARTA_SCOPES: &[&str] = &[
     "jakarta.enterprise.context.ApplicationScoped",
     "jakarta.enterprise.context.RequestScoped",
     "jakarta.enterprise.context.SessionScoped",
+    "jakarta.enterprise.context.ConversationScoped",
     "jakarta.enterprise.context.Dependent",
+    "jakarta.enterprise.inject.Model",
     "javax.enterprise.context.ApplicationScoped",
     "javax.enterprise.context.RequestScoped",
+    "javax.enterprise.context.SessionScoped",
+    "javax.enterprise.context.ConversationScoped",
     "javax.enterprise.context.Dependent",
+    "javax.enterprise.inject.Model",
+    "jakarta.faces.view.ViewScoped",
+    "javax.faces.view.ViewScoped",
+    "jakarta.faces.flow.FlowScoped",
+    "javax.faces.flow.FlowScoped",
+    "jakarta.transaction.TransactionScoped",
+    "javax.transaction.TransactionScoped",
+    "org.omnifaces.cdi.ViewScoped",
+    "org.omnifaces.cdi.Startup",
+    "org.omnifaces.cdi.GraphicImageBean",
 ];
+
+/// Meta-annotations that make an annotation bean-defining in CDI.
+const CDI_BEAN_DEFINING_META: &[&str] = &["jakarta.enterprise.context.NormalScope", "javax.enterprise.context.NormalScope", "jakarta.enterprise.inject.Stereotype", "javax.enterprise.inject.Stereotype"];
 
 pub const QUALIFIER_ANNOTATIONS: &[&str] = &["org.springframework.beans.factory.annotation.Qualifier", "jakarta.inject.Named", "javax.inject.Named"];
 pub const INJECT_ANNOTATIONS: &[&str] = &["org.springframework.beans.factory.annotation.Autowired", "jakarta.inject.Inject", "javax.inject.Inject", "jakarta.annotation.Resource", "javax.annotation.Resource"];
@@ -420,6 +441,9 @@ impl<'a> Builder<'a> {
             };
             if metas.iter().any(jsr330_scope) {
                 return Some(if n.starts_with("io.micronaut") { Framework::Micronaut } else { Framework::Jakarta });
+            }
+            if metas.iter().any(|m| CDI_BEAN_DEFINING_META.iter().any(|s| m.is(s))) {
+                return Some(Framework::Jakarta);
             }
             metas.iter().find_map(|m| if &*m.name == n { None } else { self.stereotype(m, depth + 1) })
         });
@@ -2181,5 +2205,28 @@ mod tests {
         assert!(matches!(point_resolution(&idx, &m, "listener"), Resolution::Unique(_)));
         // main code never sees a test's mock
         assert_eq!(point_resolution(&idx, &m, "mainListener"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn cdi_and_faces_scopes_define_beans() {
+        // normal scopes (Faces view and flow scopes, conversation, OmniFaces),
+        // stereotypes (@Model, a project @Stereotype) and project normal scopes
+        let (idx, m) = model(&[
+            JSR330[0], JSR330[1], JSR330[2],
+            ("src/main/java/app/Wizard.java", "package app; @jakarta.enterprise.inject.Stereotype @jakarta.enterprise.context.SessionScoped public @interface Wizard {}"),
+            ("src/main/java/app/PerTab.java", "package app; import jakarta.enterprise.context.NormalScope; @NormalScope public @interface PerTab {}"),
+            ("src/main/java/app/Views.java", "package app; import jakarta.inject.Named;
+             interface Upload {} interface Cart {} interface Flow {} interface Steps {} interface Tab {} interface Old {}
+             @Named @jakarta.faces.view.ViewScoped class UploadView implements Upload {}
+             @jakarta.enterprise.inject.Model class CartModel implements Cart {}
+             @org.omnifaces.cdi.ViewScoped class FlowView implements Flow {}
+             @Wizard class StepsView implements Steps {}
+             @PerTab class TabView implements Tab {}
+             @javax.enterprise.context.ConversationScoped class OldView implements Old {}
+             @jakarta.enterprise.context.RequestScoped class Page { @jakarta.inject.Inject Page(Upload upload, Cart cart, Flow flow, Steps steps, Tab tab, Old old) {} }"),
+        ]);
+        for name in ["upload", "cart", "flow", "steps", "tab", "old"] {
+            assert!(matches!(point_resolution(&idx, &m, name), Resolution::Unique(_)), "{name}");
+        }
     }
 }
