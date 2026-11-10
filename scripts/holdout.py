@@ -44,17 +44,25 @@ CONTEXT = 12
 
 
 def projects(path, only, after=None):
+    """The projects of one set. Sets are separated by comment lines: without
+    `after` the first set (before any comment line), with it the projects
+    between the line '# <after>' and the next comment line."""
     out = []
-    started = after is None
+    inside = after is None
+    found = after is None
     with open(path) as fh:
         for line in fh:
-            if line.startswith("#") and after is not None and line[1:].strip() == after:
-                started = True
-            if not started or not line.strip() or line.startswith("#"):
+            if line.startswith("#"):
+                inside = after is not None and line[1:].strip() == after
+                found = found or inside
+                continue
+            if not inside or not line.strip():
                 continue
             name, url, commit = line.rstrip("\n").split("\t")[:3]
             if not only or name in only:
                 out.append((name, url, commit))
+    if not found:
+        raise SystemExit(f"{path}: no line '# {after}'")
     return out
 
 
@@ -222,7 +230,7 @@ def main():
     ap.add_argument("--grounds", default=os.path.join(REPO, "target", "release", "grounds"))
     ap.add_argument("--only", type=lambda s: set(s.split(",")), default=None)
     ap.add_argument("--after", default=None, metavar="COMMENT",
-                    help="only the projects after the line '# COMMENT' (e.g. 'second set, 2026-11')")
+                    help="the set after the line '# COMMENT' (e.g. 'second set, 2026-11'); default: the first set")
     ap.add_argument("--timeout", type=int, default=1800)
     ap.add_argument("--sample", type=int, default=None, help="up to N findings per rule")
     ap.add_argument("--seed", default="1")
