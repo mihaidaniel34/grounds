@@ -200,6 +200,15 @@ impl Session {
         // have been written while the load ran: which version it read is not
         // known, and the project is loaded again at the next sync, that time
         // with a stamp from before.
+        //
+        // Known limit: equal stamps say what the file was before and after
+        // the load, not what the load read in between. A file written A, B
+        // and A again (the same size) within one tick of a coarse file-system
+        // clock, while the load runs, has equal stamps, and the load may have
+        // read B. Telling would take a hash of the bytes each reader of
+        // configuration consumed; a second load for every recent change, as
+        // before, would cost more than two rewrites inside one tick during a
+        // reload, the second restoring the first exactly.
         let began = project.load_began;
         let mut config_unread = false;
         let config: Vec<(PathBuf, Option<FileStamp>)> = config_files(&project)
@@ -334,6 +343,12 @@ impl Session {
                         any_decl_change = true;
                         changed.push(p.clone());
                     }
+                } else if old.is_some() {
+                    // could not be read: no stub, as a fresh load has none;
+                    // the stamp is `unread`, so the next sync tries again
+                    self.project.index.remove_file(&key);
+                    any_decl_change = true;
+                    changed.push(p.clone());
                 }
                 self.stamps.insert(p.clone(), stamp);
             } else {

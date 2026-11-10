@@ -695,3 +695,62 @@ fn times_in_the_future_are_trusted_once_seen_for_the_margin() {
     assert_eq!(s.project.load_began, loaded);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_file_that_could_not_be_read_is_read_once_it_can_be() {
+    // A source file that cannot be read (no permission, not UTF-8, unlinked
+    // between the look at its time and the read) is not taken as read: when
+    // it can be read again with the same time and size, it is read, and the
+    // session holds what a fresh load holds.
+    let rel = "src/main/java/demo/Api.java";
+    let good = "package demo;\npublic class Api {\n    public void m() {}\n}\n";
+    let edit = "package demo;\npublic class Api {\n    public void n() {}\n}\n";
+    let dir = one_class_project("unreadable", good);
+    let t = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    set_mtime(&dir, rel, t);
+    // (an old build file: a reload would read everything again and hide what sync does)
+    set_mtime(&dir, "build.gradle", t);
+    let mut s = Session::open(&dir).unwrap();
+    let api = |s: &Session| s.project.index.source_class_names().find(|n| n.ends_with("Api")).map(|n| format!("{:?}", s.project.index.class(n)));
+    let fresh = |dir: &Path| { let s = Session::open(dir).unwrap(); api(&s) };
+    // the edit lands, but cannot be read: without permission where that
+    // stops us, else as bytes that are not UTF-8 (of the same size)
+    let u = std::time::SystemTime::now() - std::time::Duration::from_secs(1800);
+    write(&dir, rel, edit);
+    set_mtime(&dir, rel, u);
+    let path = dir.join(rel);
+    use std::os::unix::fs::PermissionsExt;
+    // (the time is set first: a file without permission cannot be opened to set it)
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let by_permission = std::fs::read(&path).is_err();
+    if !by_permission {
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let mut bytes = edit.as_bytes().to_vec();
+        bytes[0] = 0xff;
+        std::fs::write(&path, bytes).unwrap();
+        set_mtime(&dir, rel, u);
+    }
+    s.sync(&[]);
+    assert_eq!(api(&s), fresh(&dir), "an unreadable file: as a fresh load, no stub");
+    // readable again, with the same time and size
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    write(&dir, rel, edit);
+    set_mtime(&dir, rel, u);
+    s.sync(&[]);
+    assert!(api(&s).is_some_and(|c| c.contains("\"n\"") || c.contains(" n")), "{:?}", api(&s));
+    assert_eq!(api(&s), fresh(&dir), "the file once it can be read again (by {})", if by_permission { "permission" } else { "UTF-8" });
+
+    // the same for a file that could not be read when the project was loaded
+    let mut bytes = good.as_bytes().to_vec();
+    bytes[0] = 0xff;
+    std::fs::write(&path, bytes).unwrap();
+    set_mtime(&dir, rel, t);
+    let mut s = Session::open(&dir).unwrap();
+    assert_eq!(api(&s), None);
+    write(&dir, rel, good);
+    set_mtime(&dir, rel, t);
+    s.sync(&[]);
+    assert!(api(&s).is_some(), "read once it can be");
+    assert_eq!(api(&s), fresh(&dir));
+    let _ = std::fs::remove_dir_all(&dir);
+}

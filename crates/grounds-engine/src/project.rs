@@ -241,6 +241,10 @@ pub struct FileStamp {
     /// When this time was first seen (right after it was read).
     pub seen: Instant,
     pub racy: bool,
+    /// A source file whose text could not be read (no permission, not
+    /// UTF-8, gone between the look at its time and the read): nothing was
+    /// read to vouch for, so every sync tries again until a read succeeds.
+    pub unread: bool,
 }
 
 /// The hash a stamp keeps: of the bytes of a file, of the sorted names in a
@@ -273,14 +277,15 @@ impl FileStamp {
         let seen = Instant::now();
         let racy = recent(mtime, clock);
         let (hash, bytes) = if always || racy { content_of(path, meta.is_dir()) } else { (None, None) };
-        (Some(FileStamp { mtime, size: meta.len(), hash, seen, racy: racy && hash.is_some() }), bytes)
+        (Some(FileStamp { mtime, size: meta.len(), hash, seen, racy: racy && hash.is_some(), unread: false }), bytes)
     }
 
     /// The stamp of a source file and its text (if it is UTF-8), the stamp
     /// first. No stamp if the file is gone.
     pub fn read(path: &Path) -> (Option<FileStamp>, Option<String>) {
         let (stamp, bytes) = Self::take(path, true);
-        (stamp, bytes.and_then(|b| String::from_utf8(b).ok()))
+        let text = bytes.and_then(|b| String::from_utf8(b).ok());
+        (stamp.map(|s| FileStamp { unread: text.is_none(), ..s }), text)
     }
 
     /// The stamp of a file or directory, with a hash of its content when its
@@ -310,6 +315,9 @@ impl FileStamp {
     /// (`clock`: the time before this look). A racy stamp whose content is
     /// found unchanged stays, and stops being racy once its margin is over.
     pub fn changed(&mut self, path: &Path, clock: SystemTime) -> bool {
+        if self.unread {
+            return true;
+        }
         let Ok(meta) = std::fs::metadata(path) else { return true };
         let Ok(mtime) = meta.modified() else { return true };
         if mtime != self.mtime || meta.len() != self.size {
