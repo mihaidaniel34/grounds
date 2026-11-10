@@ -160,3 +160,26 @@ class OptionalCorrelatedFlag {
         return "";
     }
 }
+class DerivedAndIfPresent {
+    String host(java.util.Optional<String> component) {
+        // a value derived from `component` is present only when `component` is present
+        java.util.Optional<String> oldHost = component.map(String::trim).filter(h -> !h.isEmpty());
+        if (oldHost.isPresent()) {
+            return component.get();
+        }
+        return "";
+    }
+    void act(java.util.Optional<String> user, StringBuilder out) {
+        // the action runs only when the Optional holds a value
+        user.ifPresent(u -> out.append(user.get()));
+        user.ifPresentOrElse(u -> out.append(user.get()), () -> out.append("none"));
+        user.ifPresentOrElse(u -> { }, () -> out.append(user.get())); // expect
+    }
+    String unrelated(java.util.Optional<String> a, java.util.Optional<String> b) {
+        java.util.Optional<String> c = b.map(String::trim);
+        if (c.isPresent()) {
+            return a.get(); // expect
+        }
+        return "";
+    }
+}

@@ -65,7 +65,7 @@ Maturity: 0 rules are `stable` (held to the project's precision promise). 6 are 
 | `nan-comparison` | error | preview | edit | spotbugs:FE_TEST_IF_EQUAL_TO_NOT_A_NUMBER, errorprone:EqualsNaN |
 | `equals-null` | error | preview | edit | spotbugs:EC_NULL_ARG, pmd:EqualsNull |
 | `compareto-specific-value` | error | preview | edit | sonar:S2200, spotbugs:RV_CHECK_COMPARETO_FOR_SPECIFIC_RETURN_VALUE |
-| `negated-compareto` | warning | preview | checkpoint | spotbugs:RV_NEGATING_RESULT_OF_COMPARETO |
+| `negated-compareto` *off* | warning | preview | checkpoint | spotbugs:RV_NEGATING_RESULT_OF_COMPARETO |
 | `equals-without-hashcode` | error | preview | edit | sonar:S1206, spotbugs:HE_EQUALS_NO_HASHCODE, spotbugs:HE_HASHCODE_NO_EQUALS, pmd:OverrideBothEqualsAndHashcode, intellij:EqualsAndHashcode |
 | `equals-overload` | error | preview | edit | sonar:S1201, spotbugs:EQ_SELF_NO_OBJECT, errorprone:NonOverridingEquals, intellij:CovariantEquals |
 | `class-name-comparison` | info | preview | checkpoint | sonar:S1872, spotbugs:EQ_COMPARING_CLASS_NAMES |
@@ -236,7 +236,7 @@ Maturity: 0 rules are `stable` (held to the project's precision promise). 6 are 
 
 | id | severity | maturity | tier | origin |
 |---|---|---|---|---|
-| `url-equals-hashcode` | warning | preview | checkpoint | sonar:S2112, spotbugs:DMI_BLOCKING_METHODS_ON_URL, spotbugs:DMI_COLLECTION_OF_URLS, errorprone:URLEqualsHashCode |
+| `url-equals-hashcode` *off* | warning | preview | checkpoint | sonar:S2112, spotbugs:DMI_BLOCKING_METHODS_ON_URL, spotbugs:DMI_COLLECTION_OF_URLS, errorprone:URLEqualsHashCode |
 | `random-used-once` | info | preview | checkpoint | sonar:S2119, spotbugs:DMI_RANDOM_USED_ONLY_ONCE |
 | `string-constructor` | info | preview | checkpoint | sonar:S2129, spotbugs:DM_STRING_CTOR, spotbugs:DM_STRING_VOID_CTOR, pmd:StringInstantiation |
 | `boxed-primitive-constructor` | warning | preview | checkpoint | sonar:S2129, spotbugs:DM_NUMBER_CTOR, spotbugs:DM_BOOLEAN_CTOR, pmd:PrimitiveWrapperInstantiation |

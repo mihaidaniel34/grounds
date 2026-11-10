@@ -53,3 +53,46 @@ class Queues {
         unbounded.offer(6); // expect
     }
 }
+class Directories {
+    void createThenWrite(File file, byte[] data) throws java.io.IOException {
+        // a missing directory makes the next write throw
+        file.getParentFile().mkdirs();
+        file.createNewFile();
+        java.nio.file.Files.write(file.toPath(), data);
+    }
+    void createThenStream(File dir) throws java.io.IOException {
+        dir.mkdirs();
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(new File(dir, "a.bin"))) { out.write(1); }
+    }
+    void unrelatedWrite(File dir, File other, byte[] data) throws java.io.IOException {
+        dir.mkdirs(); // expect
+        java.nio.file.Files.write(other.toPath(), data);
+    }
+    void unrelatedData(File dir, File marker) throws java.io.IOException {
+        dir.mkdirs(); // expect
+        java.nio.file.Files.writeString(marker.toPath(), dir.getName());
+    }
+    void tempWithAttributes(File dir, java.nio.file.attribute.FileAttribute<?> attr) throws java.io.IOException {
+        dir.mkdirs();
+        java.nio.file.Files.createTempFile(dir.toPath(), "a", ".tmp", attr);
+    }
+    void nameAsData(File dir, File other, byte[] data) throws java.io.IOException {
+        dir.mkdirs(); // expect
+        java.nio.file.Files.write(new File(other, dir.getName()).toPath(), data);
+    }
+    void canonicalChild(File dir) throws java.io.IOException {
+        dir.mkdirs();
+        java.nio.file.Files.writeString(java.nio.file.Paths.get(dir.getCanonicalPath(), "out.txt"), "data");
+    }
+    void childOfDir(File dir, byte[] data) throws java.io.IOException {
+        dir.mkdirs();
+        java.nio.file.Files.write(new File(dir, "a.bin").toPath(), data);
+    }
+    void createOnly(File dir) {
+        dir.mkdirs(); // expect
+    }
+    void createThenRead(File dir) {
+        dir.mkdirs(); // expect
+        dir.listFiles();
+    }
+}
