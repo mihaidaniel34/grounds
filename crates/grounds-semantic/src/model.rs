@@ -72,6 +72,8 @@ pub struct FileModel<'t> {
     /// method invocation types without target typing (see `arg_type`)
     pub(crate) standalone: RefCell<FxHashMap<(usize, u8), Ty>>,
     pub(crate) selected: RefCell<FxHashMap<usize, Option<Rc<ResolvedCall>>>>,
+    /// partial inference by call node id, per method (see `partial_inference`)
+    pub(crate) partials: RefCell<FxHashMap<usize, Vec<(MethodInfo, crate::calls::Inference)>>>,
     pub(crate) in_progress: RefCell<FxHashSet<(usize, u8)>>,
     /// Incremented whenever a cycle guard short-circuits; results computed
     /// while this changed are provisional and not memoized.
@@ -121,6 +123,7 @@ impl<'t> FileModel<'t> {
             calls: RefCell::new(FxHashMap::default()),
             standalone: RefCell::new(FxHashMap::default()),
             selected: RefCell::new(FxHashMap::default()),
+            partials: RefCell::new(FxHashMap::default()),
             in_progress: RefCell::new(FxHashSet::default()),
             cycle_hits: std::cell::Cell::new(0),
             work: std::cell::Cell::new(0),

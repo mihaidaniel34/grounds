@@ -1208,3 +1208,23 @@ fn final_local_chain() {
     assert_eq!(fm.constant_value(v10.field("value").unwrap()), Some(Constant::Int(1024)));
     assert!(t.elapsed() < std::time::Duration::from_secs(5), "{:?}", t.elapsed());
 }
+
+#[test]
+fn nested_generic_identity_calls_stay_linear() {
+    // found by scripts/fuzz_robust.py: `assertThat(1, is(is(...(1))))` with
+    // one generic `is` computed each level's partial inference four times
+    // per level above it (12 levels took a minute)
+    for n in [9usize, 100] {
+        let e = format!("{}1{}", "is(".repeat(n), ")".repeat(n));
+        let src = format!("class T {{ void h() {{ assertThat(1, {e}); Integer i = {e}; }} static <X> X is(X t) {{ return t; }} static void assertThat(Object a, Object b) {{}} }}");
+        let pf = ParsedFile::parse(src.as_str());
+        let mut idx = Index::new(jdk());
+        idx.set_file(Arc::from("T.java"), Arc::new(extract(&pf)));
+        let fm = FileModel::new(&pf, &idx, Arc::from("T.java"));
+        for c in pf.root().descendants().filter(|n| n.kind() == "method_invocation") {
+            fm.type_of(c);
+        }
+        assert!(fm.work.get() < 50 * n as u64, "{} guarded computations for {n} levels", fm.work.get());
+    }
+}
+
