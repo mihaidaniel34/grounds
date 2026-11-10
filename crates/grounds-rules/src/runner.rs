@@ -133,6 +133,17 @@ impl RuleSet {
         }
         // code the parser could not read is not judged: drop findings that
         // overlap a syntax error
+        // in file order, without duplicates (the first of identical ones),
+        // and at most MAX_PER_RULE per rule
+        let mut seen = FxHashSet::default();
+        out.retain(|d| seen.insert((d.rule, d.range.start, d.range.end)));
+        out.sort_by_key(|d| (d.range.start, d.rule));
+        let mut per_rule: rustc_hash::FxHashMap<&str, usize> = Default::default();
+        out.retain(|d| {
+            let n = per_rule.entry(d.rule).or_default();
+            *n += 1;
+            *n <= MAX_PER_RULE
+        });
         if fm.root().has_error() {
             // the unparseable parts: tokens directly inside an ERROR node and
             // MISSING nodes. Well-formed named nodes inside an ERROR (a whole
@@ -156,20 +167,35 @@ impl RuleSet {
                     }
                 }
             }
-            out.retain(|d| !errors.iter().any(|(s, e)| d.range.start <= *e && *s <= d.range.end));
+            // merged and sorted, so each diagnostic is one binary search
+            errors.sort_unstable();
+            let mut merged: Vec<(u32, u32)> = Vec::with_capacity(errors.len());
+            for (s, e) in errors {
+                match merged.last_mut() {
+                    Some(last) if s <= last.1 => last.1 = last.1.max(e),
+                    _ => merged.push((s, e)),
+                }
+            }
+            out.retain(|d| {
+                let i = merged.partition_point(|(_, e)| *e < d.range.start);
+                !merged.get(i).is_some_and(|(s, _)| *s <= d.range.end)
+            });
         }
         let sup = Suppressions::new(fm);
+        let metas: rustc_hash::FxHashMap<&str, &RuleMeta> = self.rules.iter().rev().map(|r| (r.meta().id, r.meta())).collect();
         out.retain(|d| {
-            let meta = self.rules.iter().find(|r| r.meta().id == d.rule).map(|r| r.meta());
+            let meta = metas.get(d.rule).copied();
             !sup.is_suppressed(fm, d, meta)
         });
-        // dedupe identical diagnostics
-        let mut seen = FxHashSet::default();
-        out.retain(|d| seen.insert((d.rule, d.range.start, d.range.end)));
-        out.sort_by_key(|d| (d.range.start, d.rule));
         out
     }
 }
+
+/// Findings of one rule kept per file. The most on the corpus is 161 (an
+/// argument order rule in a test of a hundred assertions); a file cut off in
+/// a million `;` gave a million `stray-semicolon` findings, each costing a
+/// walk over the million siblings in tree-sitter.
+pub const MAX_PER_RULE: usize = 2000;
 
 struct Suppressions {
     /// (0-based line, lowercase comment text, comment alone on its line)
@@ -235,8 +261,9 @@ impl Suppressions {
             return true;
         }
         let Some(node) = fm.root().descendant_for_byte_range(d.range.start as usize, d.range.end.max(d.range.start) as usize) else { return false };
-        let mut cur = Some(node);
-        while let Some(n) = cur {
+        // `ancestors()`, not a `parent()` loop: each `parent()` costs the depth
+        // of the tree, which made deeply nested statements cubic
+        for n in std::iter::once(node).chain(node.ancestors()) {
             if let Some(m) = n.modifiers() {
                 for a in m.kids() {
                     if matches!(a.kind(), "annotation" | "marker_annotation") {
@@ -251,7 +278,6 @@ impl Suppressions {
                     }
                 }
             }
-            cur = n.parent();
         }
         false
     }
