@@ -439,6 +439,10 @@ impl Flags {
     /// socket or JDBC connection (`new FileOutputStream(...)`,
     /// `Files.newBufferedWriter(...)`): it owns a resource of its own.
     pub const OPENS_RESOURCE: u32 = 1 << 29;
+    /// A source class that an annotation processor adds members to in a way
+    /// the Lombok model does not reproduce (`@Delegate`, `@Accessors`, an
+    /// unmodelled `lombok.config` key...): members absent from it may exist.
+    pub const MEMBERS_UNKNOWN: u32 = 1 << 30;
 
     pub fn has(self, f: u32) -> bool {
         self.0 & f != 0

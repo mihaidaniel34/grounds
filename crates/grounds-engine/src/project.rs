@@ -150,6 +150,29 @@ impl LombokConfigs {
                     ("lombok.copyableannotations", "+=") => cfg.copyable.push(v.clone()),
                     ("lombok.copyableannotations", "-=") => cfg.copyable.retain(|p| p != v),
                     ("lombok.copyableannotations", "clear") => cfg.copyable.clear(),
+                    ("lombok.getter.noisprefix", "=") => cfg.no_is_prefix = truthy,
+                    ("lombok.getter.noisprefix", "clear") => cfg.no_is_prefix = false,
+                    ("lombok.builder.classname", "=") => cfg.builder_class_name = Some(v.clone()),
+                    ("lombok.builder.classname", "clear") => cfg.builder_class_name = None,
+                    ("lombok.log.fieldname", "=") => cfg.log_field_name = Some(v.clone()),
+                    ("lombok.log.fieldname", "clear") => cfg.log_field_name = None,
+                    ("lombok.fieldnameconstants.innertypename", "=") => cfg.field_name_constants_type = Some(v.clone()),
+                    ("lombok.fieldnameconstants.innertypename", "clear") => cfg.field_name_constants_type = None,
+                    ("lombok.fieldnameconstants.uppercase", "=") => cfg.field_name_constants_uppercase = truthy,
+                    ("lombok.fieldnameconstants.uppercase", "clear") => cfg.field_name_constants_uppercase = false,
+                    // keys that change members in ways not modelled, at a
+                    // value other than their default
+                    (k, "=") if grounds_index::lombok::UNMODELLED_KEYS.contains(&k) => {
+                        let default = match k {
+                            "lombok.accessors.capitalization" => v.eq_ignore_ascii_case("basic"),
+                            "lombok.accessors.javabeansspeccapitalization" | "lombok.singular.useguava" | "lombok.noargsconstructor.extraprivate" => v.eq_ignore_ascii_case("false"),
+                            "lombok.log.fieldisstatic" => truthy,
+                            _ => false,
+                        };
+                        if !default {
+                            cfg.unmodelled = true;
+                        }
+                    }
                     _ => {}
                 }
             }

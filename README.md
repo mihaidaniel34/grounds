@@ -52,9 +52,17 @@ leaves tests for the end of the task.
   build-time beans): any type may be bound there.
 - **Lombok:** generated constructors (including `staticName`/`staticConstructor`
   factories), getters, setters, `@With`, `@Builder` on classes, constructors
-  and methods (with `@Builder.Default`), `@SuperBuilder` across files,
-  `@UtilityClass`, and the `lombok.config` keys that change signatures
-  (fluent/chained accessors, prefixes, copyable annotations).
+  and methods (builder fields and setters, `@Builder.Default`, `@Singular`,
+  `setterPrefix`, generic builders, hand-written builder classes that Lombok
+  completes), `@SuperBuilder` across files, `@FieldNameConstants`,
+  `@UtilityClass`, `@StandardException`, and the `lombok.config` keys that
+  change names or signatures (fluent/chained accessors, prefixes, copyable
+  annotations, `getter.noIsPrefix`, `builder.className`, `log.fieldName`,
+  `fieldNameConstants.*`). A class that carries any other Lombok annotation
+  (`@Delegate`, `@Accessors`, ...), or extends or is nested in one, is open
+  to the compile-break rules: they say nothing about its members. The list
+  of fully modelled annotations is `IMPLEMENTED` in
+  `crates/grounds-index/src/lombok.rs`.
 
 "Bean not found" is only reported for injection points whose type is
 declared in the project. Beans created by library auto-configuration (a
