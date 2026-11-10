@@ -17,16 +17,25 @@ pub fn rules() -> Vec<Box<dyn Rule>> {
 /// A project class whose full hierarchy is known and that no processor other
 /// than our Lombok model adds members to.
 fn closed_class<'t>(cx: &Ctx<'_, 't>, name: &str) -> Option<std::sync::Arc<ClassInfo>> {
+    // a file that does not parse as Java (a template, a file mid-edit) is no
+    // ground for a claim that code does not compile
+    if cx.fm.file.has_errors() {
+        return None;
+    }
     let c = cx.fm.class(name)?;
     if !c.is_source() || !cx.fm.hierarchy_complete(name) {
         return None;
     }
-    // every project class of the hierarchy must be read from the copy this
-    // file compiles against when its name is declared more than once (the
-    // build's module dependencies are not known)
+    // every project class of the hierarchy must be read from a file that
+    // parses, and from the copy this file compiles against when its name is
+    // declared more than once (the build's module dependencies are not known)
     for t in cx.fm.all_supertypes(&c.this_type()) {
         let Some(n) = t.class_name() else { return None };
         if !cx.fm.copy_is_certain(n) {
+            return None;
+        }
+        let file = cx.fm.class(n).and_then(|k| k.source_file().map(|f| f.to_string()));
+        if file.is_some_and(|f| cx.fm.index.file(&f).is_some_and(|s| s.has_syntax_errors)) {
             return None;
         }
     }

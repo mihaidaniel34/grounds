@@ -299,3 +299,20 @@ fn a_class_declared_in_several_modules_is_read_from_the_copy_the_file_sees() {
         ]
     );
 }
+
+#[test]
+fn files_that_do_not_parse_as_java_ground_no_compile_break_report() {
+    // a Velocity template named .java, whose directives hide half of its
+    // members from the parser, and a class in a file with a syntax error
+    let template = "package ${package};\n\npublic class Location {\n    private final int line;\n#if ( $tracked )\n    private final String modelId;\n#end\n\n    public Location(int line, String modelId) {\n        this.line = line;\n#if ( $tracked )\n        this.modelId = modelId;\n#end\n    }\n\n    public int getLine() {\n        return line;\n    }\n\n#if ( $tracked )\n    public String getModelId() {\n        return modelId;\n    }\n#end\n\n    public String toString() {\n#if ( $tracked )\n        return getModelId() + \":\" + getLine();\n#else\n        return String.valueOf(getLine());\n#end\n    }\n}\n";
+    let dir = project(
+        "templates",
+        &[
+            ("src/mdo/java/Location.java", template),
+            ("src/main/java/app/Half.java", "package app;\npublic class Half {\n    public int one() { return 1 }\n    public int two() { return 2; }\n}\n"),
+            ("src/main/java/app/Uses.java", "package app;\nclass Uses {\n    int m(Half h) { return h.one() + h.two() + h.three(); }\n    void broken(Uses u) { u.missing(); }\n}\n"),
+        ],
+    );
+    let found = findings(&dir, COMPILE);
+    assert_eq!(found, ["src/main/java/app/Uses.java:4 unresolved-method"]);
+}
