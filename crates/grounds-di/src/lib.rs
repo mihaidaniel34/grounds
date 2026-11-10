@@ -809,9 +809,18 @@ impl<'a> Builder<'a> {
                 if base_anns.iter().any(|a| self.stereotype(a, 0).is_some()) {
                     break;
                 }
+                let is_factory = |m: &MethodInfo| m.annotations.iter().any(|a| BEAN_METHOD_ANNOTATIONS.iter().any(|b| a.is(b)));
                 for m in &sc.methods {
-                    if !factory_methods.iter().any(|x| same_sig(x, m)) {
-                        factory_methods.push(m.clone());
+                    match factory_methods.iter_mut().find(|x| same_sig(x, m)) {
+                        // Spring registers the superclass's @Bean methods on the
+                        // subclass and calls the override: an override without
+                        // @Bean (of an abstract @Bean method) still defines the bean
+                        Some(x) => {
+                            if is_factory(m) && !is_factory(x) {
+                                x.annotations = m.annotations.clone();
+                            }
+                        }
+                        None => factory_methods.push(m.clone()),
                     }
                 }
                 sup = sc.superclass.clone();
@@ -1891,4 +1900,20 @@ mod tests {
         assert_eq!(point_resolution(&idx, &m, "o"), Resolution::Unique(bean("other", false)));
     }
 
+    #[test]
+    fn an_override_of_an_inherited_bean_method_defines_the_bean() {
+        // Spring registers a superclass's @Bean methods on the configuration
+        // and calls the override, which needs no @Bean of its own
+        let (idx, m) = model(&[(
+            "src/test/java/app/A.java",
+            "package app; import org.springframework.stereotype.*; import org.springframework.context.annotation.*; import org.springframework.beans.factory.annotation.Qualifier;
+             interface Props {}
+             @Component class DefaultProps implements Props {}
+             abstract class BaseConfig { @Bean(name = \"testProps\") public abstract Props props(); }
+             @Configuration class TestConfig extends BaseConfig { @Override public Props props() { return null; } }
+             @Service class Uses { Uses(@Qualifier(\"testProps\") Props p) {} }",
+        )]);
+        let test_props = m.beans.iter().position(|b| b.name == "testProps").expect("bean from the inherited @Bean method");
+        assert_eq!(point_resolution(&idx, &m, "p"), Resolution::Unique(test_props));
+    }
 }
