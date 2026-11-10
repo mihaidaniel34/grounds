@@ -72,6 +72,10 @@ class Directories {
         dir.mkdirs(); // expect
         java.nio.file.Files.writeString(marker.toPath(), dir.getName());
     }
+    void tempWithAttributes(File dir, java.nio.file.attribute.FileAttribute<?> attr) throws java.io.IOException {
+        dir.mkdirs();
+        java.nio.file.Files.createTempFile(dir.toPath(), "a", ".tmp", attr);
+    }
     void createOnly(File dir) {
         dir.mkdirs(); // expect
     }

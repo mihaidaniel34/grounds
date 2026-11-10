@@ -159,7 +159,7 @@ impl Rule for IdenticalBranches {
         match n.kind() {
             "ternary_expression" => {
                 let (Some(a), Some(b)) = (n.field("consequence"), n.field("alternative")) else { return };
-                if normalized(a, cx.src) == normalized(b, cx.src) && !n.field("condition").is_some_and(binds_pattern) {
+                if normalized(a, cx.src) == normalized(b, cx.src) && !n.field("condition").is_some_and(|c| uses_pattern_vars(&[c], a, cx.src)) {
                     cx.report(n, "Both branches of the conditional expression are identical");
                 }
             }
@@ -174,7 +174,7 @@ impl Rule for IdenticalBranches {
                 let texts: Vec<String> = branches.iter().map(|b| branch_text(*b, cx.src)).collect();
                 // conditions binding pattern variables: the branches may read
                 // different variables of the same name
-                if has_else && texts.iter().all(|t| *t == texts[0]) && !conds.iter().any(|c| binds_pattern(*c)) {
+                if has_else && texts.iter().all(|t| *t == texts[0]) && !branches.iter().any(|b| uses_pattern_vars(&conds, *b, cx.src)) {
                     cx.report(n.child(0).unwrap_or(n), "All branches of this if/else are identical; the condition has no effect");
                     return;
                 }
@@ -241,6 +241,23 @@ impl Rule for IdenticalBranches {
 /// Foo f`, `case Foo f ->`, `case Point(int x, int y)`), or carry a guard?
 fn binds_pattern(n: Node) -> bool {
     n.descendants().any(|d| matches!(d.kind(), "type_pattern" | "record_pattern" | "guard") || d.kind() == "instanceof_expression" && d.field("name").is_some())
+}
+
+/// The names of the pattern variables a condition declares.
+fn pattern_names<'t>(n: Node<'t>, src: &'t str) -> Vec<&'t str> {
+    n.descendants()
+        .filter_map(|d| match d.kind() {
+            "type_pattern" | "record_pattern_component" => d.kids().into_iter().rev().find(|k| k.kind() == "identifier").map(|k| k.text(src)),
+            "instanceof_expression" => d.field("name").map(|k| k.text(src)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Does a branch read a variable the conditions bind by pattern?
+fn uses_pattern_vars<'t>(conds: &[Node<'t>], branch: Node<'t>, src: &'t str) -> bool {
+    let names: Vec<&str> = conds.iter().flat_map(|c| pattern_names(*c, src)).collect();
+    !names.is_empty() && branch.descendants().any(|d| d.kind() == "identifier" && names.contains(&d.text(src)))
 }
 
 declare_rule!(IdenticalConditions {

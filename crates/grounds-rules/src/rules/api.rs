@@ -267,7 +267,7 @@ fn writes_file_after<'t>(cx: &Ctx<'_, 't>, stmt: Node<'t>, mkdirs: Node<'t>) -> 
                 Some("createNewFile") => d.field("object"),
                 Some("createTempFile") => {
                     if cx.fm.select_method(d).is_some_and(|m| &*m.owner == "java.nio.file.Files") {
-                        (args.len() == 3).then(|| args[0])
+                        (args.len() >= 3).then(|| args[0])
                     } else {
                         args.get(2).copied()
                     }

@@ -323,17 +323,42 @@ fn is_lifecycle_callback<'t>(m: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
     };
     let aware = callback.is_some_and(|(iface, param)| {
         let params: Vec<Node<'t>> = m.field("parameters").map(|ps| ps.kids().into_iter().filter(|p| p.kind() == "formal_parameter").collect()).unwrap_or_default();
+        // a type written with this simple name that is Spring's: resolved to
+        // `fqn`, or unresolved (the jar is missing) and so not another class
+        let springs = |ty: Node<'t>, fqn: &str| {
+            let written = cx.text(ty).split('<').next().unwrap_or("");
+            written.rsplit('.').next() == fqn.rsplit('.').next()
+                && match cx.fm.resolve_type_node(ty).class_name() {
+                    Some(n) => n == fqn || cx.fm.class(n).is_none() && !n.contains('.'),
+                    None => true,
+                }
+        };
+        let param_fqn = |t: &str| match t {
+            "ApplicationContext" => "org.springframework.context.ApplicationContext",
+            "BeanFactory" => "org.springframework.beans.factory.BeanFactory",
+            "Environment" => "org.springframework.core.env.Environment",
+            "ServletContext" => "jakarta.servlet.ServletContext",
+            "StringValueResolver" => "org.springframework.util.StringValueResolver",
+            "ResourceLoader" => "org.springframework.core.io.ResourceLoader",
+            _ => "org.springframework.beans.factory.config.ConfigurableListableBeanFactory",
+        };
         let signature = match param {
-            Some(t) => params.len() == 1 && params[0].field("type").is_some_and(|ty| cx.text(ty).rsplit('.').next() == Some(t)),
+            Some(t) => {
+                params.len() == 1
+                    && params[0].field("type").is_some_and(|ty| {
+                        springs(ty, param_fqn(t)) || t == "ServletContext" && springs(ty, "javax.servlet.ServletContext")
+                    })
+            }
             None => params.is_empty(),
         };
-        let simple = iface.rsplit('.').next().unwrap_or(iface);
         // the class implements that interface: known from the hierarchy, or
-        // named in its own declaration when the jar is missing
+        // named (and not resolved to another class) in its own declaration
         signature
             && owning_type_decl(m).is_some_and(|d| {
                 cx.fm.class_of_decl(d).is_some_and(|c| cx.fm.is_subclass(&c.name, iface).is_yes())
-                    || d.field("interfaces").or_else(|| d.kid_of_kind("super_interfaces")).is_some_and(|i| i.descendants().any(|x| x.kind() == "type_identifier" && cx.text(x) == simple))
+                    || d.field("interfaces").or_else(|| d.kid_of_kind("super_interfaces")).is_some_and(|i| {
+                        i.descendants().filter(|x| matches!(x.kind(), "type_identifier" | "scoped_type_identifier") && x.parent().is_some_and(|p| p.kind() != "scoped_type_identifier")).any(|x| springs(x, iface))
+                    })
             })
     });
     observer || aware

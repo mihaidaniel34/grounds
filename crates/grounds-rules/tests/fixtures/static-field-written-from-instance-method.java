@@ -28,3 +28,16 @@ class ContextHolder implements org.springframework.context.ApplicationContextAwa
     void onStart(@jakarta.enterprise.event.Observes io.quarkus.runtime.StartupEvent e) { secret = "y"; }
     void onOrder(@jakarta.enterprise.event.Observes String order) { requests++; } // expect
 }
+class OwnContextType implements org.springframework.context.ApplicationContextAware {
+    static class ApplicationContext { }
+    private static Object ctx;
+    public void setApplicationContext(org.springframework.context.ApplicationContext c) { ctx = c; }
+    // an overload taking a project type of the same simple name is no callback
+    public void setApplicationContext(ApplicationContext c) { ctx = c; } // expect
+}
+interface InitializingBean { }
+class NotSpringsInterface implements InitializingBean {
+    private static int started;
+    // a project interface with Spring's simple name
+    public void afterPropertiesSet() { started++; } // expect
+}

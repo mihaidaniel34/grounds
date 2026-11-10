@@ -74,6 +74,16 @@ class PatternSwitchWithDefault {
         };
     }
 }
+class PatternUnused {
+    // the bound variable is not read: the condition has no effect
+    int size(Object o) {
+        if (o instanceof String s) { // expect
+            return 1;
+        } else {
+            return 1;
+        }
+    }
+}
 class PatternShadow {
     String text = "fallback";
     // the branches read different variables named `text`: not identical

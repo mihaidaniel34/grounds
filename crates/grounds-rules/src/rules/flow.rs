@@ -87,8 +87,14 @@ fn runs_on_every_path_to<'t>(call: Node<'t>, deref: Node<'t>) -> bool {
         let conditional = match a.kind() {
             "if_statement" | "ternary_expression" => a.field("condition") != Some(child),
             "binary_expression" => matches!(op(a), "&&" | "||") && a.field("right") == Some(child),
-            "while_statement" | "for_statement" | "enhanced_for_statement" | "do_statement" => a.field("body") == Some(child),
-            "switch_block_statement_group" | "switch_rule" | "catch_clause" | "lambda_expression" | "class_body" => true,
+            "while_statement" | "enhanced_for_statement" | "do_statement" => a.field("body") == Some(child),
+            // the body and the update of a for may run zero times
+            "for_statement" => a.field("body") == Some(child) || a.fields("update").contains(&child),
+            // skipped when assertions are disabled
+            "switch_block_statement_group" | "switch_rule" | "catch_clause" | "lambda_expression" | "class_body" | "assert_statement" => true,
+            // a try whose exception is caught before the dereference: the
+            // call may have thrown and the path goes on without it
+            "try_statement" | "try_with_resources_statement" => a.field("body") == Some(child) && a.kids().iter().any(|k| k.kind() == "catch_clause"),
             _ => false,
         };
         if conditional {

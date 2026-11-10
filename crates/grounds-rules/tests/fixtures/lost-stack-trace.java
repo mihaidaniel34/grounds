@@ -71,6 +71,17 @@ class InputErrors {
     java.security.MessageDigest digest() {
         try { return java.security.MessageDigest.getInstance("WHIRLPOOL"); } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException("no digest"); } // expect
     }
+    byte[] parenthesized(String s) {
+        try { return s.getBytes(("UTF-8")); } catch (java.io.UnsupportedEncodingException e) { throw new IllegalStateException("no UTF-8"); }
+    }
+    byte[] withOtherCalls(String s, byte[] b) {
+        // neither takes a charset name: only getBytes("UTF-8") can throw
+        try { java.nio.charset.StandardCharsets.UTF_8.encode(s); new String(b, 0, b.length); return s.getBytes("UTF-8"); } catch (java.io.UnsupportedEncodingException e) { throw new IllegalStateException("no UTF-8"); }
+    }
+    // still lost: SHA-256 is guaranteed for MessageDigest, not for Mac
+    javax.crypto.Mac mac() {
+        try { java.security.MessageDigest.getInstance("SHA-256"); return javax.crypto.Mac.getInstance("SHA-256"); } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException("failed"); } // expect
+    }
     // still lost: the second call names its algorithm at run time
     java.security.MessageDigest pair(String algorithm) {
         try { java.security.MessageDigest.getInstance("SHA-256"); return java.security.MessageDigest.getInstance(algorithm); } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException("failed"); } // expect

@@ -441,21 +441,55 @@ impl Rule for LostStackTrace {
                 .filter(|d| matches!(d.kind(), "method_invocation" | "object_creation_expression"))
                 .collect();
             let literal_in = |call: Node<'t>, set: &[&str]| {
-                cx.fm.args_of(call).iter().any(|a| a.kind() == "string_literal" && set.contains(&a.text(cx.src).trim_matches('"').to_ascii_uppercase().as_str()))
+                cx.fm.args_of(call).iter().map(|a| a.unparen()).any(|a| a.kind() == "string_literal" && set.contains(&a.text(cx.src).trim_matches('"').to_ascii_uppercase().as_str()))
             };
             let charset_calls: Vec<Node<'t>> = calls
                 .iter()
                 .copied()
-                .filter(|c| match c.kind() {
-                    "method_invocation" => matches!(cx.fm.call_name(*c), Some("getBytes" | "encode" | "decode" | "toString")) && !cx.fm.args_of(*c).is_empty(),
-                    _ => matches!(cx.type_of(*c).class_name(), Some("java.lang.String" | "java.io.InputStreamReader" | "java.io.OutputStreamWriter" | "java.io.PrintStream" | "java.io.PrintWriter" | "java.util.Scanner" | "java.util.Formatter")) && cx.fm.args_of(*c).len() >= 2,
+                // the overloads that take a charset name (a String) and throw
+                // UnsupportedEncodingException; `StandardCharsets.UTF_8.encode(s)`
+                // and `new String(bytes, 0, n)` do not
+                .filter(|c| {
+                    let args = cx.fm.args_of(*c);
+                    let names_charset = args.iter().skip(if c.kind() == "method_invocation" { 0 } else { 1 }).any(|a| cx.type_of(*a).is_string());
+                    match c.kind() {
+                        "method_invocation" => {
+                            let owner = cx.fm.select_method(*c).map(|m| m.owner.to_string());
+                            names_charset
+                                && match (cx.fm.call_name(*c), owner.as_deref()) {
+                                    (Some("getBytes"), None | Some("java.lang.String")) => true,
+                                    (Some("encode"), Some("java.net.URLEncoder")) | (Some("decode"), Some("java.net.URLDecoder")) => true,
+                                    (Some("toString"), Some("java.io.ByteArrayOutputStream")) => true,
+                                    _ => false,
+                                }
+                        }
+                        _ => {
+                            names_charset
+                                && matches!(cx.type_of(*c).class_name(), Some("java.lang.String" | "java.io.InputStreamReader" | "java.io.OutputStreamWriter" | "java.io.PrintStream" | "java.io.PrintWriter" | "java.util.Scanner" | "java.util.Formatter"))
+                        }
+                    }
                 })
                 .collect();
-            let digest_calls: Vec<Node<'t>> = calls.iter().copied().filter(|c| c.kind() == "method_invocation" && cx.fm.call_name(*c) == Some("getInstance")).collect();
+            // `MessageDigest.getInstance`: other `getInstance`s (Mac, Cipher,
+            // Signature) guarantee other algorithm sets
+            let digest_calls: Vec<Node<'t>> = calls
+                .iter()
+                .copied()
+                .filter(|c| {
+                    c.kind() == "method_invocation"
+                        && cx.fm.call_name(*c) == Some("getInstance")
+                        && match cx.fm.select_method(*c) {
+                            Some(m) => &*m.owner == "java.security.MessageDigest",
+                            None => c.field("object").is_some_and(|o| cx.text(o).rsplit('.').next() == Some("MessageDigest")),
+                        }
+                })
+                .collect();
+            // a `getInstance` of another class in the try may throw too
+            let other_getinstance = calls.iter().any(|c| c.kind() == "method_invocation" && cx.fm.call_name(*c) == Some("getInstance") && !digest_calls.contains(c));
             let impossible = !caught.is_empty()
                 && caught.iter().all(|t| match t.class_name() {
                     Some("java.io.UnsupportedEncodingException") => !charset_calls.is_empty() && charset_calls.iter().all(|c| literal_in(*c, STANDARD_CHARSETS)),
-                    Some("java.security.NoSuchAlgorithmException") => !digest_calls.is_empty() && digest_calls.iter().all(|c| literal_in(*c, STANDARD_DIGESTS)),
+                    Some("java.security.NoSuchAlgorithmException") => !digest_calls.is_empty() && !other_getinstance && digest_calls.iter().all(|c| literal_in(*c, STANDARD_DIGESTS)),
                     _ => false,
                 });
             if impossible {

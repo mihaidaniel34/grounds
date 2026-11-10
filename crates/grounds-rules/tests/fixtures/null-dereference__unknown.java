@@ -77,6 +77,20 @@ class Unknown {
         if (item != null) require(item, "item");
         return item.name(); // expect
     }
+    // still reported: calls that may not run before the dereference
+    String forUpdate(@Nullable Item item, int n) {
+        for (int k = 0; k < n; require(item, "item")) { k++; }
+        return item.name(); // expect
+    }
+    static String describe(Object o) { return String.valueOf(o); }
+    String asserted(@Nullable Item item) {
+        assert describe(item).length() > 0;
+        return item.name(); // expect
+    }
+    String caught(@Nullable Item item) {
+        try { require(item, "item"); } catch (IllegalArgumentException e) { }
+        return item.name(); // expect
+    }
     // still reported: the variable is only logged
     String logged(@Nullable Item item, org.slf4j.Logger logger) {
         if (item == null) {
