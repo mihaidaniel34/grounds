@@ -678,6 +678,11 @@ impl Rule for DefaultCharset {
         if has_charset {
             return;
         }
+        // an argument after the first whose type is unknown may be the
+        // charset (`new String(bytes, Util.charset(h))` with `Util` unresolved)
+        if arg_types.iter().skip(1).any(|a| matches!(a, Ty::Unknown)) {
+            return;
+        }
         let flagged = match cn {
             STRING => arg_types.first().is_some_and(|a| matches!(a, Ty::Array(e) if matches!(**e, Ty::Prim(Prim::Byte)))) && !arg_types.iter().any(|a| a.is_string()),
             "java.io.InputStreamReader" | "java.io.OutputStreamWriter" => args.len() == 1,

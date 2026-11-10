@@ -11,4 +11,10 @@ class A {
         Reader ok3 = new InputStreamReader(in, StandardCharsets.UTF_8);
         String ok4 = new String(b, "UTF-8");
     }
+    // the charset comes from a call that does not resolve: it may well be one
+    void unknown(byte[] b, File f, lib.Headers h) throws IOException {
+        String s = new String(b, lib.Util.charset(h));
+        Reader r = new FileReader(f, lib.Util.charset(h));
+        String still = new String(b); // expect
+    }
 }
