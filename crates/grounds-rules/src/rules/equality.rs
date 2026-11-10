@@ -69,9 +69,73 @@ impl Rule for StringReferenceEquality {
         if cx.fm.constant_value(l).is_some() && cx.fm.constant_value(r).is_some() {
             return;
         }
+        if string_identity_fast_path(n, l, r, cx) {
+            return;
+        }
         let neg = if op(n) == "!=" { "!" } else { "" };
         let fix = Fix::replace("Use Objects.equals", n, format!("{neg}java.util.Objects.equals({}, {})", cx.text(l), cx.text(r)));
         cx.report_fix(n, format!("Strings compared with `{}`; use `equals()` to compare contents", op(n)), fix);
+    }
+}
+
+const CONTENT_COMPARISONS: &[&str] = &["equals", "equalsIgnoreCase", "contentEquals", "compareTo", "compareToIgnoreCase", "compare", "equal"];
+
+/// A call inside `scope`, at or after byte `from`, that compares the contents
+/// of both operands (`a.equals(b)`, `Objects.equals(a, b)`, `a.compareTo(b)`).
+fn compares_content(scope: Node<'_>, from: usize, l: Node<'_>, r: Node<'_>, src: &str) -> bool {
+    let (lt, rt) = (normalized(l, src), normalized(r, src));
+    let mut calls = Vec::new();
+    find_kind(scope, "method_invocation", &mut calls);
+    calls.iter().any(|c| {
+        c.start_byte() >= from && is_call_named(*c, src, CONTENT_COMPARISONS) && {
+            let operands: Vec<String> = c.field("object").into_iter().chain(c.field("arguments").map(|a| a.kids()).unwrap_or_default()).map(|x| normalized(x, src)).collect();
+            operands.contains(&lt) && operands.contains(&rt)
+        }
+    })
+}
+
+/// The identity test only saves work; equal strings that are distinct objects
+/// still get the right answer:
+/// - `a == b || a.equals(b)`, `a == b || (a != null && a.equals(b))`
+/// - `if (a == b) return 0; ... return a.compareTo(b);`
+/// - `return this.name == name ? this : new T(name);` (an equal copy of `this`)
+fn string_identity_fast_path<'t>(n: Node<'t>, l: Node<'t>, r: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+    let eq = op(n) == "==";
+    // the `||` chain the test is part of (`&&` for `a != b && !a.equals(b)`)
+    let chain = if eq { "||" } else { "&&" };
+    let mut top = n;
+    while let Some(p) = top.parent() {
+        if p.kind() == "parenthesized_expression" || p.kind() == "binary_expression" && op(p) == chain {
+            top = p;
+        } else {
+            break;
+        }
+    }
+    if top.unparen() != n && compares_content(top, top.start_byte(), l, r, cx.src) {
+        return true;
+    }
+    let Some(p) = n.parent_unparen() else { return false };
+    let returns = |stmt: Node<'t>| {
+        let then = stmt.field("consequence")?;
+        let first = if then.kind() == "block" { then.kids().first().copied().filter(|_| then.kids().len() == 1)? } else { then };
+        (first.kind() == "return_statement").then_some(first)
+    };
+    let is_if = p.kind() == "if_statement" && p.field("condition").is_some_and(|c| c.unparen() == n);
+    if eq && is_if && returns(p).is_some() {
+        if let Some(m) = cx.owning_callable(n) {
+            if compares_content(m, p.end_byte(), l, r, cx.src) {
+                return true;
+            }
+        }
+    }
+    if ![l, r].iter().any(|s| cx.fm.field_ref(s.unparen()).is_some()) {
+        return false;
+    }
+    let is_this = |e: Option<Node<'t>>| e.is_some_and(|e| e.unparen().kind() == "this");
+    match p.kind() {
+        "ternary_expression" if p.field("condition").is_some_and(|c| c.unparen() == n) => is_this(p.field(if eq { "consequence" } else { "alternative" })),
+        "if_statement" if eq && is_if => returns(p).is_some_and(|ret| is_this(ret.first_kid())),
+        _ => false,
     }
 }
 
@@ -338,7 +402,8 @@ impl Rule for IdenticalOperands {
             if cx.fm.call_name(n) == Some("equals") {
                 let args = cx.fm.args_of(n);
                 if let (Some(o), 1) = (n.field("object"), args.len()) {
-                    if o.kind() != "super" && same_pure_expr(o, args[0], cx.src) {
+                    // an equals-contract test checks reflexivity on purpose
+                    if o.kind() != "super" && !cx.is_test() && same_pure_expr(o, args[0], cx.src) {
                         cx.report(n, "Object compared with itself via `equals()`");
                     }
                 }
@@ -898,9 +963,22 @@ impl Rule for OptionalNullComparison {
                 if from_map(other.unparen()) {
                     return;
                 }
+                // `@Nullable Optional<T> lookup()`: null is a third state by
+                // contract ("not cached" next to "cached as absent")
+                let nullable_call = |v: Node<'t>| {
+                    let v = v.unparen();
+                    v.kind() == "method_invocation" && cx.fm.select_method(v).is_some_and(|c| c.method.annotations.iter().any(|a| matches!(a.simple_name(), "Nullable" | "CheckForNull")))
+                };
+                if nullable_call(other) {
+                    return;
+                }
                 if let Some(i) = cx.fm.local_ref(other.unparen()) {
                     let d = &cx.fm.binder.decls[i];
-                    if d.decl_node.field("value").is_some_and(from_field) {
+                    if d.decl_node.field("value").is_some_and(|v| from_field(v) || nullable_call(v)) {
+                        return;
+                    }
+                    // assigned from such a call later on
+                    if cx.fm.binder.uses[i].iter().any(|u| u.parent_unparen().is_some_and(|p| p.kind() == "assignment_expression" && p.field("left").map(|l| l.unparen()) == Some(*u) && p.field("right").is_some_and(nullable_call))) {
                         return;
                     }
                 }
@@ -910,7 +988,8 @@ impl Rule for OptionalNullComparison {
             }
             "return_statement" => {
                 if let Some(v) = n.first_kid() {
-                    if is_null_literal(v) && is_optional(&cx.fm.return_type_at(n)) {
+                    let nullable_by_contract = n.ancestors().find(|a| matches!(a.kind(), "method_declaration" | "lambda_expression")).is_some_and(|m| m.kind() == "method_declaration" && annotation_names(m, cx.src).iter().any(|a| matches!(*a, "Nullable" | "CheckForNull")));
+                    if is_null_literal(v) && !nullable_by_contract && is_optional(&cx.fm.return_type_at(n)) {
                         let fix = Fix::replace("Return Optional.empty()", v, "java.util.Optional.empty()");
                         cx.report_fix(n, "Method returning Optional returns null; return `Optional.empty()`", fix);
                     }
@@ -985,7 +1064,9 @@ impl Rule for ReferenceEqualityOnValueType {
                 return;
             }
         }
-        if identity_fast_path(n, l, r, cx.src) {
+        // the change check is an idiom of a project's own immutable trees; for
+        // a library value (`BigDecimal r = round(v); r == v`) identity is a bug
+        if identity_fast_path(n, l, r, cx.src) || c.is_source() && change_check(n, l, r, cx) {
             return;
         }
         cx.report(n, format!("`{}` overrides `equals()`; `{}` compares identity", simple_name_of(ln), op(n)));
@@ -1038,6 +1119,49 @@ fn identity_fast_path(n: Node<'_>, l: Node<'_>, r: Node<'_>, src: &str) -> bool 
         }
         _ => false,
     }
+}
+
+/// `Doc d = visit(doc); if (d != doc) ..`, `after == right.getAfter()` with
+/// `after = visitSpace(right.getAfter())`, `x != transform(x)`: one operand
+/// was computed from the other, so the identity test asks whether the
+/// computation handed back the object it was given. `equals()` would answer
+/// a different question (and walk both values to do it).
+fn change_check<'t>(n: Node<'t>, l: Node<'t>, r: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+    let src = cx.src;
+    let strip = |e: Node<'t>| {
+        let mut e = e.unparen();
+        while e.kind() == "cast_expression" {
+            match e.field("value") {
+                Some(v) => e = v.unparen(),
+                None => break,
+            }
+        }
+        e
+    };
+    // a call that was given `of` as an argument
+    let received = |e: Node<'t>, of: &str| {
+        let e = strip(e);
+        e.kind() == "method_invocation" && cx.fm.args_of(e).iter().any(|a| normalized(strip(*a), src) == of)
+    };
+    for (a, b) in [(l, r), (r, l)] {
+        let of = normalized(strip(b), src);
+        if received(a, &of) {
+            return true;
+        }
+        // a local that started out as the other operand or as such a call
+        let a = strip(a);
+        if a.kind() != "identifier" || cx.fm.field_ref(a).is_some() {
+            continue;
+        }
+        let Some(m) = enclosing_method_decl(n).or_else(|| cx.owning_callable(n)) else { continue };
+        let mut named = m.descendants().filter(|d| d.kind() == "variable_declarator" && d.start_byte() < n.start_byte() && d.field("name").is_some_and(|x| cx.text(x) == cx.text(a)));
+        if let (Some(d), None) = (named.next(), named.next()) {
+            if d.field("value").is_some_and(|v| normalized(strip(v), src) == of || received(v, &of)) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 declare_rule!(CompareToReturnsMinValue {

@@ -3,7 +3,9 @@ import static org.junit.jupiter.api.Assertions.*;
 class ATest {
     void t(Object o) {
         assertTrue(true); // expect
-        assertNotNull(new Object()); // expect
+        assertNotNull("message"); // expect
+        // runs the constructor of a utility class for coverage
+        assertNotNull(new Object());
         assertTrue(false); // expect
         assertNotNull(o);
     }

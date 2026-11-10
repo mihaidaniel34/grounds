@@ -56,3 +56,24 @@ class ATest {
     static class Builder { Builder name(String n) { return this; } Builder size(Object s) { return this; } Object build() { return null; } }
     static class Visitor { public void visit(Object o) {} void accept(java.util.function.Consumer<Object> c) {} }
 }
+class StubbingTest {
+    interface Api { String call(Object o); }
+    static <T> Stub<T> when(T t) { return null; }
+    interface Stub<T> { Stub<T> thenThrow(Throwable t); Stub<T> thenReturn(T t); }
+    void t(Api api) {
+        // stubbing sets the scene; `new ArrayList<>()` does not throw
+        assertThrows(IllegalStateException.class, () -> {
+            when(api.call(null)).thenThrow(new IllegalStateException());
+            api.call("x");
+        });
+        assertThrows(IllegalStateException.class, () -> {
+            java.util.List<Object> l = new java.util.ArrayList<>();
+            api.call(l);
+        });
+        assertThrows(IllegalStateException.class, () -> { // expect
+            when(api.call(null)).thenReturn("y");
+            api.call("x");
+            api.call("z");
+        });
+    }
+}

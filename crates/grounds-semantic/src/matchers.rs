@@ -115,6 +115,17 @@ impl<'t> FileModel<'t> {
             }
         }
         match self.select_method(call) {
+            // a guessed overload may be another class's method altogether
+            // (`wait(future)` declared by a superclass next to `Object.wait(long)`)
+            // unless every overload it may be is the same class's and matches
+            Some(c) if c.ambiguous => {
+                if call.kind() != "method_invocation" {
+                    return false;
+                }
+                let n = self.args_of(call).len();
+                let fits: Vec<_> = self.candidates(call).0.into_iter().filter(|x| x.method.accepts_arity(n)).collect();
+                !fits.is_empty() && fits.iter().all(|x| x.owner == c.owner) && fits.into_iter().all(|x| m.matches_resolved(self, &ResolvedCall { owner: x.owner, method: x.method, ..(*c).clone() }))
+            }
             Some(c) => m.matches_resolved(self, &c),
             None => false,
         }

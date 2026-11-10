@@ -383,7 +383,7 @@ impl<'t> FileModel<'t> {
     }
 
     /// Candidate methods for a method invocation and the receiver type.
-    fn candidates(&self, call: Node<'t>) -> (Vec<MethodRef>, Option<Ty>, bool) {
+    pub(crate) fn candidates(&self, call: Node<'t>) -> (Vec<MethodRef>, Option<Ty>, bool) {
         let Some(name_node) = call.field("name") else { return (Vec::new(), None, false) };
         let name = name_node.text(self.src);
         match call.field("object") {
@@ -1649,9 +1649,9 @@ impl<'t> FileModel<'t> {
         true
     }
 
-    /// The applicable method for `call` among `cands`, and how far the choice
-    /// is a guess.
-    fn select_among(&self, cands: Vec<MethodRef>, call: Node<'t>) -> Option<(MethodRef, Choice)> {
+    /// The applicable method for `call` among `cands`, how far its result is
+    /// a guess, and whether the method itself is one for want of a type.
+    fn select_among(&self, cands: Vec<MethodRef>, call: Node<'t>) -> Option<(MethodRef, Choice, bool)> {
         let arg_nodes = self.args_of(call);
         let n = arg_nodes.len();
         let cands: Vec<MethodRef> = cands.into_iter().filter(|m| m.method.accepts_arity(n)).collect();
@@ -1681,6 +1681,23 @@ impl<'t> FileModel<'t> {
         if fits.is_empty() {
             return None;
         }
+        // An argument or parameter type the model does not know (its jar is
+        // missing), where the candidates left differ: the pick is javac's only
+        // by luck. `close(ctx, rc)` with `rc` unknown fits `close(Ctx, byte)`
+        // and `close(Ctx, Msg)` alike. Where they agree on a known parameter
+        // (`put(key, 1)` with an unknown `key` for `put(String, int)` and
+        // `put(String, long)`), the unknown type decides nothing.
+        let blind = fits.len() > 1 && (0..n).any(|i| {
+            let at = |m: &MethodInfo| {
+                let np = m.params.len();
+                let spread = m.is_varargs() && i + 1 >= np;
+                m.params.get(i.min(np.saturating_sub(1))).map(|p| (spread, p.ty.clone()))
+            };
+            let first = at(&fits[0].0.method);
+            let differ = fits.iter().any(|(m, _)| at(&m.method) != first);
+            let unknown = matches!(&args[i], ArgShape::Ty(t) if t.has_unknown()) || fits.iter().any(|(m, _)| at(&m.method).is_none_or(|(_, t)| t.has_unknown()));
+            unknown && (differ || first.is_none_or(|(_, t)| t.has_unknown()))
+        });
         let best_phase = fits.iter().map(|(_, f)| f.0).min().unwrap();
         // candidates not proven inapplicable, in any phase
         let rivals = fits.len() - 1;
@@ -1691,7 +1708,7 @@ impl<'t> FileModel<'t> {
             .collect();
         if maximal.len() != 1 {
             // ambiguous: keep first, flag it
-            return Some((pool.swap_remove(0).0, Choice::Guess));
+            return Some((pool.swap_remove(0).0, Choice::Guess, false));
         }
         let w = maximal[0];
         let generic = |m: &MethodInfo| m.params.iter().any(|p| m.type_params.iter().any(|tp| mentions(&p.ty, &tp.name)));
@@ -1723,7 +1740,7 @@ impl<'t> FileModel<'t> {
         } else {
             Choice::ErasureOnly
         };
-        Some((pool.swap_remove(w).0, choice))
+        Some((pool.swap_remove(w).0, choice, blind && !(single || sure || only)))
     }
 
     /// Overload selection only (no lambda-body inference). Receiver type
@@ -1736,9 +1753,9 @@ impl<'t> FileModel<'t> {
             match call.kind() {
                 "method_invocation" => {
                     let (cands, recv, via_type) = self.candidates(call);
-                    let (m, choice) = self.select_among(cands, call)?;
-                    let (ambiguous, erasure_only) = (choice == Choice::Guess, choice == Choice::ErasureOnly);
-                    Some(Rc::new(ResolvedCall { owner: m.owner.clone(), ret: m.method.ret.clone(), method: m.method, receiver: recv, ambiguous, erasure_only, via_type }))
+                    let (m, choice, blind) = self.select_among(cands, call)?;
+                    let (ambiguous, erasure_only) = (choice == Choice::Guess || blind, choice == Choice::ErasureOnly);
+                    Some(Rc::new(ResolvedCall { owner: m.owner.clone(), ret: m.method.ret.clone(), method: m.method, receiver: recv, ambiguous, same_result: choice != Choice::Guess, erasure_only, via_type }))
                 }
                 "object_creation_expression" | "explicit_constructor_invocation" => self.select_constructor(call),
                 _ => None,
@@ -1779,8 +1796,8 @@ impl<'t> FileModel<'t> {
                 MethodRef { owner: ci.name.clone(), method: m, owner_kind: ci.kind, owner_flags: ci.flags }
             })
             .collect();
-        let (m, choice) = self.select_among(cands, call)?;
-        Some(Rc::new(ResolvedCall { owner: m.owner.clone(), method: m.method, ret: class_ty, receiver: None, ambiguous: choice == Choice::Guess, erasure_only: false, via_type: false }))
+        let (m, choice, blind) = self.select_among(cands, call)?;
+        Some(Rc::new(ResolvedCall { owner: m.owner.clone(), method: m.method, ret: class_ty, receiver: None, ambiguous: choice == Choice::Guess || blind, same_result: choice != Choice::Guess, erasure_only: false, via_type: false }))
     }
 
     /// Full resolution with type inference.
@@ -1836,7 +1853,7 @@ impl<'t> FileModel<'t> {
     fn infer_call(&self, call: Node<'t>, target: Target) -> Option<Rc<ResolvedCall>> {
         {
             let sel = self.select_method(call)?;
-            if sel.ambiguous && call.kind() == "method_invocation" {
+            if sel.ambiguous && !sel.same_result && call.kind() == "method_invocation" {
                 let mut rc = (*sel).clone();
                 rc.ret = Ty::Unknown;
                 return Some(Rc::new(rc));

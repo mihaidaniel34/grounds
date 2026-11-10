@@ -321,3 +321,22 @@ class Handlers {
         g.use();
     }
 }
+class Wrappers {
+    String wrappedInline(String p) throws IOException {
+        BufferedReader r = new BufferedReader(new FileReader(p)); // expect
+        return r.readLine();
+    }
+    Object nested(File f) throws IOException {
+        ObjectInputStream in = new ObjectInputStream(new BufferedInputStream(new FileInputStream(f))); // expect
+        return in.read();
+    }
+    String closed(String p) throws IOException {
+        try (BufferedReader r = new BufferedReader(new FileReader(p))) { return r.readLine(); }
+    }
+    String inMemory(byte[] b, InputStream given) throws IOException {
+        BufferedReader r = new BufferedReader(new InputStreamReader(new ByteArrayInputStream(b)));
+        BufferedReader g = new BufferedReader(new InputStreamReader(given));
+        java.util.Scanner s = new java.util.Scanner("a b c");
+        return r.readLine() + g.readLine() + s.next();
+    }
+}

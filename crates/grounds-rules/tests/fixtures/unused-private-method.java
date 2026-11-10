@@ -11,3 +11,11 @@ class A {
         overloaded("x");
     }
 }
+class UnknownArguments {
+    private com.unknown.Codec codec;
+    public void go(com.unknown.Code rc) { close(rc); }
+    // the argument types come from a missing jar: either overload may be the target
+    private void close(com.unknown.Code code) { close(codec.encode(code)); }
+    private void close(byte code) { close(codec.message(code)); }
+    private void close(com.unknown.Message msg) { }
+}

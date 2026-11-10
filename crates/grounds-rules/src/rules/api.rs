@@ -42,6 +42,7 @@ pub fn rules() -> Vec<Box<dyn Rule>> {
         Box::new(StreamSortedFindFirst),
         Box::new(CollectionToArrayZero),
         Box::new(StreamCountComparison),
+        Box::new(StreamConsumedTwice),
     ]
 }
 
@@ -63,6 +64,8 @@ fn pure_method(cx: &Ctx, c: &grounds_semantic::ResolvedCall) -> bool {
     match owner {
         "java.lang.String" => !matches!(name, "getChars" | "getBytes" | "intern" | "hashCode"),
         "java.math.BigInteger" | "java.math.BigDecimal" => true,
+        // `Character.toChars(cp, dst, i)` writes into `dst`
+        "java.lang.Character" if name == "toChars" && c.method.params.len() == 3 => false,
         "java.lang.Integer" | "java.lang.Long" | "java.lang.Double" | "java.lang.Float" | "java.lang.Short" | "java.lang.Byte" | "java.lang.Boolean" | "java.lang.Character" => {
             !matches!(name, "getInteger" | "getLong" | "getBoolean" | "decode" | "parseInt" | "parseLong" | "valueOf")
         }
@@ -151,12 +154,42 @@ impl Rule for IgnoredReturnValue {
         });
         // `verify(mock).method()`: the call is the verification
         let verified = e.field("object").is_some_and(|o| o.kind() == "method_invocation" && cx.fm.call_name(o) == Some("verify"));
-        if in_try_with_catch || verified {
+        if in_try_with_catch || verified || cx.is_test() && provokes_exception(n, cx) {
             return;
         }
         if pure_method(cx, &c) {
             cx.report(e, format!("The result of `{}.{}()` is ignored; the call has no other effect", simple_name_of(&c.owner), c.method.name));
         }
+    }
+}
+
+/// In a test, a statement run for the exception it throws: the last one of a
+/// `try` body with a catch, or the one before its `fail()`
+/// (`try { list.size(); fail(); } catch (Exception e) {...}`), and the last
+/// one of a lambda given to `assertThrows` and the like.
+fn provokes_exception<'t>(n: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+    let Some(block) = n.parent().filter(|b| b.kind() == "block") else { return false };
+    let Some(owner) = block.parent() else { return false };
+    let stmts: Vec<Node<'t>> = block.kids().into_iter().filter(|k| !k.kind().contains("comment")).collect();
+    let Some(i) = stmts.iter().position(|s| *s == n) else { return false };
+    match owner.kind() {
+        "try_statement" => {
+            // `fail()`, `assertTrue(false)`, `assertFalse(true)`
+            let fails = |s: Node<'t>| {
+                s.first_kid().filter(|c| s.kind() == "expression_statement" && c.kind() == "method_invocation").is_some_and(|c| {
+                    let arg = cx.fm.args_of(c).first().map(|a| a.unparen().kind());
+                    matches!((cx.fm.call_name(c), arg), (Some("fail"), _) | (Some("assertTrue"), Some("false")) | (Some("assertFalse"), Some("true")))
+                })
+            };
+            owner.field("body") == Some(block) && owner.kids().iter().any(|k| k.kind() == "catch_clause") && (i + 1 == stmts.len() || i + 2 == stmts.len() && fails(stmts[i + 1]))
+        }
+        "lambda_expression" => {
+            i + 1 == stmts.len()
+                && owner.ancestors().find(|a| a.kind() == "method_invocation").is_some_and(|c| {
+                    cx.fm.args_of(c).contains(&owner) && cx.fm.call_name(c).is_some_and(|m| m.starts_with("assertThrows") || matches!(m, "assertThatThrownBy" | "catchThrowable" | "catchThrowableOfType" | "expectThrows" | "isThrownBy"))
+                })
+        }
+        _ => false,
     }
 }
 
@@ -260,6 +293,8 @@ declare_rule!(IgnoredReadResult {
     name: "InputStream.read()/skip() result ignored",
     category: Bug,
     severity: Warning,
+    // tests read in-memory streams of known length; a short read fails the next assertion
+    scope: Main,
     sources: ["sonar:S2674", "spotbugs:RR_NOT_CHECKED", "spotbugs:SR_NOT_CHECKED"],
     kinds: ["expression_statement"],
     description: "`read(buf)` may fill only part of the buffer and `skip(n)` may skip fewer bytes; the return value says how many. Loop until done, or use `readNBytes`/`readAllBytes`/`DataInputStream.readFully`.",
@@ -411,6 +446,8 @@ declare_rule!(ToStringReturnsNull {
     name: "toString() or clone() returns null",
     category: Bug,
     severity: Error,
+    // a stub in a test returns null on purpose, to exercise the caller's null handling
+    scope: Main,
     sources: ["sonar:S2225", "spotbugs:NP_TOSTRING_COULD_RETURN_NULL", "spotbugs:NP_CLONE_COULD_RETURN_NULL"],
     kinds: ["return_statement"],
     description: "Callers (string concatenation, logging, collections) never expect `toString()` or `clone()` to return null. Return an empty string or a proper copy.",
@@ -453,6 +490,10 @@ impl Rule for CollectionAddsItself {
         let Some(o) = n.field("object") else { return };
         let args = cx.fm.args_of(n);
         if args.len() != 1 || !is_subtype_any(cx.fm, &cx.type_of(o), &["java.util.Collection"]) {
+            return;
+        }
+        // a test builds the cycle on purpose: `a.add(a); assertNotNull(print(a));`
+        if cx.is_test() && name == "add" {
             return;
         }
         if same_pure_expr(o, args[0], cx.src) {
@@ -556,6 +597,7 @@ impl Rule for ModifyCollectionInForeach {
         if !is_subtype_any(cx.fm, &cx.type_of(coll), &["java.util.Collection", "java.util.Map"]) {
             return;
         }
+        let mut uncertain = false;
         // concurrent collections allow modification
         let ct_ty = cx.type_of(coll);
         if ct_ty.class_name().is_some_and(|c| c.starts_with("java.util.concurrent.")) {
@@ -571,7 +613,24 @@ impl Rule for ModifyCollectionInForeach {
                     && cx.type_of(v).class_name().is_some_and(|c| c.starts_with("java.util.") && !c.starts_with("java.util.concurrent."))
             });
             if !known_plain {
-                return;
+                // a `List`/`Set`/`Map` of unseen origin: nearly always a plain
+                // one, so still worth a warning unless something says concurrent
+                let hint = |t: &str| t.contains("Concurrent") || t.contains("CopyOnWrite") || t.contains("synchronized");
+                let is_local = cx.fm.local_ref(coll.unparen()).is_some();
+                if !is_local && cx.fm.field_ref(coll.unparen()).is_none() {
+                    return;
+                }
+                // any declaration or assignment of that name in the file
+                let name = cx.text(coll.unparen());
+                let name = name.strip_prefix("this.").unwrap_or(name).to_string();
+                let concurrent = cx.fm.root().descendants().filter(|d| d.kind() == "variable_declarator" || d.kind() == "assignment_expression").any(|d| {
+                    let target = d.field("name").or_else(|| d.field("left")).map(|x| cx.text(x));
+                    target.is_some_and(|t| t == name || t.strip_prefix("this.") == Some(&name)) && hint(cx.text(d))
+                });
+                if concurrent {
+                    return;
+                }
+                uncertain = true;
             }
         }
         let ct = normalized(coll, cx.src);
@@ -604,6 +663,28 @@ impl Rule for ModifyCollectionInForeach {
                 }
             }
             if c.ancestors().take_while(|a| *a != body).any(|a| a.kind() == "return_statement") {
+                continue;
+            }
+            // ... or leaving it further down the same path (`remove(x); log(); break;`)
+            let leaves_later = c.ancestors().take_while(|a| *a != body).chain(std::iter::once(body)).any(|a| {
+                let mut sib = a.next_named_sibling();
+                while let Some(s) = sib {
+                    if matches!(s.kind(), "break_statement" | "return_statement" | "throw_statement") || (s.kind() == "continue_statement" && s.kid_of_kind("identifier").is_some()) {
+                        return true;
+                    }
+                    sib = s.next_named_sibling();
+                }
+                false
+            });
+            if uncertain {
+                if leaves_later {
+                    continue;
+                }
+                // replacing a value keeps the structure; only size changes count here
+                if !matches!(name, "add" | "remove" | "clear" | "addAll" | "removeAll" | "removeIf") {
+                    continue;
+                }
+                cx.report_with_severity(c, Severity::Warning, format!("`{name}()` modifies the collection being iterated; unless it is a concurrent collection this throws ConcurrentModificationException"));
                 continue;
             }
             cx.report(c, format!("`{name}()` modifies the collection being iterated; this throws ConcurrentModificationException"));
@@ -1259,8 +1340,91 @@ impl Rule for StreamCountComparison {
             return;
         }
         let l = l.unparen();
-        if is_call_named(l, cx.src, &["count"]) && l.field("object").is_some_and(|o| is_subtype_any(cx.fm, &cx.type_of(o), &["java.util.stream.BaseStream"])) && matches!(cx.fm.int_value(r), Some(0) | Some(1)) {
+        // an existence test only: `count() == 1` asks for exactly one, and
+        // `limit(n).count()` stops early
+        let existence = match (op(n), cx.fm.int_value(r)) {
+            (">" | "!=" | "==", Some(0)) | (">=", Some(1)) => true,
+            _ => false,
+        };
+        let bounded = l.field("object").is_some_and(|o| is_call_named(o.unparen(), cx.src, &["limit"]));
+        if existence && !bounded && is_call_named(l, cx.src, &["count"]) && l.field("object").is_some_and(|o| is_subtype_any(cx.fm, &cx.type_of(o), &["java.util.stream.BaseStream"])) {
             cx.report(n, "Use `anyMatch()`/`findAny()` instead of counting the whole stream");
+        }
+    }
+}
+
+declare_rule!(StreamConsumedTwice {
+    id: "stream-consumed-twice",
+    name: "Stream used after it was already consumed",
+    category: Bug,
+    severity: Warning,
+    sources: ["sonar:S3959"],
+    kinds: ["<file>"],
+    description: "A stream can be operated on once. `s.count(); s.count();` (or `s.filter(..)` whose result is dropped, then `s.collect(..)`) throws IllegalStateException: stream has already been operated upon or closed. Build a new stream for the second use, or collect to a list first.",
+});
+
+impl Rule for StreamConsumedTwice {
+    rule_meta!();
+    fn check_file<'t>(&self, cx: &mut Ctx<'_, 't>) {
+        use grounds_flow::EdgeKind;
+        let mut found: Vec<(Node<'t>, String)> = Vec::new();
+        for (idx, d) in cx.fm.binder.decls.iter().enumerate() {
+            let uses = cx.fm.binder.uses(idx);
+            if uses.len() < 2 || !is_subtype_any(cx.fm, &cx.fm.local_type(idx), &["java.util.stream.BaseStream"]) {
+                continue;
+            }
+            let Some(owner) = d.owner else { continue };
+            // `s = s.filter(..)` starts a new pipeline under the same name, and a
+            // use inside a lambda runs at a time the method's flow does not show
+            let reassigned = uses.iter().any(|u| u.parent().is_some_and(|p| p.kind() == "assignment_expression" && p.field("left") == Some(*u)));
+            if reassigned || uses.iter().any(|u| cx.owning_callable(*u) != Some(owner)) {
+                continue;
+            }
+            // operations on the stream; `close`/`isParallel` do not consume it and
+            // `onClose`/`parallel`/.. return the receiver itself
+            let ops: Vec<Node<'t>> = uses
+                .iter()
+                .filter_map(|u| u.parent().filter(|p| p.kind() == "method_invocation" && p.field("object") == Some(*u)))
+                .filter(|c| !matches!(cx.fm.call_name(*c), Some("close" | "isParallel" | "onClose" | "parallel" | "sequential" | "unordered")))
+                .collect();
+            if ops.len() < 2 {
+                continue;
+            }
+            let cfg = cx.cfg(owner);
+            let decl_pos = cfg.position(d.decl_node);
+            'pairs: for (ai, a) in ops.iter().enumerate() {
+                let Some((ab, ae)) = cfg.position(*a) else { continue };
+                // what can run after `a` without an exception and without passing
+                // the declaration again (a stream declared in a loop body): the
+                // two arms of an if/else or a switch never follow one another
+                let normal = |b: usize| cfg.blocks[b].succs.iter().filter(|(_, k)| !matches!(k, EdgeKind::Exception(_))).map(|(s, _)| *s).collect::<Vec<_>>();
+                let mut seen = vec![false; cfg.blocks.len()];
+                let mut stack = normal(ab);
+                let mut after: Vec<(usize, usize)> = Vec::new();
+                while let Some(b) = stack.pop() {
+                    if seen[b] {
+                        continue;
+                    }
+                    seen[b] = true;
+                    match decl_pos {
+                        Some((db, de)) if db == b => after.push((b, de)),
+                        _ => {
+                            after.push((b, usize::MAX));
+                            stack.extend(normal(b));
+                        }
+                    }
+                }
+                for b in &ops[ai + 1..] {
+                    let Some((bb, be)) = cfg.position(*b) else { continue };
+                    if (bb == ab && be > ae) || after.iter().any(|(blk, until)| *blk == bb && be < *until) {
+                        found.push((*b, format!("Stream `{}` was already consumed by `{}()` on line {}", d.name, cx.fm.call_name(*a).unwrap_or(""), line_of(*a) + 1)));
+                        break 'pairs;
+                    }
+                }
+            }
+        }
+        for (n, m) in found {
+            cx.report(n, m);
         }
     }
 }

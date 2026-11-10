@@ -38,3 +38,37 @@ final class Node {
         return a == b ? a.price != null : false; // expect
     }
 }
+// identity as "the transformation gave back what it was given"
+class Rewriter {
+    Money visit(Money m, Object ctx) { return m; }
+    Money price() { return null; }
+    boolean unchanged(Money before, Object ctx) {
+        Money after = visit(before, ctx);
+        return after == before;
+    }
+    boolean inline(Money m, Object ctx) { return m != visit(m, ctx); }
+    boolean getter(Object ctx) {
+        Money p = visit(price(), ctx);
+        return p == price();
+    }
+    boolean accumulated(Money original, Object ctx) {
+        Money m = original;
+        for (int i = 0; i < 3; i++) m = visit(m, ctx);
+        return m != original;
+    }
+    // a library value: an equal result is a new object
+    java.math.BigDecimal round(java.math.BigDecimal v) { return v; }
+    boolean library(java.math.BigDecimal v) {
+        java.math.BigDecimal r = round(v);
+        return r == v; // expect
+    }
+    // unrelated values: identity is not a change check
+    boolean unrelated(Money a, Money b, Object ctx) {
+        Money after = visit(a, ctx);
+        return after == b; // expect
+    }
+    boolean fresh(Money a) {
+        Money b = price();
+        return a == b; // expect
+    }
+}

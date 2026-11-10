@@ -31,6 +31,9 @@ pub struct ResolvedCall {
     pub receiver: Option<Ty>,
     /// Overload resolution could not pick a unique method.
     pub ambiguous: bool,
+    /// The overloads that may be called agree on the result: `ret` stands
+    /// even where `ambiguous` says `method` may be another one of them.
+    pub same_result: bool,
     /// The pick is a guess among overloads with the same erased result:
     /// only that erasure is known.
     pub erasure_only: bool,

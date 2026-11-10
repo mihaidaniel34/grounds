@@ -17,3 +17,8 @@ class OuterTest {
     @org.junit.jupiter.api.Nested
     class InnerTests { int x; }
 }
+class Generic<P> {
+    // names the outer type parameter: cannot be static
+    class Visitor { P visit(P p) { return p; } }
+    class Plain { int x; } // expect
+}

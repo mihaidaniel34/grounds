@@ -205,6 +205,14 @@ impl<'a, 't> NullnessAnalysis<'a, 't> {
                     return None;
                 }
                 if c.method.annotations.iter().any(is_nullable_annotation) && !c.method.ret.is_array() {
+                    // `@Contract("null, _ -> null; !null, _ -> !null")`: null only for a null argument
+                    if self.contract_nonnull_for_args(v, &c.method.annotations, f) {
+                        return None;
+                    }
+                    // `if (c.getParent() != null) c = c.getParent();`: the same getter was just checked
+                    if self.getter_checked_nonnull(v) {
+                        return None;
+                    }
                     return Some(Nullness::Nullable);
                 }
                 if self.fm.call_matches_any(v, REQUIRE_NON_NULL) {
@@ -224,6 +232,136 @@ impl<'a, 't> NullnessAnalysis<'a, 't> {
                 }
             }
         }
+    }
+
+    /// A `@Contract` clause promises a non-null result when the listed
+    /// arguments are non-null, and none of those arguments is known to be
+    /// nullable here.
+    fn contract_nonnull_for_args(&self, call: Node<'t>, anns: &[AnnotationInfo], f: &NullFact) -> bool {
+        let args = self.fm.args_of(call);
+        anns.iter().filter(|a| a.simple_name() == "Contract").any(|a| {
+            a.arg("value").is_some_and(|v| {
+                v.strings().iter().flat_map(|s| s.split(';').map(str::to_string).collect::<Vec<_>>()).any(|clause| {
+                    let Some((lhs, rhs)) = clause.rsplit_once("->") else { return false };
+                    if rhs.trim() != "!null" {
+                        return false;
+                    }
+                    let parts: Vec<&str> = lhs.split(',').map(str::trim).collect();
+                    parts.len() == args.len()
+                        && parts.iter().any(|p| *p == "!null")
+                        && parts.iter().zip(&args).all(|(p, a)| match *p {
+                            "_" => true,
+                            "!null" => !matches!(self.eval(*a, f), Some(Nullness::Null | Nullness::AssignedNull | Nullness::Nullable | Nullness::MaybeAssignedNull)),
+                            _ => false,
+                        })
+                })
+            })
+        })
+    }
+
+    /// A no-argument call on a stable receiver (`cursor.getParent()`,
+    /// `this.owner.getName()`) evaluated where an enclosing condition, or an
+    /// earlier guard that leaves the block, has already compared the same
+    /// expression with null (or tested it with `instanceof`) and the
+    /// receiver was not reassigned in between.
+    fn getter_checked_nonnull(&self, v: Node<'t>) -> bool {
+        let fm = self.fm;
+        if !fm.args_of(v).is_empty() {
+            return false;
+        }
+        // receiver: identifiers, `this`, field accesses and no-argument calls only
+        fn stable<'t>(fm: &FileModel<'t>, n: Node<'t>) -> bool {
+            let n = n.unparen();
+            match n.kind() {
+                "identifier" | "this" => true,
+                "field_access" => n.field("object").is_none_or(|o| stable(fm, o)),
+                "method_invocation" => fm.args_of(n).is_empty() && n.field("object").is_none_or(|o| stable(fm, o)),
+                _ => false,
+            }
+        }
+        if !v.field("object").is_none_or(|o| stable(fm, o)) {
+            return false;
+        }
+        let norm = |n: Node<'t>| fm.text(n.unparen()).chars().filter(|c| !c.is_whitespace()).collect::<String>();
+        let want = norm(v);
+        // root local of the receiver chain, if any
+        let mut root = v;
+        while let Some(o) = root.field("object") {
+            root = o.unparen();
+        }
+        let root_local = if root.kind() == "identifier" { fm.binder.decl_index_of_ref(root) } else { None };
+        // does `c` having outcome `truth` prove the expression non-null?
+        fn proves<'t>(c: Node<'t>, truth: bool, want: &str, norm: &dyn Fn(Node<'t>) -> String) -> bool {
+            let c = c.unparen();
+            let op = c.field("operator").map(|o| o.kind());
+            match c.kind() {
+                "unary_expression" if op == Some("!") => c.field("operand").is_some_and(|o| proves(o, !truth, want, norm)),
+                "binary_expression" if (op == Some("&&") && truth) || (op == Some("||") && !truth) => {
+                    [c.field("left"), c.field("right")].into_iter().flatten().any(|s| proves(s, truth, want, norm))
+                }
+                "binary_expression" if (op == Some("!=") && truth) || (op == Some("==") && !truth) => {
+                    let (Some(l), Some(r)) = (c.field("left"), c.field("right")) else { return false };
+                    (r.unparen().kind() == "null_literal" && norm(l) == want) || (l.unparen().kind() == "null_literal" && norm(r) == want)
+                }
+                "instanceof_expression" if truth => c.field("left").is_some_and(|l| norm(l) == want),
+                _ => false,
+            }
+        }
+        // no write to the receiver's root local between the check and `v`
+        // (the assignment `v` itself feeds does not count)
+        let unchanged = |scope: Node<'t>, from: usize| -> bool {
+            let Some(i) = root_local else { return true };
+            !fm.binder.uses[i].iter().any(|u| {
+                u.start_byte() >= from
+                    && u.start_byte() < v.start_byte()
+                    && scope.start_byte() <= u.start_byte()
+                    && u.parent_unparen().is_some_and(|w| match w.kind() {
+                        "assignment_expression" => w.field("left").map(|l| l.unparen()) == Some(*u) && !v.ancestors().any(|a| a == w),
+                        "update_expression" => true,
+                        _ => false,
+                    })
+            })
+        };
+        let leaves = |st: Node<'t>| -> bool {
+            let last = if st.kind() == "block" { st.kids().into_iter().filter(|k| !grounds_syntax::is_comment(k.kind())).last() } else { Some(st) };
+            last.is_some_and(|l| matches!(l.kind(), "return_statement" | "throw_statement" | "continue_statement" | "break_statement"))
+        };
+        let mut child = v;
+        while let Some(p) = child.parent() {
+            if grounds_syntax::is_method_like(p.kind()) || matches!(p.kind(), "lambda_expression" | "class_body") {
+                break;
+            }
+            let cond = p.field("condition");
+            let hit = match p.kind() {
+                "if_statement" | "ternary_expression" => {
+                    if p.field("consequence") == Some(child) {
+                        cond.filter(|c| proves(*c, true, &want, &norm))
+                    } else if p.field("alternative") == Some(child) {
+                        cond.filter(|c| proves(*c, false, &want, &norm))
+                    } else {
+                        None
+                    }
+                }
+                "while_statement" | "for_statement" if p.field("body") == Some(child) => cond.filter(|c| proves(*c, true, &want, &norm)),
+                "binary_expression" if p.field("right") == Some(child) => {
+                    let op = p.field("operator").map(|o| o.kind());
+                    p.field("left").filter(|l| (op == Some("&&") && proves(*l, true, &want, &norm)) || (op == Some("||") && proves(*l, false, &want, &norm)))
+                }
+                // `if (x.getY() == null) return; ... x.getY().z()`
+                "block" => p.kids().into_iter().take_while(|k| *k != child).filter(|k| k.kind() == "if_statement" && k.field("alternative").is_none()).find_map(|k| {
+                    let c = k.field("condition")?;
+                    (proves(c, false, &want, &norm) && k.field("consequence").is_some_and(leaves) && unchanged(p, k.end_byte())).then_some(c)
+                }),
+                _ => None,
+            };
+            if let Some(c) = hit {
+                if p.kind() == "block" || unchanged(p, c.end_byte()) {
+                    return true;
+                }
+            }
+            child = p;
+        }
+        false
     }
 
     /// A call that returns only when its first (boolean) argument is true:
@@ -388,6 +526,23 @@ impl<'a, 't> NullnessAnalysis<'a, 't> {
             _ => {}
         }
         out
+    }
+
+    /// Locals passed directly as arguments to a boolean method of the
+    /// project (or one that does not resolve) in condition `c`.
+    fn passed_to_predicate(&self, c: Node<'t>) -> Vec<usize> {
+        let c = c.unparen();
+        match c.kind() {
+            "unary_expression" => c.field("operand").map(|o| self.passed_to_predicate(o)).unwrap_or_default(),
+            "method_invocation" => {
+                let library = self.fm.select_method(c).is_some_and(|m| !self.fm.index.is_source_class(&m.owner));
+                if library {
+                    return Vec::new();
+                }
+                self.fm.args_of(c).iter().map(|a| a.unparen()).filter(|a| a.kind() == "identifier").filter_map(|a| self.fm.binder.decl_index_of_ref(a)).collect()
+            }
+            _ => Vec::new(),
+        }
     }
 
     /// Facts implied when a boolean expression has outcome `truth`, through
@@ -730,11 +885,34 @@ impl<'a, 't> Analysis<'t> for NullnessAnalysis<'a, 't> {
         }
         let mut f = fact.clone();
         let effects = self.cond_effect(c);
+        // `name = dto == null ? null : dto.getName()`: null is passed along, and
+        // what follows usually checks the result instead of `dto` again
+        let propagates_null = {
+            let mut top = c;
+            while let Some(p) = top.parent().filter(|p| p.kind() == "parenthesized_expression") {
+                top = p;
+            }
+            top.parent().filter(|t| t.kind() == "ternary_expression" && t.field("condition") == Some(top)).is_some_and(|t| {
+                let arm = if truth { t.field("consequence") } else { t.field("alternative") };
+                arm.is_some_and(|a| a.unparen().kind() == "null_literal")
+            })
+        };
         for &(i, s, on_true) in &effects {
             // a check of a value known non-null proves nothing: that outcome
             // is dead (`dto == null ? null : dto.getId()` after `dto.getName()`)
             if on_true == truth && !(s == Nullness::Null && f.get(&i) == Some(&Nullness::NonNull)) {
+                if s == Nullness::Null && propagates_null && !f.contains_key(&i) {
+                    continue;
+                }
                 f.insert(i, s);
+            }
+        }
+        // `if (isUsable(dto)) dto.getName()`: a project predicate given a
+        // possibly-null local usually checks it; which outcome proves what is
+        // not known, so the local is unknown on both
+        for i in self.passed_to_predicate(c) {
+            if f.get(&i) == Some(&Nullness::Nullable) && !effects.iter().any(|e| e.0 == i) {
+                f.remove(&i);
             }
         }
         // `name = ""; if (dto != null) name = dto.getName(); if (!name.isEmpty()) dto...`
@@ -830,6 +1008,12 @@ impl<'a, 't> ResourceAnalysis<'a, 't> {
                 if is_wrapper_type(self.fm, n) {
                     let args = self.fm.args_of(v);
                     if args.iter().any(|a| self.arg_is_stream_like(*a)) {
+                        // `new BufferedReader(new FileReader(f))`: the wrapper is
+                        // the only handle on the stream opened in its argument
+                        return args.iter().any(|a| self.arg_is_stream_like(*a) && self.creates_resource(*a));
+                    }
+                    // `new Scanner("a b c")` reads memory
+                    if n == "java.util.Scanner" && args.first().is_some_and(|a| self.fm.type_of(*a).is_string()) {
                         return false;
                     }
                 }

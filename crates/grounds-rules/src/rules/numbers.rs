@@ -159,6 +159,8 @@ declare_rule!(IntOverflowInLongContext {
     name: "int arithmetic may overflow before widening to long",
     category: Bug,
     severity: Warning,
+    // test arithmetic runs on the small values the test picked
+    scope: Main,
     sources: ["sonar:S2184", "spotbugs:ICAST_INTEGER_MULTIPLY_CAST_TO_LONG", "errorprone:IntLongMath"],
     kinds: ["binary_expression"],
     description: "`long millis = days * 24 * 3600 * 1000;` multiplies in `int` and overflows before the result is widened. Make the first operand long: `days * 24L * 3600 * 1000`.",
@@ -411,6 +413,8 @@ declare_rule!(BigDecimalFromDouble {
     category: Bug,
     severity: Warning,
     tier: Edit,
+    // a wrong expected value in a test fails that test
+    scope: Main,
     sources: ["sonar:S2111", "spotbugs:DMI_BIGDECIMAL_CONSTRUCTED_FROM_DOUBLE", "pmd:AvoidDecimalLiteralsInBigDecimalConstructor"],
     kinds: ["object_creation_expression"],
     description: "`new BigDecimal(0.1)` captures the binary approximation 0.1000000000000000055511151231257827... Use `BigDecimal.valueOf(0.1)` or `new BigDecimal(\"0.1\")`.",
@@ -463,6 +467,21 @@ impl Rule for OddCheckWithRemainder {
                         // values known to be non-negative: .size(), .length, abs()
                         let at = cx.text(a);
                         if at.ends_with(".size()") || at.ends_with(".length") || at.ends_with(".length()") || at.starts_with("Math.abs(") {
+                            return;
+                        }
+                        // a local counting up from a non-negative literal (`for (int i = 0; ...; i++)`)
+                        let counts_up = cx.fm.local_ref(a.unparen()).is_some_and(|i| {
+                            let d = &cx.fm.binder.decls[i];
+                            d.decl_node.field("value").is_some_and(|v| cx.fm.int_value(v).is_some_and(|k| k >= 0))
+                                && cx.fm.binder.uses[i].iter().all(|u| match u.parent_unparen() {
+                                    Some(p) if p.kind() == "update_expression" => cx.text(p).contains("++"),
+                                    Some(p) if p.kind() == "assignment_expression" && p.field("left").map(|l| l.unparen()) == Some(*u) => {
+                                        p.field("operator").is_some_and(|o| o.kind() == "+=") && p.field("right").is_some_and(|r| cx.fm.int_value(r).is_some_and(|k| k >= 0))
+                                    }
+                                    _ => true,
+                                })
+                        });
+                        if counts_up {
                             return;
                         }
                         let neg = if op(n) == "==" { "!=" } else { "==" };

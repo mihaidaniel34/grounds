@@ -1,6 +1,6 @@
 # Rule catalog
 
-315 rules. `grounds explain <id>` prints the full description.
+318 rules. `grounds explain <id>` prints the full description.
 
 Tier `edit` rules run after every edit; all rules run at checkpoints. Rules marked *off* are disabled by default (enable in `grounds.toml`).
 
@@ -47,7 +47,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `dead-store` | warning | checkpoint | sonar:S1854, spotbugs:DLS_DEAD_LOCAL_STORE, pmd:UnusedAssignment, intellij:UnusedAssignment |
 | `legacy-date-api` *off* | info | checkpoint | sonar:S2143 |
 
-## bug (112)
+## bug (115)
 
 | id | severity | tier | origin |
 |---|---|---|---|
@@ -116,6 +116,7 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `collection-modified-during-iteration` | error | checkpoint | errorprone:ModifyCollectionInEnhancedForLoop, sonar:S6466, spotbugs:DMI_ENTRY_SETS_MAY_REUSE_ENTRY_OBJECTS |
 | `immutable-collection-modified` | error | edit | sonar:S5838, errorprone:DoNotCall, intellij:ModifyingImmutableCollection |
 | `list-remove-int-ambiguity` | warning | checkpoint | errorprone:CollectionUndefinedEquality, sonar:S3878 |
+| `stream-consumed-twice` | warning | checkpoint | sonar:S3959 |
 | `empty-control-statement-body` | warning | edit | sonar:S1116, errorprone:EmptyIf, pmd:EmptyControlStatement, intellij:ControlFlowStatementWithoutBraces |
 | `identical-branches` | warning | checkpoint | sonar:S1871, sonar:S3923, spotbugs:DB_DUPLICATE_BRANCHES, spotbugs:DB_DUPLICATE_SWITCH_CLAUSES, intellij:IfStatementWithIdenticalBranches |
 | `identical-conditions` | error | edit | sonar:S1862, intellij:DuplicateCondition |
@@ -129,6 +130,8 @@ Tier `edit` rules run after every edit; all rules run at checkpoints. Rules mark
 | `assert-with-side-effect` | warning | checkpoint | sonar:S3346, spotbugs:SA_LOCAL_SELF_COMPARISON, intellij:AssertWithSideEffects |
 | `constant-boolean-condition` | warning | checkpoint | sonar:S2583, sonar:S2589, intellij:ConstantConditions |
 | `for-loop-updates-wrong-variable` | error | edit | sonar:S1994, intellij:ForLoopThatDoesntUseLoopVariable |
+| `loop-bound-off-by-one` | error | edit | sonar:S6466, spotbugs:RANGE_ARRAY_INDEX, intellij:DataFlowIssue |
+| `contradictory-range-condition` | warning | edit | sonar:S2583, sonar:S2589, spotbugs:UC_USELESS_CONDITION, intellij:ConstantValue |
 | `constructor-calls-overridable-method` | info | checkpoint | sonar:S1699, pmd:ConstructorCallsOverridableMethod, spotbugs:MC_OVERRIDABLE_METHOD_CALL_IN_CONSTRUCTOR |
 | `method-named-like-class` | warning | checkpoint | sonar:S1223, spotbugs:NM_METHOD_CONSTRUCTOR_CONFUSION, pmd:MethodWithSameNameAsEnclosingClass |
 | `object-method-name-typo` | error | edit | sonar:S1221, spotbugs:NM_LCASE_HASHCODE, spotbugs:NM_LCASE_TOSTRING, spotbugs:NM_BAD_EQUAL, pmd:SuspiciousHashcodeMethodName |

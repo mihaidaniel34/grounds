@@ -15,4 +15,12 @@ class Keys {
     static final String PROVISION_SECRET = "provisionDeviceSecret";
     static final String AUTH_TOKEN = "Authorization";
     static final String CSRF_HEADER_TOKEN = "X-CSRF-Token";
+    // names of settings, query fragments and labels are not secrets
+    static final String ENV_ACCESS_KEY = "spas_accessKey";
+    static final String LLM_API_KEY = "SKILL_SCANNER_LLM_API_KEY";
+    static final String GRANT_TOKEN = "client_credentials";
+    static final String SECRET_PARAM_TOKEN = "&client_secret=";
+    static final String PASSWORD_PARAM = "password=";
+    static final String SIGNING_SECRET = "c2VjcmV0LWtleS0xMjM0NTY3ODk="; // expect
+    static final String DING_TALK_PASSWORD = "$t('password')";
 }

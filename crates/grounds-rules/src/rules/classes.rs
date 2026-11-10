@@ -352,6 +352,14 @@ impl Rule for InnerClassCouldBeStatic {
         if inner.superclass.as_ref().and_then(|s| s.class_name()).and_then(|s| cx.fm.class(s)).is_some_and(|s| s.is_inner()) {
             return;
         }
+        // a static class cannot name the outer class's type parameters
+        let outer_params: Vec<&str> = outer_decl
+            .field("type_parameters")
+            .map(|tp| tp.kids_of_kind("type_parameter").into_iter().filter_map(|k| k.descendants().find(|x| matches!(x.kind(), "type_identifier" | "identifier")).map(|x| cx.text(x))).collect())
+            .unwrap_or_default();
+        if !outer_params.is_empty() && n.descendants().any(|d| d.kind() == "type_identifier" && outer_params.contains(&cx.text(d))) {
+            return;
+        }
         let Some(body) = n.field("body") else { return };
         for d in body.descendants() {
             match d.kind() {
@@ -883,6 +891,8 @@ declare_rule!(CloneWithoutSuper {
     name: "clone() does not call super.clone()",
     category: Bug,
     severity: Warning,
+    // test stubs (`clone() { return null; }`, `return new Stub();`) have no subclasses to get wrong
+    scope: Main,
     sources: ["sonar:S1182", "spotbugs:CN_IDIOM_NO_SUPER_CALL", "pmd:ProperCloneImplementation"],
     kinds: ["method_declaration"],
     description: "A `clone()` built with `new` returns the wrong type for subclasses. Call `super.clone()` (or better, provide a copy constructor).",
@@ -903,7 +913,15 @@ impl Rule for CloneWithoutSuper {
             return;
         }
         let Some(body) = n.field("body") else { return };
-        if !cx.text(body).contains("super.clone()") {
+        // `return cloneReset();` where `cloneReset()` of this class calls super.clone()
+        let via_helper = body.descendants().any(|d| {
+            d.kind() == "method_invocation"
+                && d.field("object").is_none_or(|o| o.kind() == "this")
+                && cx.fm.call_name(d).is_some_and(|callee| {
+                    decl.field("body").is_some_and(|b| b.kids().iter().any(|m| m.kind() == "method_declaration" && method_name(*m, cx.src) == callee && cx.text(*m).contains("super.clone()")))
+                })
+        });
+        if !cx.text(body).contains("super.clone()") && !via_helper {
             if let Some(nm) = n.field("name") {
                 cx.report(nm, "`clone()` should obtain the copy via `super.clone()`");
             }
@@ -1348,7 +1366,28 @@ impl Rule for MutableException {
         }
         let Some(cls) = cx.fm.enclosing_class(n) else { return };
         if cx.fm.is_subclass(&cls.name, "java.lang.Throwable").is_yes() {
+            let Some(decl) = n.ancestors().find(|a| grounds_syntax::is_type_declaration(a.kind())) else { return };
+            let setters = |x: Node<'t>| annotation_names(x, cx.src).iter().any(|a| matches!(*a, "Setter" | "Data"));
+            let lombok_setter = setters(n) || setters(decl);
+            let private = n.has_modifier("private");
             for d in n.fields("declarator") {
+                // nothing can change it after construction: private, no
+                // setter, no write outside the constructors
+                let name = d.field("name").map(|x| cx.text(x)).unwrap_or("");
+                let written = decl.descendants().any(|a| {
+                    let target = match a.kind() {
+                        "assignment_expression" => a.field("left"),
+                        "update_expression" => a.first_kid(),
+                        _ => None,
+                    };
+                    target.is_some_and(|t| {
+                        let t = cx.text(t.unparen());
+                        (t == name || t.strip_prefix("this.") == Some(name)) && !a.ancestors().take_while(|x| *x != decl).any(|x| x.kind() == "constructor_declaration")
+                    })
+                });
+                if private && !lombok_setter && !written {
+                    continue;
+                }
                 cx.report(d, "Exception fields should be final");
             }
         }
