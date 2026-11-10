@@ -116,12 +116,15 @@ jobs:
       # report a compile or wiring break. The last 15 commits with Java
       # changes among the 60 fetched, fewer on a project where that many
       # would take over seven minutes; a report that was read and found right
-      # is listed in corpus/replay-known.txt.
+      # is listed in corpus/replay-known.txt. The daemon logs what it found
+      # changed at each request (GROUNDS_DAEMON_LOG), for a difference that
+      # does not show again.
       - name: replay
         timeout-minutes: 25
-        run: python3 -I scripts/replay.py "$CORPUS_DIR/${{ matrix.project }}" --grounds bin/grounds --commits 15 --budget 420 --known corpus/replay-known.txt --out target/corpus/replay.json
+        run: mkdir -p target/corpus && python3 -I scripts/replay.py "$CORPUS_DIR/${{ matrix.project }}" --grounds bin/grounds --commits 15 --budget 420 --known corpus/replay-known.txt --out target/corpus/replay.json
         env:
           CORPUS_DIR: ${{ runner.temp }}/corpus
+          GROUNDS_DAEMON_LOG: ${{ github.workspace }}/target/corpus/daemon.log
       - name: summary
         if: always()
         run: |
@@ -147,6 +150,7 @@ jobs:
             target/corpus/planted-*.diff
             target/corpus/mutations.json
             target/corpus/replay.json
+            target/corpus/daemon.log
 
   # helidon on JDK 21: the release it infers (27) is newer than the JDK, which
   # used to report the JDK 20 API's missing members (getFirst, a Java 21 method)

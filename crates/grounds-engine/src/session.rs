@@ -5,7 +5,7 @@
 
 use crate::analyze::{analyze_text, build_ruleset, Finding};
 use crate::git;
-use crate::project::{path_key, Project};
+use crate::project::{path_key, FileStamp, Project};
 use crate::workspace::{classify, SourceKind};
 use grounds_index::{simple_name_of, ClassLookup, FileStub, Name};
 use grounds_rules::framework::RuleOptions;
@@ -24,7 +24,8 @@ pub struct Session {
     pub edit_rules: RuleSet,
     pub resolution_rules: RuleSet,
     pub options: RuleOptions,
-    mtimes: FxHashMap<PathBuf, SystemTime>,
+    /// The source files as their stubs in the index were made from.
+    stamps: FxHashMap<PathBuf, FileStamp>,
     /// Build and configuration files the project was loaded from (and the
     /// places one may appear), with their modification times.
     config: Vec<(PathBuf, Option<SystemTime>)>,
@@ -73,7 +74,13 @@ fn config_files(project: &Project) -> Vec<(PathBuf, Option<SystemTime>)> {
     }
     paths.sort();
     paths.dedup();
-    paths.into_iter().map(|p| { let m = std::fs::metadata(&p).and_then(|m| m.modified()).ok(); (p, m) }).collect()
+    // A file written after the load began may have been read before the
+    // write: its time is not recorded, so that the next look finds it
+    // "changed" and loads the project again. (A time in the future, which a
+    // write now cannot give, is kept: it would reload the project on every
+    // look.)
+    let (began, now) = (project.load_began, SystemTime::now());
+    paths.into_iter().map(|p| { let m = std::fs::metadata(&p).and_then(|m| m.modified()).ok().filter(|t| *t < began || *t > now); (p, m) }).collect()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -167,23 +174,22 @@ pub struct CheckOptions {
 
 impl Session {
     pub fn open(root: &Path) -> anyhow::Result<Session> {
+        crate::trace::log(|| format!("load {}: start", root.display()));
         let project = Project::load(root)?;
+        crate::trace::log(|| format!("load {}: done", root.display()));
         Ok(Self::from_project(project))
     }
 
-    pub fn from_project(project: Project) -> Session {
+    pub fn from_project(mut project: Project) -> Session {
         let (all_rules, options) = build_ruleset(&project);
         // same configuration as full checks, narrowed to edit-tier rules
         let edit_rules = RuleSet::new(crate::analyze::selected_rules(&project).into_iter().filter(|r| r.meta().tier == Tier::Edit).collect());
         let resolution_rules = RuleSet::new(crate::analyze::selected_rules(&project).into_iter().filter(|r| r.meta().id.starts_with("unresolved-")).collect());
         let config = config_files(&project);
-        let mut s = Session { project, all_rules, edit_rules, resolution_rules, options, mtimes: FxHashMap::default(), config, warned: false };
-        for f in &s.project.workspace.files {
-            if let Ok(m) = std::fs::metadata(&f.path).and_then(|m| m.modified()) {
-                s.mtimes.insert(f.path.clone(), m);
-            }
-        }
-        s
+        // taken as the files were read: a time looked up now could be that of
+        // a version written since (the stubs are of the one read)
+        let stamps = std::mem::take(&mut project.stamps);
+        Session { project, all_rules, edit_rules, resolution_rules, options, stamps, config, warned: false }
     }
 
     /// Classpath warnings, the first time they are asked for: agents and
@@ -199,8 +205,10 @@ impl Session {
         &self.project.workspace.root
     }
 
-    /// Re-read files whose modification time changed (and the given extra
-    /// files, which may be new). Returns files whose declarations changed.
+    /// Re-read files that changed since they were read (and the given extra
+    /// files, which may be new): by time and size, and by content for those
+    /// whose time was too recent to tell (see `FileStamp`). Returns files
+    /// whose declarations changed.
     pub fn sync(&mut self, extra: &[PathBuf]) -> Vec<PathBuf> {
         // A build, configuration or bean registration file changed, appeared
         // or went: the modules, the classpath, the settings and the beans come
@@ -208,23 +216,34 @@ impl Session {
         // load it. (Without
         // this a daemon kept the layout it started with: after a module was
         // added or renamed its files counted as the root module's.)
-        if self.config.iter().any(|(p, old)| std::fs::metadata(p).and_then(|m| m.modified()).ok() != *old) {
+        let trace = crate::trace::enabled();
+        let sig = |s: &Session, f: &Path| s.project.index.file(&path_key(f)).map(|s| format!("{:016x}", s.signature_hash)).unwrap_or_else(|| "-".into());
+        let before: Vec<String> = if trace { extra.iter().map(|e| sig(self, e)).collect() } else { Vec::new() };
+        if let Some((p, old)) = self.config.iter().find(|(p, old)| std::fs::metadata(p).and_then(|m| m.modified()).ok() != *old) {
+            crate::trace::log(|| format!("sync: reload, {} was {} now {}", p.display(), crate::trace::time(*old), crate::trace::time(std::fs::metadata(p).and_then(|m| m.modified()).ok())));
             let root = self.root().to_path_buf();
             if let Ok(project) = Project::load(&root) {
                 *self = Session::from_project(project);
             }
         }
-        let mut stale: Vec<PathBuf> = Vec::new();
-        for (p, old) in &self.mtimes {
-            match std::fs::metadata(p).and_then(|m| m.modified()) {
-                Ok(m) if m != *old => stale.push(p.clone()),
-                Err(_) => stale.push(p.clone()),
-                _ => {}
-            }
-        }
+        // (on all cores: after a checkout of the whole tree every file is racy
+        // and read once more)
+        let now = SystemTime::now();
+        let mut stale: Vec<PathBuf> = self
+            .stamps
+            .par_iter_mut()
+            .filter_map(|(p, stamp)| {
+                let was = *stamp;
+                if !stamp.changed(p, now) {
+                    return None;
+                }
+                crate::trace::log(|| format!("sync: stale {} recorded {} size {}{} now {}", p.display(), crate::trace::time(Some(was.mtime)), was.size, if was.racy { " racy" } else { "" }, crate::trace::time(std::fs::metadata(p).and_then(|m| m.modified()).ok())));
+                Some(p.clone())
+            })
+            .collect();
         for e in extra {
             let e = e.canonicalize().unwrap_or_else(|_| e.clone());
-            if e.extension().is_some_and(|x| x == "java") && !self.mtimes.contains_key(&e) {
+            if e.extension().is_some_and(|x| x == "java") && !self.stamps.contains_key(&e) {
                 stale.push(e.clone());
                 let module = self.project.workspace.module_of(&e).unwrap_or(0);
                 self.project.workspace.files.push(crate::workspace::SourceFile { path: e.clone(), module, kind: classify(&e) });
@@ -234,12 +253,13 @@ impl Session {
         let mut any_decl_change = false;
         let mut di_stale = false;
         for p in stale {
-            let exists = p.exists();
+            // the stamp first, then the text it vouches for
+            let (stamp, text) = FileStamp::read(&p);
             // refresh_file rebuilds the DI model itself; batch it below instead
             let key = path_key(&p);
             let old = self.project.index.file(&key).map(|s| s.signature_hash);
-            if exists {
-                if let Ok(text) = std::fs::read_to_string(&p) {
+            if let Some(stamp) = stamp {
+                if let Some(text) = text {
                     let pf = ParsedFile::parse(text);
                     let stub = Arc::new(self.project.extract(&p, &pf));
                     // install the new stub even when signatures are unchanged:
@@ -254,12 +274,10 @@ impl Session {
                         changed.push(p.clone());
                     }
                 }
-                if let Ok(m) = std::fs::metadata(&p).and_then(|m| m.modified()) {
-                    self.mtimes.insert(p.clone(), m);
-                }
+                self.stamps.insert(p.clone(), stamp);
             } else {
                 self.project.index.remove_file(&key);
-                self.mtimes.remove(&p);
+                self.stamps.remove(&p);
                 any_decl_change = true;
                 changed.push(p.clone());
             }
@@ -268,6 +286,13 @@ impl Session {
             self.project.rebuild_di();
         }
         self.project.index.ensure_resolved();
+        if trace {
+            for (e, b) in extra.iter().zip(&before) {
+                let now = std::fs::metadata(e).and_then(|m| m.modified()).ok();
+                let text = std::fs::read_to_string(e).ok().map(|t| format!("{:016x}", crate::cache::content_hash(&t))).unwrap_or_else(|| "-".into());
+                crate::trace::log(|| format!("sync: checked {} stub {} -> {} recorded {} now {} content {}", e.display(), b, sig(self, e), crate::trace::time(self.stamps.get(e).map(|s| s.mtime)), crate::trace::time(now), text));
+            }
+        }
         changed
     }
 

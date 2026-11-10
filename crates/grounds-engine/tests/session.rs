@@ -472,3 +472,95 @@ fn a_changed_build_file_reloads_the_project() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn set_mtime(dir: &Path, rel: &str, t: std::time::SystemTime) {
+    std::fs::File::options().write(true).open(dir.join(rel)).unwrap().set_modified(t).unwrap();
+}
+
+fn mtime(dir: &Path, rel: &str) -> std::time::SystemTime {
+    std::fs::metadata(dir.join(rel)).unwrap().modified().unwrap()
+}
+
+/// A project with one class committed, for the tests of change detection
+/// below: `changed_apis` of a check against HEAD says whether the session
+/// saw the file's declarations change.
+fn one_class_project(name: &str, api: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("grounds-session-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, "src/main/java/demo/Api.java", api);
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+    dir
+}
+
+fn changed_apis(s: &mut Session, dir: &Path) -> Vec<String> {
+    let api = dir.join("src/main/java/demo/Api.java").canonicalize().unwrap();
+    let opts = CheckOptions { mode: Mode::Checkpoint, files: vec![api], all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None };
+    s.check(&opts).changed_apis
+}
+
+#[test]
+fn a_file_written_while_the_project_loads_is_read_again() {
+    // The replay's first step: a daemon started at a commit loads the project
+    // in the background while the next commit is checked out. It read the
+    // file before the checkout wrote it, and took the file's time after: the
+    // new version's time with the old version's stub, so no later look found
+    // the file changed.
+    let rel = "src/main/java/demo/Api.java";
+    let dir = one_class_project("load-race", "package demo;\npublic class Api {\n    public void old() {}\n}\n");
+    let now = std::time::SystemTime::now();
+    // times too old to be racy: this is about the order of time and read
+    set_mtime(&dir, rel, now - std::time::Duration::from_secs(7200));
+    let project = grounds_engine::Project::load(&dir).unwrap();
+    // the checkout, between the read of the sources and the end of the load
+    write(&dir, rel, "package demo;\npublic class Api {\n    public void renamed() {}\n}\n");
+    set_mtime(&dir, rel, now - std::time::Duration::from_secs(3600));
+    let mut s = Session::from_project(project);
+    assert_eq!(changed_apis(&mut s, &dir), [rel], "the session holds the stub of the version it read");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_rewrite_that_keeps_time_and_size_is_seen() {
+    // A file system keeps times only as fine as its clock ticks: a file
+    // rewritten in the tick it was read in keeps its time, and an edit of a
+    // string can keep its size. Its time was recent when it was read, so the
+    // content decides.
+    let rel = "src/main/java/demo/Api.java";
+    let dir = one_class_project("racy", "package demo;\npublic class Api {\n    @Deprecated(since = \"1\") public void m() {}\n}\n");
+    let mut s = Session::open(&dir).unwrap();
+    assert!(changed_apis(&mut s, &dir).is_empty());
+    let (t, size) = (mtime(&dir, rel), std::fs::metadata(dir.join(rel)).unwrap().len());
+    write(&dir, rel, "package demo;\npublic class Api {\n    @Deprecated(since = \"2\") public void m() {}\n}\n");
+    set_mtime(&dir, rel, t);
+    assert_eq!(std::fs::metadata(dir.join(rel)).unwrap().len(), size);
+    assert_eq!(changed_apis(&mut s, &dir), [rel], "same time and size, other content");
+
+    // and back again, once more within the same tick
+    write(&dir, rel, "package demo;\npublic class Api {\n    @Deprecated(since = \"1\") public void m() {}\n}\n");
+    set_mtime(&dir, rel, t);
+    assert!(changed_apis(&mut s, &dir).is_empty(), "content back to that of HEAD");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_build_file_written_while_the_project_loads_reloads_it() {
+    // as above, for the files the project's layout and settings come from
+    let dir = std::env::temp_dir().join(format!("grounds-session-load-race-build-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, "grounds.toml", "exclude = []\n");
+    write(&dir, "src/main/java/demo/App.java", "package demo;\npublic class App {}\n");
+    write(&dir, "src/main/java/gen/Gen.java", "package gen;\npublic class Gen {}\n");
+    let project = grounds_engine::Project::load(&dir).unwrap();
+    write(&dir, "grounds.toml", "exclude = [\"src/main/java/gen/**\"]\n");
+    let mut s = Session::from_project(project);
+    assert!(s.project.config.exclude.is_empty());
+    s.sync(&[]);
+    assert_eq!(s.project.config.exclude, ["src/main/java/gen/**"], "the settings written during the load are read");
+    let _ = std::fs::remove_dir_all(&dir);
+}

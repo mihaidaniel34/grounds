@@ -47,6 +47,11 @@ pub struct Project {
     pub classpath_warnings: Vec<crate::classpath::Warning>,
     /// The jars and class directories the classpath was built from.
     pub classpath_entries: Vec<PathBuf>,
+    /// What each source file was when its stub was made, for telling later
+    /// that it changed (taken over by a `Session`).
+    pub stamps: rustc_hash::FxHashMap<PathBuf, FileStamp>,
+    /// When reading the configuration and build files began.
+    pub load_began: std::time::SystemTime,
 }
 
 /// Class names registered through Spring's META-INF files in any module, and
@@ -172,13 +177,80 @@ pub fn path_key(p: &Path) -> Arc<str> {
     Arc::from(p.to_string_lossy().as_ref())
 }
 
+/// A file as it was read: its modification time and size, taken before the
+/// text was read, and a hash of that text.
+///
+/// Time and size alone miss a change in two ways. Taken after the read, they
+/// can describe a version written in between (a project load reads every
+/// source first and is seconds long). And a file system keeps times only as
+/// fine as its clock ticks (milliseconds on ext4, two seconds on FAT), so a
+/// file rewritten in the tick it was read in keeps its time, and an edit can
+/// keep its size. As git does with its index, a time that was that recent
+/// when it was taken is not trusted: until a look at the file finds the time
+/// older than `RACY`, the file's text is hashed and compared on every look.
+/// That is the files written in the last seconds, not the project.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileStamp {
+    pub mtime: std::time::SystemTime,
+    pub size: u64,
+    /// `content_hash` of the text read (0 when it could not be read).
+    pub hash: u64,
+    /// The time was within `RACY` of the clock when it was taken.
+    pub racy: bool,
+}
+
+/// Longer than the coarsest timestamp a file system keeps (two seconds) and
+/// than the lag of the file system's clock behind the system clock.
+pub const RACY: Duration = Duration::from_secs(3);
+
+fn recent(mtime: std::time::SystemTime, now: std::time::SystemTime) -> bool {
+    now.duration_since(mtime).map_or(true, |age| age < RACY)
+}
+
+impl FileStamp {
+    /// The stamp of a file and its text, the stamp taken first: a write after
+    /// it changes the time or is caught as racy. No stamp if the file is gone;
+    /// no text if it cannot be read as UTF-8 (then the stamp is time and size
+    /// only, as such a file is not analyzed).
+    pub fn read(path: &Path) -> (Option<FileStamp>, Option<String>) {
+        let now = std::time::SystemTime::now();
+        let Some((meta, mtime)) = std::fs::metadata(path).ok().and_then(|m| { let t = m.modified().ok()?; Some((m, t)) }) else { return (None, None) };
+        let text = std::fs::read_to_string(path).ok();
+        let hash = text.as_deref().map_or(0, content_hash);
+        (Some(FileStamp { mtime, size: meta.len(), hash, racy: text.is_some() && recent(mtime, now) }), text)
+    }
+
+    /// Whether the file may differ from the text this stamp was taken with
+    /// (`now`: the clock before this look). A racy stamp whose text is found
+    /// unchanged is renewed, and stops being racy once its time is old.
+    pub fn changed(&mut self, path: &Path, now: std::time::SystemTime) -> bool {
+        let Ok(meta) = std::fs::metadata(path) else { return true };
+        let Ok(mtime) = meta.modified() else { return true };
+        if mtime != self.mtime || meta.len() != self.size {
+            return true;
+        }
+        if !self.racy {
+            return false;
+        }
+        match std::fs::read(path) {
+            Ok(bytes) if xxhash_rust::xxh3::xxh3_64(&bytes) == self.hash => {
+                self.racy = recent(mtime, now);
+                false
+            }
+            _ => true,
+        }
+    }
+}
+
 impl Project {
     pub fn load(root: &Path) -> anyhow::Result<Project> {
+        let began = std::time::SystemTime::now();
         let config = Config::load(root)?;
-        Self::load_with(root, config)
+        Ok(Project { load_began: began, ..Self::load_with(root, config)? })
     }
 
     pub fn load_with(root: &Path, config: Config) -> anyhow::Result<Project> {
+        let load_began = std::time::SystemTime::now();
         let mut stats = LoadStats::default();
         let t = Instant::now();
         let source_sets = SourceSets::load(root);
@@ -207,20 +279,34 @@ impl Project {
         let t = Instant::now();
         let lombok = LombokConfigs::discover(&workspace.root);
         let cache = StubCache::load(&workspace.root);
-        let results: Vec<(PathBuf, u64, Arc<FileStub>, bool)> = workspace
+        // (with the stamp of each file, taken before it is read)
+        let read: Vec<(PathBuf, Option<FileStamp>, Option<(u64, Arc<FileStub>, bool)>)> = workspace
             .files
             .par_iter()
-            .filter_map(|f| {
-                let text = std::fs::read_to_string(&f.path).ok()?;
-                let h = content_hash(&text) ^ lombok.key_for(&f.path);
-                let key = f.path.to_string_lossy();
-                if let Some(s) = cache.get(&key, h) {
-                    return Some((f.path.clone(), h, s, true));
-                }
-                let pf = ParsedFile::parse(text);
-                Some((f.path.clone(), h, Arc::new(extract_with(&pf, &lombok.for_file(&f.path))), false))
+            .map(|f| {
+                let (stamp, text) = FileStamp::read(&f.path);
+                let stub = text.map(|text| {
+                    let h = stamp.map_or_else(|| content_hash(&text), |s| s.hash) ^ lombok.key_for(&f.path);
+                    let key = f.path.to_string_lossy();
+                    if let Some(s) = cache.get(&key, h) {
+                        return (h, s, true);
+                    }
+                    let pf = ParsedFile::parse(text);
+                    (h, Arc::new(extract_with(&pf, &lombok.for_file(&f.path))), false)
+                });
+                (f.path.clone(), stamp, stub)
             })
             .collect();
+        let mut stamps = rustc_hash::FxHashMap::default();
+        let mut results: Vec<(PathBuf, u64, Arc<FileStub>, bool)> = Vec::with_capacity(read.len());
+        for (p, stamp, stub) in read {
+            if let Some(st) = stamp {
+                stamps.insert(p.clone(), st);
+            }
+            if let Some((h, s, cached)) = stub {
+                results.push((p, h, s, cached));
+            }
+        }
         stats.t_stubs = t.elapsed();
 
         let t = Instant::now();
@@ -251,7 +337,7 @@ impl Project {
         di.lombok_copies_qualifiers = lombok_copies_qualifiers(&workspace.root);
         di.bean_overriding_allowed = bean_overriding_allowed(&workspace);
         let classpath_warnings = crate::classpath::warnings(&workspace, &config, &index);
-        Ok(Project { config, workspace, index, stats, di, source_sets, lombok, registered, auto_registered, classpath_warnings, classpath_entries: entries })
+        Ok(Project { config, workspace, index, stats, di, source_sets, lombok, registered, auto_registered, classpath_warnings, classpath_entries: entries, stamps, load_began })
     }
 
     pub fn source_kind(&self, path: &Path) -> SourceKind {
