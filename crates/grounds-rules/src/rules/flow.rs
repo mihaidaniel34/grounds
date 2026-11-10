@@ -50,11 +50,16 @@ impl Rule for NullDereference {
             res.for_each_before(&cfg, &na, |e, f| {
                 for (i, node) in na.derefs(e) {
                     let Some(state) = f.get(&i) else { continue };
-                    if matches!(*state, Nullness::NonNull | Nullness::MaybeAssignedNull) || !reported.insert(i) {
+                    if matches!(*state, Nullness::NonNull | Nullness::MaybeAssignedNull) || reported.contains(&i) {
                         continue;
                     }
                     let name = cx.fm.binder.decls[i].name;
                     let definite = state.is_definitely_null();
+                    // "may be null" rests on paths the analysis cannot tell apart
+                    if !definite && maybe_null_unknown(cx, c, i, node) {
+                        continue;
+                    }
+                    reported.insert(i);
                     let msg = if definite { format!("`{name}` is always null here") } else { format!("`{name}` may be null here") };
                     found.push((node, msg, definite));
                 }
@@ -68,6 +73,228 @@ impl Rule for NullDereference {
             }
         }
     }
+}
+
+/// Does `call` run on every path from its position to `deref`? It must not
+/// sit in a branch, loop body, case, catch block or lambda that the
+/// dereference is not also inside (`if (x != null) consume(x); x.length()`).
+/// `null_branch(if, branch)` names the branches only the null paths take
+/// (`if (x == null) require(x);`): the call needs to run on those alone.
+/// `try_safe(try, call)` says the try neither skips the call (no earlier
+/// part of the try may throw what it catches) nor swallows its exception.
+fn runs_on_every_path_to<'t>(call: Node<'t>, deref: Node<'t>, null_branch: impl Fn(Node<'t>, Node<'t>) -> bool, try_safe: impl Fn(Node<'t>, Node<'t>) -> bool) -> bool {
+    let mut child = call;
+    for a in call.ancestors() {
+        if deref.ancestors().any(|d| d == a) {
+            return true;
+        }
+        let conditional = match a.kind() {
+            "if_statement" => a.field("condition") != Some(child) && !null_branch(a, child),
+            "ternary_expression" => a.field("condition") != Some(child),
+            "binary_expression" => matches!(op(a), "&&" | "||") && a.field("right") == Some(child),
+            "while_statement" | "enhanced_for_statement" | "do_statement" => a.field("body") == Some(child),
+            // the body and the update of a for may run zero times
+            "for_statement" => a.field("body") == Some(child) || a.fields("update").contains(&child),
+            // skipped when assertions are disabled
+            "switch_block_statement_group" | "switch_rule" | "catch_clause" | "lambda_expression" | "class_body" | "assert_statement" => true,
+            // a try whose exception is caught before the dereference: the
+            // call may have thrown and the path goes on without it
+            "try_statement" | "try_with_resources_statement" => a.field("body") == Some(child) && a.kids().iter().any(|k| k.kind() == "catch_clause") && !try_safe(a, call),
+            _ => false,
+        };
+        if conditional {
+            return false;
+        }
+        child = a;
+    }
+    false
+}
+
+/// Does a "may be null" at `deref` depend on something the nullness analysis
+/// does not know? It joins paths without correlating them, and it does not
+/// look into callees, so it stays silent when, between the last null check
+/// or assignment of the variable and the dereference:
+/// - the variable was handed to a call (which may reject null: an assertion
+///   helper, a validator, a precondition on several arguments);
+/// - the dereference sits under a condition that does not involve the
+///   variable (a flag, a length, another variable set on the same paths);
+/// - or the null check's branch ends in a call the analysis cannot see into
+///   (unresolved, or an overridable method that throws).
+fn maybe_null_unknown<'t>(cx: &Ctx<'_, 't>, callable: Node<'t>, i: usize, deref: Node<'t>) -> bool {
+    let refs: Vec<Node<'t>> = callable.descendants().filter(|d| d.kind() == "identifier" && cx.fm.local_ref(*d) == Some(i)).collect();
+    let null_check = |r: Node<'t>| {
+        r.parent().is_some_and(|p| p.kind() == "binary_expression" && matches!(op(p), "==" | "!=") && lr(p).is_some_and(|(l, rr)| is_null_literal(l) || is_null_literal(rr)))
+    };
+    let written = |r: Node<'t>| {
+        r.parent().is_some_and(|p| (p.kind() == "assignment_expression" && p.field("left") == Some(r)) || (p.kind() == "variable_declarator" && p.field("name") == Some(r)))
+    };
+    let decl_name = cx.fm.binder.decls[i].name_node;
+    let mut last = callable.start_byte();
+    let mut last_check: Option<Node<'t>> = None;
+    for r in refs.iter().chain(std::iter::once(&decl_name)) {
+        if r.start_byte() < deref.start_byte() && (null_check(*r) || written(*r) || *r == decl_name) && r.start_byte() >= last {
+            last = r.start_byte();
+            last_check = null_check(*r).then_some(*r);
+        }
+    }
+    // the branch of an `if (x == null)` / `if (x != null) ... else` that
+    // only null takes
+    let null_branch = |ifs: Node<'t>, branch: Node<'t>| {
+        ifs.field("condition").map(|c| c.unparen()).is_some_and(|c| {
+            c.kind() == "binary_expression"
+                && lr(c).is_some_and(|(l, rr)| {
+                    let (l, rr) = (l.unparen(), rr.unparen());
+                    (is_null_literal(l) && cx.fm.local_ref(rr) == Some(i)) || (is_null_literal(rr) && cx.fm.local_ref(l) == Some(i))
+                })
+                && match op(c) {
+                    "==" => ifs.field("consequence") == Some(branch),
+                    "!=" => ifs.field("alternative") == Some(branch),
+                    _ => false,
+                }
+        })
+    };
+    // a try around the call that cannot bypass it nor swallow what it throws:
+    // it catches only checked exceptions, the call declares none of them, and
+    // nothing before it in the try may throw one
+    let try_safe = |t: Node<'t>, call: Node<'t>| {
+        let caught: Vec<Ty> = t
+            .kids()
+            .into_iter()
+            .filter(|k| k.kind() == "catch_clause")
+            .flat_map(|k| k.descendants().filter(|d| d.kind() == "catch_type").flat_map(|ct| ct.kids().into_iter().filter(|x| x.is_named())).collect::<Vec<_>>())
+            .map(|ty| cx.fm.resolve_type_node(ty))
+            .collect();
+        let checked = |ty: &Ty| {
+            ty.class_name().is_some_and(|c| {
+                !matches!(c, "java.lang.Exception" | "java.lang.Throwable")
+                    && cx.fm.is_subclass(c, "java.lang.Exception").is_yes()
+                    && cx.fm.is_subclass(c, "java.lang.RuntimeException").is_no()
+            })
+        };
+        if caught.is_empty() || !caught.iter().all(checked) {
+            return false;
+        }
+        let may_throw_caught = |c: Node<'t>| match cx.fm.select_method(c) {
+            None => true,
+            Some(m) => {
+                m.ambiguous
+                    || m.method.throws.iter().any(|th| match th.class_name() {
+                        None => true,
+                        Some(tn) => caught.iter().filter_map(|k| k.class_name()).any(|k| k == tn || !cx.fm.is_subclass(k, tn).is_no() || !cx.fm.is_subclass(tn, k).is_no()),
+                    })
+            }
+        };
+        let is_call = |d: &Node<'t>| matches!(d.kind(), "method_invocation" | "object_creation_expression");
+        // the call itself, and every call before it in the try (resources included)
+        !may_throw_caught(call)
+            && !t
+                .kids()
+                .into_iter()
+                .filter(|k| matches!(k.kind(), "block" | "resource_specification"))
+                .flat_map(|k| k.descendants())
+                .filter(|d| is_call(d) && d.end_byte() <= call.start_byte())
+                .any(may_throw_caught)
+    };
+    // handed to a call
+    let handed = refs.iter().any(|r| {
+        r.start_byte() >= last
+            && r.start_byte() < deref.start_byte()
+            && r.ancestors().take_while(|a| !a.kind().ends_with("statement") && *a != callable).any(|a| {
+                a.kind() == "argument_list"
+                    && a.parent().is_some_and(|call| {
+                        !call.descendants().any(|d| d == deref)
+                            && runs_on_every_path_to(call, deref, null_branch, try_safe)
+                            && !(call.kind() == "method_invocation"
+                                && (super::exceptions::is_log_like(call, cx) || matches!(cx.fm.call_name(call), Some("println" | "print" | "printf" | "format" | "valueOf"))))
+                    })
+            })
+    });
+    if handed {
+        return true;
+    }
+    // locals whose value comes from the variable, or flags set under a
+    // condition on it: a condition on those involves the variable
+    let mentions = |n: Node<'t>| n.descendants().any(|d| d.kind() == "identifier" && cx.fm.local_ref(d) == Some(i));
+    let conditions_on_i: Vec<Node<'t>> = refs
+        .iter()
+        .filter_map(|r| r.ancestors().take_while(|a| *a != callable).find(|a| matches!(a.kind(), "if_statement" | "ternary_expression" | "while_statement" | "for_statement" | "do_statement")))
+        .collect();
+    let mut derived: Vec<usize> = Vec::new();
+    for d in callable.descendants() {
+        let (target, value) = match d.kind() {
+            "assignment_expression" => (d.field("left"), d.field("right")),
+            "variable_declarator" => (d.field("name"), d.field("value")),
+            _ => continue,
+        };
+        let Some(j) = target.and_then(|t| cx.fm.local_ref(t).or_else(|| cx.fm.binder.decl_index(t))) else { continue };
+        if j == i {
+            continue;
+        }
+        // a boolean flag set under a condition on the variable is a guard the
+        // analysis tracks itself: if it still reports, the flag went stale
+        let flag = value.is_some_and(|v| matches!(v.unparen().kind(), "true" | "false"));
+        if value.is_some_and(mentions) || (flag && conditions_on_i.iter().any(|c| d.ancestors().any(|a| a == *c) && c.field("condition").is_none_or(|cc| !cc.descendants().any(|x| x == d)))) {
+            derived.push(j);
+        }
+    }
+    let involves = |cond: Node<'t>| {
+        cond.descendants().any(|d| d.kind() == "identifier" && cx.fm.local_ref(d).is_some_and(|j| j == i || derived.contains(&j)))
+    };
+    // under an unrelated condition
+    let mut child = deref;
+    for a in deref.ancestors() {
+        if a == callable || a.kind() == "lambda_expression" || a.kind() == "class_body" || a.start_byte() < last {
+            break;
+        }
+        let cond = match a.kind() {
+            "if_statement" | "while_statement" | "do_statement" | "ternary_expression" => a.field("condition").filter(|c| *c != child && !c.descendants().any(|x| x == deref)),
+            "for_statement" | "enhanced_for_statement" => a.field("condition").or_else(|| a.field("value")).filter(|c| !c.descendants().any(|x| x == deref)),
+            "switch_block_statement_group" | "switch_rule" => a.parent().and_then(|b| b.parent()).and_then(|sw| sw.field("condition")),
+            "binary_expression" if matches!(op(a), "&&" | "||") && a.field("right") == Some(child) => a.field("left"),
+            _ => None,
+        };
+        if cond.is_some_and(|c| !involves(c)) {
+            return true;
+        }
+        child = a;
+    }
+    // the null check's branch ends in a call the analysis cannot see into
+    if let Some(check) = last_check {
+        if let Some(ifs) = check.ancestors().take_while(|a| *a != callable).find(|a| a.kind() == "if_statement") {
+            // the `if` must take the null path: `x == null`, alone or in an `||`
+            let cond = ifs.field("condition");
+            let mut null_branch = check.parent().is_some_and(|p| op(p) == "==");
+            let mut cur = check.parent();
+            while let Some(c) = cur {
+                if Some(c) == cond {
+                    break;
+                }
+                let up = c.parent();
+                if let Some(u) = up {
+                    if Some(u) != cond && !(u.kind() == "parenthesized_expression" || u.kind() == "binary_expression" && op(u) == "||") {
+                        null_branch = false;
+                        break;
+                    }
+                }
+                cur = up;
+            }
+            let in_cond = null_branch && ifs.field("condition").is_some_and(|c| c.descendants().any(|x| x == check));
+            if in_cond && ifs.field("alternative").is_none() {
+                let then = ifs.field("consequence");
+                let last_stmt = then.and_then(|t| if t.kind() == "block" { t.kids().into_iter().rfind(|k| !grounds_syntax::is_comment(k.kind())) } else { Some(t) });
+                if let Some(call) = last_stmt.filter(|st| st.kind() == "expression_statement").and_then(|st| st.first_kid()).filter(|c| c.kind() == "method_invocation") {
+                    let opaque = match cx.fm.select_method(call) {
+                        None => !super::exceptions::is_log_like(call, cx),
+                        Some(m) => m.method.flags.has(Flags::ALWAYS_THROWS),
+                    };
+                    if opaque {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
 }
 
 declare_rule!(RedundantNullCheck {
@@ -237,6 +464,13 @@ impl Rule for ResourceLeak {
         for n in root.descendants() {
             if let Some(pos) = found.iter().position(|(id, _)| *id == n.id()) {
                 let (_, msg) = found.remove(pos);
+                // a test's closeables are mostly in memory or test doubles (a
+                // reader over a String, a heap buffer, a pool of strings), and
+                // the test ends soon: only a file, socket or database handle
+                // left open there is worth a report
+                if cx.is_test() && !holds_os_resource(cx, n) {
+                    continue;
+                }
                 cx.report(n, msg);
                 if found.is_empty() {
                     break;
@@ -244,6 +478,51 @@ impl Rule for ResourceLeak {
             }
         }
     }
+}
+
+/// JDK types that hold an operating-system or database handle.
+const OS_RESOURCES: &[&str] = &[
+    "java.io.FileInputStream",
+    "java.io.FileOutputStream",
+    "java.io.FileReader",
+    "java.io.FileWriter",
+    "java.io.RandomAccessFile",
+    "java.net.Socket",
+    "java.net.ServerSocket",
+    "java.net.DatagramSocket",
+    "java.sql.Connection",
+    "java.sql.Statement",
+    "java.sql.ResultSet",
+    "java.util.zip.ZipFile",
+    "java.nio.channels.FileChannel",
+    "java.nio.channels.SocketChannel",
+    "java.nio.channels.ServerSocketChannel",
+    "java.nio.file.DirectoryStream",
+    "java.nio.file.WatchService",
+];
+
+/// Does the expression creating a resource open a file, socket or database
+/// handle (itself, or inside the creations it wraps)?
+fn holds_os_resource<'t>(cx: &Ctx<'_, 't>, site: Node<'t>) -> bool {
+    site.descendants().filter(|d| matches!(d.kind(), "object_creation_expression" | "method_invocation")).any(|d| {
+        if d.kind() == "method_invocation" && cx.fm.select_method(d).is_some_and(|m| &*m.owner == "java.nio.file.Files" && (m.method.name.starts_with("new") || matches!(&*m.method.name, "lines" | "list" | "walk" | "find"))) {
+            return true;
+        }
+        // constructors that open the file they are given: `new Scanner(file)`,
+        // `new PrintWriter("out.txt")`, `new Formatter(path)`
+        if d.kind() == "object_creation_expression" {
+            let t = cx.type_of(d);
+            let first = cx.fm.args_of(d).first().map(|a| cx.type_of(*a));
+            let file_arg = first.as_ref().is_some_and(|a| matches!(a.class_name(), Some("java.io.File" | "java.nio.file.Path")));
+            let name_arg = first.as_ref().is_some_and(|a| a.is_string());
+            match t.class_name() {
+                Some("java.util.Scanner") if file_arg => return true,
+                Some("java.io.PrintWriter" | "java.io.PrintStream" | "java.util.Formatter") if file_arg || name_arg => return true,
+                _ => {}
+            }
+        }
+        cx.type_of(d).class_name().is_some_and(|t| OS_RESOURCES.iter().any(|r| t == *r || cx.fm.is_subclass(t, r).is_yes()))
+    })
 }
 
 declare_rule!(OptionalGetWithoutCheck {
@@ -281,6 +560,20 @@ fn checked_before_lambda<'t>(cx: &Ctx<'_, 't>, callable: Node<'t>, local: usize)
     });
     // nested lambdas: known present where the enclosing lambda is created
     present || (outer.kind() == "lambda_expression" && checked_before_lambda(cx, outer, local))
+}
+
+/// `get()` inside the action an Optional runs only when it holds a value:
+/// `o.ifPresent(v -> use(o.get()))`, the first lambda of `o.ifPresentOrElse`.
+fn in_if_present<'t>(cx: &Ctx<'_, 't>, get: Node<'t>, local: usize) -> bool {
+    if !grounds_flow::analyses::is_effectively_final(cx.fm, local) {
+        return false;
+    }
+    get.ancestors().filter(|a| a.kind() == "lambda_expression").any(|lambda| {
+        let Some(call) = lambda.parent().filter(|p| p.kind() == "argument_list").and_then(|a| a.parent()) else { return false };
+        matches!(cx.fm.call_name(call), Some("ifPresent" | "ifPresentOrElse"))
+            && cx.fm.args_of(call).first() == Some(&lambda)
+            && call.field("object").map(|o| o.unparen()).is_some_and(|o| o.kind() == "identifier" && cx.fm.binder.decl_index_of_ref(o) == Some(local))
+    })
 }
 
 /// `get()` on the parameter of a stream step right after a filter that
@@ -327,7 +620,7 @@ impl Rule for OptionalGetWithoutCheck {
                     return;
                 }
                 if let Some(i) = oa.optional_local(e.field("object")) {
-                    if !f.contains(&i) && !checked_before_lambda(cx, c, i) && !filtered_present(cx, e) {
+                    if !f.contains(&i) && !checked_before_lambda(cx, c, i) && !filtered_present(cx, e) && !in_if_present(cx, e, i) {
                         found.push(e);
                     }
                 }
@@ -447,6 +740,8 @@ declare_rule!(UseAfterClose {
     category: Bug,
     severity: Warning,
     maturity: Preview,
+    // tests call a closed object on purpose, to check what it does then
+    scope: Main,
     sources: ["sonar:S2095", "spotbugs:OBL_UNSATISFIED_OBLIGATION_EXCEPTION_EDGE"],
     kinds: ["<file>"],
     description: "A method is called on a stream/reader/connection after it was closed on every path leading here; this throws an IOException or silently does nothing.",
@@ -588,6 +883,10 @@ declare_rule!(NullPassedToNonNull {
     severity: Error,
     maturity: Preview,
     tier: Edit,
+    // tests pass null on purpose: to check that it is rejected (by bean
+    // validation, a precondition, a method that throws anyway) or for a
+    // collaborator the tested path never uses
+    scope: Main,
     sources: ["spotbugs:NP_NONNULL_PARAM_VIOLATION", "errorprone:NullAway", "intellij:ConstantConditions"],
     kinds: ["method_invocation", "object_creation_expression"],
     description: "The parameter is annotated as non-null, but the call passes a `null` literal.",
@@ -613,7 +912,8 @@ impl Rule for NullPassedToNonNull {
                 continue;
             }
             if let Some(p) = c.method.params.get(i) {
-                if p.annotations.iter().any(is_nonnull_annotation) {
+                // null is the only value of `Void`
+                if p.annotations.iter().any(is_nonnull_annotation) && p.ty.class_name() != Some("java.lang.Void") {
                     cx.report(*a, format!("`null` passed to non-null parameter `{}`", p.name));
                 }
             }

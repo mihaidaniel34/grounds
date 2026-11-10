@@ -478,6 +478,168 @@ fn a_changed_build_file_reloads_the_project() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A project whose committed code already has a compile-break claim the
+/// model cannot back (`l.gap()`, which stands for a call to a member that a
+/// framework feature the model lacks generates): the claim exists before and
+/// after a change, so `grounds changed` must not report it, even on a line
+/// the change touches, while what the change does break is reported.
+fn gap_project(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let repo = std::env::temp_dir().join(format!("grounds-gap-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&repo);
+    std::fs::create_dir_all(&repo).unwrap();
+    let dir = repo.join("app");
+    write(&dir, "settings.gradle", "rootProject.name = 'demo'\n");
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, "src/main/java/demo/Lib.java", "package demo;\npublic class Lib {\n    public void real() {}\n    public void other() {}\n}\n");
+    write(&dir, "src/main/java/demo/Use.java", "package demo;\nclass Use {\n    void a(Lib l) { l.gap(); }\n    void b(Lib l) { l.real(); }\n}\n");
+    write(&dir, "src/main/java/demo/Other.java", "package demo;\nclass Other {\n    void c(Lib l) { l.gap(); }\n    void d(Lib l) { l.real(); }\n}\n");
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "init"]);
+    (repo, dir)
+}
+
+fn claims(r: &grounds_engine::session::Report) -> Vec<(String, u32, String)> {
+    let mut v: Vec<(String, u32, String)> = r.findings.iter().filter(|f| f.rule == "unresolved-method").map(|f| (f.path.rsplit('/').next().unwrap().to_string(), f.line, f.message.clone())).collect();
+    v.sort();
+    v
+}
+
+fn json(r: &grounds_engine::session::Report) -> String {
+    serde_json::to_string_pretty(r).unwrap()
+}
+
+#[test]
+fn a_pre_existing_break_claim_on_a_changed_line_is_not_reported() {
+    let (repo, dir) = gap_project("per-turn");
+    let use_java = "src/main/java/demo/Use.java";
+    let opts = |base: Option<String>| CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base };
+    // a whole-project run reports the gap: that is what `check` is told
+    let mut warm = Session::open(&dir).unwrap();
+    let all = warm.check(&CheckOptions { all_lines: true, files: vec![dir.join(use_java)], ..opts(None) });
+    assert_eq!(claims(&all).len(), 1, "{:?}", all.findings);
+    assert_eq!(all.findings.iter().find(|f| f.rule == "unresolved-method").unwrap().maturity, grounds_rules::Maturity::Preview, "on an unchanged line it is not the promise");
+
+    // 1. the change edits the very line of the gap, harmlessly: not reported
+    write(&dir, use_java, "package demo;\nclass Use {\n    void a(Lib l) { l.gap(); /* touched */ }\n    void b(Lib l) { l.real(); }\n}\n");
+    let r = warm.check(&opts(None));
+    assert_eq!(claims(&r), vec![], "{:?}", r.findings);
+    assert_eq!(r.outside_changed_lines, 0);
+    // the post-edit hook, with the file named
+    let edit = warm.check(&CheckOptions { mode: Mode::Edit, files: vec![dir.join(use_java)], ..opts(None) });
+    assert_eq!(claims(&edit), vec![]);
+
+    // 2. a new break on a changed line next to it: reported, as stable
+    write(&dir, use_java, "package demo;\nclass Use {\n    void a(Lib l) { l.gap(); /* touched */ }\n    void b(Lib l) { l.missing(); }\n}\n");
+    let r = warm.check(&opts(None));
+    assert_eq!(claims(&r), vec![("Use.java".to_string(), 4, "`Lib` has no method `missing`".to_string())], "{:?}", r.findings);
+    let v: serde_json::Value = serde_json::from_str(&json(&r)).unwrap();
+    let f = v["findings"].as_array().unwrap().iter().find(|f| f["rule"] == "unresolved-method").unwrap();
+    assert_eq!(f["maturity"], "stable");
+    assert_eq!(r.findings.iter().find(|f| f.rule == "unresolved-method").unwrap().maturity, grounds_rules::Maturity::Stable);
+    let fresh = Session::open(&dir).unwrap().check(&opts(None));
+    assert_eq!(json(&fresh), json(&r), "a fresh session (no daemon) answers as the warm one");
+
+    // 3. the gap's line moved to the end of the class and edited: not reported
+    write(&dir, use_java, "package demo;\nclass Use {\n    void b(Lib l) { l.real(); }\n\n    void a(Lib l) {\n        l.gap();\n    }\n}\n");
+    let r = warm.check(&opts(None));
+    assert_eq!(claims(&r), vec![], "{:?}", r.findings);
+    assert_eq!(json(&Session::open(&dir).unwrap().check(&opts(None))), json(&r));
+
+    // 4. a new file: everything in it is new, except a claim the project
+    // before the change already got (the same call in untouched code)
+    write(&dir, use_java, "package demo;\nclass Use {\n    void a(Lib l) { l.gap(); }\n    void b(Lib l) { l.real(); }\n}\n");
+    write(&dir, "src/main/java/demo/Fresh.java", "package demo;\nclass Fresh {\n    void e(Lib l) { l.nowhere(); }\n    void f(Lib l) { l.gap(); }\n}\n");
+    let r = warm.check(&opts(None));
+    assert_eq!(claims(&r), vec![("Fresh.java".to_string(), 3, "`Lib` has no method `nowhere`".to_string())], "{:?}", r.findings);
+    assert_eq!(json(&Session::open(&dir).unwrap().check(&opts(None))), json(&r));
+
+    // 5. the same in CI mode, against the merge base, once committed
+    git(&repo, &["checkout", "-qb", "feature"]);
+    write(&dir, use_java, "package demo;\nclass Use {\n    void a(Lib l) { l.gap(); /* touched */ }\n    void b(Lib l) { l.missing(); }\n}\n");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "feature"]);
+    let mb = grounds_engine::git::merge_base(&dir, "main").unwrap();
+    let r = warm.check(&opts(Some(mb.clone())));
+    assert_eq!(
+        claims(&r),
+        vec![("Fresh.java".to_string(), 3, "`Lib` has no method `nowhere`".to_string()), ("Use.java".to_string(), 4, "`Lib` has no method `missing`".to_string())],
+        "{:?}",
+        r.findings
+    );
+    assert!(r.pending.is_empty(), "{:?}", r.pending);
+    assert_eq!(json(&Session::open(&dir).unwrap().check(&opts(Some(mb)))), json(&r));
+    // against HEAD the branch is clean
+    assert!(warm.check(&opts(None)).findings.is_empty());
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+#[test]
+fn per_turn_breaks_in_other_files_are_only_those_the_change_made() {
+    let (repo, dir) = gap_project("pending");
+    let opts = CheckOptions { mode: Mode::Edit, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None };
+    let mut warm = Session::open(&dir).unwrap();
+    assert!(warm.check(&opts).pending.is_empty());
+    // renaming `real` breaks its callers in Use and Other; their `l.gap()`
+    // calls were already claimed broken before and are not the change's
+    write(&dir, "src/main/java/demo/Lib.java", "package demo;\npublic class Lib {\n    public void real2() {}\n    public void other() {}\n}\n");
+    let r = warm.check(&opts);
+    let mut pending: Vec<(&str, u32)> = r.pending.iter().map(|f| (f.path.rsplit('/').next().unwrap(), f.line)).collect();
+    pending.sort();
+    assert_eq!(pending, vec![("Other.java", 4), ("Use.java", 4)], "{:?}", r.pending);
+    assert!(r.pending.iter().all(|f| f.maturity == grounds_rules::Maturity::Stable));
+    assert_eq!(r.breaks.len(), 1);
+    let v: serde_json::Value = serde_json::from_str(&json(&r)).unwrap();
+    assert_eq!(v["pending"][0]["maturity"], "stable");
+    assert_eq!(v["breaks"][0]["finding"]["maturity"], "stable");
+    let sarif: serde_json::Value = serde_json::from_str(&grounds_engine::report::sarif_report(&r, &dir, &[])).unwrap();
+    for x in sarif["runs"][0]["results"].as_array().unwrap() {
+        assert_eq!(x["properties"]["maturity"], "stable", "{x}");
+    }
+    for d in sarif["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap() {
+        assert_eq!(d["properties"]["maturity"], "stable", "{d}");
+    }
+    assert_eq!(json(&Session::open(&dir).unwrap().check(&opts)), json(&r));
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+#[test]
+fn only_the_promised_rules_are_stable_in_pending_and_sarif_rules_take_the_weaker_maturity() {
+    let (repo, dir) = gap_project("static");
+    write(&dir, "src/main/java/demo/Util.java", "package demo;\npublic class Util {\n    public static void helper() {}\n}\n");
+    write(&dir, "src/main/java/demo/UsesUtil.java", "package demo;\nimport static demo.Util.helper;\nclass UsesUtil {\n    void t() { helper(); }\n}\n");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "util"]);
+    let mut s = Session::open(&dir).unwrap();
+    // a renamed statically imported member: `unresolved-static-import` is not
+    // one of the promised rules, so it stays preview in `pending`
+    write(&dir, "src/main/java/demo/Util.java", "package demo;\npublic class Util {\n    public static void helper2() {}\n}\n");
+    let r = s.check(&CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None });
+    assert!(r.pending.iter().any(|f| f.rule == "unresolved-static-import"), "{:?}", r.pending);
+    for f in &r.pending {
+        let want = if grounds_engine::session::stable_in_changed(f.rule) { grounds_rules::Maturity::Stable } else { grounds_rules::Maturity::Preview };
+        assert_eq!(f.maturity, want, "{f:?}");
+    }
+    // a break on a changed line is as mature as the weakest place under it
+    assert!(!r.breaks.is_empty());
+    for b in &r.breaks {
+        let all_stable = b.broken.iter().all(|&i| r.pending[i].maturity == grounds_rules::Maturity::Stable);
+        assert_eq!(b.finding.maturity == grounds_rules::Maturity::Stable, all_stable, "{b:?}");
+    }
+
+    // `--all-lines`: the pre-existing gap on an unchanged line (preview) and a
+    // new break on a changed line (stable) of the same rule
+    write(&dir, "src/main/java/demo/Util.java", "package demo;\npublic class Util {\n    public static void helper() {}\n}\n");
+    write(&dir, "src/main/java/demo/Use.java", "package demo;\nclass Use {\n    void a(Lib l) { l.gap(); }\n    void b(Lib l) { l.missing(); }\n}\n");
+    let r = s.check(&CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None });
+    let m: Vec<_> = r.findings.iter().filter(|f| f.rule == "unresolved-method").map(|f| (f.line, f.maturity)).collect();
+    assert!(m.contains(&(3, grounds_rules::Maturity::Preview)) && m.contains(&(4, grounds_rules::Maturity::Stable)), "{m:?}");
+    let sarif: serde_json::Value = serde_json::from_str(&grounds_engine::report::sarif_report(&r, &dir, &[])).unwrap();
+    let d = sarif["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap().iter().find(|d| d["id"] == "unresolved-method").unwrap().clone();
+    assert_eq!(d["properties"]["maturity"], "preview", "{d}");
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
 #[test]
 fn a_file_written_while_the_project_loads_is_read_again() {
     let dir = std::env::temp_dir().join(format!("grounds-session-loadrace-{}", std::process::id()));
@@ -631,5 +793,234 @@ fn a_comparison_with_a_base_sees_the_base_s_launcher() {
     let r = s.check(&opts);
     let conflicts: Vec<&str> = r.pending.iter().chain(r.findings.iter()).filter(|f| f.rule == "bean-name-conflict").map(|f| f.path.as_str()).collect();
     assert!(!conflicts.is_empty(), "the clash the change introduces is new: {:?} / {:?}", r.pending, r.findings);
+    drop(s);
+    // against a base that already starts Pair, an edit of the launcher that
+    // still starts it is not a new clash: the base state (`at_base`) must
+    // read the base's launcher, not take its startups from the head
+    write(&repo, "src/main/java/launch/Main.java", &launcher("Pair").replace("public class Main {", "public class Main {\n    // still Pair"));
+    let r = base_check(&repo);
+    assert!(!rules_of(&r).iter().any(|(_, rule)| *rule == "bean-name-conflict"), "{:?}", r.pending);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// The same place, a different claim: a changed return type turns "`Old` has
+/// no method `missing`" (there before the change) into "`New` has no method
+/// `missing`" on an unchanged line of another file. That is a new break.
+#[test]
+fn a_different_claim_at_the_same_place_is_a_new_break() {
+    let repo = std::env::temp_dir().join(format!("grounds-sameplace-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&repo);
+    let dir = repo.join("app");
+    write(&dir, "settings.gradle", "rootProject.name = 'demo'\n");
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, "src/main/java/demo/Old.java", "package demo;\npublic class Old {\n    public void present() {}\n}\n");
+    write(&dir, "src/main/java/demo/New.java", "package demo;\npublic class New {\n    public void present() {}\n}\n");
+    write(&dir, "src/main/java/demo/Lib.java", "package demo;\npublic class Lib {\n    public Old api() { return null; }\n    public void helper(int a) {}\n}\n");
+    write(&dir, "src/main/java/demo/Caller.java", "package demo;\nclass Caller {\n    void t(Lib l) { l.api().missing(); l.helper(1); }\n}\n");
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "init"]);
+    let mut s = Session::open(&dir).unwrap();
+    // `helper` widened (so Caller is a dependent per turn), `api` now returns `New`
+    write(&dir, "src/main/java/demo/Lib.java", "package demo;\npublic class Lib {\n    public New api() { return null; }\n    public void helper(long a) {}\n}\n");
+    let opts = |base: Option<String>| CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base };
+    let msgs = |r: &grounds_engine::session::Report| r.pending.iter().map(|f| f.message.clone()).collect::<Vec<_>>();
+    let r = s.check(&opts(None));
+    assert_eq!(msgs(&r), ["`New` has no method `missing`"], "per turn: {:?}", r.pending);
+    git(&repo, &["checkout", "-qb", "feature"]);
+    git(&repo, &["commit", "-qam", "api"]);
+    let mb = grounds_engine::git::merge_base(&dir, "main").unwrap();
+    let r = s.check(&opts(Some(mb)));
+    assert_eq!(msgs(&r), ["`New` has no method `missing`"], "--base: {:?}", r.pending);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// Reordering overloads changes only the order of the `available:` list in an
+/// old claim, which is not a break; a different receiver type still is.
+#[test]
+fn reordered_declarations_do_not_make_an_old_claim_new() {
+    let repo = std::env::temp_dir().join(format!("grounds-reorder-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&repo);
+    let dir = repo.join("app");
+    write(&dir, "settings.gradle", "rootProject.name = 'demo'\n");
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, "src/main/java/demo/Lib.java", "package demo;\npublic class Lib {\n    public void f(int a) {}\n    public void f(int a, int b) {}\n}\n");
+    write(&dir, "src/main/java/demo/Caller.java", "package demo;\nclass Caller {\n    void t(Lib l) { l.f(\"x\"); }\n}\n");
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "init"]);
+    let mut s = Session::open(&dir).unwrap();
+    let before = s.check(&CheckOptions { mode: Mode::Checkpoint, files: vec![dir.join("src/main/java/demo/Caller.java")], all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None });
+    assert!(before.findings.iter().any(|f| f.message.contains("available: f(int), f(int,int)")), "{:?}", before.findings);
+    write(&dir, "src/main/java/demo/Lib.java", "package demo;\npublic class Lib {\n    public void f(int a, int b) {}\n    public void f(int a) {}\n}\n");
+    let opts = |base: Option<String>| CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base };
+    let r = s.check(&opts(Some("HEAD".into())));
+    assert!(r.pending.is_empty() && r.breaks.is_empty(), "--base: {:?}", r.pending);
+    let r = s.check(&opts(None));
+    assert!(r.pending.is_empty() && r.breaks.is_empty(), "per turn: {:?}", r.pending);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// A Spring application in a repository, for the wiring claims.
+fn spring_project(name: &str, files: &[(&str, &str)]) -> (std::path::PathBuf, std::path::PathBuf) {
+    let repo = std::env::temp_dir().join(format!("grounds-claim-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&repo);
+    let dir = repo.join("app");
+    write(&dir, "settings.gradle", "rootProject.name = 'demo'\n");
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    for a in ["Service", "Component"] {
+        write(&dir, &format!("src/main/java/org/springframework/stereotype/{a}.java"), &format!("package org.springframework.stereotype;\npublic @interface {a} {{}}\n"));
+    }
+    write(&dir, "src/main/java/org/springframework/boot/autoconfigure/SpringBootApplication.java", "package org.springframework.boot.autoconfigure;\npublic @interface SpringBootApplication {}\n");
+    write(&dir, "src/main/java/demo/App.java", "package demo;\n@org.springframework.boot.autoconfigure.SpringBootApplication\npublic class App { public static void main(String[] args) {} }\n");
+    for (f, t) in files {
+        write(&dir, &format!("src/main/java/demo/{f}"), t);
+    }
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "init"]);
+    (repo, dir)
+}
+
+fn base_check(dir: &std::path::Path) -> grounds_engine::session::Report {
+    let mut s = Session::open(dir).unwrap();
+    s.check(&CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: Some("HEAD".into()) })
+}
+
+fn rules_of(r: &grounds_engine::session::Report) -> Vec<(String, &'static str)> {
+    let mut v: Vec<_> = r.findings.iter().chain(&r.pending).filter(|f| grounds_engine::session::compared_in_changed(f.rule)).map(|f| (f.path.rsplit('/').next().unwrap().to_string(), f.rule)).collect();
+    v.sort();
+    v
+}
+
+/// S5: what an unchanged class is missing changes; the number does not.
+#[test]
+fn a_different_missing_method_is_a_new_claim() {
+    let (repo, dir) = spring_project("unimpl", &[("I.java", "package demo;\npublic interface I {\n    void old();\n}\n"), ("C.java", "package demo;\npublic class C implements I {}\n")]);
+    assert_eq!(rules_of(&base_check(&dir)), vec![], "nothing changed yet");
+    write(&dir, "src/main/java/demo/I.java", "package demo;\npublic interface I {\n    void fresh();\n}\n");
+    let r = base_check(&dir);
+    assert_eq!(rules_of(&r), vec![("C.java".into(), "unimplemented-abstract-method")], "{:?}", r.pending);
+    assert!(r.pending[0].message.contains("I.fresh()"), "{:?}", r.pending);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// S7: other candidates for the same ambiguous injection point.
+#[test]
+fn other_ambiguous_candidates_are_a_new_claim() {
+    let bean = |n: &str| format!("package demo;\n@org.springframework.stereotype.Service\npublic class {n} implements Api {{}}\n");
+    let (repo, dir) = spring_project(
+        "ambiguous",
+        &[("Api.java", "package demo;\npublic interface Api {}\n"), ("One.java", &bean("One")), ("Two.java", &bean("Two")), ("Vet.java", "package demo;\n@org.springframework.stereotype.Component\npublic class Vet {\n    Vet(Api api) {}\n}\n")],
+    );
+    std::fs::remove_file(dir.join("src/main/java/demo/One.java")).unwrap();
+    std::fs::remove_file(dir.join("src/main/java/demo/Two.java")).unwrap();
+    write(&dir, "src/main/java/demo/Three.java", &bean("Three"));
+    write(&dir, "src/main/java/demo/Four.java", &bean("Four"));
+    let r = base_check(&dir);
+    assert_eq!(rules_of(&r), vec![("Vet.java".into(), "ambiguous-bean")], "{:?}", r.pending);
+    // the same candidates in another order of declaration are the old claim
+    write(&dir, "src/main/java/demo/Api.java", "package demo;\n// reordered\npublic interface Api {}\n");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "three and four"]);
+    std::fs::remove_file(dir.join("src/main/java/demo/Four.java")).unwrap();
+    write(&dir, "src/main/java/demo/Four.java", &format!("package demo;\n\n{}", &bean("Four")["package demo;\n".len()..]));
+    assert_eq!(rules_of(&base_check(&dir)), vec![]);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// S8, by decision: which cycle the rule reports can depend on the order of
+/// parameters (the wiring rules' claims depend on order in the model), so the
+/// cycle rule is not stable: whatever it reports after the change is preview.
+#[test]
+fn a_cycle_found_after_reordered_parameters_is_preview() {
+    let c = |n: &str, ps: &str| format!("package demo;\n@org.springframework.stereotype.Component public class {n} {{ {n}({ps}) {{}} }}\n");
+    let (repo, dir) = spring_project("cycle", &[("A.java", &c("A", "B b, C c")), ("B.java", &c("B", "A a")), ("C.java", &c("C", "A a"))]);
+    write(&dir, "src/main/java/demo/A.java", &c("A", "C c, B b"));
+    let r = base_check(&dir);
+    for f in r.findings.iter().chain(&r.pending).filter(|f| f.rule == "circular-constructor-dependency") {
+        assert_eq!(f.maturity, grounds_rules::Maturity::Preview, "{f:?}");
+    }
+    assert!(r.breaks.iter().all(|b| b.finding.maturity == grounds_rules::Maturity::Preview || b.broken.iter().all(|&i| r.pending[i].rule != "circular-constructor-dependency")));
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// S6, decided: a new injection point of a type whose bean untouched code
+/// already missed before the change is the model's gap (limit b), not
+/// reported; a missing bean of another type is.
+#[test]
+fn a_new_injection_point_of_a_type_already_missing_is_the_same_gap() {
+    let comp = |n: &str, ps: &str| format!("package demo;\n@org.springframework.stereotype.Component\npublic class {n} {{\n    {n}({ps}) {{}}\n}}\n");
+    let (repo, dir) = spring_project("gap", &[("Api.java", "package demo;\npublic interface Api {}\n"), ("Other.java", "package demo;\npublic interface Other {}\n"), ("Old.java", &comp("Old", "Api old"))]);
+    write(&dir, "src/main/java/demo/Fresh.java", &comp("Fresh", "Api fresh"));
+    assert_eq!(rules_of(&base_check(&dir)), vec![]);
+    write(&dir, "src/main/java/demo/Fresh.java", &comp("Fresh", "Other fresh"));
+    assert_eq!(rules_of(&base_check(&dir)), vec![("Fresh.java".into(), "bean-not-found")]);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// Two types with one simple name: an injection point of `b.Api` missing its
+/// bean is not the gap untouched code had for `a.Api`.
+#[test]
+fn a_missing_bean_of_another_type_with_the_same_simple_name_is_reported() {
+    let (repo, dir) = spring_project(
+        "samename",
+        &[
+            ("a/Api.java", "package demo.a;\npublic interface Api {}\n"),
+            ("b/Api.java", "package demo.b;\npublic interface Api {}\n"),
+            ("Old.java", "package demo;\n@org.springframework.stereotype.Component\npublic class Old {\n    Old(demo.a.Api api) {}\n}\n"),
+        ],
+    );
+    write(&dir, "src/main/java/demo/Fresh.java", "package demo;\n@org.springframework.stereotype.Component\npublic class Fresh {\n    Fresh(demo.b.Api api) {}\n}\n");
+    assert_eq!(rules_of(&base_check(&dir)), vec![("Fresh.java".into(), "bean-not-found")]);
+    write(&dir, "src/main/java/demo/Fresh.java", "package demo;\n@org.springframework.stereotype.Component\npublic class Fresh {\n    Fresh(demo.a.Api api) {}\n}\n");
+    assert_eq!(rules_of(&base_check(&dir)), vec![]);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// S9: which of several private overloads is shown depends on declaration
+/// order; the claim (every fitting overload is private) does not.
+#[test]
+fn reordered_private_overloads_are_the_old_claim() {
+    let (repo, dir) = spring_project("private", &[("Lib.java", "package demo;\npublic class Lib {\n    private void f(int a) {}\n    private void f(long a) {}\n}\n"), ("Caller.java", "package demo;\nclass Caller {\n    void t(Lib x) { x.f(1); }\n}\n")]);
+    let mut s = Session::open(&dir).unwrap();
+    let all = s.check(&CheckOptions { mode: Mode::Checkpoint, files: vec![dir.join("src/main/java/demo/Caller.java")], all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None });
+    assert!(all.findings.iter().any(|f| f.rule == "unresolved-method" && f.message.contains("is private")), "{:?}", all.findings);
+    write(&dir, "src/main/java/demo/Lib.java", "package demo;\npublic class Lib {\n    private void f(long a) {}\n    private void f(int a) {}\n}\n");
+    assert_eq!(rules_of(&base_check(&dir)), vec![]);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// S10: the same requirement inherited from two interfaces, listed in the
+/// other order, is the old claim.
+#[test]
+fn a_requirement_from_reordered_interfaces_is_the_old_claim() {
+    let (repo, dir) = spring_project(
+        "twointerfaces",
+        &[("I.java", "package demo;\npublic interface I {\n    void f();\n}\n"), ("J.java", "package demo;\npublic interface J {\n    void f();\n}\n"), ("C.java", "package demo;\npublic class C implements I, J {}\n")],
+    );
+    let mut s = Session::open(&dir).unwrap();
+    let all = s.check(&CheckOptions { mode: Mode::Checkpoint, files: vec![dir.join("src/main/java/demo/C.java")], all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None });
+    assert!(all.findings.iter().any(|f| f.rule == "unimplemented-abstract-method"), "{:?}", all.findings);
+    write(&dir, "src/main/java/demo/C.java", "package demo;\npublic class C implements J, I {}\n");
+    assert_eq!(rules_of(&base_check(&dir)), vec![]);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// S11: a short cycle next to a long route to the same class is found
+/// whatever the order of the search.
+#[test]
+fn a_short_cycle_beside_a_long_route_is_found() {
+    let c = |n: &str, ps: &str| (format!("{n}.java"), format!("package demo;\n@org.springframework.stereotype.Component public class {n} {{ {n}({ps}) {{}} }}\n"));
+    let mut files = vec![c("S", "Z z, A a"), c("A", "R r"), c("R", "S s"), c("Z", "Z1 z"), c("Z6", "R r")];
+    for i in 1..6 {
+        files.push(c(&format!("Z{i}"), &format!("Z{} z", i + 1)));
+    }
+    let refs: Vec<(&str, &str)> = files.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let (repo, dir) = spring_project("longroute", &refs);
+    let mut s = Session::open(&dir).unwrap();
+    let all = s.check(&CheckOptions { mode: Mode::Checkpoint, files: vec![dir.join("src/main/java/demo/S.java")], all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None });
+    let cyc: Vec<&str> = all.findings.iter().filter(|f| f.rule == "circular-constructor-dependency").map(|f| f.message.as_str()).collect();
+    assert_eq!(cyc, ["Circular constructor dependency: S -> A -> R -> S"], "{:?}", all.findings);
     let _ = std::fs::remove_dir_all(&repo);
 }

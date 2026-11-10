@@ -260,6 +260,22 @@ impl Rule for ThrowRawException {
     }
 }
 
+/// Exceptions that report invalid input (an unparsable number, date or
+/// pattern, a value of the wrong type or state).
+const INPUT_VALIDATION: &[&str] = &[
+    "java.lang.IllegalArgumentException",
+    "java.lang.IllegalStateException",
+    "java.lang.ClassCastException",
+    "java.time.DateTimeException",
+    "java.text.ParseException",
+];
+
+/// Charsets every Java platform supports (`java.nio.charset.StandardCharsets`).
+const STANDARD_CHARSETS: &[&str] = &["UTF-8", "UTF8", "US-ASCII", "ISO-8859-1", "UTF-16", "UTF-16BE", "UTF-16LE"];
+
+/// `MessageDigest` algorithms every Java platform supports (and their aliases).
+const STANDARD_DIGESTS: &[&str] = &["MD5", "SHA", "SHA1", "SHA-1", "SHA-256"];
+
 declare_rule!(LostStackTrace {
     id: "lost-stack-trace",
     name: "Exception rethrown without its cause",
@@ -376,8 +392,133 @@ impl Rule for LostStackTrace {
             return;
         }
         // exception assigned to a variable that later gets the cause
-        if catch_types(c, cx).iter().any(|t| matches!(t.class_name(), Some("java.lang.NumberFormatException" | "java.lang.InterruptedException"))) {
+        let caught = catch_types(c, cx);
+        if caught.iter().any(|t| matches!(t.class_name(), Some("java.lang.NumberFormatException" | "java.lang.InterruptedException"))) {
             return;
+        }
+        let try_stmt = c.parent().filter(|t| matches!(t.kind(), "try_statement" | "try_with_resources_statement"));
+        // A failure to parse or validate input, translated into an error that
+        // carries the caught message or names the input: the stack of the
+        // parser adds nothing to that, and the translation is deliberate.
+        let validation = !caught.is_empty()
+            && caught.iter().all(|t| {
+                t.class_name().is_some_and(|tn| INPUT_VALIDATION.iter().any(|f| tn == *f || cx.fm.is_subclass(tn, f).is_yes()))
+            });
+        if validation {
+            let carries_message = e.descendants().any(|d| {
+                d.kind() == "method_invocation"
+                    && d.field("object").is_some_and(|o| names.contains(&o.text(cx.src)))
+                    && d.field("name").is_some_and(|nm| matches!(nm.text(cx.src), "getMessage" | "getLocalizedMessage"))
+            });
+            let read_in_try: Vec<usize> = try_stmt
+                .map(|t| {
+                    t.kids()
+                        .into_iter()
+                        .filter(|k| matches!(k.kind(), "block" | "resource_specification"))
+                        .flat_map(|k| k.descendants())
+                        // the input: what the try handed to the parser or
+                        // validator, or cast
+                        .filter(|d| d.ancestors().take_while(|a| Some(*a) != try_stmt).any(|a| matches!(a.kind(), "argument_list" | "cast_expression")))
+                        .filter_map(|d| cx.fm.local_ref(d))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let names_input = e.field("arguments").is_some_and(|a| a.descendants().any(|d| cx.fm.local_ref(d).is_some_and(|i| read_in_try.contains(&i))));
+            if carries_message || names_input {
+                return;
+            }
+        }
+        // a checked exception the JDK guarantees never happens: a charset or
+        // a message digest every Java platform must support, named by a literal
+        if let Some(t) = try_stmt {
+            // every call in the try that takes a charset or algorithm name
+            // must be given a guaranteed one as a literal
+            let calls: Vec<Node<'t>> = t
+                .kids()
+                .into_iter()
+                .filter(|k| matches!(k.kind(), "block" | "resource_specification"))
+                .flat_map(|k| k.descendants())
+                .filter(|d| matches!(d.kind(), "method_invocation" | "object_creation_expression"))
+                .collect();
+            let literal_in = |call: Node<'t>, set: &[&str]| {
+                cx.fm.args_of(call).iter().map(|a| a.unparen()).any(|a| a.kind() == "string_literal" && set.contains(&a.text(cx.src).trim_matches('"').to_ascii_uppercase().as_str()))
+            };
+            let charset_calls: Vec<Node<'t>> = calls
+                .iter()
+                .copied()
+                // the overloads that take a charset name (a String) and throw
+                // UnsupportedEncodingException; `StandardCharsets.UTF_8.encode(s)`
+                // and `new String(bytes, 0, n)` do not
+                .filter(|c| {
+                    let args = cx.fm.args_of(*c);
+                    let names_charset = args.iter().skip(if c.kind() == "method_invocation" { 0 } else { 1 }).any(|a| cx.type_of(*a).is_string());
+                    match c.kind() {
+                        "method_invocation" => {
+                            // unresolved: only a `getBytes` on a String receiver
+                            let owner = cx.fm.select_method(*c).map(|m| m.owner.to_string()).or_else(|| {
+                                c.field("object").filter(|o| cx.type_of(*o).is_string()).map(|_| "java.lang.String".to_string())
+                            });
+                            names_charset
+                                && matches!(
+                                    (cx.fm.call_name(*c), owner.as_deref()),
+                                    (Some("getBytes"), Some("java.lang.String"))
+                                        | (Some("encode"), Some("java.net.URLEncoder"))
+                                        | (Some("decode"), Some("java.net.URLDecoder"))
+                                        | (Some("toString"), Some("java.io.ByteArrayOutputStream"))
+                                )
+                        }
+                        _ => {
+                            names_charset
+                                && matches!(cx.type_of(*c).class_name(), Some("java.lang.String" | "java.io.InputStreamReader" | "java.io.OutputStreamWriter" | "java.io.PrintStream" | "java.io.PrintWriter" | "java.util.Scanner" | "java.util.Formatter"))
+                        }
+                    }
+                })
+                .collect();
+            // `MessageDigest.getInstance`: other `getInstance`s (Mac, Cipher,
+            // Signature) guarantee other algorithm sets
+            let digest_calls: Vec<Node<'t>> = calls
+                .iter()
+                .copied()
+                .filter(|c| {
+                    c.kind() == "method_invocation"
+                        && cx.fm.call_name(*c) == Some("getInstance")
+                        && match cx.fm.select_method(*c) {
+                            Some(m) => &*m.owner == "java.security.MessageDigest",
+                            None => c.field("object").is_some_and(|o| cx.text(o).rsplit('.').next() == Some("MessageDigest")),
+                        }
+                })
+                .collect();
+            // a `getInstance` of another class in the try may throw too
+            let other_getinstance = calls.iter().any(|c| c.kind() == "method_invocation" && cx.fm.call_name(*c) == Some("getInstance") && !digest_calls.contains(c));
+            // any other call in the try that may throw the caught exception
+            // (or a supertype or subtype of it); an unresolved one may
+            let others_may_throw = |caught: &str| {
+                calls.iter().any(|c| {
+                    // a lambda or a local class runs at another time
+                    !c.ancestors().take_while(|a| *a != t).any(|a| matches!(a.kind(), "lambda_expression" | "class_body"))
+                        && !charset_calls.contains(c)
+                        && !digest_calls.contains(c)
+                        && match cx.fm.select_method(*c) {
+                            None => true,
+                            Some(m) => {
+                                m.ambiguous
+                                    || m.method.throws.iter().any(|th| match th.class_name() {
+                                        None => true,
+                                        Some(tn) => tn == caught || !cx.fm.is_subclass(caught, tn).is_no() || !cx.fm.is_subclass(tn, caught).is_no(),
+                                    })
+                            }
+                        }
+                })
+            };
+            let impossible = !caught.is_empty()
+                && caught.iter().all(|t| match t.class_name() {
+                    Some(c @ "java.io.UnsupportedEncodingException") => !charset_calls.is_empty() && !others_may_throw(c) && charset_calls.iter().all(|c| literal_in(*c, STANDARD_CHARSETS)),
+                    Some(c @ "java.security.NoSuchAlgorithmException") => !digest_calls.is_empty() && !other_getinstance && !others_may_throw(c) && digest_calls.iter().all(|c| literal_in(*c, STANDARD_DIGESTS)),
+                    _ => false,
+                });
+            if impossible {
+                return;
+            }
         }
         cx.report(e, format!("The caught exception `{v}` is not passed as the cause; its stack trace is lost"));
     }
@@ -569,7 +710,7 @@ impl Rule for RethrowOnly {
 }
 
 /// A logger call or a logging helper (`Tracer.logError(msg, e)`, `logException(e)`).
-fn is_log_like<'t>(n: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+pub(crate) fn is_log_like<'t>(n: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
     is_log_call(n, cx) || (n.kind() == "method_invocation" && cx.fm.call_name(n).and_then(|m| m.strip_prefix("log")).is_some_and(|r| r.starts_with(|c: char| c.is_ascii_uppercase())))
 }
 

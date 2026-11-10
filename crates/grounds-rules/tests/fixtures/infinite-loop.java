@@ -1,11 +1,12 @@
 class A {
+    // an explicit endless loop is meant to run forever (a worker, a server loop)
     void m() {
-        while (true) { // expect
+        while (true) {
             work();
         }
     }
     void n() {
-        for (;;) { // expect
+        for (;;) {
             work();
         }
     }

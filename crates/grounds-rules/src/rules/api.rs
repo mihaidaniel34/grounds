@@ -194,7 +194,9 @@ fn provokes_exception<'t>(n: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
     }
 }
 
-const FILE_OPS: MethodMatcher = MethodMatcher::instance("java.io.File").named(&["delete", "mkdir", "mkdirs", "createNewFile", "renameTo", "setReadable", "setWritable", "setExecutable", "setLastModified", "setReadOnly"]);
+// not `createNewFile`: false only means the file already exists, and a
+// failure to create it throws IOException
+const FILE_OPS: MethodMatcher = MethodMatcher::instance("java.io.File").named(&["delete", "mkdir", "mkdirs", "renameTo", "setReadable", "setWritable", "setExecutable", "setLastModified", "setReadOnly"]);
 const LOCK_TRY: MethodMatcher = MethodMatcher::instance("java.util.concurrent.locks.Lock").named(&["tryLock"]);
 const QUEUE_OFFER: MethodMatcher = MethodMatcher::instance("java.util.concurrent.BlockingQueue").named(&["offer"]);
 const LATCH_AWAIT: MethodMatcher = MethodMatcher::instance("java.util.concurrent.CountDownLatch").named(&["await"]).arity(2);
@@ -229,10 +231,96 @@ impl Rule for IgnoredFileResult {
         if cx.fm.call_matches(e, &LATCH_AWAIT) && latch_checked_after(cx, e) {
             return;
         }
+        // a bounded wait in a test: the assertions after it notice when the
+        // work did not finish
+        if cx.is_test() && cx.fm.call_matches_any(e, &[LATCH_AWAIT, EXECUTOR_AWAIT]) {
+            return;
+        }
+        // a directory whose creation failed makes the file written into it
+        // next throw IOException
+        if matches!(cx.fm.call_name(e), Some("mkdir" | "mkdirs")) && writes_file_after(cx, n, e) {
+            return;
+        }
         if cx.fm.call_matches_any(e, &[FILE_OPS, LOCK_TRY, QUEUE_OFFER, LATCH_AWAIT, EXECUTOR_AWAIT]) {
             cx.report(e, format!("The boolean result of `{}()` is ignored; failures go unnoticed", cx.fm.call_name(e).unwrap_or("")));
         }
     }
+}
+
+/// Does a later statement of the same block create or write a file under the
+/// same path variable as the `mkdirs` call (which throws IOException when the
+/// directory is missing)?
+fn writes_file_after<'t>(cx: &Ctx<'_, 't>, stmt: Node<'t>, mkdirs: Node<'t>) -> bool {
+    let Some(block) = stmt.parent() else { return false };
+    // the variable the directory comes from: `dir` in `dir.mkdirs()`,
+    // `file` in `file.getParentFile().mkdirs()`, `path` in `path.toFile().mkdirs()`
+    let mut root = mkdirs.field("object").map(|o| o.unparen());
+    while let Some(r) = root.filter(|r| r.kind() == "method_invocation") {
+        root = r.field("object").map(|o| o.unparen());
+    }
+    let Some(root) = root.filter(|r| r.kind() == "identifier").map(|r| cx.text(r)) else { return false };
+    // the path a later call writes to: its receiver or destination argument
+    let destination = |d: Node<'t>| -> Option<Node<'t>> {
+        let args = cx.fm.args_of(d);
+        match d.kind() {
+            "method_invocation" => match cx.fm.call_name(d) {
+                Some("createNewFile") => d.field("object"),
+                Some("createTempFile") => {
+                    if cx.fm.select_method(d).is_some_and(|m| &*m.owner == "java.nio.file.Files") {
+                        (args.len() >= 3).then(|| args[0])
+                    } else {
+                        args.get(2).copied()
+                    }
+                }
+                Some("write" | "writeString" | "createFile" | "createDirectory" | "newOutputStream" | "newBufferedWriter" | "newByteChannel")
+                    if cx.fm.select_method(d).is_some_and(|m| &*m.owner == "java.nio.file.Files") =>
+                {
+                    args.first().copied()
+                }
+                Some("copy" | "move") if cx.fm.select_method(d).is_some_and(|m| &*m.owner == "java.nio.file.Files") => args.get(1).copied(),
+                _ => None,
+            },
+            "object_creation_expression"
+                if matches!(
+                    cx.type_of(d).class_name(),
+                    Some("java.io.FileOutputStream" | "java.io.FileWriter" | "java.io.RandomAccessFile" | "java.io.PrintWriter" | "java.io.PrintStream")
+                ) =>
+            {
+                args.first().copied()
+            }
+            _ => None,
+        }
+    };
+    // the variable a path expression is built on: `dir` in `dir`,
+    // `dir.toPath()`, `new File(dir, name)`, `Paths.get(dir.getPath(), name)`,
+    // `dir.toPath().resolve(name)`; not `dir.getName()` used as data
+    fn path_root<'t>(cx: &Ctx<'_, 't>, e: Node<'t>) -> Option<&'t str> {
+        let e = e.unparen();
+        match e.kind() {
+            "identifier" => Some(cx.text(e)),
+            "method_invocation" => match cx.fm.call_name(e) {
+                Some("toPath" | "toFile" | "getParentFile" | "getAbsoluteFile" | "getCanonicalFile" | "getPath" | "getAbsolutePath" | "getCanonicalPath" | "toRealPath" | "resolve" | "resolveSibling" | "normalize" | "toAbsolutePath" | "getParent") => {
+                    e.field("object").and_then(|o| path_root(cx, o))
+                }
+                Some("get" | "of") if e.field("object").is_some_and(|o| matches!(cx.text(o), "Paths" | "Path" | "java.nio.file.Paths" | "java.nio.file.Path")) => {
+                    cx.fm.args_of(e).first().and_then(|a| path_root(cx, *a))
+                }
+                _ => None,
+            },
+            "object_creation_expression" if cx.type_of(e).class_name() == Some("java.io.File") => cx.fm.args_of(e).first().and_then(|a| path_root(cx, *a)),
+            _ => None,
+        }
+    }
+    block
+        .kids()
+        .into_iter()
+        .filter(|k| k.start_byte() > stmt.start_byte())
+        .flat_map(|k| {
+            // a write in a lambda or a local class runs at another time
+            k.descendants().filter(move |d| !d.ancestors().take_while(|a| *a != k).any(|a| matches!(a.kind(), "lambda_expression" | "class_body")))
+        })
+        .filter_map(destination)
+        .any(|dest| path_root(cx, dest) == Some(root))
 }
 
 /// `offer` on a queue without capacity never returns false: a
