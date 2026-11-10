@@ -3410,4 +3410,29 @@ mod tests {
             assert!(matches!(point_resolution(&idx, &m, "joy"), Resolution::Ambiguous(_)), "{import}");
         }
     }
+
+    #[test]
+    fn an_application_started_from_xml_has_beans_the_model_does_not_read() {
+        // (fixed by #70 and by contexts; kept as the regression test of the triage's reproducer)
+        let controller = |starter: &str| {
+            format!(
+                "package agent; import org.springframework.beans.factory.annotation.Autowired;
+                 @org.springframework.stereotype.Component public class Controller {{
+                     @Autowired public Controller(Registry registry) {{}}
+                     public static void main(String[] args) {{ {starter} }}
+                 }}"
+            )
+        };
+        let rest = [
+            ("src/main/java/agent/Registry.java", "package agent; public interface Registry {}"),
+            ("src/main/java/agent/DefaultRegistry.java", "package agent; public class DefaultRegistry implements Registry {}"),
+        ];
+        let xml = controller("new org.springframework.context.support.ClassPathXmlApplicationContext(\"applicationContext.xml\");");
+        let (idx, m) = model(&[("src/main/java/agent/Controller.java", &xml), rest[0], rest[1]]);
+        assert_eq!(point_resolution(&idx, &m, "registry"), Resolution::Unknown);
+        // started from the class itself, the context is the class's: judged
+        let annotated = controller("new org.springframework.context.annotation.AnnotationConfigApplicationContext(Controller.class);");
+        let (idx, m) = model(&[("src/main/java/agent/Controller.java", &annotated), rest[0], rest[1]]);
+        assert_eq!(point_resolution(&idx, &m, "registry"), Resolution::NotFound);
+    }
 }
