@@ -913,7 +913,7 @@ def run_case(exe, i, case, a, tmp_root):
                 for where, why in res["failures"]:
                     fh.write(f"{where}: {why}\n")
                 fh.write(f"rerun: python3 -I scripts/fuzz_robust.py --seed {a.seed} --case {i} --family {a.family} "
-                         f"--daemon-every {a.daemon_every}\n")
+                         f"--daemon-every {a.daemon_every} --timeout {a.timeout:g}\n")
                 # inside this repository its .gitignore hides target/ from grounds
                 fh.write(f"or:    cp -r {dest} /tmp/case && grounds check --root /tmp/case --format json\n")
         unlock(d)
