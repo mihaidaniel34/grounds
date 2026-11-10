@@ -2215,6 +2215,8 @@ impl DiModel {
                 return Resolution::Unknown;
             }
         }
+        // a point held only by open contexts concludes no absence
+        let open_only = p.framework == Framework::Spring && self.held_only_by_open(&p.owner, include_test);
         let (mut cands, mut maybe) = self.candidates(lk, &p.ty, include_test);
         if cands.iter().any(|&i| self.duplicated.contains(&self.beans[i].declaring_class)) {
             return Resolution::Unknown;
@@ -2246,7 +2248,7 @@ impl DiModel {
             }
             if cands.is_empty() {
                 if before.is_empty() {
-                    return if maybe > 0 || self.opaque_imports || p.lazy || !self.provable_type(lk, &p.ty) || self.dynamically_registered(&p.ty, include_test) || self.may_be_registered_unseen(lk, p, include_test) {
+                    return if maybe > 0 || open_only || self.opaque_imports || p.lazy || !self.provable_type(lk, &p.ty) || self.dynamically_registered(&p.ty, include_test) || self.may_be_registered_unseen(lk, p, include_test) {
                         Resolution::Unknown
                     } else if p.optional {
                         Resolution::Absent
@@ -2263,7 +2265,7 @@ impl DiModel {
                 }
                 // a library type may get named beans from its own
                 // auto-configuration (clients configured by properties)
-                if !self.provable_type(lk, &p.ty) || self.dynamically_registered(&p.ty, include_test) || p.lazy || self.may_be_registered_unseen(lk, p, include_test) {
+                if open_only || !self.provable_type(lk, &p.ty) || self.dynamically_registered(&p.ty, include_test) || p.lazy || self.may_be_registered_unseen(lk, p, include_test) {
                     return Resolution::Unknown;
                 }
                 return Resolution::QualifierNotFound { qualifier: q.clone(), candidates: before };
@@ -2306,6 +2308,7 @@ impl DiModel {
                 if p.optional {
                     Resolution::Absent
                 } else if maybe > 0
+                    || open_only
                     || self.opaque_imports
                     || !self.provable_type(lk, &p.ty)
                     || jit_possible()
@@ -2465,6 +2468,14 @@ impl DiModel {
     /// dependencies are provided by a context the model cannot see.
     pub fn in_application(&self, class: &str) -> bool {
         self.app_classes.contains(class)
+    }
+
+    /// Is the class held only by open contexts? Their sources are a lower
+    /// bound, so a bean missing from what the model sees may be registered
+    /// all the same: absence needs a closed context.
+    fn held_only_by_open(&self, class: &str, test: bool) -> bool {
+        let mut held = self.contexts.iter().filter(|ctx| ctx.holds(class, test)).peekable();
+        held.peek().is_some() && held.all(|ctx| ctx.open)
     }
 
     /// Is the bean registered in the context (in a test run with `test`)?
@@ -4038,25 +4049,30 @@ mod tests {
     fn an_open_start_holds_its_classes_but_concludes_no_clash() {
         // the application handed to a library helper (JHipster's
         // DefaultProfileUtil.addDefaultProfile(app)) may get more sources or
-        // overriding: its classes are judged, its clashes are not
+        // overriding: its classes are held, but no clash, no ambiguity and
+        // no absence is concluded (absence needs a closed context)
         let app = ("src/main/java/app/App.java", "package app; import org.springframework.boot.SpringApplication;
              @org.springframework.boot.autoconfigure.SpringBootApplication public class App {
                  public static void main(String[] args) { var a = new SpringApplication(App.class); Profiles.addDefault(a); a.run(args); } }");
         let files = [
             app,
-            ("src/main/java/app/Uses.java", "package app; interface Missing {} @org.springframework.stereotype.Service class Uses { Uses(Missing m) {} }"),
+            ("src/main/java/app/Uses.java", "package app; interface Missing {} interface Port {} @org.springframework.stereotype.Service class Adapter implements Port {}
+                @org.springframework.stereotype.Service class Uses { Uses(Missing m, @org.springframework.beans.factory.annotation.Qualifier(\"other\") Port q) {} }"),
             ("src/main/java/app/x/Same.java", "package app.x; @org.springframework.stereotype.Service public class Same {}"),
             ("src/main/java/app/y/Same.java", "package app.y; @org.springframework.stereotype.Service public class Same {}"),
         ];
         let (idx, m) = model(&files);
         assert_eq!(m.contexts.len(), 1);
         assert!(m.contexts[0].open);
-        assert_eq!(point_resolution(&idx, &m, "m"), Resolution::NotFound);
+        assert_eq!(point_resolution(&idx, &m, "m"), Resolution::Unknown);
+        assert_eq!(point_resolution(&idx, &m, "q"), Resolution::Unknown);
         assert!(m.name_conflicts().is_empty());
-        // the same application started plainly: the clash is certain
+        // the same application started plainly: the absence and the clash are certain
         let plain = ("src/main/java/app/App.java", "package app; import org.springframework.boot.SpringApplication;
              @org.springframework.boot.autoconfigure.SpringBootApplication public class App { public static void main(String[] args) { SpringApplication.run(App.class, args); } }");
-        let (_, m) = model(&[plain, files[1], files[2], files[3]]);
+        let (idx, m) = model(&[plain, files[1], files[2], files[3]]);
+        assert_eq!(point_resolution(&idx, &m, "m"), Resolution::NotFound);
+        assert!(matches!(point_resolution(&idx, &m, "q"), Resolution::QualifierNotFound { .. }));
         assert_eq!(m.name_conflicts().len(), 1);
     }
 }
