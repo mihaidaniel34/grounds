@@ -663,7 +663,7 @@ declare_rule!(SqlInjection {
     severity: Warning,
     sources: ["sonar:S2077", "sonar:S3649", "spotbugs:SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE", "spotbugs:SQL_PREPARED_STATEMENT_GENERATED_FROM_NONCONSTANT_STRING", "spotbugs:SQL_INJECTION_JDBC"],
     kinds: ["method_invocation"],
-    description: "Concatenating values into SQL lets attackers change the query (SQL injection). Use bind parameters (`?` with PreparedStatement, named parameters in JPA/JdbcTemplate). Only text that reaches the query from a method parameter is reported. A table or column name cannot be bound, so one that a method takes from its caller beside `?` placeholders is not reported, unless it visibly comes from the request (a servlet request getter, a `@RequestParam`-style parameter, a parameter of a handler method): check such a name against the names you allow.",
+    description: "Concatenating values into SQL lets attackers change the query (SQL injection). Use bind parameters (`?` with PreparedStatement, named parameters in JPA/JdbcTemplate). Only text that reaches the query from a method parameter, or from the request wherever it is held, is reported. A table or column name cannot be bound, so one that a method takes from its caller beside `?` placeholders is not reported, unless it visibly comes from the request (a servlet request getter, a `@RequestParam`-style parameter, a parameter of a handler method): check such a name against the names you allow.",
 });
 
 impl Rule for SqlInjection {
