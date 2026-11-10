@@ -39,6 +39,13 @@ pub enum JdkApi {
     Unreadable { release: u32 },
 }
 
+/// Another release's JDK API, from ct.sym: its classes and packages.
+struct OtherRelease {
+    container: ClassContainer,
+    classes: FxHashSet<Name>,
+    packages: FxHashSet<Name>,
+}
+
 /// Immutable classpath: JDK symbols plus dependency jars and class dirs.
 pub struct Classpath {
     containers: Vec<ClassContainer>,
@@ -54,6 +61,12 @@ pub struct Classpath {
     /// Every package of the JDK: those of the API loaded, and those of the
     /// installed JDK's runtime image, exported or not.
     jdk_packages: FxHashSet<Name>,
+    /// The packages of the JDK API loaded (exported ones), and of the jars.
+    api_packages: FxHashSet<Name>,
+    jar_packages: FxHashSet<Name>,
+    jdk_home: Option<std::path::PathBuf>,
+    /// The classes and packages of other releases' APIs, read from ct.sym when asked.
+    other_releases: DashMap<u32, Option<Arc<OtherRelease>>>,
 }
 
 impl std::fmt::Debug for Classpath {
@@ -64,7 +77,7 @@ impl std::fmt::Debug for Classpath {
 
 impl Classpath {
     pub fn empty() -> Classpath {
-        Classpath { containers: Vec::new(), names: FxHashMap::default(), packages: FxHashSet::default(), cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false, jdk_packages: FxHashSet::default() }
+        Classpath { containers: Vec::new(), names: FxHashMap::default(), packages: FxHashSet::default(), cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false, jdk_packages: FxHashSet::default(), api_packages: FxHashSet::default(), jar_packages: FxHashSet::default(), jdk_home: None, other_releases: DashMap::new() }
     }
 
     /// Build from containers in priority order (first definition wins).
@@ -95,7 +108,7 @@ impl Classpath {
                 names.entry(Arc::from(b.as_str())).or_insert(i as u32);
             }
         }
-        Classpath { containers, names, packages, cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false, jdk_packages: FxHashSet::default() }
+        Classpath { containers, names, packages, cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false, jdk_packages: FxHashSet::default(), api_packages: FxHashSet::default(), jar_packages: FxHashSet::default(), jdk_home: None, other_releases: DashMap::new() }
     }
 
     /// JDK classes for a release (see `ClassContainer::open_jdk`), followed by the given jars/dirs.
@@ -106,7 +119,9 @@ impl Classpath {
         let mut jdk_full = false;
         let mut jdk_packages: FxHashSet<Name> = FxHashSet::default();
         if let Some(home) = java_home {
-            let opened = ClassContainer::open_jdk(home, release);
+            // a release newer than the JDK: the JDK's own API is the closest at hand
+            let read_as = grounds_classfile::jdk_feature_release(home).filter(|&i| release > i).unwrap_or(release);
+            let opened = ClassContainer::open_jdk(home, read_as);
             // the image lists every package, the internal ones too
             let mut image_packages = |j: &grounds_classfile::jimage::JImage| jdk_packages.extend(j.all_packages().map(|p| Arc::from(p.replace('/', ".").as_str())));
             match &opened {
@@ -140,10 +155,28 @@ impl Classpath {
             }
         }
         let mut cp = Classpath::from_containers(containers);
-        if jdk_release.is_some() {
-            // the API's packages: a JDK older than 9 has no image
-            jdk_packages.extend(cp.names.iter().filter(|(_, &i)| i == 0).filter_map(|(n, _)| n.rfind('.').map(|i| Arc::from(&n[..i]))));
+        let with_parents = |set: &mut FxHashSet<Name>, n: &str| {
+            let mut p = n;
+            while let Some(i) = p.rfind('.') {
+                p = &p[..i];
+                if !set.insert(Arc::from(p)) {
+                    break;
+                }
+            }
+        };
+        let (mut api_packages, mut jar_packages) = (FxHashSet::default(), FxHashSet::default());
+        for (n, &i) in &cp.names {
+            if jdk_release.is_some() && i == 0 {
+                with_parents(&mut api_packages, n);
+            } else {
+                with_parents(&mut jar_packages, n);
+            }
         }
+        // the API's packages: a JDK older than 9 has no image
+        jdk_packages.extend(api_packages.iter().cloned());
+        cp.api_packages = api_packages;
+        cp.jar_packages = jar_packages;
+        cp.jdk_home = java_home.map(Path::to_path_buf);
         cp.jdk = jdk;
         cp.jdk_release = jdk_release;
         cp.jdk_full = jdk_full;
@@ -159,9 +192,86 @@ impl Classpath {
         self.jdk_release.is_some() && self.names.get(name) == Some(&0)
     }
 
+    /// Whether the JDK's API (the release loaded) has the package: javac
+    /// refuses a source file in it when compiling the code.
+    pub fn is_jdk_api_package(&self, package: &str) -> bool {
+        self.api_packages.contains(package)
+    }
+
     /// Whether a package belongs to the JDK, exported or not.
     pub fn is_jdk_package(&self, package: &str) -> bool {
         self.jdk_packages.contains(package)
+    }
+
+    /// Whether a jar or class directory (not the JDK) has the class.
+    pub fn contains_outside_jdk(&self, name: &str) -> bool {
+        self.names.get(name).is_some_and(|&i| self.jdk_release.is_none() || i != 0)
+    }
+
+    /// Whether a jar or class directory (not the JDK) has the package.
+    pub fn has_package_outside_jdk(&self, package: &str) -> bool {
+        self.jar_packages.contains(package)
+    }
+
+    /// Whether the JDK API of `release` has the public class. The loaded
+    /// release when its API is exact, another from the JDK's ct.sym (8 up to
+    /// the JDK's own); None when that API cannot be read.
+    pub fn jdk_has_class(&self, release: u32, name: &str) -> Option<bool> {
+        if self.exact_jdk_release() == Some(release) {
+            return Some(self.is_jdk_class(name) && self.contains(name));
+        }
+        Some(self.other_release(release)?.classes.contains(name))
+    }
+
+    /// Whether the JDK API of `release` has the package (see `jdk_has_class`).
+    pub fn jdk_has_package(&self, release: u32, package: &str) -> Option<bool> {
+        if self.exact_jdk_release() == Some(release) {
+            return Some(self.api_packages.contains(package));
+        }
+        Some(self.other_release(release)?.packages.contains(package))
+    }
+
+    /// Whether the JDK class has, in the API of `release`, a method of that
+    /// name whose parameters erase to `params` (see `jdk_has_class`).
+    pub fn jdk_has_method(&self, release: u32, class: &str, name: &str, params: &[Ty]) -> Option<bool> {
+        let has = |c: &ClassInfo| c.methods.iter().any(|m| &*m.name == name && m.params.len() == params.len() && m.params.iter().zip(params).all(|(a, b)| a.ty.erasure() == b.erasure()));
+        if self.exact_jdk_release() == Some(release) {
+            return Some(self.is_jdk_class(class) && self.class(class).is_some_and(|c| has(&c)));
+        }
+        let other = self.other_release(release)?;
+        let cf = other.container.read_class(&class.replace('.', "/"));
+        Some(cf.is_some_and(|cf| has(&binary::lower_class(&cf, 0))))
+    }
+
+    fn other_release(&self, release: u32) -> Option<Arc<OtherRelease>> {
+        if let Some(r) = self.other_releases.get(&release) {
+            return r.clone();
+        }
+        let api = (|| {
+            let home = self.jdk_home.as_deref()?;
+            // ct.sym holds signatures for releases older than the JDK's own
+            let installed = grounds_classfile::jdk_feature_release(home)?;
+            if release < 8 || release >= installed {
+                return None;
+            }
+            let ct = ClassContainer::open_ct_sym(&home.join("lib/ct.sym"), release).ok()?;
+            let mut classes = FxHashSet::default();
+            let mut packages = FxHashSet::default();
+            for n in ct.class_names() {
+                let b = binary::internal_to_binary(&n);
+                let mut p = b.as_str();
+                while let Some(i) = p.rfind('.') {
+                    p = &p[..i];
+                    if !packages.insert(Arc::from(p)) {
+                        break;
+                    }
+                }
+                classes.insert(Arc::from(b.as_str()));
+            }
+            Some(Arc::new(OtherRelease { container: ct, classes, packages }))
+        })();
+        self.other_releases.insert(release, api.clone());
+        api
     }
 
     /// Whether `name` is a JDK class whose API may be newer than the one
@@ -265,6 +375,10 @@ pub struct Index {
     defs: FxHashMap<Name, u32>,
     /// The files declaring each duplicated class name (`defs` > 1).
     copies: FxHashMap<Name, Vec<Arc<str>>>,
+    /// Directories (ending in `/`) of modules whose build states the release
+    /// they compile for exactly, with that release.
+    exact_releases: Vec<(String, u32)>,
+    release_floors: Vec<(String, u32)>,
     /// Number of files in a variant source set (see `in_variant_set`)
     /// declaring each class name.
     variant_defs: FxHashMap<Name, u32>,
@@ -354,7 +468,7 @@ impl Drop for Resolving<'_> {
 
 impl Index {
     pub fn new(classpath: Arc<Classpath>) -> Index {
-        Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), copies: FxHashMap::default(), variant_defs: FxHashMap::default(), release_modules: Vec::new(), generation: 0, resolved_at: AtomicU64::new(u64::MAX), plan: parking_lot::Mutex::new(None) }
+        Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), copies: FxHashMap::default(), variant_defs: FxHashMap::default(), exact_releases: Vec::new(), release_floors: Vec::new(), release_modules: Vec::new(), generation: 0, resolved_at: AtomicU64::new(u64::MAX), plan: parking_lot::Mutex::new(None) }
     }
 
     pub fn set_file(&mut self, path: Arc<str>, stub: Arc<FileStub>) {
@@ -471,6 +585,40 @@ impl Index {
         }
     }
 
+    /// The modules that compile for an exact release: (directory, release).
+    pub fn set_exact_releases(&mut self, modules: Vec<(String, u32)>) {
+        let mut modules: Vec<(String, u32)> = modules.into_iter().map(|(d, r)| (if d.ends_with('/') { d } else { format!("{d}/") }, r)).collect();
+        // the innermost module first
+        modules.sort_by_key(|(d, _)| std::cmp::Reverse(d.len()));
+        self.exact_releases = modules;
+    }
+
+    /// The release a file's module states exactly (`--release`, a
+    /// toolchain), the code not contradicting it. None when its build leaves
+    /// the JDK API to the JDK running it, or grounds cannot tell.
+    pub fn exact_release(&self, file: &str) -> Option<u32> {
+        self.exact_releases.iter().find(|(d, _)| file.starts_with(d.as_str())).map(|(_, r)| *r)
+    }
+
+    /// The lowest release a file's module may compile for: its exact
+    /// release, or the `source`/`target` it states. A JDK member newer than
+    /// that may not exist where the code is built, though the API loaded has it.
+    pub fn release_floor(&self, file: &str) -> Option<u32> {
+        self.release_floors.iter().find(|(d, _)| file.starts_with(d.as_str())).map(|(_, r)| *r)
+    }
+
+    /// The modules' floors (see `release_floor`): (directory, release).
+    pub fn set_release_floors(&mut self, modules: Vec<(String, u32)>) {
+        let mut modules: Vec<(String, u32)> = modules.into_iter().map(|(d, r)| (if d.ends_with('/') { d } else { format!("{d}/") }, r)).collect();
+        modules.sort_by_key(|(d, _)| std::cmp::Reverse(d.len()));
+        self.release_floors = modules;
+    }
+
+    /// Whether some source file is in the package (or one below it).
+    pub fn has_source_package(&self, package: &str) -> bool {
+        self.packages.contains_key(package)
+    }
+
     /// Mark the modules whose build compiles against a published release of
     /// the project itself (kafka's `streams/upgrade-system-tests-22` against
     /// `kafka-streams:2.2`): their code does not see the project's sources.
@@ -508,6 +656,13 @@ impl Index {
     /// JDK's), so which declaration the code compiles against is a guess.
     pub fn is_duplicated(&self, name: &str) -> bool {
         self.defs.get(name).is_some_and(|d| *d > 1) || (self.classes.contains_key(name) && name.rfind('.').is_some_and(|i| self.classpath.is_jdk_package(&name[..i])))
+    }
+
+    /// A source class in a package of the JDK (exported or not): code that
+    /// javac compiles only in special builds (GWT emulation, `--patch-module`,
+    /// a compile-only stub).
+    pub fn in_jdk_package(&self, name: &str) -> bool {
+        self.classes.contains_key(name) && name.rfind('.').is_some_and(|i| self.classpath.is_jdk_package(&name[..i]))
     }
 
     /// A source class standing in for a class of the JDK's API, or nested in

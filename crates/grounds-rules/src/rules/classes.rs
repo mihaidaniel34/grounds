@@ -1216,6 +1216,7 @@ impl Rule for MissingOverride {
         let Some(m) = cx.fm.method_of_decl(n) else { return };
         let Some(cls) = cx.fm.enclosing_class(n) else { return };
         let mut found: Option<Name> = None;
+        let mut found_params: Vec<Ty> = Vec::new();
         for st in cx.fm.all_supertypes(&cls.this_type()).into_iter().skip(1) {
             let Some(sn) = st.class_name() else { continue };
             let Some(sc) = cx.fm.class(sn) else { continue };
@@ -1230,11 +1231,23 @@ impl Rule for MissingOverride {
                 };
                 if same {
                     found = Some(sc.name.clone());
+                    found_params = sm.params.iter().map(|p| p.ty.clone()).collect();
                     break;
                 }
             }
             if found.is_some() {
                 break;
+            }
+        }
+        // a JDK method newer than the lowest release the module may compile
+        // for (`CharSequence.isEmpty` is Java 15) is overridden only on newer
+        // JDKs, and @Override would not compile on the older ones
+        if let Some(owner) = found.as_deref().filter(|o| cx.fm.class(o).is_some_and(|c| !c.is_source())) {
+            let cp = &cx.fm.index.classpath;
+            if let Some(floor) = cx.fm.index.release_floor(&cx.info.path).filter(|&f| Some(f) != cp.exact_jdk_release() && cp.is_jdk_class(owner)) {
+                if cp.jdk_has_method(floor, owner, &m.name, &found_params) != Some(true) {
+                    return;
+                }
             }
         }
         if let (Some(owner), Some(nm)) = (found, n.field("name")) {

@@ -134,6 +134,12 @@ pub fn analyze_text(project: &Project, rules: &RuleSet, options: &RuleOptions, p
         return Vec::new();
     }
     let key = path_key(path);
+    // a file in a package the JDK exports (a GWT emulation of java.io, a test
+    // input declaring java.lang.Object) is never compiled with the code that
+    // uses the JDK, and is read against the JDK's classes: not judged
+    if project.index.file(&key).is_some_and(|s| !s.package.is_empty() && project.index.classpath.is_jdk_api_package(&s.package)) {
+        return Vec::new();
+    }
     let fm = FileModel::new(&pf, &project.index, key.clone());
     let kind = classify(path);
     let info = FileInfo { path: key.to_string(), is_test: kind == SourceKind::Test, is_generated: kind == SourceKind::Generated };

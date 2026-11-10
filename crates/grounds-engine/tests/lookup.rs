@@ -194,3 +194,20 @@ fn a_module_built_against_a_published_release_of_the_project_sees_no_sources_of_
         vec!["app/src/main/java/org/example/app/Windows.java:6 unresolved-method".to_string(), "streams/upgrade-tests-22/src/test/java/org/example/upgrade/SmokeTest.java:7 unresolved-method".to_string()]
     );
 }
+
+#[test]
+fn emulations_of_jdk_classes_are_not_judged() {
+    if !has_jdk() {
+        return;
+    }
+    // libgdx: GWT emulation of java.nio, compiled by GWT only, never by javac with the code
+    let dir = project(
+        "gwt-emulation",
+        &[
+            ("gwt/emu/java/nio/CharSequenceAdapter.java", "package java.nio;\n\nfinal class CharSequenceAdapter extends CharBuffer {\n    CharSequenceAdapter(int cap) { super(cap); }\n    void m() { int p = position; }\n}\n"),
+            ("gwt/emu/java/io/BufferedReader.java", "package java.io;\n\npublic class BufferedReader {\n    private int position;\n    public int read() { return position++; }\n}\n"),
+            ("src/main/java/app/Use.java", "package app;\n\nclass Use {\n    void f() { new Use().missing(); }\n}\n"),
+        ],
+    );
+    assert_eq!(findings(&dir), vec!["src/main/java/app/Use.java:4 unresolved-method".to_string()]);
+}

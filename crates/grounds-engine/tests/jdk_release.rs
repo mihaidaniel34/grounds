@@ -93,3 +93,106 @@ fn imports_of_jdk_classes_the_release_lacks_are_reported() {
     let own = check(installed);
     assert_eq!(own.iter().map(|(l, _)| *l).collect::<Vec<_>>(), vec![3, 4], "{own:?}");
 }
+
+/// `path:line rule` of the findings of `rules` over a whole project.
+fn project_findings(dir: &Path, rules: &[&str]) -> Vec<String> {
+    let mut project = grounds_engine::Project::load(dir).unwrap();
+    project.config.rules.enable = rules.iter().map(|s| s.to_string()).collect();
+    let (set, options) = grounds_engine::analyze::build_ruleset(&project);
+    let files: Vec<_> = project.workspace.files.iter().map(|f| f.path.clone()).collect();
+    let mut out: Vec<String> = grounds_engine::analyze::analyze_files(&project, &set, &options, &files).into_iter().map(|f| format!("{}:{} {}", f.path, f.line, f.rule)).collect();
+    out.sort();
+    out
+}
+
+fn fresh(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("grounds-jdk-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn a_release_the_build_does_not_state_as_a_literal_leaves_the_newest_api() {
+    let Some(home) = grounds_classfile::find_java_home() else { return };
+    if grounds_classfile::jdk_feature_release(&home).is_none_or(|v| v < 21) {
+        return;
+    }
+    // gocd: the release every module compiles for is an expression; two
+    // plugin modules state 11 for themselves
+    let dir = fresh("release-expression");
+    write(&dir, "settings.gradle", "include 'app', 'plugin-api'\n");
+    write(&dir, "build.gradle", "ext.targetJavaVersion = 21\nsubprojects {\n  apply plugin: 'java'\n  tasks.withType(JavaCompile).configureEach {\n    options.release.set(targetJavaVersion as Integer)\n  }\n}\n");
+    write(&dir, "app/src/main/java/app/Stages.java", "package app;\n\nimport java.util.ArrayList;\n\npublic class Stages extends ArrayList<String> {\n    String first() { return getFirst(); }\n    String none() { return noSuchMethod(); }\n}\n");
+    write(&dir, "plugin-api/build.gradle", "compileJava {\n  options.release.set(11)\n}\n");
+    write(&dir, "plugin-api/src/main/java/api/Plugin.java", "package api;\n\npublic interface Plugin { }\n");
+    let found = project_findings(&dir, &["unresolved-method", "missing-jdk-import"]);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(found, vec!["app/src/main/java/app/Stages.java:7 unresolved-method".to_string()]);
+}
+
+#[test]
+fn jdk_classes_a_module_release_lacks_are_reported_where_the_release_is_exact() {
+    let Some(home) = grounds_classfile::find_java_home() else { return };
+    if !home.join("lib/ct.sym").is_file() || grounds_classfile::jdk_feature_release(&home).is_none_or(|v| v < 21) {
+        return;
+    }
+    let dir = fresh("module-releases");
+    let uses = |pkg: &str| format!("package {pkg};\n\nimport java.util.SequencedCollection;\n\nclass Uses {{ }}\n");
+    write(&dir, "pom.xml", "<project><groupId>g</groupId><artifactId>root</artifactId><version>1</version><modules><module>exact</module><module>newer</module><module>lower-bound</module><module>records</module></modules></project>");
+    // --release 17: Java 21's SequencedCollection does not compile, while
+    // another module compiles for 21 and the API loaded is 21's
+    write(&dir, "exact/pom.xml", "<project><artifactId>exact</artifactId><properties><maven.compiler.release>17</maven.compiler.release></properties></project>");
+    write(&dir, "exact/src/main/java/a/Uses.java", &uses("a"));
+    write(&dir, "newer/pom.xml", "<project><artifactId>newer</artifactId><properties><maven.compiler.release>21</maven.compiler.release></properties></project>");
+    write(&dir, "newer/src/main/java/b/Uses.java", &uses("b"));
+    // -source/-target 17 only: javac compiles against the JDK it runs on
+    write(&dir, "lower-bound/pom.xml", "<project><artifactId>lower-bound</artifactId><properties><maven.compiler.source>17</maven.compiler.source><maven.compiler.target>17</maven.compiler.target></properties></project>");
+    write(&dir, "lower-bound/src/main/java/c/Uses.java", &uses("c"));
+    // --release 11 with records: the build's literal is not what compiles this code
+    write(&dir, "records/pom.xml", "<project><artifactId>records</artifactId><properties><maven.compiler.release>11</maven.compiler.release></properties></project>");
+    write(&dir, "records/src/main/java/d/Uses.java", &uses("d"));
+    write(&dir, "records/src/main/java/d/Point.java", "package d;\n\nrecord Point(int x, int y) { }\n");
+    let found = project_findings(&dir, &["missing-jdk-import"]);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(found, vec!["exact/src/main/java/a/Uses.java:3 missing-jdk-import".to_string()]);
+}
+
+#[test]
+fn a_jdk_deprecation_newer_than_the_module_release_is_not_reported() {
+    let Some(home) = grounds_classfile::find_java_home() else { return };
+    if grounds_classfile::jdk_feature_release(&home).is_none_or(|v| v < 21) {
+        return;
+    }
+    let dir = fresh("deprecation-since");
+    // URL's constructors are deprecated since Java 20
+    let uses = |pkg: &str| format!("package {pkg};\n\nclass Uses {{\n    Object url() throws Exception {{ return new java.net.URL(\"http://x\"); }}\n}}\n");
+    write(&dir, "pom.xml", "<project><groupId>g</groupId><artifactId>root</artifactId><version>1</version><modules><module>old</module><module>new</module></modules></project>");
+    write(&dir, "old/pom.xml", "<project><artifactId>old</artifactId><properties><maven.compiler.release>17</maven.compiler.release></properties></project>");
+    write(&dir, "old/src/main/java/a/Uses.java", &uses("a"));
+    write(&dir, "new/pom.xml", "<project><artifactId>new</artifactId><properties><maven.compiler.release>21</maven.compiler.release></properties></project>");
+    write(&dir, "new/src/main/java/b/Uses.java", &uses("b"));
+    let found = project_findings(&dir, &["deprecated-api-usage"]);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(found, vec!["new/src/main/java/b/Uses.java:4 deprecated-api-usage".to_string()]);
+}
+
+#[test]
+fn jdk_members_newer_than_a_source_level_are_not_taken_as_existing() {
+    let Some(home) = grounds_classfile::find_java_home() else { return };
+    if !home.join("lib/ct.sym").is_file() || grounds_classfile::jdk_feature_release(&home).is_none_or(|v| v < 21) {
+        return;
+    }
+    // -source/-target 8: the API loaded is the installed JDK's, so that Java 9+
+    // members the code may use are not missing; members it claims exist must
+    // exist in Java 8's API
+    let dir = fresh("source-level");
+    write(&dir, "pom.xml", "<project><groupId>g</groupId><artifactId>a</artifactId><version>1</version><properties><maven.compiler.source>1.8</maven.compiler.source><maven.compiler.target>1.8</maven.compiler.target></properties></project>");
+    // CharSequence.isEmpty is Java 15; length() and toString() are Java 8's
+    write(&dir, "src/main/java/a/Text.java", "package a;\n\npublic abstract class Text implements CharSequence {\n    public boolean isEmpty() { return length() == 0; }\n    public String toString() { return \"\"; }\n}\n");
+    // Thread.getId is deprecated since 19, new Integer(int) since 9
+    write(&dir, "src/main/java/a/Uses.java", "package a;\n\nclass Uses {\n    long id() { return Thread.currentThread().getId(); }\n    Object boxed() { return new Integer(1); }\n    Object first(java.util.ArrayList<String> l) { return l.getFirst(); }\n}\n");
+    let found = project_findings(&dir, &["missing-override", "deprecated-api-usage", "unresolved-method"]);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(found, vec!["src/main/java/a/Text.java:5 missing-override".to_string()]);
+}

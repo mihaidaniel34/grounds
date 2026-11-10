@@ -384,7 +384,7 @@ filter, which would drop the breaks in unchanged files:
 - Project-wide, in `grounds.toml`:
 
 ```toml
-java_release = 17                     # which JDK API version to check against (default: from the build, else 21)
+java_release = 17                     # which JDK API version to check against (default: from the build, see below)
 exclude = ["**/generated/**"]
 test_source_sets = ["scenarios"]      # besides test/integration/e2e/functional/...
                                       # (src/main under a tests/, test/, it/, integration-tests/
@@ -406,22 +406,35 @@ build_outputs = true    # module build/classes directories
 warn = true             # warn when the classpath looks missing or stale
 ```
 
-When `java_release` is not set, grounds reads it from the build: Maven's
-`maven.compiler.release`/`target`/`source` properties or the
-maven-compiler-plugin's `<release>`/`<target>`/`<source>` (with `${...}`
-resolved, also from parent poms in the repository; `java.version` under
-Spring Boot's parent), and Gradle's `options.release`,
-`targetCompatibility`, `sourceCompatibility` or toolchain
-`languageVersion` (Groovy and Kotlin DSL, convention plugins in
-`buildSrc`/`build-logic` included). Modules on different releases share one
-JDK API, so the highest is used; without any, 21. `grounds index` prints the
-release in use.
+When `java_release` is not set, grounds reads each module's build:
+- `--release` (Maven's `maven.compiler.release` or the
+  maven-compiler-plugin's `<release>`, `java.version` under Spring Boot 3's
+  parent, Gradle's `options.release`) or a toolchain (`languageVersion`,
+  `jvmToolchain`) without it: the module compiles against exactly that
+  release's API;
+- `source`/`target` alone (`maven.compiler.source`/`target`,
+  `sourceCompatibility`): against the API of whichever JDK runs the build,
+  that release or newer;
+- nothing, or something grounds cannot evaluate (a variable, a property it
+  cannot resolve, a parent pom outside the repository, different values set
+  under conditions): unknown.
+
+`${...}` is resolved through parent poms in the repository; Gradle modules
+inherit from the root's `subprojects`/`allprojects` and from convention
+plugins in `buildSrc`/`build-logic` (Groovy and Kotlin DSL). A record, a
+sealed class or a module import in a module said to compile for an older
+release means that is not what compiles it: its release is unknown. All
+modules share one JDK API: the exact release when every module states one,
+otherwise the installed JDK's (the newest at hand, so nothing the code may
+use is missing), or a release newer than that when some module needs it.
+Imports of JDK classes a release lacks are reported only in modules whose
+release is exact. `grounds index` prints the release whose API is loaded.
 
 The JDK's API comes from its `lib/ct.sym` (the signatures of each release
 before its own). A release newer than the installed JDK, say 25 with JDK 21,
-has none: grounds uses the newest older release it has, which lacks APIs
-added since, so it warns and stays silent about classes that inherit from JDK
-classes (an absent member may be one of those APIs). A JDK home without
+has none: grounds uses the installed JDK's own, which lacks APIs added since,
+so it warns and stays silent about classes that inherit from JDK classes (an
+absent member may be one of those APIs). A JDK home without
 `lib/ct.sym` (a JRE, or a JDK older than 9) warns too, and checks that need
 the JDK's classes stay silent. A JDK's own release is read from `lib/modules`;
 if that image cannot be read (a compressed `jlink` image, say), grounds warns
