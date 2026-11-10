@@ -57,6 +57,21 @@ class Unknown {
         if (name.isEmpty()) return item.name(); // expect
         return name;
     }
+    // still reported: the opaque call is on the non-null branch
+    String wrongPolarity(@Nullable Item item) {
+        if (item != null) {
+            missing.Reporter.reportBadInput("an item");
+        }
+        return item.name(); // expect
+    }
+    // still reported: a silenced "may be null" does not hide a later "always null"
+    String laterAlwaysNull(@Nullable Item item, boolean ready) {
+        if (ready) {
+            item.name();
+        }
+        item = null;
+        return item.name(); // expect
+    }
     // still reported: the variable is only logged
     String logged(@Nullable Item item, org.slf4j.Logger logger) {
         if (item == null) {

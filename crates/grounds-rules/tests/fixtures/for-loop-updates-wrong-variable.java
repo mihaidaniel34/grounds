@@ -21,3 +21,13 @@ class Iterators {
         for (int j = 0; j < n; k++) { values.add(j); } // expect
     }
 }
+class IteratorNotAdvanced {
+    int count(java.util.List<Integer> values) {
+        int i = 0;
+        // hasNext() alone does not advance the iterator
+        for (java.util.Iterator<Integer> it = values.iterator(); it.hasNext(); i++) { // expect
+            if (i > 10) break;
+        }
+        return i;
+    }
+}

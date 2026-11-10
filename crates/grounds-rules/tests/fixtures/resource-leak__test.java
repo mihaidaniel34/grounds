@@ -14,6 +14,10 @@ class ParserTest {
         InputStream in = new BufferedInputStream(new FileInputStream(f)); // expect
         in.read();
     }
+    void lines(java.nio.file.Path p) throws IOException {
+        java.util.stream.Stream<String> lines = java.nio.file.Files.lines(p); // expect
+        lines.count();
+    }
     void connection(javax.sql.DataSource ds) throws java.sql.SQLException {
         java.sql.Statement st = ds.getConnection().createStatement(); // expect
         st.execute("select 1");

@@ -1453,7 +1453,7 @@ impl<'a, 't> OptionalPresence<'a, 't> {
                 // `a.flatMap(g).filter(p)`) is empty when that one is: both
                 // effectively final, a present `b` proves `a`
                 let mut k = 0;
-                while k < out.len() && out.len() < 8 {
+                while k < out.len() {
                     let i = out[k];
                     k += 1;
                     let d = &self.fm.binder.decls[i];

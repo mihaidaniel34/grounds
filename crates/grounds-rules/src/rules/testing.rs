@@ -155,9 +155,14 @@ impl Rule for TestWithoutAssertion {
         // vert.x tests assert through their context (`ctx.asyncAssertSuccess()`,
         // `async.complete()`, `testContext.verify(..)`)
         let async_context = n.field("parameters").is_some_and(|ps| {
-            ps.kids().iter().filter_map(|p| p.field("type")).any(|t| {
-                matches!(cx.fm.resolve_type_node(t).class_name(), Some("io.vertx.ext.unit.TestContext" | "io.vertx.junit5.VertxTestContext"))
-                    || matches!(cx.text(t).rsplit('.').next(), Some("TestContext" | "VertxTestContext")) && cx.src.contains("io.vertx.")
+            ps.kids().iter().any(|p| {
+                let vertx = p.field("type").is_some_and(|t| {
+                    matches!(cx.fm.resolve_type_node(t).class_name(), Some("io.vertx.ext.unit.TestContext" | "io.vertx.junit5.VertxTestContext"))
+                        || matches!(cx.text(t).rsplit('.').next(), Some("TestContext" | "VertxTestContext")) && cx.src.contains("io.vertx.")
+                });
+                // and the body uses it (`ctx.async()`, `ctx.asyncAssertSuccess()`)
+                let name = p.field("name").map(|x| cx.text(x));
+                vertx && name.is_some_and(|nm| body.descendants().any(|d| d.kind() == "identifier" && cx.text(d) == nm))
             })
         });
         if async_context {

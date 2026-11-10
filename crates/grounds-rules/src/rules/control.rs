@@ -879,7 +879,8 @@ impl Rule for SwitchFallthrough {
 fn conditional_exit(st: Node, group: Node) -> bool {
     st.descendants().filter(|d| d.kind() == "if_statement").any(|ifs| {
         ifs.descendants().any(|j| match j.kind() {
-            "return_statement" | "throw_statement" | "continue_statement" => !j.ancestors().take_while(|a| *a != group).any(|a| matches!(a.kind(), "lambda_expression" | "class_body")),
+            "return_statement" | "throw_statement" => !j.ancestors().take_while(|a| *a != group).any(|a| matches!(a.kind(), "lambda_expression" | "class_body")),
+            "continue_statement" => !j.ancestors().take_while(|a| *a != group).any(|a| matches!(a.kind(), "while_statement" | "do_statement" | "for_statement" | "enhanced_for_statement" | "lambda_expression" | "class_body")),
             "break_statement" => {
                 j.named_child_count() == 0
                     && !j.ancestors().take_while(|a| *a != group).any(|a| matches!(a.kind(), "switch_expression" | "while_statement" | "do_statement" | "for_statement" | "enhanced_for_statement" | "lambda_expression" | "class_body"))
@@ -1309,11 +1310,11 @@ impl Rule for ForLoopWrongVariable {
         if n.field("body").is_some_and(|b| assigned_names(b, cx.src).iter().any(|c| cond_vars.contains(c))) {
             return;
         }
-        // the tested counter is an object whose methods advance it (an
-        // iterator loop keeping a separate index: `it.hasNext(); i++` with
-        // `it.next()` in the body)
+        // the tested counter is an object whose methods, called in the body,
+        // advance it (an iterator loop keeping a separate index: `it.hasNext();
+        // i++` with `it.next()` in the body)
         let advanced_by_call = |c: &str| {
-            std::iter::once(cond).chain(n.field("body")).flat_map(|b| b.descendants()).any(|d| {
+            n.field("body").into_iter().flat_map(|b| b.descendants()).any(|d| {
                 d.kind() == "method_invocation" && d.field("object").is_some_and(|o| o.unparen().kind() == "identifier" && o.unparen().text(cx.src) == c)
             })
         };

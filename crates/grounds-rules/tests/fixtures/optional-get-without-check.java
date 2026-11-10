@@ -162,7 +162,7 @@ class OptionalCorrelatedFlag {
 }
 class DerivedAndIfPresent {
     String host(java.util.Optional<String> component) {
-        // a value derived from `component` is present only when `component` is
+        // a value derived from `component` is present only when `component` is present
         java.util.Optional<String> oldHost = component.map(String::trim).filter(h -> !h.isEmpty());
         if (oldHost.isPresent()) {
             return component.get();

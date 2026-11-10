@@ -22,4 +22,7 @@ class ContextHolder implements org.springframework.context.ApplicationContextAwa
     // still reported: runs on every call
     void handle() { requests++; } // expect
     void setContext(org.springframework.context.ApplicationContext ctx) { context = ctx; } // expect
+    // a startup observer runs once; an application-event observer runs per event
+    void onStart(@jakarta.enterprise.event.Observes io.quarkus.runtime.StartupEvent e) { secret = "y"; }
+    void onOrder(@jakarta.enterprise.event.Observes String order) { requests++; } // expect
 }

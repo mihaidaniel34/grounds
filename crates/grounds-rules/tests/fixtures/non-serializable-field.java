@@ -32,5 +32,11 @@ class ViewBean implements Serializable {
     private Plain injected;
     private Probe byConstructor;
     private Plain notInjected; // expect
+    @jakarta.inject.Inject
     ViewBean(Probe p) { byConstructor = p; }
+}
+// not a passivating CDI bean: nothing checks what is injected
+class Session implements Serializable {
+    @jakarta.inject.Inject
+    private Plain helper; // expect
 }

@@ -71,6 +71,14 @@ class InputErrors {
     java.security.MessageDigest digest() {
         try { return java.security.MessageDigest.getInstance("WHIRLPOOL"); } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException("no digest"); } // expect
     }
+    // still lost: the literal is not what the call was given
+    byte[] encodedLabel(String s, String charset) {
+        try { String label = "UTF-8"; return s.getBytes(charset); } catch (java.io.UnsupportedEncodingException e) { throw new IllegalStateException("bad charset"); } // expect
+    }
+    // still lost: the message names a local the try only read, not the input it parsed
+    Mode tagged(String[] values, String tag) {
+        try { String seen = tag; return Mode.valueOf(values[0]); } catch (IllegalArgumentException e) { throw new BadFlag("bad mode for " + tag); } // expect
+    }
     enum Mode { A, B }
 }
 class BadFlag extends RuntimeException { BadFlag(String m) { super(m); } }

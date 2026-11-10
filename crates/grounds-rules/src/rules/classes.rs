@@ -295,8 +295,17 @@ fn is_lifecycle_callback<'t>(m: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
     if anns.iter().any(|a| matches!(*a, "PostConstruct" | "PreDestroy" | "Autowired" | "Inject" | "Value" | "Resource" | "Bean")) {
         return true;
     }
-    // `void onStart(@Observes StartupEvent e)`
-    let observer = m.field("parameters").is_some_and(|ps| ps.kids().iter().any(|p| has_annotation_named(*p, cx.src, "Observes") || has_annotation_named(*p, cx.src, "ObservesAsync")));
+    // `void onStart(@Observes StartupEvent e)`,
+    // `@Observes @Initialized(ApplicationScoped.class) Object o`: container
+    // lifecycle events only, not application events
+    let observer = m.field("parameters").is_some_and(|ps| {
+        ps.kids().iter().any(|p| {
+            (has_annotation_named(*p, cx.src, "Observes") || has_annotation_named(*p, cx.src, "ObservesAsync"))
+                && (has_annotation_named(*p, cx.src, "Initialized")
+                    || has_annotation_named(*p, cx.src, "Destroyed")
+                    || p.field("type").is_some_and(|t| matches!(cx.text(t).rsplit('.').next(), Some("StartupEvent" | "ShutdownEvent" | "ServerStartupEvent"))))
+        })
+    });
     let name = m.field("name").map(|x| cx.text(x)).unwrap_or("");
     let aware = matches!(
         name,
@@ -844,8 +853,8 @@ impl Rule for SerialVersionUidModifiers {
     }
 }
 
-/// Annotations whose field a dependency-injection container fills with a
-/// value it makes serializable (or rejects at deployment).
+/// Annotations whose field a dependency-injection container fills; in a
+/// passivating CDI bean the value is serializable or deployment fails.
 const INJECTED_BY_CONTAINER: &[&str] = &[
     "jakarta.inject.Inject",
     "javax.inject.Inject",
@@ -855,6 +864,19 @@ const INJECTED_BY_CONTAINER: &[&str] = &[
     "javax.persistence.PersistenceContext",
     "jakarta.persistence.PersistenceUnit",
     "javax.persistence.PersistenceUnit",
+];
+
+/// CDI scopes whose beans may be passivated: the container checks at
+/// deployment that every injected dependency is passivation capable.
+const CDI_PASSIVATING_SCOPES: &[&str] = &[
+    "jakarta.enterprise.context.SessionScoped",
+    "javax.enterprise.context.SessionScoped",
+    "jakarta.enterprise.context.ConversationScoped",
+    "javax.enterprise.context.ConversationScoped",
+    "jakarta.faces.view.ViewScoped",
+    "javax.faces.view.ViewScoped",
+    "jakarta.faces.flow.FlowScoped",
+    "javax.faces.flow.FlowScoped",
 ];
 
 /// CDI normal scopes (and the JSF and JTA ones built on them): their beans
@@ -934,7 +956,8 @@ impl Rule for NonSerializableField {
         // proxies of normal-scoped beans and refuses to deploy a passivating
         // bean with a dependency that is not passivation capable; EJB and
         // persistence-context references are serializable proxies too
-        if cx.fm.annotations_of(n).iter().any(|a| INJECTED_BY_CONTAINER.iter().any(|f| a.is(f))) {
+        let passivating = cls.annotations.iter().any(|a| CDI_PASSIVATING_SCOPES.iter().any(|f| a.is(f)));
+        if passivating && cx.fm.annotations_of(n).iter().any(|a| INJECTED_BY_CONTAINER.iter().any(|f| a.is(f))) {
             return;
         }
         let Some(t) = n.field("type") else { return };

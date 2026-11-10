@@ -23,5 +23,7 @@ class Exact {
         BigDecimal tenth = new BigDecimal(0.1f); // expect
         BigDecimal price = new BigDecimal(19.99); // expect
         BigDecimal third = new BigDecimal(1.0 / 3); // expect
+        BigDecimal unrounded = new BigDecimal(0.1, java.math.MathContext.UNLIMITED); // expect
+        BigDecimal big = new BigDecimal((double) Long.MAX_VALUE); // expect
     }
 }

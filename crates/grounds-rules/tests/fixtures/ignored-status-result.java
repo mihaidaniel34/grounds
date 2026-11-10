@@ -64,6 +64,10 @@ class Directories {
         dir.mkdirs();
         try (java.io.FileOutputStream out = new java.io.FileOutputStream(new File(dir, "a.bin"))) { out.write(1); }
     }
+    void unrelatedWrite(File dir, File other, byte[] data) throws java.io.IOException {
+        dir.mkdirs(); // expect
+        java.nio.file.Files.write(other.toPath(), data);
+    }
     void createOnly(File dir) {
         dir.mkdirs(); // expect
     }

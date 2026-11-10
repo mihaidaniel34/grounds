@@ -416,6 +416,9 @@ impl Rule for LostStackTrace {
                         .into_iter()
                         .filter(|k| matches!(k.kind(), "block" | "resource_specification"))
                         .flat_map(|k| k.descendants())
+                        // the input: what the try handed to the parser or
+                        // validator, or cast
+                        .filter(|d| d.ancestors().any(|a| matches!(a.kind(), "argument_list" | "cast_expression")))
                         .filter_map(|d| cx.fm.local_ref(d))
                         .collect()
                 })
@@ -433,7 +436,7 @@ impl Rule for LostStackTrace {
                 .into_iter()
                 .filter(|k| matches!(k.kind(), "block" | "resource_specification"))
                 .flat_map(|k| k.descendants())
-                .filter(|d| d.kind() == "string_literal")
+                .filter(|d| d.kind() == "string_literal" && d.parent().is_some_and(|p| p.kind() == "argument_list"))
                 .map(|d| d.text(cx.src).trim_matches('"').to_ascii_uppercase())
                 .collect();
             let impossible = !caught.is_empty()

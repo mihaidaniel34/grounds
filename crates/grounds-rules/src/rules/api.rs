@@ -238,7 +238,7 @@ impl Rule for IgnoredFileResult {
         }
         // a directory whose creation failed makes the file written into it
         // next throw IOException
-        if matches!(cx.fm.call_name(e), Some("mkdir" | "mkdirs")) && writes_file_after(cx, n) {
+        if matches!(cx.fm.call_name(e), Some("mkdir" | "mkdirs")) && writes_file_after(cx, n, e) {
             return;
         }
         if cx.fm.call_matches_any(e, &[FILE_OPS, LOCK_TRY, QUEUE_OFFER, LATCH_AWAIT, EXECUTOR_AWAIT]) {
@@ -247,11 +247,21 @@ impl Rule for IgnoredFileResult {
     }
 }
 
-/// Does a later statement of the same block create or write a file (which
-/// throws IOException when its directory is missing)?
-fn writes_file_after<'t>(cx: &Ctx<'_, 't>, stmt: Node<'t>) -> bool {
+/// Does a later statement of the same block create or write a file under the
+/// same path variable as the `mkdirs` call (which throws IOException when the
+/// directory is missing)?
+fn writes_file_after<'t>(cx: &Ctx<'_, 't>, stmt: Node<'t>, mkdirs: Node<'t>) -> bool {
     let Some(block) = stmt.parent() else { return false };
-    block.kids().into_iter().filter(|k| k.start_byte() > stmt.start_byte()).flat_map(|k| k.descendants()).any(|d| match d.kind() {
+    // the variable the directory comes from: `dir` in `dir.mkdirs()`,
+    // `file` in `file.getParentFile().mkdirs()`, `path` in `path.toFile().mkdirs()`
+    let mut root = mkdirs.field("object").map(|o| o.unparen());
+    while let Some(r) = root.filter(|r| r.kind() == "method_invocation") {
+        root = r.field("object").map(|o| o.unparen());
+    }
+    let Some(root) = root.filter(|r| r.kind() == "identifier").map(|r| cx.text(r)) else { return false };
+    block.kids().into_iter().filter(|k| k.start_byte() > stmt.start_byte()).flat_map(|k| k.descendants()).any(|d| {
+        let same_path = || d.descendants().any(|x| x.kind() == "identifier" && cx.text(x) == root);
+        same_path() && match d.kind() {
         "method_invocation" => match cx.fm.call_name(d) {
             Some("createNewFile" | "createTempFile") => true,
             Some("write" | "writeString" | "createFile" | "createDirectory" | "copy" | "move" | "newOutputStream" | "newBufferedWriter" | "newByteChannel") => {
@@ -264,6 +274,7 @@ fn writes_file_after<'t>(cx: &Ctx<'_, 't>, stmt: Node<'t>) -> bool {
             Some("java.io.FileOutputStream" | "java.io.FileWriter" | "java.io.RandomAccessFile" | "java.io.PrintWriter" | "java.io.PrintStream")
         ),
         _ => false,
+        }
     })
 }
 

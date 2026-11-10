@@ -70,6 +70,9 @@ class ConditionalExit {
                 break;
             case 5:
                 for (int i = 0; i < 2; i++) { if (i == 1) break; }
+            case 6: // expect
+                for (int i = 0; i < 2; i++) { if (i == 1) continue; out.append(i); }
+                out.append("a jump of the nested loop does not leave the switch");
             default: // expect
                 out.append('?');
         }

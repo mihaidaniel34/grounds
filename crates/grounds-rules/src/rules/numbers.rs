@@ -446,7 +446,7 @@ impl Rule for BigDecimalFromDouble {
                 return;
             }
             // rounded on purpose to an explicit precision
-            if args.len() == 2 && cx.type_of(args[1]).is_class("java.math.MathContext") {
+            if args.len() == 2 && cx.type_of(args[1]).is_class("java.math.MathContext") && !cx.text(args[1]).ends_with("UNLIMITED") {
                 return;
             }
             let fix = if args.len() == 1 { Some(Fix::replace("Use BigDecimal.valueOf", n, format!("java.math.BigDecimal.valueOf({})", cx.text(args[0])))) } else { None };
@@ -465,7 +465,11 @@ fn exact_double<'t>(cx: &Ctx<'_, 't>, e: Node<'t>) -> bool {
     let e = e.unparen();
     match e.kind() {
         "unary_expression" if matches!(op(e), "-" | "+") => e.field("operand").is_some_and(|o| exact_double(cx, o)),
-        "cast_expression" => e.field("value").is_some_and(|v| matches!(cx.type_of(v).prim(), Some(Prim::Int | Prim::Long | Prim::Short | Prim::Byte | Prim::Char)) || exact_double(cx, v)),
+        // int, short, byte and char fit a double's 53-bit mantissa; a long may not
+        "cast_expression" => {
+            let to_double = e.field("type").is_some_and(|t| cx.text(t) == "double");
+            e.field("value").is_some_and(|v| to_double && matches!(cx.type_of(v).prim(), Some(Prim::Int | Prim::Short | Prim::Byte | Prim::Char)) || exact_double(cx, v))
+        }
         "decimal_floating_point_literal" | "decimal_integer_literal" => literal_is_exact(e.text(cx.src)),
         "field_access" | "identifier" => matches!(cx.fm.symbol(e), Some(grounds_semantic::Symbol::Field(f)) if matches!(&*f.owner, "java.lang.Double" | "java.lang.Float")),
         _ => false,

@@ -21,6 +21,7 @@ class AsyncTests {
         async.complete();
     }
     @Test void notAContext(Parser ctx) { Parser.parse("y"); } // expect
+    @Test void contextUnused(io.vertx.ext.unit.TestContext ctx) { Parser.parse("z"); } // expect
 }
 class GuavaTesters {
     // Guava's EqualsTester throws AssertionError when a group is wrong

@@ -50,7 +50,7 @@ impl Rule for NullDereference {
             res.for_each_before(&cfg, &na, |e, f| {
                 for (i, node) in na.derefs(e) {
                     let Some(state) = f.get(&i) else { continue };
-                    if matches!(*state, Nullness::NonNull | Nullness::MaybeAssignedNull) || !reported.insert(i) {
+                    if matches!(*state, Nullness::NonNull | Nullness::MaybeAssignedNull) || reported.contains(&i) {
                         continue;
                     }
                     let name = cx.fm.binder.decls[i].name;
@@ -59,6 +59,7 @@ impl Rule for NullDereference {
                     if !definite && maybe_null_unknown(cx, c, i, node) {
                         continue;
                     }
+                    reported.insert(i);
                     let msg = if definite { format!("`{name}` is always null here") } else { format!("`{name}` may be null here") };
                     found.push((node, msg, definite));
                 }
@@ -166,7 +167,24 @@ fn maybe_null_unknown<'t>(cx: &Ctx<'_, 't>, callable: Node<'t>, i: usize, deref:
     // the null check's branch ends in a call the analysis cannot see into
     if let Some(check) = last_check {
         if let Some(ifs) = check.ancestors().take_while(|a| *a != callable).find(|a| a.kind() == "if_statement") {
-            let in_cond = ifs.field("condition").is_some_and(|c| c.descendants().any(|x| x == check));
+            // the `if` must take the null path: `x == null`, alone or in an `||`
+            let cond = ifs.field("condition");
+            let mut null_branch = check.parent().is_some_and(|p| op(p) == "==");
+            let mut cur = check.parent();
+            while let Some(c) = cur {
+                if Some(c) == cond {
+                    break;
+                }
+                let up = c.parent();
+                if let Some(u) = up {
+                    if Some(u) != cond && !(u.kind() == "parenthesized_expression" || u.kind() == "binary_expression" && op(u) == "||") {
+                        null_branch = false;
+                        break;
+                    }
+                }
+                cur = up;
+            }
+            let in_cond = null_branch && ifs.field("condition").is_some_and(|c| c.descendants().any(|x| x == check));
             if in_cond && ifs.field("alternative").is_none() {
                 let then = ifs.field("consequence");
                 let last_stmt = then.and_then(|t| if t.kind() == "block" { t.kids().into_iter().filter(|k| !grounds_syntax::is_comment(k.kind())).last() } else { Some(t) });
@@ -393,7 +411,7 @@ const OS_RESOURCES: &[&str] = &[
 /// handle (itself, or inside the creations it wraps)?
 fn holds_os_resource<'t>(cx: &Ctx<'_, 't>, site: Node<'t>) -> bool {
     site.descendants().filter(|d| matches!(d.kind(), "object_creation_expression" | "method_invocation")).any(|d| {
-        if d.kind() == "method_invocation" && cx.fm.select_method(d).is_some_and(|m| &*m.owner == "java.nio.file.Files" && m.method.name.starts_with("new")) {
+        if d.kind() == "method_invocation" && cx.fm.select_method(d).is_some_and(|m| &*m.owner == "java.nio.file.Files" && (m.method.name.starts_with("new") || matches!(&*m.method.name, "lines" | "list" | "walk" | "find"))) {
             return true;
         }
         cx.type_of(d).class_name().is_some_and(|t| OS_RESOURCES.iter().any(|r| t == *r || cx.fm.is_subclass(t, r).is_yes()))
