@@ -167,7 +167,7 @@ impl Rule for IdenticalBranches {
                 if is_else_if(n) {
                     return;
                 }
-                let (_, branches, has_else) = if_chain(n);
+                let (conds, branches, has_else) = if_chain(n);
                 if branches.len() < 2 {
                     return;
                 }
@@ -182,7 +182,14 @@ impl Rule for IdenticalBranches {
                     if trivial {
                         continue;
                     }
-                    if let Some(j) = (0..i).find(|&j| texts[j] == texts[i]) {
+                    // only the branch just before: with other conditions in
+                    // between, the order of the tests matters and the two
+                    // cannot simply be merged
+                    let j = i - 1;
+                    // conditions binding pattern variables (`x instanceof A a
+                    // && a.isEmpty()`) cannot be joined with `||`
+                    let binds = |k: usize| conds.get(k).is_some_and(|c| binds_pattern(*c));
+                    if texts[j] == texts[i] && !binds(i) && !binds(j) {
                         let line = line_of(branches[j]) + 1;
                         cx.report_with_severity(branches[i], Severity::Info, format!("This branch has the same code as the branch on line {line}"));
                     }
@@ -192,9 +199,16 @@ impl Rule for IdenticalBranches {
                 let Some(body) = n.field("body") else { return };
                 let groups = body.kids();
                 let mut bodies: Vec<(Node, String)> = Vec::new();
+                let mut patterns = false;
                 for g in &groups {
                     let stmts: Vec<Node> = g.kids().into_iter().filter(|k| k.kind() != "switch_label").collect();
                     if stmts.is_empty() {
+                        continue;
+                    }
+                    // a case with a type or record pattern (and a guard) cannot
+                    // share its label with another one
+                    if g.kids().iter().filter(|k| k.kind() == "switch_label").any(|l| binds_pattern(*l)) {
+                        patterns = true;
                         continue;
                     }
                     let text: String = stmts.iter().map(|s| normalized(*s, cx.src)).collect::<Vec<_>>().join(" ");
@@ -202,7 +216,7 @@ impl Rule for IdenticalBranches {
                     bodies.push((*g, text.clone()));
                     let _ = stmt_count;
                 }
-                if bodies.len() >= 2 && bodies.iter().all(|(_, t)| *t == bodies[0].1) && cx.text(body).contains("default") {
+                if !patterns && bodies.len() >= 2 && bodies.iter().all(|(_, t)| *t == bodies[0].1) && cx.text(body).contains("default") {
                     cx.report(n.child(0).unwrap_or(n), "All cases of this switch execute the same code");
                     return;
                 }
@@ -219,6 +233,12 @@ impl Rule for IdenticalBranches {
             _ => {}
         }
     }
+}
+
+/// Does a condition or case label declare pattern variables (`x instanceof
+/// Foo f`, `case Foo f ->`, `case Point(int x, int y)`), or carry a guard?
+fn binds_pattern(n: Node) -> bool {
+    n.descendants().any(|d| matches!(d.kind(), "type_pattern" | "record_pattern" | "guard") || d.kind() == "instanceof_expression" && d.field("name").is_some())
 }
 
 declare_rule!(IdenticalConditions {
