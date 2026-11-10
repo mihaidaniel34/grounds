@@ -163,13 +163,24 @@ enum Cmd {
     },
 }
 
+/// Stack of the thread running a command and of the rayon workers. Parsing,
+/// indexing and the rules recurse along the syntax tree; rayon's default
+/// 2 MiB (and the main thread's 8 MiB) overflowed on code that is deeply
+/// nested but under the analysis limit (grounds_engine::analyze::
+/// MAX_TREE_DEPTH). Unused stack is only reserved address space.
+const STACK_SIZE: usize = 64 << 20;
+
 fn main() -> anyhow::Result<()> {
+    let _ = rayon::ThreadPoolBuilder::new().stack_size(STACK_SIZE).build_global();
+    match std::thread::Builder::new().name("main".into()).stack_size(STACK_SIZE).spawn(run) {
+        Ok(t) => t.join().unwrap_or_else(|e| std::panic::resume_unwind(e)),
+        // no thread with such a stack (an address space limit): run here
+        Err(_) => run(),
+    }
+}
+
+fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    // Parsing, indexing and the rules recurse along the syntax tree; rayon's
-    // default 2 MiB stacks overflowed on code that is deeply nested but under
-    // the analysis limit (grounds_engine::analyze::MAX_TREE_DEPTH). Unused
-    // stack is only reserved address space.
-    let _ = rayon::ThreadPoolBuilder::new().stack_size(64 << 20).build_global();
     let style = grounds_engine::report::Style::detect(&cli.color);
     match cli.cmd {
         Cmd::Index { root, groups } => {
