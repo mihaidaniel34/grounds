@@ -55,6 +55,10 @@ impl Rule for NullDereference {
                     }
                     let name = cx.fm.binder.decls[i].name;
                     let definite = state.is_definitely_null();
+                    // "may be null" rests on paths the analysis cannot tell apart
+                    if !definite && maybe_null_unknown(cx, c, i, node) {
+                        continue;
+                    }
                     let msg = if definite { format!("`{name}` is always null here") } else { format!("`{name}` may be null here") };
                     found.push((node, msg, definite));
                 }
@@ -68,6 +72,117 @@ impl Rule for NullDereference {
             }
         }
     }
+}
+
+/// Does a "may be null" at `deref` depend on something the nullness analysis
+/// does not know? It joins paths without correlating them, and it does not
+/// look into callees, so it stays silent when, between the last null check
+/// or assignment of the variable and the dereference:
+/// - the variable was handed to a call (which may reject null: an assertion
+///   helper, a validator, a precondition on several arguments);
+/// - the dereference sits under a condition that does not involve the
+///   variable (a flag, a length, another variable set on the same paths);
+/// - or the null check's branch ends in a call the analysis cannot see into
+///   (unresolved, or an overridable method that throws).
+fn maybe_null_unknown<'t>(cx: &Ctx<'_, 't>, callable: Node<'t>, i: usize, deref: Node<'t>) -> bool {
+    let refs: Vec<Node<'t>> = callable.descendants().filter(|d| d.kind() == "identifier" && cx.fm.local_ref(*d) == Some(i)).collect();
+    let null_check = |r: Node<'t>| {
+        r.parent().is_some_and(|p| p.kind() == "binary_expression" && matches!(op(p), "==" | "!=") && lr(p).is_some_and(|(l, rr)| is_null_literal(l) || is_null_literal(rr)))
+    };
+    let written = |r: Node<'t>| {
+        r.parent().is_some_and(|p| (p.kind() == "assignment_expression" && p.field("left") == Some(r)) || (p.kind() == "variable_declarator" && p.field("name") == Some(r)))
+    };
+    let decl_name = cx.fm.binder.decls[i].name_node;
+    let mut last = callable.start_byte();
+    let mut last_check: Option<Node<'t>> = None;
+    for r in refs.iter().chain(std::iter::once(&decl_name)) {
+        if r.start_byte() < deref.start_byte() && (null_check(*r) || written(*r) || *r == decl_name) && r.start_byte() >= last {
+            last = r.start_byte();
+            last_check = null_check(*r).then_some(*r);
+        }
+    }
+    // handed to a call
+    let handed = refs.iter().any(|r| {
+        r.start_byte() >= last
+            && r.start_byte() < deref.start_byte()
+            && r.ancestors().take_while(|a| !a.kind().ends_with("statement") && *a != callable).any(|a| {
+                a.kind() == "argument_list"
+                    && a.parent().is_some_and(|call| {
+                        !call.descendants().any(|d| d == deref)
+                            && !(call.kind() == "method_invocation"
+                                && (super::exceptions::is_log_like(call, cx) || matches!(cx.fm.call_name(call), Some("println" | "print" | "printf" | "format" | "valueOf"))))
+                    })
+            })
+    });
+    if handed {
+        return true;
+    }
+    // locals whose value comes from the variable, or flags set under a
+    // condition on it: a condition on those involves the variable
+    let mentions = |n: Node<'t>| n.descendants().any(|d| d.kind() == "identifier" && cx.fm.local_ref(d) == Some(i));
+    let conditions_on_i: Vec<Node<'t>> = refs
+        .iter()
+        .filter_map(|r| r.ancestors().take_while(|a| *a != callable).find(|a| matches!(a.kind(), "if_statement" | "ternary_expression" | "while_statement" | "for_statement" | "do_statement")))
+        .collect();
+    let mut derived: Vec<usize> = Vec::new();
+    for d in callable.descendants() {
+        let (target, value) = match d.kind() {
+            "assignment_expression" => (d.field("left"), d.field("right")),
+            "variable_declarator" => (d.field("name"), d.field("value")),
+            _ => continue,
+        };
+        let Some(j) = target.and_then(|t| cx.fm.local_ref(t).or_else(|| cx.fm.binder.decl_index(t))) else { continue };
+        if j == i {
+            continue;
+        }
+        // a boolean flag set under a condition on the variable is a guard the
+        // analysis tracks itself: if it still reports, the flag went stale
+        let flag = value.is_some_and(|v| matches!(v.unparen().kind(), "true" | "false"));
+        if value.is_some_and(|v| mentions(v)) || (flag && conditions_on_i.iter().any(|c| d.ancestors().any(|a| a == *c) && c.field("condition").is_none_or(|cc| !cc.descendants().any(|x| x == d)))) {
+            derived.push(j);
+        }
+    }
+    let involves = |cond: Node<'t>| {
+        cond.descendants().any(|d| d.kind() == "identifier" && cx.fm.local_ref(d).is_some_and(|j| j == i || derived.contains(&j)))
+    };
+    // under an unrelated condition
+    let mut child = deref;
+    for a in deref.ancestors() {
+        if a == callable || a.kind() == "lambda_expression" || a.kind() == "class_body" || a.start_byte() < last {
+            break;
+        }
+        let cond = match a.kind() {
+            "if_statement" | "while_statement" | "do_statement" | "ternary_expression" => a.field("condition").filter(|c| *c != child && !c.descendants().any(|x| x == deref)),
+            "for_statement" | "enhanced_for_statement" => a.field("condition").or_else(|| a.field("value")).filter(|c| !c.descendants().any(|x| x == deref)),
+            "switch_block_statement_group" | "switch_rule" => a.parent().and_then(|b| b.parent()).and_then(|sw| sw.field("condition")),
+            "binary_expression" if matches!(op(a), "&&" | "||") && a.field("right") == Some(child) => a.field("left"),
+            _ => None,
+        };
+        if cond.is_some_and(|c| !involves(c)) {
+            return true;
+        }
+        child = a;
+    }
+    // the null check's branch ends in a call the analysis cannot see into
+    if let Some(check) = last_check {
+        if let Some(ifs) = check.ancestors().take_while(|a| *a != callable).find(|a| a.kind() == "if_statement") {
+            let in_cond = ifs.field("condition").is_some_and(|c| c.descendants().any(|x| x == check));
+            if in_cond && ifs.field("alternative").is_none() {
+                let then = ifs.field("consequence");
+                let last_stmt = then.and_then(|t| if t.kind() == "block" { t.kids().into_iter().filter(|k| !grounds_syntax::is_comment(k.kind())).last() } else { Some(t) });
+                if let Some(call) = last_stmt.filter(|st| st.kind() == "expression_statement").and_then(|st| st.first_kid()).filter(|c| c.kind() == "method_invocation") {
+                    let opaque = match cx.fm.select_method(call) {
+                        None => !super::exceptions::is_log_like(call, cx),
+                        Some(m) => m.method.flags.has(Flags::ALWAYS_THROWS),
+                    };
+                    if opaque {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
 }
 
 declare_rule!(RedundantNullCheck {

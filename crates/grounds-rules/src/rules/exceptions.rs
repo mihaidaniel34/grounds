@@ -636,7 +636,7 @@ impl Rule for RethrowOnly {
 }
 
 /// A logger call or a logging helper (`Tracer.logError(msg, e)`, `logException(e)`).
-fn is_log_like<'t>(n: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+pub(crate) fn is_log_like<'t>(n: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
     is_log_call(n, cx) || (n.kind() == "method_invocation" && cx.fm.call_name(n).and_then(|m| m.strip_prefix("log")).is_some_and(|r| r.starts_with(|c: char| c.is_ascii_uppercase())))
 }
 

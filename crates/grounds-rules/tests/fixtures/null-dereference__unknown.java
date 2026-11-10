@@ -1,0 +1,67 @@
+// "may be null" that depends on facts the analysis does not track stays silent
+@interface Nullable {}
+class Unknown {
+    interface Item { String name(); boolean active(); }
+    static void require(Object o, String what) { if (o == null) throw new IllegalArgumentException(what); }
+    void log(String m) { }
+
+    // handed to a call that may reject null
+    String validated(@Nullable Item item) {
+        String label = item == null ? null : item.name();
+        require(item, "item");
+        return item.name() + label;
+    }
+    // under a condition that does not involve the variable
+    String correlatedKey(@Nullable Item item, java.util.Map<String, Item> byName, String name) {
+        if (byName.containsKey(name)) {
+            return item.name();
+        }
+        return "";
+    }
+    int boundedLoop(int[] values, int n) {
+        if (values == null) {
+            n = 0;
+        }
+        int sum = 0;
+        for (int i = 0; i < n; i++) {
+            sum += values[i];
+        }
+        return sum;
+    }
+    // the null check's branch ends in a call the analysis cannot see into
+    String opaqueCall(@Nullable Item item) {
+        if (item == null) {
+            missing.Reporter.reportBadInput("no item");
+        }
+        return item.name();
+    }
+
+    // still reported: nothing between the check and the dereference
+    String checkedThenUsed(@Nullable Item item) {
+        if (item == null) {
+            log("none");
+        }
+        return item.name(); // expect
+    }
+    // still reported: the condition is on the variable
+    String wrongBranch(Item item) {
+        if (item == null || !item.active()) {
+            return item.name(); // expect
+        }
+        return "";
+    }
+    // still reported: the condition is on a value derived from the variable
+    String derived(Item item) {
+        String name = "";
+        if (item != null) name = item.name();
+        if (name.isEmpty()) return item.name(); // expect
+        return name;
+    }
+    // still reported: the variable is only logged
+    String logged(@Nullable Item item, org.slf4j.Logger logger) {
+        if (item == null) {
+            logger.warn("no item {}", item);
+        }
+        return item.name(); // expect
+    }
+}
