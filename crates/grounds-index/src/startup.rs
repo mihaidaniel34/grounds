@@ -140,6 +140,20 @@ struct Group {
     uncertain: bool,
     /// the sources are a lower bound (see `StartCall::open`)
     open: bool,
+    /// where the object was created or handed in: code after it that runs
+    /// on one path only is conditional
+    at: usize,
+}
+
+/// Constructs in which code runs on some paths only, or not when written.
+const CONDITIONAL: &[&str] = &[
+    "if_statement", "while_statement", "for_statement", "enhanced_for_statement", "do_statement", "switch_expression", "switch_block_statement_group",
+    "switch_rule", "ternary_expression", "catch_clause", "binary_expression", "lambda_expression", "class_body",
+];
+
+/// The name of the method a node is in.
+fn method_name<'a>(n: Node, src: &'a str) -> &'a str {
+    n.ancestors().find(|a| a.kind() == "method_declaration").and_then(|m| m.field("name")).map(|x| x.text(src)).unwrap_or("")
 }
 
 struct Reader<'s> {
@@ -150,9 +164,9 @@ struct Reader<'s> {
 }
 
 impl<'s> Reader<'s> {
-    fn group(&mut self, sources: Option<Vec<Name>>) -> usize {
+    fn group(&mut self, sources: Option<Vec<Name>>, at: usize) -> usize {
         let uncertain = sources.is_none();
-        self.groups.push(Group { sources: sources.unwrap_or_default(), uncertain, open: false });
+        self.groups.push(Group { sources: sources.unwrap_or_default(), uncertain, open: false, at });
         self.groups.len() - 1
     }
 
@@ -160,6 +174,13 @@ impl<'s> Reader<'s> {
     fn on_call(&mut self, g: usize, call: Node) {
         let name = call.field("name").map(|n| n.text(self.src)).unwrap_or("");
         if ADDS_SOURCES.contains(&name) {
+            let at = self.groups[g].at;
+            if call.ancestors().take_while(|a| a.start_byte() > at).any(|a| CONDITIONAL.contains(&a.kind())) {
+                // a source added on some paths only: which classes the
+                // context holds is unknown
+                self.groups[g].uncertain = true;
+                return;
+            }
             match all_literals(call, self.src) {
                 Some(more) => self.groups[g].sources.extend(more),
                 // more sources the reader cannot name
@@ -190,7 +211,15 @@ impl<'s> Reader<'s> {
                     node = p;
                 }
                 "parenthesized_expression" => node = p,
-                "expression_statement" | "return_statement" => return,
+                "expression_statement" => return,
+                // handed back to Spring by an initializer's configure; from
+                // any other method, to a caller the reader does not follow
+                "return_statement" => {
+                    if !INITIALIZER_ENTRIES.contains(&method_name(p, self.src)) {
+                        self.groups[g].open = true;
+                    }
+                    return;
+                }
                 "variable_declarator" if p.field("value").is_some_and(|v| v.id() == node.id()) => {
                     self.vars.insert(p.id(), g);
                     return;
@@ -236,7 +265,11 @@ fn declaration<'t>(id: Node<'t>, src: &str) -> Option<Node<'t>> {
                         }
                     }
                 }
-                if a.kind() != "lambda_expression" {
+                // a method of an anonymous or local class sees the
+                // enclosing code's variables too
+                let owner = a.parent().and_then(|body| body.parent());
+                let in_code = owner.is_some_and(|o| o.kind() == "object_creation_expression" || o.parent().is_some_and(|q| !matches!(q.kind(), "program" | "class_body" | "interface_body" | "enum_body" | "enum_body_declarations")));
+                if a.kind() != "lambda_expression" && !in_code {
                     return None;
                 }
             }
@@ -321,35 +354,39 @@ pub fn extract(root: Node, src: &str, imports: &Imports) -> Startups {
         if n.kind() == "method_invocation" {
             // run(Class<?> source | Class<?>[] sources, String... args)
             let first = n.field("arguments").and_then(|a| a.kids().into_iter().next());
-            r.group(first.and_then(|a| literals(a, src)));
+            r.group(first.and_then(|a| literals(a, src)), n.start_byte());
         } else {
-            let g = r.group(all_literals(n, src));
+            let g = r.group(all_literals(n, src), n.start_byte());
             r.follow(g, n);
         }
     }
-    // initializers: the builder Spring Boot hands to configure(...)
+    // initializers: the builder Spring Boot hands to configure(...); any
+    // other method's parameter is its caller's object, which the reader
+    // does not follow there
     for m in methods.iter().filter(|m| reach.contains(&m.id())) {
+        let name = m.field("name").map(|n| n.text(src)).unwrap_or("");
         for p in m.field("parameters").map(|ps| ps.kids()).unwrap_or_default() {
             if p.kind() == "formal_parameter" && p.field("type").is_some_and(|t| spring_type(t.text(src), imports)) {
-                let g = r.group(Some(Vec::new()));
+                let handed = if INITIALIZER_ENTRIES.contains(&name) { Some(Vec::new()) } else { None };
+                let g = r.group(handed, p.start_byte());
                 r.vars.insert(p.id(), g);
             }
         }
         // get*ConfigClasses: the classes returned
-        let name = m.field("name").map(|n| n.text(src)).unwrap_or("");
         if matches!(name, "getRootConfigClasses" | "getServletConfigClasses") {
             for ret in m.descendants().filter(|d| d.kind() == "return_statement") {
                 let Some(v) = ret.kids().into_iter().next() else { continue };
                 if v.kind() == "null_literal" {
                     continue;
                 }
-                r.group(literals(v, src));
+                r.group(literals(v, src), v.start_byte());
             }
         }
     }
     // uses of the variables (and parameters) holding a builder or context
-    let decls: Vec<(usize, usize)> = r.vars.iter().map(|(k, v)| (*k, *v)).collect();
-    if !decls.is_empty() {
+    // (looked up as they are registered: a variable initialised from one
+    // followed earlier, `var b = a.web(null)`, is followed in turn)
+    if !r.vars.is_empty() {
         for id in root.descendants().filter(|n| n.kind() == "identifier") {
             let Some(p) = id.parent() else { continue };
             // the declaration itself, or a member name (`x.app`)
@@ -363,7 +400,13 @@ pub fn extract(root: Node, src: &str, imports: &Imports) -> Startups {
                 continue;
             }
             let Some(d) = declaration(id, src) else { continue };
-            let Some(g) = decls.iter().find(|(k, _)| *k == d.id()).map(|(_, g)| *g) else { continue };
+            let Some(g) = r.vars.get(&d.id()).copied() else { continue };
+            // captured by a lambda or an anonymous class: when, and whether,
+            // that code runs is unknown
+            if id.ancestors().take_while(|a| a.start_byte() > d.start_byte()).any(|a| matches!(a.kind(), "lambda_expression" | "class_body")) {
+                r.groups[g].open = true;
+                continue;
+            }
             r.follow(g, id);
         }
     }
@@ -559,5 +602,41 @@ mod tests {
             public class Main {{ public static void main(String[] args) {{ SpringApplication.run(new Class<?>[] {}A.class{}, args); }} }}", "{".repeat(n), "}".repeat(n));
         let st = std::thread::Builder::new().stack_size(8 << 20).spawn(move || read(&s)).unwrap().join().expect("no stack overflow");
         assert!(st.calls.is_empty() && st.uncertain, "{st:?}");
+    }
+
+    #[test]
+    fn an_object_the_reader_loses_track_of_never_makes_a_closed_context() {
+        // every launcher does one thing the reader does not model with the
+        // application, builder or context: whatever comes out is open or
+        // uncertain, never a closed context
+        let b = "SpringApplicationBuilder";
+        let cases = [
+            // handed to a helper that adds a source
+            format!("withX(new {b}(A.class)).run(args); }} static {b} withX({b} b) {{ return b.sources(X.class); }}"),
+            // returned from a helper, sources added by the caller
+            format!("make().sources(B.class).run(args); }} static {b} make() {{ return new {b}(A.class); }}"),
+            // copied to another variable
+            format!("var a = new {b}(A.class); var c = a.web(null); c.sources(B.class); c.addInitializers(x -> {{}}); c.run(args); }}"),
+            format!("var a = new {b}(A.class); var c = a; Profiles.add(c); c.run(args); }}"),
+            // stored in a field
+            format!("app = new {b}(A.class); app.run(args); }} static {b} app;"),
+            // captured in a lambda or an anonymous class
+            format!("var a = new {b}(A.class); Runnable r = () -> a.run(args); r.run(); }}"),
+            format!("var a = new {b}(A.class); new Thread() {{ public void run() {{ a.run(args); }} }}.start(); }}"),
+            // a source added on one path only
+            format!("var a = new {b}(A.class); if (args.length > 0) a.sources(B.class); a.run(args); }}"),
+            format!("var a = new {b}(A.class); for (String s : args) a.sources(B.class); a.run(args); }}"),
+        ];
+        for body in cases {
+            let s = format!("package l; import org.springframework.boot.builder.{b};
+                public class Main {{ public static void main(String[] args) {{ {body} }}");
+            let st = read(&s);
+            assert!(st.calls.iter().all(|c| c.open), "{body}\n{st:?}");
+            assert!(!st.calls.is_empty() || st.uncertain, "the fallback must not stand in for it: {body}\n{st:?}");
+        }
+        // what the reader does model stays closed
+        let s = format!("package l; import org.springframework.boot.builder.{b};
+            public class Main {{ public static void main(String[] args) {{ var a = new {b}(A.class); var c = a.web(null); c.sources(B.class); c.run(args); }} }}");
+        assert_eq!(calls(&s), (vec![vec!["A".to_string(), "B".to_string()]], false));
     }
 }
