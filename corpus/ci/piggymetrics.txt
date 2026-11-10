@@ -54,4 +54,3 @@ statistics-service/src/test/java/com/piggymetrics/statistics/service/StatisticsS
 statistics-service/src/test/java/com/piggymetrics/statistics/service/StatisticsServiceImplTest.java:159 assert-true-with-comparison
 statistics-service/src/test/java/com/piggymetrics/statistics/service/StatisticsServiceImplTest.java:160 assert-true-with-comparison
 statistics-service/src/test/java/com/piggymetrics/statistics/service/StatisticsServiceImplTest.java:161 assert-true-with-comparison
-statistics-service/src/test/java/com/piggymetrics/statistics/service/StatisticsServiceImplTest.java:99 bigdecimal-from-double

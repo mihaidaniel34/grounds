@@ -7,6 +7,7 @@ amazon-kms-quickstart/src/main/java/org/acme/kms/QuarkusKmsAsyncResource.java:42
 amazon-kms-quickstart/src/main/java/org/acme/kms/QuarkusKmsSyncResource.java:23 field-injection
 amazon-kms-quickstart/src/main/java/org/acme/kms/QuarkusKmsSyncResource.java:40 default-charset
 amazon-s3-quickstart/src/main/java/org/acme/s3/S3AsyncClientResource.java:34 field-injection
+amazon-s3-quickstart/src/main/java/org/acme/s3/S3AsyncClientResource.java:56 print-stack-trace
 amazon-s3-quickstart/src/main/java/org/acme/s3/S3SyncClientResource.java:27 field-injection
 amazon-ses-quickstart/src/main/java/org/acme/ses/QuarkusSesAsyncResource.java:19 field-injection
 amazon-ses-quickstart/src/main/java/org/acme/ses/QuarkusSesSyncResource.java:17 field-injection
@@ -43,17 +44,12 @@ elasticsearch-quickstart/src/main/java/org/acme/elasticsearch/java/FruitService.
 elasticsearch-quickstart/src/main/java/org/acme/elasticsearch/rest/FruitResource.java:20 field-injection
 elasticsearch-quickstart/src/main/java/org/acme/elasticsearch/rest/FruitService.java:19 field-injection
 funqy-quickstarts/funqy-amazon-lambda-http-quickstart/src/main/java/org/acme/funqy/GreetingFunction.java:9 field-injection
-funqy-quickstarts/funqy-amazon-lambda-http-quickstart/src/main/java/org/acme/funqy/GreetingFunction.java:9 injection-in-non-bean
 funqy-quickstarts/funqy-amazon-lambda-quickstart/src/main/java/org/acme/funqy/GreetingFunction.java:9 field-injection
-funqy-quickstarts/funqy-amazon-lambda-quickstart/src/main/java/org/acme/funqy/GreetingFunction.java:9 injection-in-non-bean
 funqy-quickstarts/funqy-google-cloud-functions-http-quickstart/src/main/java/org/acme/funqy/GreetingFunction.java:9 field-injection
-funqy-quickstarts/funqy-google-cloud-functions-http-quickstart/src/main/java/org/acme/funqy/GreetingFunction.java:9 injection-in-non-bean
 funqy-quickstarts/funqy-google-cloud-functions-quickstart/src/main/java/org/acme/GreetingFunctions.java:12 field-injection
-funqy-quickstarts/funqy-google-cloud-functions-quickstart/src/main/java/org/acme/GreetingFunctions.java:12 injection-in-non-bean
 funqy-quickstarts/funqy-google-cloud-functions-quickstart/src/main/java/org/acme/GreetingFunctions.java:17 system-out-println
 funqy-quickstarts/funqy-google-cloud-functions-quickstart/src/main/java/org/acme/GreetingFunctions.java:23 system-out-println
 funqy-quickstarts/funqy-http-quickstart/src/main/java/org/acme/funqy/GreetingFunction.java:9 field-injection
-funqy-quickstarts/funqy-http-quickstart/src/main/java/org/acme/funqy/GreetingFunction.java:9 injection-in-non-bean
 funqy-quickstarts/funqy-knative-events-quickstart/src/main/java/org/acme/funqy/SimpleFunctionChain.java:71 log-string-concatenation
 getting-started-async/src/main/java/org/acme/getting/started/async/GreetingResource.java:15 field-injection
 getting-started-command-mode/src/main/java/org/acme/getting/started/commandmode/GreetingMain.java:11 field-injection

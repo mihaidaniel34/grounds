@@ -46,17 +46,12 @@ elasticsearch-quickstart/src/main/java/org/acme/elasticsearch/java/FruitService.
 elasticsearch-quickstart/src/main/java/org/acme/elasticsearch/rest/FruitResource.java:20 field-injection
 elasticsearch-quickstart/src/main/java/org/acme/elasticsearch/rest/FruitService.java:19 field-injection
 funqy-quickstarts/funqy-amazon-lambda-http-quickstart/src/main/java/org/acme/funqy/GreetingFunction.java:9 field-injection
-funqy-quickstarts/funqy-amazon-lambda-http-quickstart/src/main/java/org/acme/funqy/GreetingFunction.java:9 injection-in-non-bean
 funqy-quickstarts/funqy-amazon-lambda-quickstart/src/main/java/org/acme/funqy/GreetingFunction.java:9 field-injection
-funqy-quickstarts/funqy-amazon-lambda-quickstart/src/main/java/org/acme/funqy/GreetingFunction.java:9 injection-in-non-bean
 funqy-quickstarts/funqy-google-cloud-functions-http-quickstart/src/main/java/org/acme/funqy/GreetingFunction.java:9 field-injection
-funqy-quickstarts/funqy-google-cloud-functions-http-quickstart/src/main/java/org/acme/funqy/GreetingFunction.java:9 injection-in-non-bean
 funqy-quickstarts/funqy-google-cloud-functions-quickstart/src/main/java/org/acme/GreetingFunctions.java:12 field-injection
-funqy-quickstarts/funqy-google-cloud-functions-quickstart/src/main/java/org/acme/GreetingFunctions.java:12 injection-in-non-bean
 funqy-quickstarts/funqy-google-cloud-functions-quickstart/src/main/java/org/acme/GreetingFunctions.java:17 system-out-println
 funqy-quickstarts/funqy-google-cloud-functions-quickstart/src/main/java/org/acme/GreetingFunctions.java:23 system-out-println
 funqy-quickstarts/funqy-http-quickstart/src/main/java/org/acme/funqy/GreetingFunction.java:9 field-injection
-funqy-quickstarts/funqy-http-quickstart/src/main/java/org/acme/funqy/GreetingFunction.java:9 injection-in-non-bean
 getting-started-async/src/main/java/org/acme/getting/started/async/GreetingResource.java:15 field-injection
 getting-started-command-mode/src/main/java/org/acme/getting/started/commandmode/GreetingMain.java:11 field-injection
 getting-started-command-mode/src/main/java/org/acme/getting/started/commandmode/GreetingMain.java:18 system-out-println

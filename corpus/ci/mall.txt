@@ -157,7 +157,6 @@ mall-common/src/main/java/com/macro/mall/common/api/ResultCode.java:14 mutable-e
 mall-common/src/main/java/com/macro/mall/common/api/ResultCode.java:21 missing-override
 mall-common/src/main/java/com/macro/mall/common/api/ResultCode.java:25 missing-override
 mall-common/src/main/java/com/macro/mall/common/config/BaseRedisConfig.java:55 bean-method-call-in-lite-mode
-mall-common/src/main/java/com/macro/mall/common/exception/ApiException.java:10 mutable-exception
 mall-common/src/main/java/com/macro/mall/common/exception/Asserts.java:9 utility-class-instantiable
 mall-common/src/main/java/com/macro/mall/common/log/WebLogAspect.java:119 use-isempty
 mall-common/src/main/java/com/macro/mall/common/log/WebLogAspect.java:43 empty-method
@@ -165,7 +164,6 @@ mall-common/src/main/java/com/macro/mall/common/log/WebLogAspect.java:47 empty-m
 mall-common/src/main/java/com/macro/mall/common/log/WebLogAspect.java:51 empty-method
 mall-common/src/main/java/com/macro/mall/common/log/WebLogAspect.java:88 commented-out-code
 mall-common/src/main/java/com/macro/mall/common/service/impl/RedisServiceImpl.java:17 field-injection
-mall-common/src/main/java/com/macro/mall/common/service/impl/RedisServiceImpl.java:17 injection-in-non-bean
 mall-common/src/main/java/com/macro/mall/common/util/RequestUtil.java:11 utility-class-instantiable
 mall-common/src/main/java/com/macro/mall/common/util/RequestUtil.java:16 cognitive-complexity
 mall-common/src/main/java/com/macro/mall/common/util/RequestUtil.java:19 use-isempty
@@ -825,7 +823,6 @@ mall-security/src/main/java/com/macro/mall/security/config/SecurityConfig.java:3
 mall-security/src/main/java/com/macro/mall/security/config/SecurityConfig.java:32 field-injection
 mall-security/src/main/java/com/macro/mall/security/config/SecurityConfig.java:34 field-injection
 mall-security/src/main/java/com/macro/mall/security/config/SecurityConfig.java:36 field-injection
-mall-security/src/main/java/com/macro/mall/security/config/SecurityConfig.java:41 csrf-protection-disabled
 mall-security/src/main/java/com/macro/mall/security/util/JwtTokenUtil.java:125 unused-private-method
 mall-security/src/main/java/com/macro/mall/security/util/JwtTokenUtil.java:64 collection-method-returns-null
 mall-security/src/main/java/com/macro/mall/security/util/JwtTokenUtil.java:70 collection-method-returns-null

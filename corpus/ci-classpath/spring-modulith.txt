@@ -228,7 +228,6 @@ spring-modulith-events/spring-modulith-events-jdbc/src/test/java/org/springframe
 spring-modulith-events/spring-modulith-events-jdbc/src/test/java/org/springframework/modulith/events/jdbc/JdbcEventPublicationRepositoryIntegrationTests.java:557 inner-class-could-be-static
 spring-modulith-events/spring-modulith-events-jdbc/src/test/java/org/springframework/modulith/events/jdbc/JdbcEventPublicationRepositoryPerformance.java:103 test-without-assertion
 spring-modulith-events/spring-modulith-events-jdbc/src/test/java/org/springframework/modulith/events/jdbc/JdbcEventPublicationRepositoryPerformance.java:80 random-used-once
-spring-modulith-events/spring-modulith-events-jdbc/src/test/java/org/springframework/modulith/events/jdbc/JdbcEventPublicationRepositoryPerformance.java:81 int-overflow-in-long-context
 spring-modulith-events/spring-modulith-events-jdbc/src/test/java/org/springframework/modulith/events/jdbc/JdbcEventPublicationRepositoryPerformance.java:87 random-used-once
 spring-modulith-events/spring-modulith-events-jdbc/src/test/java/org/springframework/modulith/events/jdbc/JdbcEventPublicationRepositoryPerformance.java:97 test-without-assertion
 spring-modulith-events/spring-modulith-events-jdbc/src/test/java/org/springframework/modulith/events/jdbc/JdbcEventPublicationRepositoryV2IntegrationTests.java:221 thread-sleep-in-test
@@ -267,8 +266,6 @@ spring-modulith-events/spring-modulith-events-jms/src/test/java/org/springframew
 spring-modulith-events/spring-modulith-events-jpa/src/main/java/org/springframework/modulith/events/jpa/JpaEventPublication.java:67 too-many-parameters
 spring-modulith-events/spring-modulith-events-jpa/src/main/java/org/springframework/modulith/events/jpa/JpaEventPublication.java:96 too-many-parameters
 spring-modulith-events/spring-modulith-events-jpa/src/main/java/org/springframework/modulith/events/jpa/JpaEventPublicationRepository.java:217 constructor-calls-overridable-method
-spring-modulith-events/spring-modulith-events-jpa/src/main/java/org/springframework/modulith/events/jpa/JpaEventPublicationRepository.java:326 sql-injection
-spring-modulith-events/spring-modulith-events-jpa/src/main/java/org/springframework/modulith/events/jpa/JpaEventPublicationRepository.java:350 sql-injection
 spring-modulith-events/spring-modulith-events-jpa/src/main/java/org/springframework/modulith/events/jpa/archiving/ArchivedJpaEventPublication.java:32 too-many-parameters
 spring-modulith-events/spring-modulith-events-jpa/src/main/java/org/springframework/modulith/events/jpa/updating/DefaultJpaEventPublication.java:32 too-many-parameters
 spring-modulith-events/spring-modulith-events-jpa/src/test/java/org/springframework/modulith/events/jpa/JpaEventPublicationRepositoryIntegrationTests.java:304 thread-sleep-in-test
@@ -358,7 +355,6 @@ spring-modulith-junit/src/main/java/org/springframework/modulith/junit/Changes.j
 spring-modulith-junit/src/main/java/org/springframework/modulith/junit/Changes.java:363 redundant-modifier
 spring-modulith-junit/src/main/java/org/springframework/modulith/junit/Changes.java:47 private-constructor-class-not-final
 spring-modulith-junit/src/main/java/org/springframework/modulith/junit/ChangesFactory.java:32 utility-class-instantiable
-spring-modulith-junit/src/main/java/org/springframework/modulith/junit/ChangesFactory.java:46 boxed-reference-equality
 spring-modulith-junit/src/main/java/org/springframework/modulith/junit/TestExecutionCondition.java:141 catch-return-null
 spring-modulith-junit/src/main/java/org/springframework/modulith/junit/TestExecutionCondition.java:50 cognitive-complexity
 spring-modulith-junit/src/main/java/org/springframework/modulith/junit/TestExecutionCondition.java:82 todo-comment

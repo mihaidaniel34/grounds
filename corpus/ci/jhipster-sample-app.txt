@@ -1,4 +1,3 @@
-src/main/java/io/github/jhipster/sample/config/SecurityConfiguration.java:46 csrf-protection-disabled
 src/main/java/io/github/jhipster/sample/config/SecurityJwtConfiguration.java:46 exception-message-only-logged
 src/main/java/io/github/jhipster/sample/domain/User.java:99 missing-override
 src/main/java/io/github/jhipster/sample/web/filter/SpaWebFilter.java:21 complex-boolean-expression

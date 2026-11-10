@@ -79,7 +79,6 @@ auto-configurations/mcp/spring-ai-autoconfigure-mcp-server-webmvc/src/test/java/
 auto-configurations/mcp/spring-ai-autoconfigure-mcp-server-webmvc/src/test/java/org/springframework/ai/mcp/server/webmvc/autoconfigure/McpServerSseWebMvcAutoConfigurationIT.java:70 deprecated-api-usage
 auto-configurations/models/spring-ai-autoconfigure-model-anthropic/src/main/java/org/springframework/ai/model/anthropic/autoconfigure/AnthropicChatAutoConfiguration.java:86 deprecated-api-usage
 auto-configurations/models/spring-ai-autoconfigure-model-bedrock-ai/src/main/java/org/springframework/ai/model/bedrock/autoconfigure/BedrockAwsConnectionConfiguration.java:51 cognitive-complexity
-auto-configurations/models/spring-ai-autoconfigure-model-bedrock-ai/src/main/java/org/springframework/ai/model/bedrock/autoconfigure/BedrockAwsConnectionConfiguration.java:64 null-dereference
 auto-configurations/models/spring-ai-autoconfigure-model-bedrock-ai/src/main/java/org/springframework/ai/model/bedrock/converse/autoconfigure/BedrockConverseProxyChatAutoConfiguration.java:63 too-many-parameters
 auto-configurations/models/spring-ai-autoconfigure-model-bedrock-ai/src/main/java/org/springframework/ai/model/bedrock/converse/autoconfigure/BedrockConverseProxyChatAutoConfiguration.java:71 deprecated-api-usage
 auto-configurations/models/spring-ai-autoconfigure-model-deepseek/src/main/java/org/springframework/ai/model/deepseek/autoconfigure/DeepSeekChatAutoConfiguration.java:60 too-many-parameters
@@ -529,7 +528,6 @@ models/spring-ai-anthropic/src/main/java/org/springframework/ai/anthropic/Anthro
 models/spring-ai-anthropic/src/main/java/org/springframework/ai/anthropic/AnthropicChatModel.java:1307 exception-message-only-logged
 models/spring-ai-anthropic/src/main/java/org/springframework/ai/anthropic/AnthropicChatModel.java:1475 throw-generic-exception
 models/spring-ai-anthropic/src/main/java/org/springframework/ai/anthropic/AnthropicChatModel.java:1628 throw-generic-exception
-models/spring-ai-anthropic/src/main/java/org/springframework/ai/anthropic/AnthropicChatModel.java:1653 null-dereference
 models/spring-ai-anthropic/src/main/java/org/springframework/ai/anthropic/AnthropicChatModel.java:1828 private-constructor-class-not-final
 models/spring-ai-anthropic/src/main/java/org/springframework/ai/anthropic/AnthropicChatModel.java:252 too-many-parameters
 models/spring-ai-anthropic/src/main/java/org/springframework/ai/anthropic/AnthropicChatModel.java:430 cognitive-complexity
@@ -575,7 +573,6 @@ models/spring-ai-bedrock-converse/src/main/java/org/springframework/ai/bedrock/c
 models/spring-ai-bedrock-converse/src/main/java/org/springframework/ai/bedrock/converse/BedrockProxyChatModel.java:542 throw-generic-exception
 models/spring-ai-bedrock-converse/src/main/java/org/springframework/ai/bedrock/converse/BedrockProxyChatModel.java:641 cognitive-complexity
 models/spring-ai-bedrock-converse/src/main/java/org/springframework/ai/bedrock/converse/BedrockProxyChatModel.java:794 cognitive-complexity
-models/spring-ai-bedrock-converse/src/main/java/org/springframework/ai/bedrock/converse/BedrockProxyChatModel.java:826 null-dereference
 models/spring-ai-bedrock-converse/src/main/java/org/springframework/ai/bedrock/converse/BedrockProxyChatModel.java:853 unused-local-variable
 models/spring-ai-bedrock-converse/src/main/java/org/springframework/ai/bedrock/converse/BedrockProxyChatModel.java:855 unused-local-variable
 models/spring-ai-bedrock-converse/src/main/java/org/springframework/ai/bedrock/converse/api/StreamingToolCallBuilder.java:30 legacy-synchronized-collection
@@ -593,6 +590,7 @@ models/spring-ai-bedrock-converse/src/test/java/org/springframework/ai/bedrock/c
 models/spring-ai-bedrock-converse/src/test/java/org/springframework/ai/bedrock/converse/client/BedrockNovaChatClientIT.java:120 complex-boolean-expression
 models/spring-ai-bedrock-converse/src/test/java/org/springframework/ai/bedrock/converse/client/BedrockNovaToolCallingAdvisorIT.java:42 disabled-test-without-reason
 models/spring-ai-bedrock/src/main/java/org/springframework/ai/bedrock/aot/BedrockRuntimeHints.java:60 constructor-calls-overridable-method
+models/spring-ai-bedrock/src/main/java/org/springframework/ai/bedrock/aot/BedrockRuntimeHints.java:70 catch-throwable
 models/spring-ai-bedrock/src/main/java/org/springframework/ai/bedrock/aot/BedrockRuntimeHints.java:97 catch-throwable
 models/spring-ai-bedrock/src/main/java/org/springframework/ai/bedrock/api/AbstractBedrockApi.java:267 commented-out-code
 models/spring-ai-bedrock/src/main/java/org/springframework/ai/bedrock/cohere/BedrockCohereEmbeddingModel.java:111 identical-branches
@@ -653,7 +651,6 @@ models/spring-ai-google-genai/src/main/java/org/springframework/ai/google/genai/
 models/spring-ai-google-genai/src/main/java/org/springframework/ai/google/genai/GoogleGenAiChatModel.java:778 complex-boolean-expression
 models/spring-ai-google-genai/src/main/java/org/springframework/ai/google/genai/GoogleGenAiChatModel.java:868 cognitive-complexity
 models/spring-ai-google-genai/src/main/java/org/springframework/ai/google/genai/GoogleGenAiChatModel.java:876 null-dereference
-models/spring-ai-google-genai/src/main/java/org/springframework/ai/google/genai/GoogleGenAiChatModel.java:982 null-dereference
 models/spring-ai-google-genai/src/main/java/org/springframework/ai/google/genai/GoogleGenAiChatOptions.java:209 too-many-parameters
 models/spring-ai-google-genai/src/main/java/org/springframework/ai/google/genai/GoogleGenAiChatOptions.java:397 complex-boolean-expression
 models/spring-ai-google-genai/src/main/java/org/springframework/ai/google/genai/GoogleGenAiChatOptions.java:551 missing-override
@@ -954,7 +951,6 @@ spring-ai-model/src/main/java/org/springframework/ai/image/ImageOptionsBuilder.j
 spring-ai-model/src/main/java/org/springframework/ai/model/KotlinModule.java:46 commented-out-code
 spring-ai-model/src/main/java/org/springframework/ai/model/KotlinModule.java:49 commented-out-code
 spring-ai-model/src/main/java/org/springframework/ai/model/MutableResponseMetadata.java:107 missing-override
-spring-ai-model/src/main/java/org/springframework/ai/model/observation/ErrorLoggingObservationHandler.java:51 log-placeholder-mismatch
 spring-ai-model/src/main/java/org/springframework/ai/model/tool/DefaultStructuredOutputChatOptions.java:116 collapsible-if
 spring-ai-model/src/main/java/org/springframework/ai/model/tool/DefaultStructuredOutputChatOptions.java:41 too-many-parameters
 spring-ai-model/src/main/java/org/springframework/ai/model/tool/DefaultToolCallingChatOptions.java:47 too-many-parameters
@@ -1149,10 +1145,8 @@ vector-stores/spring-ai-azure-store/src/test/java/org/springframework/ai/vectors
 vector-stores/spring-ai-cassandra-store/src/main/java/org/springframework/ai/vectorstore/cassandra/CassandraFilterExpressionConverter.java:154 collapsible-if
 vector-stores/spring-ai-cassandra-store/src/main/java/org/springframework/ai/vectorstore/cassandra/CassandraFilterExpressionConverter.java:66 commented-out-code
 vector-stores/spring-ai-cassandra-store/src/main/java/org/springframework/ai/vectorstore/cassandra/CassandraFilterExpressionConverter.java:66 todo-comment
-vector-stores/spring-ai-cassandra-store/src/main/java/org/springframework/ai/vectorstore/cassandra/CassandraFilterExpressionConverter.java:80 optional-get-without-check
 vector-stores/spring-ai-cassandra-store/src/main/java/org/springframework/ai/vectorstore/cassandra/CassandraVectorStore.java:239 constructor-calls-overridable-method
 vector-stores/spring-ai-cassandra-store/src/main/java/org/springframework/ai/vectorstore/cassandra/CassandraVectorStore.java:323 todo-comment
-vector-stores/spring-ai-cassandra-store/src/main/java/org/springframework/ai/vectorstore/cassandra/CassandraVectorStore.java:574 optional-get-without-check
 vector-stores/spring-ai-cassandra-store/src/main/java/org/springframework/ai/vectorstore/cassandra/CassandraVectorStore.java:739 record-array-component
 vector-stores/spring-ai-cassandra-store/src/main/java/org/springframework/ai/vectorstore/cassandra/CassandraVectorStore.java:774 private-constructor-class-not-final
 vector-stores/spring-ai-cassandra-store/src/test/java/org/springframework/ai/vectorstore/cassandra/CassandraRichSchemaVectorStoreIT.java:107 optional-orelse-eager-call

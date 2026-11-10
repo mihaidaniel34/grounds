@@ -27,7 +27,6 @@ api/src/main/java/run/halo/app/extension/controller/DefaultController.java:189 c
 api/src/main/java/run/halo/app/extension/controller/DefaultController.java:193 log-string-concatenation
 api/src/main/java/run/halo/app/extension/controller/DefaultController.java:214 deep-nesting
 api/src/main/java/run/halo/app/extension/controller/DefaultController.java:215 todo-comment
-api/src/main/java/run/halo/app/extension/controller/DefaultController.java:287 interrupted-exception-swallowed
 api/src/main/java/run/halo/app/extension/controller/DefaultController.java:46 too-many-parameters
 api/src/main/java/run/halo/app/extension/controller/DefaultController.java:59 too-many-parameters
 api/src/main/java/run/halo/app/extension/controller/ExtensionWatcher.java:36 todo-comment
@@ -37,10 +36,7 @@ api/src/main/java/run/halo/app/extension/index/AbstractValueIndexSpecBuilder.jav
 api/src/main/java/run/halo/app/extension/index/AbstractValueIndexSpecBuilder.java:39 missing-override
 api/src/main/java/run/halo/app/extension/router/selector/FieldSelectorConverter.java:29 deprecated-api-usage
 api/src/main/java/run/halo/app/extension/router/selector/LabelSelectorConverter.java:30 deprecated-api-usage
-api/src/main/java/run/halo/app/extension/router/selector/Operator.java:12 null-dereference
-api/src/main/java/run/halo/app/extension/router/selector/Operator.java:44 null-dereference
 api/src/main/java/run/halo/app/extension/router/selector/Operator.java:57 collapsible-if
-api/src/main/java/run/halo/app/extension/router/selector/Operator.java:58 null-dereference
 api/src/main/java/run/halo/app/extension/router/selector/Operator.java:69 todo-comment
 api/src/main/java/run/halo/app/infra/AnonymousUserConst.java:6 constant-naming
 api/src/main/java/run/halo/app/infra/ConditionList.java:109 missing-override
@@ -142,14 +138,10 @@ application/src/main/java/run/halo/app/core/endpoint/console/PluginEndpoint.java
 application/src/main/java/run/halo/app/core/endpoint/console/PluginEndpoint.java:394 catch-instanceof-dispatch
 application/src/main/java/run/halo/app/core/endpoint/console/PluginEndpoint.java:454 unused-private-method
 application/src/main/java/run/halo/app/core/endpoint/console/PluginEndpoint.java:470 unused-private-method
-application/src/main/java/run/halo/app/core/endpoint/console/PluginEndpoint.java:96 singleton-mutable-state
-application/src/main/java/run/halo/app/core/endpoint/console/PluginEndpoint.java:98 singleton-mutable-state
 application/src/main/java/run/halo/app/core/endpoint/console/PostEndpoint.java:48 singleton-mutable-state
 application/src/main/java/run/halo/app/core/endpoint/console/PostEndpoint.java:53 method-too-long
 application/src/main/java/run/halo/app/core/endpoint/console/SinglePageEndpoint.java:48 method-too-long
 application/src/main/java/run/halo/app/core/endpoint/console/UiPluginEndpoint.java:135 todo-comment
-application/src/main/java/run/halo/app/core/endpoint/console/UiPluginEndpoint.java:33 singleton-mutable-state
-application/src/main/java/run/halo/app/core/endpoint/console/UiPluginEndpoint.java:35 singleton-mutable-state
 application/src/main/java/run/halo/app/core/endpoint/console/UiPluginEndpoint.java:53 todo-comment
 application/src/main/java/run/halo/app/core/endpoint/console/UserEndpoint.java:1020 trim-isempty
 application/src/main/java/run/halo/app/core/endpoint/console/UserEndpoint.java:118 method-too-long
@@ -297,8 +289,6 @@ application/src/main/java/run/halo/app/infra/SystemState.java:45 deprecated-api-
 application/src/main/java/run/halo/app/infra/SystemState.java:60 deprecated-api-usage
 application/src/main/java/run/halo/app/infra/SystemState.java:62 deprecated-api-usage
 application/src/main/java/run/halo/app/infra/SystemState.java:68 deprecated-api-usage
-application/src/main/java/run/halo/app/infra/actuator/RestartEndpoint.java:23 singleton-mutable-state
-application/src/main/java/run/halo/app/infra/actuator/RestartEndpoint.java:25 singleton-mutable-state
 application/src/main/java/run/halo/app/infra/actuator/RestartEndpoint.java:27 singleton-mutable-state
 application/src/main/java/run/halo/app/infra/actuator/RestartEndpoint.java:32 thread-group-usage
 application/src/main/java/run/halo/app/infra/actuator/RestartEndpoint.java:53 catch-throwable
@@ -341,7 +331,6 @@ application/src/main/java/run/halo/app/migration/MigrationEndpoint.java:143 depr
 application/src/main/java/run/halo/app/notification/DefaultNotificationCenter.java:286 todo-comment
 application/src/main/java/run/halo/app/notification/DefaultNotificationCenter.java:290 optional-orelse-eager-call
 application/src/main/java/run/halo/app/notification/DefaultNotificationReasonEmitter.java:59 deprecated-api-usage
-application/src/main/java/run/halo/app/notification/DefaultNotificationSender.java:38 singleton-mutable-state
 application/src/main/java/run/halo/app/notification/DefaultNotificationSender.java:47 constructor-calls-overridable-method
 application/src/main/java/run/halo/app/notification/DefaultNotificationTemplateRender.java:47 deprecated-api-usage
 application/src/main/java/run/halo/app/notification/DefaultNotifierConfigStore.java:75 deprecated-api-usage
@@ -546,8 +535,6 @@ application/src/main/java/run/halo/app/theme/service/ThemeService.java:46 todo-c
 application/src/main/java/run/halo/app/theme/service/ThemeServiceImpl.java:166 todo-comment
 application/src/main/java/run/halo/app/theme/service/ThemeServiceImpl.java:185 todo-comment
 application/src/main/java/run/halo/app/theme/service/ThemeServiceImpl.java:193 deprecated-api-usage
-application/src/main/java/run/halo/app/theme/service/ThemeServiceImpl.java:220 stream-count-comparison
-application/src/main/java/run/halo/app/theme/service/ThemeServiceImpl.java:224 stream-count-comparison
 application/src/main/java/run/halo/app/theme/service/ThemeServiceImpl.java:303 deprecated-api-usage
 application/src/main/java/run/halo/app/theme/service/ThemeUtils.java:96 catch-instanceof-dispatch
 application/src/main/java/run/halo/app/theme/service/ThemeUtils.java:99 throw-generic-exception
@@ -611,8 +598,6 @@ application/src/test/java/run/halo/app/core/user/service/impl/EmailVerificationS
 application/src/test/java/run/halo/app/core/user/service/impl/UserServiceImplTest.java:239 unused-local-variable
 application/src/test/java/run/halo/app/extension/DefaultSchemeManagerTest.java:112 test-without-assertion
 application/src/test/java/run/halo/app/extension/JsonExtensionConverterTest.java:68 default-charset
-application/src/test/java/run/halo/app/extension/ReactiveExtensionClientTest.java:139 assertthrows-multiple-calls
-application/src/test/java/run/halo/app/extension/ReactiveExtensionClientTest.java:143 assertthrows-multiple-calls
 application/src/test/java/run/halo/app/extension/ReactiveExtensionClientTest.java:98 default-charset
 application/src/test/java/run/halo/app/extension/router/ExtensionCreateHandlerTest.java:75 assert-true-with-comparison
 application/src/test/java/run/halo/app/extension/router/ExtensionDeleteHandlerTest.java:60 assert-true-with-comparison

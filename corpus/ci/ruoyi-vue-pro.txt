@@ -140,7 +140,6 @@ yudao-framework/yudao-spring-boot-starter-excel/src/main/java/cn/iocoder/yudao/f
 yudao-framework/yudao-spring-boot-starter-excel/src/test/java/cn/iocoder/yudao/framework/excel/core/convert/MultiDictConvertTest.java:168 assert-true-with-comparison
 yudao-framework/yudao-spring-boot-starter-excel/src/test/java/cn/iocoder/yudao/framework/excel/core/convert/MultiDictConvertTest.java:178 assert-true-with-comparison
 yudao-framework/yudao-spring-boot-starter-excel/src/test/java/cn/iocoder/yudao/framework/excel/core/convert/MultiDictConvertTest.java:227 assert-true-with-comparison
-yudao-framework/yudao-spring-boot-starter-job/src/main/java/cn/iocoder/yudao/framework/quartz/core/handler/JobHandlerInvoker.java:57 catch-throwable
 yudao-framework/yudao-spring-boot-starter-job/src/main/java/cn/iocoder/yudao/framework/quartz/core/util/CronUtils.java:17 utility-class-instantiable
 yudao-framework/yudao-spring-boot-starter-job/src/main/java/cn/iocoder/yudao/framework/quartz/core/util/CronUtils.java:42 lost-stack-trace
 yudao-framework/yudao-spring-boot-starter-monitor/src/main/java/cn/iocoder/yudao/framework/tracer/core/util/TracerFrameworkUtils.java:14 utility-class-instantiable
@@ -163,12 +162,9 @@ yudao-framework/yudao-spring-boot-starter-protection/src/main/java/cn/iocoder/yu
 yudao-framework/yudao-spring-boot-starter-protection/src/main/java/cn/iocoder/yudao/framework/ratelimiter/core/keyresolver/impl/ExpressionRateLimiterKeyResolver.java:60 throw-generic-exception
 yudao-framework/yudao-spring-boot-starter-security/src/main/java/cn/iocoder/yudao/framework/operatelog/core/service/LogRecordServiceImpl.java:44 catch-throwable
 yudao-framework/yudao-spring-boot-starter-security/src/main/java/cn/iocoder/yudao/framework/security/config/SecurityProperties.java:40 hardcoded-credentials
-yudao-framework/yudao-spring-boot-starter-security/src/main/java/cn/iocoder/yudao/framework/security/config/YudaoWebSecurityConfigurerAdapter.java:112 csrf-protection-disabled
 yudao-framework/yudao-spring-boot-starter-security/src/main/java/cn/iocoder/yudao/framework/security/config/YudaoWebSecurityConfigurerAdapter.java:155 unused-private-method
 yudao-framework/yudao-spring-boot-starter-security/src/main/java/cn/iocoder/yudao/framework/security/core/handler/AccessDeniedHandlerImpl.java:11 unused-import
 yudao-framework/yudao-spring-boot-starter-security/src/main/java/cn/iocoder/yudao/framework/security/core/handler/AccessDeniedHandlerImpl.java:20 unused-import
-yudao-framework/yudao-spring-boot-starter-security/src/main/java/cn/iocoder/yudao/framework/security/core/handler/AccessDeniedHandlerImpl.java:37 log-placeholder-mismatch
-yudao-framework/yudao-spring-boot-starter-security/src/main/java/cn/iocoder/yudao/framework/security/core/handler/AuthenticationEntryPointImpl.java:30 log-placeholder-mismatch
 yudao-framework/yudao-spring-boot-starter-security/src/main/java/cn/iocoder/yudao/framework/security/core/util/SecurityFrameworkUtils.java:24 private-constructor-class-not-final
 yudao-framework/yudao-spring-boot-starter-test/src/main/java/cn/iocoder/yudao/framework/test/core/util/AssertUtils.java:22 utility-class-instantiable
 yudao-framework/yudao-spring-boot-starter-test/src/main/java/cn/iocoder/yudao/framework/test/core/util/RandomUtils.java:10 unused-import
@@ -205,17 +201,6 @@ yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/fra
 yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/config/YudaoWebAutoConfiguration.java:112 permissive-cors
 yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/filter/CacheRequestBodyWrapper.java:32 default-charset
 yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/filter/CacheRequestBodyWrapper.java:67 empty-method
-yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:126 log-placeholder-mismatch
-yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:137 log-placeholder-mismatch
-yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:146 log-placeholder-mismatch
-yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:171 log-placeholder-mismatch
-yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:185 log-placeholder-mismatch
-yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:201 log-placeholder-mismatch
-yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:211 log-placeholder-mismatch
-yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:233 log-placeholder-mismatch
-yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:244 log-placeholder-mismatch
-yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:255 log-placeholder-mismatch
-yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:266 log-placeholder-mismatch
 yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:344 catch-throwable
 yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/web/core/handler/GlobalExceptionHandler.java:385 cognitive-complexity
 yudao-framework/yudao-spring-boot-starter-web/src/main/java/cn/iocoder/yudao/framework/xss/core/clean/JsoupXssCleaner.java:48 commented-out-code
@@ -907,7 +892,6 @@ yudao-module-hrm/src/main/java/cn/iocoder/yudao/module/hrm/service/performance/a
 yudao-module-hrm/src/main/java/cn/iocoder/yudao/module/hrm/service/performance/assessment/HrmPerformanceAssessmentReviewServiceImpl.java:953 complex-boolean-expression
 yudao-module-hrm/src/main/java/cn/iocoder/yudao/module/hrm/service/performance/plan/HrmPerformancePlanServiceImpl.java:408 cognitive-complexity
 yudao-module-hrm/src/main/java/cn/iocoder/yudao/module/hrm/service/performance/plan/HrmPerformancePlanServiceImpl.java:464 cognitive-complexity
-yudao-module-hrm/src/main/java/cn/iocoder/yudao/module/hrm/service/salary/config/HrmSalaryChangeTemplateServiceImpl.java:132 null-dereference
 yudao-module-hrm/src/main/java/cn/iocoder/yudao/module/hrm/service/salary/employee/HrmSalaryEmployeeInfoServiceImpl.java:133 cognitive-complexity
 yudao-module-hrm/src/main/java/cn/iocoder/yudao/module/hrm/service/salary/employee/HrmSalaryEmployeeInfoServiceImpl.java:572 too-many-parameters
 yudao-module-hrm/src/main/java/cn/iocoder/yudao/module/hrm/service/salary/employee/HrmSalaryEmployeeInfoServiceImpl.java:644 nested-ternary
@@ -1204,8 +1188,6 @@ yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/
 yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/udp/handler/upstream/IotUdpUpstreamHandler.java:142 exception-message-only-logged
 yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/udp/handler/upstream/IotUdpUpstreamHandler.java:148 exception-message-only-logged
 yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/udp/handler/upstream/IotUdpUpstreamHandler.java:301 unused-parameter
-yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/udp/handler/upstream/IotUdpUpstreamHandler.java:366 log-placeholder-mismatch
-yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/udp/manager/IotUdpSessionManager.java:125 log-placeholder-mismatch
 yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/websocket/IotWebSocketProtocol.java:155 log-and-rethrow
 yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/websocket/handler/downstream/IotWebSocketDownstreamHandler.java:46 throw-generic-exception
 yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/websocket/handler/upstream/IotWebSocketUpstreamHandler.java:102 cognitive-complexity
@@ -2063,7 +2045,6 @@ yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/framework/pay/core/cl
 yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/service/channel/PayChannelServiceImpl.java:85 nested-ternary
 yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/service/demo/PayDemoOrderServiceImpl.java:229 unused-parameter
 yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/service/demo/PayDemoWithdrawServiceImpl.java:155 nested-ternary
-yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/service/notify/PayNotifyServiceImpl.java:212 catch-throwable
 yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/service/notify/PayNotifyServiceImpl.java:246 throw-generic-exception
 yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/service/order/PayOrderServiceImpl.java:515 catch-throwable
 yudao-module-pay/src/main/java/cn/iocoder/yudao/module/pay/service/order/PayOrderServiceImpl.java:595 catch-throwable
