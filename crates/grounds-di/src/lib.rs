@@ -1909,9 +1909,13 @@ impl<'a> Builder<'a> {
     /// starts a context names other classes too, `ctx.getBean(Service.class)`:
     /// a plain component is not taken for a root.)
     fn configuration_like(&mut self, c: &ClassInfo) -> bool {
-        c.annotations.iter().any(|a| {
-            matches!(a.simple_name(), "Configuration" | "ComponentScan" | "ComponentScans" | "Import" | "ImportResource" | "SpringBootApplication" | "SpringBootConfiguration" | "EnableAutoConfiguration")
-        }) || c.methods.iter().any(|m| self.is_factory_method(m))
+        const MARKS: &[&str] = &[
+            "org.springframework.context.annotation.Configuration", "org.springframework.context.annotation.ComponentScan", "org.springframework.context.annotation.ComponentScans",
+            "org.springframework.context.annotation.Import", "org.springframework.context.annotation.ImportResource", "org.springframework.boot.autoconfigure.SpringBootApplication",
+            "org.springframework.boot.SpringBootConfiguration", "org.springframework.boot.autoconfigure.EnableAutoConfiguration",
+        ];
+        // (Spring's own, not a project's `com.acme.Configuration`)
+        c.annotations.iter().any(|a| MARKS.iter().any(|m| a.is(m))) || c.methods.iter().any(|m| self.is_factory_method(m))
     }
 
     /// The scans declared on a class whose result the model can name:
@@ -4088,5 +4092,21 @@ mod tests {
         ];
         let (_, m) = model(&files);
         assert_eq!(conflicts(&m), vec!["App Config"]);
+    }
+
+    #[test]
+    fn a_project_annotation_named_configuration_marks_no_root() {
+        let files = [
+            ("src/main/java/com/acme/Configuration.java", "package com.acme; public @interface Configuration {}"),
+            // an initializer carrying a project annotation named like Spring's
+            ("src/main/java/app/Init.java", "package app; @com.acme.Configuration public class Init extends org.springframework.boot.web.servlet.support.SpringBootServletInitializer {}"),
+            ("src/main/java/app/Settings.java", "package app; @com.acme.Configuration public class Settings {}"),
+        ];
+        // it is no Spring configuration: no context
+        let (_, m) = model(&files);
+        assert!(m.contexts.is_empty());
+        let spring = ("src/main/java/app/Init.java", "package app; @org.springframework.context.annotation.Configuration public class Init extends org.springframework.boot.web.servlet.support.SpringBootServletInitializer {}");
+        let (_, m) = model(&[files[0], spring, files[2]]);
+        assert_eq!(m.contexts.len(), 1);
     }
 }
