@@ -11,6 +11,8 @@ class NoThrowTests {
     @Test void parsesPath() { Parser.parse("a/b"); } // expect
     @Test void testSuccess() { Parser.parse("ok"); } // expect
     @Test void okayToParse() { Parser.parse("x"); } // expect
+    @Test void testAllowListContains() { Parser.parse("x"); } // expect
+    @Test void shouldAllowEmptyName() { Parser.parse(""); }
     @Test void shouldCreateParserWithConstructorThatAcceptsText() { Parser.parse("x"); } // expect
 }
 class AsyncTests {

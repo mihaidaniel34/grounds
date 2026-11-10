@@ -291,13 +291,36 @@ fn writes_file_after<'t>(cx: &Ctx<'_, 't>, stmt: Node<'t>, mkdirs: Node<'t>) -> 
             _ => None,
         }
     };
+    // the variable a path expression is built on: `dir` in `dir`,
+    // `dir.toPath()`, `new File(dir, name)`, `Paths.get(dir.getPath(), name)`,
+    // `dir.toPath().resolve(name)`; not `dir.getName()` used as data
+    fn path_root<'t>(cx: &Ctx<'_, 't>, e: Node<'t>) -> Option<&'t str> {
+        let e = e.unparen();
+        match e.kind() {
+            "identifier" => Some(cx.text(e)),
+            "method_invocation" => match cx.fm.call_name(e) {
+                Some("toPath" | "toFile" | "getParentFile" | "getAbsoluteFile" | "getCanonicalFile" | "getPath" | "getAbsolutePath" | "resolve" | "resolveSibling" | "normalize" | "toAbsolutePath" | "getParent") => {
+                    e.field("object").and_then(|o| path_root(cx, o))
+                }
+                Some("get" | "of") if e.field("object").is_some_and(|o| matches!(cx.text(o), "Paths" | "Path" | "java.nio.file.Paths" | "java.nio.file.Path")) => {
+                    cx.fm.args_of(e).first().and_then(|a| path_root(cx, *a))
+                }
+                _ => None,
+            },
+            "object_creation_expression" if cx.type_of(e).class_name() == Some("java.io.File") => cx.fm.args_of(e).first().and_then(|a| path_root(cx, *a)),
+            _ => None,
+        }
+    }
     block
         .kids()
         .into_iter()
         .filter(|k| k.start_byte() > stmt.start_byte())
-        .flat_map(|k| k.descendants())
+        .flat_map(|k| {
+            // a write in a lambda or a local class runs at another time
+            k.descendants().filter(move |d| !d.ancestors().take_while(|a| *a != k).any(|a| matches!(a.kind(), "lambda_expression" | "class_body")))
+        })
         .filter_map(destination)
-        .any(|dest| dest.descendants().any(|x| x.kind() == "identifier" && cx.text(x) == root))
+        .any(|dest| path_root(cx, dest) == Some(root))
 }
 
 /// `offer` on a queue without capacity never returns false: a

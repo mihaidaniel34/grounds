@@ -76,6 +76,14 @@ class Directories {
         dir.mkdirs();
         java.nio.file.Files.createTempFile(dir.toPath(), "a", ".tmp", attr);
     }
+    void nameAsData(File dir, File other, byte[] data) throws java.io.IOException {
+        dir.mkdirs(); // expect
+        java.nio.file.Files.write(new File(other, dir.getName()).toPath(), data);
+    }
+    void childOfDir(File dir, byte[] data) throws java.io.IOException {
+        dir.mkdirs();
+        java.nio.file.Files.write(new File(dir, "a.bin").toPath(), data);
+    }
     void createOnly(File dir) {
         dir.mkdirs(); // expect
     }

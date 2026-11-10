@@ -705,7 +705,6 @@ impl Rule for InfiniteLoop {
         };
         if !always {
             self.stuck_condition(n, cx);
-            return;
         }
         // An explicit `while (true)` / `for (;;)` says the loop is meant to
         // run forever: a worker taking from a queue, a server loop, a

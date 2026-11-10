@@ -94,6 +94,12 @@ class InputErrors {
     Mode tagged(String[] values, String tag) {
         try { String seen = tag; return Mode.valueOf(values[0]); } catch (IllegalArgumentException e) { throw new BadFlag("bad mode for " + tag); } // expect
     }
+    // still lost inside a lambda: the try is in an argument list, the tag is not the input
+    void each(java.util.List<String[]> rows, String tag) {
+        rows.forEach(values -> {
+            try { String seen = tag; Mode.valueOf(values[0]); } catch (IllegalArgumentException e) { throw new BadFlag("bad mode for " + tag); } // expect
+        });
+    }
     enum Mode { A, B }
 }
 class BadFlag extends RuntimeException { BadFlag(String m) { super(m); } }

@@ -35,6 +35,12 @@ class OwnContextType implements org.springframework.context.ApplicationContextAw
     // an overload taking a project type of the same simple name is no callback
     public void setApplicationContext(ApplicationContext c) { ctx = c; } // expect
 }
+@interface Value { String value(); }
+class OwnValueAnnotation {
+    private static String setting;
+    // a project annotation named Value is not Spring's injection
+    @Value("x") void set(String s) { setting = s; } // expect
+}
 interface InitializingBean { }
 class NotSpringsInterface implements InitializingBean {
     private static int started;

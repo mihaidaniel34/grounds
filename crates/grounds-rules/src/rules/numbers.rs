@@ -520,7 +520,7 @@ fn literal_is_exact(text: &str) -> bool {
     let raw_exp = ((bits >> 52) & 0x7ff) as i32;
     let mut m = if raw_exp == 0 { bits & ((1 << 52) - 1) } else { (bits & ((1 << 52) - 1)) | (1 << 52) } as u128;
     let mut p = 1075 - raw_exp.max(1);
-    while m % 2 == 0 && m > 0 {
+    while m.is_multiple_of(2) && m > 0 {
         m /= 2;
         p -= 1;
     }

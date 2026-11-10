@@ -253,7 +253,9 @@ fn guava_tester<'t>(cx: &Ctx<'_, 't>, c: Node<'t>) -> bool {
             let written = cx.text(t).split('<').next().unwrap_or("");
             return cx.fm.resolve_type_node(t).class_name().is_some_and(guava)
                 || guava(written)
-                || written.ends_with("Tester") && cx.src.contains(&format!("import com.google.common.testing.{written};"));
+                || written.ends_with("Tester")
+                    && !written.contains('.')
+                    && cx.fm.stub.imports.iter().any(|i| !i.is_static && (i.on_demand && &*i.path == "com.google.common.testing" || !i.on_demand && &*i.path == format!("com.google.common.testing.{written}")));
         }
         return cx.type_of(r).class_name().is_some_and(guava);
     }
@@ -290,7 +292,11 @@ fn names_no_throw_test(name: &str) -> bool {
         || words.windows(3).any(|p| negation(&p[0]) && matches!(&*p[1], "to" | "any") && failure(&p[2]))
         // the test's verb (`acceptsHttpScheme`, `createAllowsSlashes`), not a
         // relative clause (`createsClassWithConstructorThatAccepts...`)
-        || words.iter().take(3).any(|w| matches!(w.as_str(), "accepts" | "accept" | "allows" | "allow" | "tolerates" | "tolerate" | "permits"))
+        // a verb in the third person among the first words (`acceptsHttp`,
+        // `createAllowsSlashes`), or a base form after should/must/can/will
+        // (`shouldAcceptValid`); not a noun (`testAllowListContains`)
+        || words.iter().take(3).any(|w| matches!(w.as_str(), "accepts" | "allows" | "tolerates" | "permits"))
+        || words.windows(2).take(2).any(|p| matches!(&*p[0], "should" | "must" | "can" | "will") && matches!(&*p[1], "accept" | "allow" | "tolerate" | "permit"))
         || words.len() > 1 && words.last().is_some_and(|w| w == "ok")
 }
 

@@ -170,7 +170,7 @@ fn maybe_null_unknown<'t>(cx: &Ctx<'_, 't>, callable: Node<'t>, i: usize, deref:
         // a boolean flag set under a condition on the variable is a guard the
         // analysis tracks itself: if it still reports, the flag went stale
         let flag = value.is_some_and(|v| matches!(v.unparen().kind(), "true" | "false"));
-        if value.is_some_and(|v| mentions(v)) || (flag && conditions_on_i.iter().any(|c| d.ancestors().any(|a| a == *c) && c.field("condition").is_none_or(|cc| !cc.descendants().any(|x| x == d)))) {
+        if value.is_some_and(mentions) || (flag && conditions_on_i.iter().any(|c| d.ancestors().any(|a| a == *c) && c.field("condition").is_none_or(|cc| !cc.descendants().any(|x| x == d)))) {
             derived.push(j);
         }
     }
@@ -218,7 +218,7 @@ fn maybe_null_unknown<'t>(cx: &Ctx<'_, 't>, callable: Node<'t>, i: usize, deref:
             let in_cond = null_branch && ifs.field("condition").is_some_and(|c| c.descendants().any(|x| x == check));
             if in_cond && ifs.field("alternative").is_none() {
                 let then = ifs.field("consequence");
-                let last_stmt = then.and_then(|t| if t.kind() == "block" { t.kids().into_iter().filter(|k| !grounds_syntax::is_comment(k.kind())).last() } else { Some(t) });
+                let last_stmt = then.and_then(|t| if t.kind() == "block" { t.kids().into_iter().rfind(|k| !grounds_syntax::is_comment(k.kind())) } else { Some(t) });
                 if let Some(call) = last_stmt.filter(|st| st.kind() == "expression_statement").and_then(|st| st.first_kid()).filter(|c| c.kind() == "method_invocation") {
                     let opaque = match cx.fm.select_method(call) {
                         None => !super::exceptions::is_log_like(call, cx),

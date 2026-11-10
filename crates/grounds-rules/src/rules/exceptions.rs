@@ -418,7 +418,7 @@ impl Rule for LostStackTrace {
                         .flat_map(|k| k.descendants())
                         // the input: what the try handed to the parser or
                         // validator, or cast
-                        .filter(|d| d.ancestors().any(|a| matches!(a.kind(), "argument_list" | "cast_expression")))
+                        .filter(|d| d.ancestors().take_while(|a| Some(*a) != try_stmt).any(|a| matches!(a.kind(), "argument_list" | "cast_expression")))
                         .filter_map(|d| cx.fm.local_ref(d))
                         .collect()
                 })
@@ -456,12 +456,13 @@ impl Rule for LostStackTrace {
                         "method_invocation" => {
                             let owner = cx.fm.select_method(*c).map(|m| m.owner.to_string());
                             names_charset
-                                && match (cx.fm.call_name(*c), owner.as_deref()) {
-                                    (Some("getBytes"), None | Some("java.lang.String")) => true,
-                                    (Some("encode"), Some("java.net.URLEncoder")) | (Some("decode"), Some("java.net.URLDecoder")) => true,
-                                    (Some("toString"), Some("java.io.ByteArrayOutputStream")) => true,
-                                    _ => false,
-                                }
+                                && matches!(
+                                    (cx.fm.call_name(*c), owner.as_deref()),
+                                    (Some("getBytes"), None | Some("java.lang.String"))
+                                        | (Some("encode"), Some("java.net.URLEncoder"))
+                                        | (Some("decode"), Some("java.net.URLDecoder"))
+                                        | (Some("toString"), Some("java.io.ByteArrayOutputStream"))
+                                )
                         }
                         _ => {
                             names_charset

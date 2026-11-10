@@ -291,8 +291,20 @@ impl Rule for StaticWriteFromInstance {
 /// observer, or a Spring `*Aware`/`InitializingBean`/`DisposableBean`/
 /// `BeanFactoryPostProcessor` callback?
 fn is_lifecycle_callback<'t>(m: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
-    let anns = annotation_names(m, cx.src);
-    if anns.iter().any(|a| matches!(*a, "PostConstruct" | "PreDestroy" | "Autowired" | "Inject" | "Value" | "Resource" | "Bean")) {
+    const ONCE: &[&str] = &[
+        "jakarta.annotation.PostConstruct",
+        "javax.annotation.PostConstruct",
+        "jakarta.annotation.PreDestroy",
+        "javax.annotation.PreDestroy",
+        "org.springframework.beans.factory.annotation.Autowired",
+        "jakarta.inject.Inject",
+        "javax.inject.Inject",
+        "org.springframework.beans.factory.annotation.Value",
+        "jakarta.annotation.Resource",
+        "javax.annotation.Resource",
+        "org.springframework.context.annotation.Bean",
+    ];
+    if cx.fm.annotations_of(m).iter().any(|a| ONCE.iter().any(|f| a.is(f))) {
         return true;
     }
     // `void onStart(@Observes StartupEvent e)`,
@@ -1018,9 +1030,23 @@ impl Rule for NonSerializableField {
         // container-made client proxy, which is serializable
         // (when the container provides it: an injected field, or a field set
         // by an @Inject constructor; `new Probe()` is a plain object)
+        // (an @Inject constructor that assigns this field)
+        let names: Vec<&str> = n.fields("declarator").iter().filter_map(|d| d.field("name")).map(|x| cx.text(x)).collect();
         let injected = cx.fm.annotations_of(n).iter().any(|a| INJECTED_BY_CONTAINER.iter().any(|f| a.is(f)))
             || n.fields("declarator").iter().all(|d| d.field("value").is_none())
-                && owning_type_decl(n).is_some_and(|d| members(d).iter().any(|m| m.kind() == "constructor_declaration" && has_annotation_named(*m, cx.src, "Inject")));
+                && owning_type_decl(n).is_some_and(|d| {
+                    members(d).iter().any(|m| {
+                        m.kind() == "constructor_declaration"
+                            && cx.fm.annotations_of(*m).iter().any(|a| a.is("jakarta.inject.Inject") || a.is("javax.inject.Inject"))
+                            && m.descendants().filter(|x| x.kind() == "assignment_expression").any(|x| {
+                                x.field("left").is_some_and(|l| {
+                                    let l = l.unparen();
+                                    let target = if l.kind() == "field_access" { l.field("field") } else { Some(l) };
+                                    target.is_some_and(|t| names.contains(&cx.text(t)))
+                                })
+                            })
+                    })
+                });
         if injected && tc.annotations.iter().any(|a| CDI_NORMAL_SCOPES.iter().any(|f| a.is(f))) {
             return;
         }

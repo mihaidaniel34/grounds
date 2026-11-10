@@ -44,3 +44,10 @@ class Session implements Serializable {
 class DirectHolder implements Serializable {
     private Probe probe = new Probe(); // expect
 }
+// an @Inject constructor that does not set the field: nothing injects it
+@jakarta.faces.view.ViewScoped
+class PartlyInjected implements Serializable {
+    private Probe unset; // expect
+    @jakarta.inject.Inject
+    PartlyInjected(Plain p) { }
+}
