@@ -194,7 +194,9 @@ fn provokes_exception<'t>(n: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
     }
 }
 
-const FILE_OPS: MethodMatcher = MethodMatcher::instance("java.io.File").named(&["delete", "mkdir", "mkdirs", "createNewFile", "renameTo", "setReadable", "setWritable", "setExecutable", "setLastModified", "setReadOnly"]);
+// not `createNewFile`: false only means the file already exists, and a
+// failure to create it throws IOException
+const FILE_OPS: MethodMatcher = MethodMatcher::instance("java.io.File").named(&["delete", "mkdir", "mkdirs", "renameTo", "setReadable", "setWritable", "setExecutable", "setLastModified", "setReadOnly"]);
 const LOCK_TRY: MethodMatcher = MethodMatcher::instance("java.util.concurrent.locks.Lock").named(&["tryLock"]);
 const QUEUE_OFFER: MethodMatcher = MethodMatcher::instance("java.util.concurrent.BlockingQueue").named(&["offer"]);
 const LATCH_AWAIT: MethodMatcher = MethodMatcher::instance("java.util.concurrent.CountDownLatch").named(&["await"]).arity(2);
@@ -229,10 +231,40 @@ impl Rule for IgnoredFileResult {
         if cx.fm.call_matches(e, &LATCH_AWAIT) && latch_checked_after(cx, e) {
             return;
         }
+        // a bounded wait in a test: the assertions after it notice when the
+        // work did not finish
+        if cx.is_test() && cx.fm.call_matches_any(e, &[LATCH_AWAIT, EXECUTOR_AWAIT]) {
+            return;
+        }
+        // a directory whose creation failed makes the file written into it
+        // next throw IOException
+        if matches!(cx.fm.call_name(e), Some("mkdir" | "mkdirs")) && writes_file_after(cx, n) {
+            return;
+        }
         if cx.fm.call_matches_any(e, &[FILE_OPS, LOCK_TRY, QUEUE_OFFER, LATCH_AWAIT, EXECUTOR_AWAIT]) {
             cx.report(e, format!("The boolean result of `{}()` is ignored; failures go unnoticed", cx.fm.call_name(e).unwrap_or("")));
         }
     }
+}
+
+/// Does a later statement of the same block create or write a file (which
+/// throws IOException when its directory is missing)?
+fn writes_file_after<'t>(cx: &Ctx<'_, 't>, stmt: Node<'t>) -> bool {
+    let Some(block) = stmt.parent() else { return false };
+    block.kids().into_iter().filter(|k| k.start_byte() > stmt.start_byte()).flat_map(|k| k.descendants()).any(|d| match d.kind() {
+        "method_invocation" => match cx.fm.call_name(d) {
+            Some("createNewFile" | "createTempFile") => true,
+            Some("write" | "writeString" | "createFile" | "createDirectory" | "copy" | "move" | "newOutputStream" | "newBufferedWriter" | "newByteChannel") => {
+                cx.fm.select_method(d).is_some_and(|m| &*m.owner == "java.nio.file.Files")
+            }
+            _ => false,
+        },
+        "object_creation_expression" => matches!(
+            cx.type_of(d).class_name(),
+            Some("java.io.FileOutputStream" | "java.io.FileWriter" | "java.io.RandomAccessFile" | "java.io.PrintWriter" | "java.io.PrintStream")
+        ),
+        _ => false,
+    })
 }
 
 /// `offer` on a queue without capacity never returns false: a

@@ -53,3 +53,22 @@ class Queues {
         unbounded.offer(6); // expect
     }
 }
+class Directories {
+    void createThenWrite(File file, byte[] data) throws java.io.IOException {
+        // a missing directory makes the next write throw
+        file.getParentFile().mkdirs();
+        file.createNewFile();
+        java.nio.file.Files.write(file.toPath(), data);
+    }
+    void createThenStream(File dir) throws java.io.IOException {
+        dir.mkdirs();
+        try (java.io.FileOutputStream out = new java.io.FileOutputStream(new File(dir, "a.bin"))) { out.write(1); }
+    }
+    void createOnly(File dir) {
+        dir.mkdirs(); // expect
+    }
+    void createThenRead(File dir) {
+        dir.mkdirs(); // expect
+        dir.listFiles();
+    }
+}
