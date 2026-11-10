@@ -2504,7 +2504,17 @@ impl<'t> FileModel<'t> {
             [] => None,
             [one] => Some(*one),
             several => {
-                let fits = |m: &MethodRef| -> Tri {
+                // strict invocation: subtyping and primitive widening only;
+                // loose: boxing and unboxing too (JLS 5.3, 15.12.2.2-3)
+                let strict = |s: &Ty, p: &Ty| -> Tri {
+                    match (s.prim(), p.prim()) {
+                        (Some(a), Some(b)) => Tri::from_bool(a.widens_to(b)),
+                        (None, None) => self.is_assignable(s, p),
+                        _ => Tri::No,
+                    }
+                };
+                // (strict, loose) applicability of one candidate
+                let fits = |m: &MethodRef| -> (Tri, Tri) {
                     // an unbound receiver takes the first parameter, which must
                     // be of the referenced type
                     let skip = usize::from(is_type && !m.is_static());
@@ -2514,36 +2524,45 @@ impl<'t> FileModel<'t> {
                     } else {
                         Tri::Yes
                     };
-                    sam.params[skip..].iter().zip(&m.method.params).fold(receiver, |acc, (s, p)| {
+                    sam.params[skip..].iter().zip(&m.method.params).fold((receiver, receiver), |(sa, la), (s, p)| {
                         let st = s.ty.upper_bound();
-                        acc.and(if st.mentions_type_var() || p.ty.mentions_type_var() { Tri::Unknown } else { self.is_assignable(&st, &p.ty) })
+                        if st.mentions_type_var() || p.ty.mentions_type_var() {
+                            (sa.and(Tri::Unknown), la.and(Tri::Unknown))
+                        } else {
+                            (sa.and(strict(&st, &p.ty)), la.and(self.is_assignable(&st, &p.ty)))
+                        }
                     })
                 };
-                let verdicts: Vec<Tri> = several.iter().map(|m| fits(m)).collect();
-                let yes: Vec<&MethodRef> = several.iter().zip(&verdicts).filter(|(_, v)| v.is_yes()).map(|(m, _)| *m).collect();
-                let maybe = verdicts.iter().filter(|v| !v.is_no()).count();
-                // of several that apply, the one whose parameters are all
-                // subtypes of each other one's (JLS 15.12.2.5)
+                let verdicts: Vec<(Tri, Tri)> = several.iter().map(|m| fits(m)).collect();
+                let possible: Vec<&MethodRef> = several.iter().zip(&verdicts).filter(|(_, v)| !v.1.is_no()).map(|(m, _)| *m).collect();
+                // the earliest phase in which some candidate applies; every
+                // candidate's phase must be known
+                let decided = verdicts.iter().all(|(s, l)| s.is_yes() || (s.is_no() && *l != Tri::Unknown) || l.is_no());
+                let phase: Vec<&MethodRef> = if verdicts.iter().any(|v| v.0.is_yes()) {
+                    several.iter().zip(&verdicts).filter(|(_, v)| v.0.is_yes()).map(|(m, _)| *m).collect()
+                } else {
+                    several.iter().zip(&verdicts).filter(|(_, v)| v.1.is_yes()).map(|(m, _)| *m).collect()
+                };
+                // the most specific of them: each parameter a subtype of the
+                // other's, primitives by widening (JLS 15.12.2.5)
+                let below = |a: &MethodRef, b: &MethodRef| {
+                    a.method.params.len() == b.method.params.len() && a.method.params.iter().zip(&b.method.params).all(|(p, q)| !p.ty.mentions_type_var() && !q.ty.mentions_type_var() && strict(&p.ty, &q.ty).is_yes())
+                };
                 let most_specific = || -> Option<&MethodRef> {
-                    let below = |a: &MethodRef, b: &MethodRef| {
-                        a.method.params.len() == b.method.params.len()
-                            && a.method.params.iter().zip(&b.method.params).all(|(p, q)| !p.ty.mentions_type_var() && !q.ty.mentions_type_var() && self.is_assignable(&p.ty, &q.ty).is_yes())
-                    };
-                    let best: Vec<&MethodRef> = yes.iter().copied().filter(|a| yes.iter().all(|b| std::ptr::eq(*a, *b) || below(a, b))).collect();
+                    let best: Vec<&MethodRef> = phase.iter().copied().filter(|a| phase.iter().all(|b| std::ptr::eq(*a, *b) || below(a, b))).collect();
                     match best.as_slice() {
-                        [one] if yes.iter().all(|b| std::ptr::eq(*one, *b) || !below(b, one)) => Some(*one),
+                        [one] if phase.iter().all(|b| std::ptr::eq(*one, *b) || !below(b, one)) => Some(*one),
                         _ => None,
                     }
                 };
-                match yes.as_slice() {
-                    [one] if maybe == 1 => Some(*one),
-                    _ if maybe == yes.len() && yes.len() > 1 && most_specific().is_some() => most_specific(),
-                    _ => {
-                        let rest: Vec<&MethodRef> = several.iter().zip(&verdicts).filter(|(_, v)| !v.is_no()).map(|(m, _)| *m).collect();
-                        // all that may apply return the same type
-                        rest.first().filter(|f| rest.iter().all(|m| m.method.ret == f.method.ret)).copied()
-                    }
-                }
+                let chosen = match phase.as_slice() {
+                    _ if !decided => None,
+                    [one] => Some(*one),
+                    [] => None,
+                    _ => most_specific(),
+                };
+                // otherwise, only when all that may apply return the same type
+                chosen.or_else(|| possible.first().filter(|f| possible.iter().all(|m| m.method.ret == f.method.ret)).copied())
             }
         };
         match pick {

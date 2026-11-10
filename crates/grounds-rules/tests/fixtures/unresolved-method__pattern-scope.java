@@ -82,3 +82,38 @@ class CompletionRules {
         s.ok(); // expect
     }
 }
+
+class LoopRules {
+    Bad s;
+
+    void doReturns(Object o) {
+        if (!(o instanceof Good s)) {
+            do { return; } while (false);
+        }
+        s.ok();
+    }
+
+    void constantCondition(Object o) {
+        if (!(o instanceof Good s)) {
+            while (1 == 1) { }
+        }
+        s.ok();
+    }
+
+    void finallyReturns(Object o) {
+        if (!(o instanceof Good s)) {
+            while (true) {
+                try { break; } finally { return; }
+            }
+        }
+        s.ok();
+    }
+
+    void loopCompletes(Object o) {
+        if (!(o instanceof Good s)) {
+            do { System.out.println(); } while (false);
+        }
+        s.other();
+        s.ok(); // expect
+    }
+}

@@ -636,8 +636,10 @@ fn introduced_when(decl: Node, cond: Node) -> Option<bool> {
 /// Whether a statement can complete normally (JLS 14.22): Some(false) for
 /// `return`, `throw`, `break`, `continue`, `yield`, a block ending with one,
 /// an `if` whose branches both cannot, a `try` whose blocks cannot, a loop
-/// that runs forever with no break out; None where these rules are not
-/// modelled (a labeled statement, a switch); Some(true) for the rest.
+/// that runs forever with no break out; Some(true) where the rules say it
+/// completes; None for everything they are not implemented for (a labeled
+/// statement, a switch, a condition that is not a literal...), so that a gap
+/// leaves a name unknown instead of taking another declaration.
 fn completes_normally(s: Node) -> Option<bool> {
     match s.kind() {
         "return_statement" | "throw_statement" | "break_statement" | "continue_statement" | "yield_statement" => Some(false),
@@ -665,20 +667,38 @@ fn completes_normally(s: Node) -> Option<bool> {
                 None => body,
             }
         }
-        // `while (true)`, `do ... while (true)`, `for (;;)` without a break out
-        "while_statement" | "do_statement" | "for_statement" => {
-            let forever = match s.field("condition") {
-                None => s.kind() == "for_statement",
-                Some(c) => c.unparen().kind() == "true",
+        // JLS 14.22: a `while` or `for` completes normally iff its condition
+        // is not constant true or a break leaves it; a `do` also needs its body
+        // (or a continue) to reach the condition. A condition other than a
+        // literal may still be constant: unknown.
+        "while_statement" | "for_statement" => match loop_condition(s) {
+            Some(true) => breaks_out_of(s),
+            Some(false) => Some(true),
+            None => None,
+        },
+        "do_statement" => {
+            let breaks = breaks_out_of(s);
+            if breaks == Some(true) {
+                return Some(true);
+            }
+            let reaches_condition = match s.field("body").map_or(Some(true), completes_normally) {
+                Some(true) => Some(true),
+                // a continue reaches the condition too: not modelled
+                Some(false) if !s.field("body").is_some_and(|b| b.descendants().any(|d| d.kind() == "continue_statement")) => Some(false),
+                _ => None,
             };
-            if forever {
-                breaks_out_of(s)
-            } else {
-                Some(true)
+            match (reaches_condition, loop_condition(s), breaks) {
+                (Some(false), _, Some(false)) => Some(false),
+                (Some(true), Some(false), _) => Some(true),
+                (_, Some(true), Some(false)) => Some(false),
+                _ => None,
             }
         }
-        "labeled_statement" | "switch_expression" | "switch_statement" => None,
-        _ => Some(true),
+        // these complete normally when reachable (JLS 14.22)
+        "expression_statement" | "local_variable_declaration" | "assert_statement" | ";" | "empty_statement" | "class_declaration" | "record_declaration"
+        | "enum_declaration" | "interface_declaration" | "explicit_constructor_invocation" | "enhanced_for_statement" => Some(true),
+        // a labeled statement, a switch, and anything not listed: unknown
+        _ => None,
     }
 }
 
@@ -691,29 +711,70 @@ fn or3(a: Option<bool>, b: Option<bool>) -> Option<bool> {
     }
 }
 
-/// Whether a `break` in the body of `loop_` leaves it: Some(true) for an
-/// unlabeled one not inside a nested loop or switch, None when only a
-/// labeled one may (its target is not modelled), Some(false) otherwise.
+/// The value of a loop's condition when it is the literal `true` or
+/// `false`; a `for` without one is true. None for anything else, which may
+/// still be a constant expression (`1 == 1`, a constant variable).
+fn loop_condition(s: Node) -> Option<bool> {
+    match s.field("condition") {
+        None if s.kind() == "for_statement" => Some(true),
+        None => None,
+        Some(c) => match c.unparen().kind() {
+            "true" => Some(true),
+            "false" => Some(false),
+            _ => None,
+        },
+    }
+}
+
+/// Whether a `break` in the body of `loop_` leaves it (JLS 14.15, 14.20.2):
+/// Some(true) for an unlabeled one that targets this loop and gets out
+/// through every `finally` in between, None when that cannot be told (a
+/// labeled break, a `finally` that may not complete), Some(false) when no
+/// break leaves it.
 fn breaks_out_of(loop_: Node) -> Option<bool> {
     let Some(body) = loop_.field("body") else { return Some(false) };
-    let mut labeled = false;
+    let mut unknown = false;
     for b in body.descendants().filter(|d| d.kind() == "break_statement") {
         if b.kid_of_kind("identifier").is_some() {
-            labeled = true;
+            unknown = true;
             continue;
         }
+        // the target, and the finally blocks on the way out
+        let mut leaves = Some(true);
+        let mut prev = b;
         let mut cur = b.parent();
+        let mut targets = false;
         while let Some(a) = cur {
             if a == loop_ {
-                return Some(true);
+                targets = true;
+                break;
             }
             if matches!(a.kind(), "while_statement" | "do_statement" | "for_statement" | "enhanced_for_statement" | "switch_block" | "switch_expression") {
                 break;
             }
+            if matches!(a.kind(), "try_statement" | "try_with_resources_statement") {
+                let finally = a.kid_of_kind("finally_clause");
+                let inside_finally = finally.is_some_and(|f| f == prev);
+                if let (Some(f), false) = (finally.and_then(|f| f.kid_of_kind("block")), inside_finally) {
+                    leaves = match completes_normally(f) {
+                        Some(true) => leaves,
+                        Some(false) => Some(false),
+                        None => None,
+                    };
+                }
+            }
+            prev = a;
             cur = a.parent();
         }
+        if targets {
+            match leaves {
+                Some(true) => return Some(true),
+                None => unknown = true,
+                Some(false) => {}
+            }
+        }
     }
-    if labeled {
+    if unknown {
         None
     } else {
         Some(false)

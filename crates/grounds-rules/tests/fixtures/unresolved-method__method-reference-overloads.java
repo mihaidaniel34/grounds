@@ -39,3 +39,21 @@ class PrivateNotARefCandidate {
     void test(List<RefBoth> xs) { xs.stream().map(RefBoth::help).forEach(x -> x.ok()); }
     void wrong(List<RefBoth> xs) { xs.stream().map(RefBoth::help).forEach(x -> x.nonexistent()); } // expect
 }
+
+class PhGood { void ok() { } }
+class PhBad { void other() { } }
+
+// the earliest applicable phase first: m(Object) applies by subtyping,
+// m(long) only by unboxing (JLS 15.12.2.2-3)
+class PhaseConv {
+    static PhGood m(Object x) { return null; }
+    static PhBad m(long x) { return null; }
+    static PhGood n(long x) { return null; }
+    static PhBad n(Integer x) { return null; }
+}
+
+class PhaseUse {
+    void boxed(List<Integer> xs) { xs.stream().map(PhaseConv::m).forEach(x -> x.ok()); }
+    void prim(java.util.stream.IntStream xs) { xs.mapToObj(PhaseConv::n).forEach(x -> x.ok()); }
+    void wrong(List<Integer> xs) { xs.stream().map(PhaseConv::m).forEach(x -> x.other()); } // expect
+}
