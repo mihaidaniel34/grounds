@@ -103,6 +103,36 @@ fn enums_records_interfaces() {
 }
 
 #[test]
+fn constants_that_refer_to_each_other_are_not_constants() {
+    // j2cl's circularcompiletimeconstant test: javac compiles it, and none of
+    // the cycle is a constant. This overflowed the stack.
+    let idx = index_of(&[(
+        "Main.java",
+        "package q; public class Main {
+           public static class A { static final int A = B.B; static final int C = B.B + A; static final int D = 1 + 2; }
+           public static class B { static final int B = A.A + 1; }
+           static final int X = Y.Y + Y.Y + Y.Y + Y.Y;
+           static class Y { static final int Y = Main.X + Main.X + Main.X + Main.X; }
+         }",
+    )]);
+    let a = idx.class("q.Main$A").unwrap();
+    assert_eq!(a.field("A").unwrap().constant, None);
+    assert_eq!(a.field("C").unwrap().constant, None);
+    assert_eq!(a.field("D").unwrap().constant, Some(Constant::Int(3)));
+    assert_eq!(idx.class("q.Main$B").unwrap().field("B").unwrap().constant, None);
+    assert_eq!(idx.class("q.Main").unwrap().field("X").unwrap().constant, None);
+}
+
+#[test]
+fn constants_that_refer_to_themselves_by_simple_name_terminate() {
+    // does not compile (forward references), but is a state between edits
+    let idx = index_of(&[("F.java", "package f; class F { static final int A = B + B + B + B; static final int B = A + A + A + A; static final int C = 7; }")]);
+    let f = idx.class("f.F").unwrap();
+    assert_eq!(f.field("A").unwrap().constant, None);
+    assert_eq!(f.field("C").unwrap().constant, Some(Constant::Int(7)));
+}
+
+#[test]
 fn without_a_jdk_no_hierarchy_is_complete() {
     // an interface declares no supertypes, but has Object's methods
     let src = "package p; interface I {} class C implements I {}";
