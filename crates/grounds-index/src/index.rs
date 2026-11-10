@@ -547,8 +547,10 @@ impl Index {
         let mut o = raw.outer.clone();
         while let Some(on) = o {
             enclosing.push(on.clone());
-            o = match self.raw_class(&on) {
-                Some((_, oc)) => {
+            // the outer class of the same copy, for a class declared in several files
+            let outer = stub.classes.iter().find(|c| c.name == on).or_else(|| self.raw_class(&on).map(|(_, c)| c));
+            o = match outer {
+                Some(oc) => {
                     if !raw.flags.is_static() {
                         type_vars.extend(oc.type_params.iter().map(|t| t.name.clone()));
                     }
@@ -1063,9 +1065,17 @@ impl ClassLookup for Index {
     }
 }
 
-/// The module directory of a source file: the path before its `/src/`.
+/// The module directory of a source file: the path before the `src` of its
+/// source set (`<module>/src/<set>/java/...`), else before its last `/src/`.
+/// Not the first `/src/`: the checkout itself may sit below one.
 pub fn module_dir(path: &str) -> &str {
-    path.split("/src/").next().unwrap_or("")
+    const LANGS: &[&str] = &["java", "kotlin", "groovy", "scala"];
+    let starts: Vec<usize> = path.match_indices("/src/").map(|(i, _)| i).collect();
+    let set_root = starts.iter().rev().find(|&&i| path[i + 5..].split('/').nth(1).is_some_and(|l| LANGS.contains(&l)));
+    match set_root.or(starts.last()) {
+        Some(&i) => &path[..i],
+        None => "",
+    }
 }
 
 /// Convert a folded constant to the representation of the declared type.
@@ -1155,5 +1165,20 @@ mod resolving_tests {
         idx.remove_file("/r/b/src/main/java/p/B.java");
         assert!(!idx.is_duplicated("p.B"));
         assert_eq!(pick(&idx, "/r/a/src/test/java/p/T.java"), None);
+        // a checkout below a directory named src: modules stay apart
+        let mut idx = Index::new(Arc::new(Classpath::empty()));
+        idx.set_file(Arc::from("/w/src/r/a/src/test/java/p/B.java"), stub(b));
+        idx.set_file(Arc::from("/w/src/r/b/src/main/java/p/B.java"), stub(b));
+        assert_eq!(pick(&idx, "/w/src/r/b/src/test/java/p/T.java").as_deref(), Some("/w/src/r/b/src/main/java/p/B.java"));
+        assert_eq!(pick(&idx, "/w/src/r/c/src/test/java/p/T.java"), None);
+    }
+
+    #[test]
+    fn module_dirs() {
+        assert_eq!(module_dir("/w/src/r/a/src/test/java/p/B.java"), "/w/src/r/a");
+        assert_eq!(module_dir("/r/a/src/main/java/com/x/src/C.java"), "/r/a");
+        assert_eq!(module_dir("/r/src/mdo/java/C.java"), "/r");
+        assert_eq!(module_dir("/r/a/src/C.java"), "/r/a");
+        assert_eq!(module_dir("C.java"), "");
     }
 }

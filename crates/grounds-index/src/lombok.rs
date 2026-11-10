@@ -106,16 +106,19 @@ fn has_method(c: &RawClass, name: &str, arity: usize) -> bool {
     c.methods.iter().any(|m| &*m.name == name && m.params.len() == arity)
 }
 
-// a parameter type as far as signatures clash: its class's simple name
-// and array dimensions (type arguments are erased)
-fn erased(t: &TypeSyntax) -> (Option<&str>, usize) {
+// a parameter type as far as signatures clash: its name as written, without
+// type arguments, and array dimensions. Two spellings of one class (`Widget`,
+// `a.Widget`) count as different: the extra overload this models can only
+// make a call ambiguous, never unresolved.
+fn erased(t: &TypeSyntax) -> (Option<String>, usize) {
     match t {
         TypeSyntax::Array(e) => {
             let (n, d) = erased(e);
             (n, d + 1)
         }
-        TypeSyntax::Prim(p) => (Some(p.keyword()), 0),
-        _ => (t.last_name(), 0),
+        TypeSyntax::Prim(p) => (Some(p.keyword().to_string()), 0),
+        TypeSyntax::Named(segs) => (Some(segs.iter().map(|s| &*s.0).collect::<Vec<_>>().join(".")), 0),
+        _ => (None, 0),
     }
 }
 

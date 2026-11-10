@@ -316,3 +316,22 @@ fn files_that_do_not_parse_as_java_ground_no_compile_break_report() {
     let found = findings(&dir, COMPILE);
     assert_eq!(found, ["src/main/java/app/Uses.java:4 unresolved-method"]);
 }
+
+#[test]
+fn a_resources_file_checked_by_name_is_not_analyzed() {
+    let dir = project(
+        "resources-by-name",
+        &[
+            ("src/main/java/p/Real.java", "package p;\npublic class Real {\n    public void a() {}\n}\n"),
+            ("src/test/resources/fixture/src/main/java/p/Uses.java", "package p;\nclass Uses {\n    void m(Real r) { r.b(); }\n}\n"),
+        ],
+    );
+    let mut project = Project::load(&dir).unwrap();
+    project.config.rules.enable = COMPILE.iter().map(|s| s.to_string()).collect();
+    let (set, options) = build_ruleset(&project);
+    let file = project.workspace.root.join("src/test/resources/fixture/src/main/java/p/Uses.java");
+    let text = std::fs::read_to_string(&file).unwrap();
+    let found = grounds_engine::analyze::analyze_text(&project, &set, &options, &file, &text);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(found.is_empty(), "{:?}", found.iter().map(|f| &f.message).collect::<Vec<_>>());
+}

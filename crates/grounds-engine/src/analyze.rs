@@ -83,6 +83,10 @@ fn severity_override(project: &Project, rule: &str, sev: Severity) -> Severity {
 
 /// Analyze one file whose current text is `text`.
 pub fn analyze_text(project: &Project, rules: &RuleSet, options: &RuleOptions, path: &Path, text: &str) -> Vec<Finding> {
+    // fixtures under src/*/resources are data, also when checked by name
+    if crate::workspace::is_resource(path.strip_prefix(&project.workspace.root).unwrap_or(path)) {
+        return Vec::new();
+    }
     let pf = ParsedFile::parse(text);
     let key = path_key(path);
     let fm = FileModel::new(&pf, &project.index, key.clone());
@@ -146,7 +150,7 @@ fn to_finding(project: &Project, pf: &ParsedFile, fm: &FileModel, rel: &str, d: 
 pub fn analyze_files(project: &Project, rules: &RuleSet, options: &RuleOptions, files: &[PathBuf]) -> Vec<Finding> {
     let mut all: Vec<Finding> = files
         .par_iter()
-        .filter(|p| classify(p) != SourceKind::Generated && !crate::workspace::is_resource(p.strip_prefix(&project.workspace.root).unwrap_or(p)))
+        .filter(|p| classify(p) != SourceKind::Generated)
         .flat_map_iter(|p| match std::fs::read_to_string(p) {
             Ok(text) => analyze_text(project, rules, options, p, &text),
             Err(_) => Vec::new(),

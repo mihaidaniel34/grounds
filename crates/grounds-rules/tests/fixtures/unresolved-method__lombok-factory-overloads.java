@@ -22,6 +22,17 @@ class Pair {
     static Pair create(String both) { return new Pair(both, both); }
 }
 
+// a hand-written factory taking another `Widget` than the field's
+@AllArgsConstructor(staticName = "of")
+class Holder {
+    private Left.Widget widget;
+
+    static Holder of(Right.Widget widget) { return of(new Left.Widget()); }
+}
+
+class Left { static class Widget {} }
+class Right { static class Widget {} }
+
 class Session {}
 class Topic { String name; }
 
@@ -32,6 +43,8 @@ class Use {
         Message c = Message.of(s, t, 1);
         Pair p = Pair.create("l", "r");
         Pair q = Pair.create("both");
+        Holder h = Holder.of(new Left.Widget());
+        Holder k = Holder.of(new Right.Widget());
         Message.of("a", "b"); // expect
         Pair.create(1, 2, 3); // expect
     }
