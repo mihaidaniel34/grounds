@@ -33,7 +33,7 @@ fn classpath_files(ws: &Workspace, cfg: &Config) -> Vec<PathBuf> {
 
 /// Entries of a classpath file: one per line or `:`-separated.
 fn read_list(f: &Path) -> Vec<PathBuf> {
-    let Ok(text) = std::fs::read_to_string(f) else { return Vec::new() };
+    let Ok(text) = crate::fsutil::read_text(f) else { return Vec::new() };
     text.lines().flat_map(|l| l.split(':')).map(str::trim).filter(|p| !p.is_empty() && !p.starts_with('#')).map(PathBuf::from).collect()
 }
 
@@ -379,7 +379,7 @@ mod tests {
         }
         let mut index = Index::new(Arc::new(Classpath::from_containers(vec![grounds_classfile::ClassContainer::open_dir(&dir)])));
         for f in &ws.files {
-            let pf = grounds_syntax::ParsedFile::parse(std::fs::read_to_string(&f.path).unwrap());
+            let pf = grounds_syntax::ParsedFile::parse(crate::fsutil::read_text(&f.path).unwrap());
             index.set_file(crate::project::path_key(&f.path), Arc::new(grounds_index::stubs::extract(&pf)));
         }
         warnings(&ws, cfg, &index)

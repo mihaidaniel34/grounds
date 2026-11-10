@@ -89,7 +89,7 @@ impl Config {
         for name in ["grounds.toml", ".grounds/config.toml"] {
             let p = root.join(name);
             if p.exists() {
-                let text = std::fs::read_to_string(&p)?;
+                let text = crate::fsutil::read_text(&p)?;
                 let cfg: Config = toml::from_str(&text).map_err(|e| anyhow::anyhow!("{}: {e}", p.display()))?;
                 return Ok(cfg);
             }
