@@ -178,3 +178,22 @@ fn a_daemon_session_stamps_pipes_and_devices_without_reading_them() {
     assert!(rx.recv_timeout(Duration::from_secs(60)).is_ok(), "a session blocked on a pipe or a device");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_package_name_of_half_a_million_segments_is_not_indexed() {
+    // found by scripts/fuzz_robust.py (seed 2 case 456 once the fixtures it
+    // draws from changed): a file cut off in `package a.x.x.x...`. The index
+    // counted every prefix of the package name, 500,000 strings of 500 KB on
+    // average: two minutes and tens of gigabytes. The other file is checked.
+    let garbage = format!("package a.{}x;\nclass Lost {{ void m() {{ ;; }} }}\n", "x.".repeat(500_000));
+    let dir = project("package-name", &[("src/main/java/a/Lost.java", &garbage), ("src/main/java/p/B.java", "package p;\nclass B { void m() { ;; } }\n")]);
+    let t = Instant::now();
+    let loaded = Project::load(&dir).unwrap();
+    assert!(t.elapsed() < Duration::from_secs(20), "{:?}", t.elapsed());
+    // the file declares nothing that can be named
+    assert!(!loaded.index.source_class_names().any(|n| n.ends_with("Lost")));
+    assert!(loaded.index.class_exists("p.B"));
+    let fs = check(&dir, &["stray-semicolon"]);
+    assert!(fs.iter().any(|f| f.path.ends_with("p/B.java")), "{fs:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
