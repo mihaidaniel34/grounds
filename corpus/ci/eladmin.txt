@@ -21,7 +21,6 @@ eladmin-common/src/main/java/me/zhengjie/config/webConfig/SwaggerConfig.java:16 
 eladmin-common/src/main/java/me/zhengjie/config/webConfig/SwaggerDataConfig.java:1 package-naming
 eladmin-common/src/main/java/me/zhengjie/config/webConfig/SwaggerDataConfig.java:42 private-constructor-class-not-final
 eladmin-common/src/main/java/me/zhengjie/config/webConfig/WebSocketConfig.java:16 package-naming
-eladmin-common/src/main/java/me/zhengjie/exception/BadRequestException.java:30 mutable-exception
 eladmin-common/src/main/java/me/zhengjie/exception/handler/ApiError.java:25 private-constructor-class-not-final
 eladmin-common/src/main/java/me/zhengjie/utils/AnonTagUtils.java:33 utility-class-instantiable
 eladmin-common/src/main/java/me/zhengjie/utils/AnonTagUtils.java:98 map-keyset-then-get
@@ -116,10 +115,7 @@ eladmin-system/src/main/java/me/zhengjie/modules/maint/websocket/WebSocketServer
 eladmin-system/src/main/java/me/zhengjie/modules/maint/websocket/WebSocketServer.java:75 log-string-concatenation
 eladmin-system/src/main/java/me/zhengjie/modules/quartz/config/QuartzConfig.java:60 log-and-rethrow
 eladmin-system/src/main/java/me/zhengjie/modules/security/config/LoginProperties.java:38 constant-naming
-eladmin-system/src/main/java/me/zhengjie/modules/security/config/SpringSecurityConfig.java:69 csrf-protection-disabled
 eladmin-system/src/main/java/me/zhengjie/modules/security/security/TokenConfigurer.java:21 unused-import
-eladmin-system/src/main/java/me/zhengjie/modules/security/security/TokenProvider.java:45 singleton-mutable-state
-eladmin-system/src/main/java/me/zhengjie/modules/security/security/TokenProvider.java:46 singleton-mutable-state
 eladmin-system/src/main/java/me/zhengjie/modules/system/rest/DictController.java:28 unused-import
 eladmin-system/src/main/java/me/zhengjie/modules/system/rest/MenuController.java:27 unused-import
 eladmin-system/src/main/java/me/zhengjie/modules/system/service/impl/DeptServiceImpl.java:206 cognitive-complexity

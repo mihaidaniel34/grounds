@@ -152,9 +152,6 @@ application/src/main/java/org/thingsboard/server/actors/calculatedField/Calculat
 application/src/main/java/org/thingsboard/server/actors/calculatedField/CalculatedFieldEntityMessageProcessor.java:419 cognitive-complexity
 application/src/main/java/org/thingsboard/server/actors/calculatedField/CalculatedFieldEntityMessageProcessor.java:499 cognitive-complexity
 application/src/main/java/org/thingsboard/server/actors/calculatedField/CalculatedFieldEntityMessageProcessor.java:617 cognitive-complexity
-application/src/main/java/org/thingsboard/server/actors/calculatedField/CalculatedFieldException.java:21 mutable-exception
-application/src/main/java/org/thingsboard/server/actors/calculatedField/CalculatedFieldException.java:22 mutable-exception
-application/src/main/java/org/thingsboard/server/actors/calculatedField/CalculatedFieldException.java:23 mutable-exception
 application/src/main/java/org/thingsboard/server/actors/calculatedField/CalculatedFieldException.java:3 package-naming
 application/src/main/java/org/thingsboard/server/actors/calculatedField/CalculatedFieldLinkedTelemetryMsg.java:3 package-naming
 application/src/main/java/org/thingsboard/server/actors/calculatedField/CalculatedFieldManagerActor.java:3 package-naming
@@ -301,7 +298,6 @@ application/src/main/java/org/thingsboard/server/config/ThingsboardSecurityConfi
 application/src/main/java/org/thingsboard/server/config/ThingsboardSecurityConfiguration.java:249 field-injection
 application/src/main/java/org/thingsboard/server/config/ThingsboardSecurityConfiguration.java:252 field-injection
 application/src/main/java/org/thingsboard/server/config/ThingsboardSecurityConfiguration.java:339 field-injection
-application/src/main/java/org/thingsboard/server/config/ThingsboardSecurityConfiguration.java:362 csrf-protection-disabled
 application/src/main/java/org/thingsboard/server/config/WebSocketConfiguration.java:48 throw-generic-exception
 application/src/main/java/org/thingsboard/server/config/WebSocketConfiguration.java:50 permissive-cors
 application/src/main/java/org/thingsboard/server/controller/AbstractRpcController.java:116 identical-branches
@@ -537,7 +533,6 @@ application/src/main/java/org/thingsboard/server/controller/ControllerConstants.
 application/src/main/java/org/thingsboard/server/controller/ControllerConstants.java:311 constant-naming
 application/src/main/java/org/thingsboard/server/controller/ControllerConstants.java:6 utility-class-instantiable
 application/src/main/java/org/thingsboard/server/controller/ConverterController.java:283 unused-parameter
-application/src/main/java/org/thingsboard/server/controller/ConverterController.java:330 stream-count-comparison
 application/src/main/java/org/thingsboard/server/controller/ConverterController.java:336 cognitive-complexity
 application/src/main/java/org/thingsboard/server/controller/ConverterController.java:371 deep-nesting
 application/src/main/java/org/thingsboard/server/controller/ConverterController.java:394 cognitive-complexity
@@ -682,7 +677,6 @@ application/src/main/java/org/thingsboard/server/controller/OAuth2ConfigTemplate
 application/src/main/java/org/thingsboard/server/controller/OwnerController.java:71 field-injection
 application/src/main/java/org/thingsboard/server/controller/OwnerController.java:72 field-hides-superclass-field
 application/src/main/java/org/thingsboard/server/controller/QrCodeSettingsController.java:88 field-hides-superclass-field
-application/src/main/java/org/thingsboard/server/controller/QrCodeSettingsController.java:98 null-dereference
 application/src/main/java/org/thingsboard/server/controller/QueueController.java:100 redundant-response-body
 application/src/main/java/org/thingsboard/server/controller/QueueController.java:140 redundant-response-body
 application/src/main/java/org/thingsboard/server/controller/QueueController.java:87 redundant-response-body
@@ -781,7 +775,6 @@ application/src/main/java/org/thingsboard/server/controller/WidgetTypeController
 application/src/main/java/org/thingsboard/server/controller/WidgetTypeController.java:322 too-many-parameters
 application/src/main/java/org/thingsboard/server/controller/WidgetTypeController.java:396 collapsible-if
 application/src/main/java/org/thingsboard/server/controller/WidgetsBundleController.java:182 too-many-parameters
-application/src/main/java/org/thingsboard/server/controller/plugin/TbWebSocketHandler.java:448 log-placeholder-mismatch
 application/src/main/java/org/thingsboard/server/controller/plugin/TbWebSocketHandler.java:567 cognitive-complexity
 application/src/main/java/org/thingsboard/server/controller/plugin/TbWebSocketHandler.java:83 field-injection
 application/src/main/java/org/thingsboard/server/controller/plugin/TbWebSocketHandler.java:85 field-injection
@@ -847,7 +840,6 @@ application/src/main/java/org/thingsboard/server/service/agent/template/AgentApp
 application/src/main/java/org/thingsboard/server/service/agent/template/AgentAppTemplateSyncService.java:265 exception-message-only-logged
 application/src/main/java/org/thingsboard/server/service/agent/template/AppTemplateMaterializer.java:142 cognitive-complexity
 application/src/main/java/org/thingsboard/server/service/ai/DefaultAiRequestsExecutor.java:38 private-constructor-class-not-final
-application/src/main/java/org/thingsboard/server/service/ai/DefaultAiRequestsExecutor.java:51 singleton-mutable-state
 application/src/main/java/org/thingsboard/server/service/ai/Langchain4jChatModelConfigurerImpl.java:110 throw-generic-exception
 application/src/main/java/org/thingsboard/server/service/apiusage/BaseApiUsageState.java:188 enum-compared-with-equals
 application/src/main/java/org/thingsboard/server/service/apiusage/BaseApiUsageState.java:27 enum-keyed-hash-collection
@@ -1298,17 +1290,12 @@ application/src/main/java/org/thingsboard/server/service/entitiy/user/TbUserServ
 application/src/main/java/org/thingsboard/server/service/gateway_device/DefaultGatewayNotificationsService.java:33 constant-naming
 application/src/main/java/org/thingsboard/server/service/gateway_device/DefaultGatewayNotificationsService.java:34 field-injection
 application/src/main/java/org/thingsboard/server/service/housekeeper/HousekeeperReprocessingService.java:73 interrupted-exception-swallowed
-application/src/main/java/org/thingsboard/server/service/housekeeper/HousekeeperService.java:123 catch-throwable
 application/src/main/java/org/thingsboard/server/service/housekeeper/HousekeeperService.java:125 catch-instanceof-dispatch
 application/src/main/java/org/thingsboard/server/service/housekeeper/HousekeeperService.java:127 catch-instanceof-dispatch
 application/src/main/java/org/thingsboard/server/service/housekeeper/HousekeeperService.java:84 interrupted-exception-swallowed
 application/src/main/java/org/thingsboard/server/service/housekeeper/processor/AiDataDeletionTaskProcessor.java:34 throw-generic-exception
 application/src/main/java/org/thingsboard/server/service/housekeeper/processor/AlarmsUnassignTaskProcessor.java:63 deprecated-api-usage
 application/src/main/java/org/thingsboard/server/service/housekeeper/processor/HousekeeperTaskProcessor.java:14 field-injection
-application/src/main/java/org/thingsboard/server/service/housekeeper/processor/LatestTsDeletionTaskProcessor.java:23 wait-not-in-loop
-application/src/main/java/org/thingsboard/server/service/housekeeper/processor/LatestTsDeletionTaskProcessor.java:23 wait-notify-without-lock
-application/src/main/java/org/thingsboard/server/service/housekeeper/processor/TsHistoryDeletionTaskProcessor.java:26 wait-not-in-loop
-application/src/main/java/org/thingsboard/server/service/housekeeper/processor/TsHistoryDeletionTaskProcessor.java:26 wait-notify-without-lock
 application/src/main/java/org/thingsboard/server/service/install/AbstractCassandraDatabaseUpgradeService.java:17 field-injection
 application/src/main/java/org/thingsboard/server/service/install/AbstractCassandraDatabaseUpgradeService.java:20 field-injection
 application/src/main/java/org/thingsboard/server/service/install/AbstractCassandraDatabaseUpgradeService.java:30 interrupted-exception-swallowed
@@ -1385,7 +1372,6 @@ application/src/main/java/org/thingsboard/server/service/install/lts/V4_4_0_0Mig
 application/src/main/java/org/thingsboard/server/service/install/migrate/CassandraToSqlTable.java:182 legacy-synchronized-collection
 application/src/main/java/org/thingsboard/server/service/install/migrate/CassandraToSqlTable.java:244 collapsible-if
 application/src/main/java/org/thingsboard/server/service/install/migrate/CassandraToSqlTable.java:245 collapsible-if
-application/src/main/java/org/thingsboard/server/service/install/migrate/CassandraToSqlTable.java:288 sql-injection
 application/src/main/java/org/thingsboard/server/service/install/migrate/CassandraTsLatestToSqlMigrateService.java:120 cognitive-complexity
 application/src/main/java/org/thingsboard/server/service/install/migrate/CassandraTsLatestToSqlMigrateService.java:139 empty-catch-block
 application/src/main/java/org/thingsboard/server/service/install/migrate/CassandraTsLatestToSqlMigrateService.java:147 empty-catch-block
@@ -2594,7 +2580,6 @@ application/src/test/java/org/thingsboard/server/controller/plugin/TbWebSocketHa
 application/src/test/java/org/thingsboard/server/controller/plugin/TbWebSocketHandlerTest.java:177 thread-sleep-in-test
 application/src/test/java/org/thingsboard/server/controller/plugin/TbWebSocketHandlerTest.java:180 throw-generic-exception
 application/src/test/java/org/thingsboard/server/controller/plugin/TbWebSocketHandlerTest.java:185 ignored-status-result
-application/src/test/java/org/thingsboard/server/edge/AbstractEdgeTest.java:1058 stream-count-comparison
 application/src/test/java/org/thingsboard/server/edge/AbstractEdgeTest.java:250 throw-generic-exception
 application/src/test/java/org/thingsboard/server/edge/AbstractEdgeTest.java:739 assert-true-with-comparison
 application/src/test/java/org/thingsboard/server/edge/AbstractEdgeTest.java:975 optional-orelse-eager-call
@@ -2949,7 +2934,6 @@ application/src/test/java/org/thingsboard/server/system/SchemaFunctionsReplayInt
 application/src/test/java/org/thingsboard/server/system/SystemPatchApplierTest.java:364 ignored-status-result
 application/src/test/java/org/thingsboard/server/system/SystemPatchApplierTest.java:367 thread-sleep-in-test
 application/src/test/java/org/thingsboard/server/system/SystemPatchApplierTest.java:383 ignored-status-result
-application/src/test/java/org/thingsboard/server/transport/AbstractTransportIntegrationTest.java:138 catch-throwable
 application/src/test/java/org/thingsboard/server/transport/AbstractTransportIntegrationTest.java:147 throw-generic-exception
 application/src/test/java/org/thingsboard/server/transport/coap/AbstractCoapIntegrationTest.java:86 cognitive-complexity
 application/src/test/java/org/thingsboard/server/transport/coap/CoapTestCallback.java:16 volatile-array-or-collection
@@ -3186,8 +3170,6 @@ application/src/test/java/org/thingsboard/server/transport/mqtt/mqttv3/telemetry
 application/src/test/java/org/thingsboard/server/transport/mqtt/mqttv3/telemetry/timeseries/AbstractMqttTimeseriesProtoIntegrationTest.java:476 assert-true-with-comparison
 application/src/test/java/org/thingsboard/server/transport/mqtt/mqttv3/telemetry/timeseries/AbstractMqttTimeseriesProtoIntegrationTest.java:479 assert-true-with-comparison
 application/src/test/java/org/thingsboard/server/transport/mqtt/mqttv3/telemetry/timeseries/AbstractMqttTimeseriesProtoIntegrationTest.java:71 default-charset
-application/src/test/java/org/thingsboard/server/transport/mqtt/mqttv5/MqttV5TestCallback.java:48 log-placeholder-mismatch
-application/src/test/java/org/thingsboard/server/transport/mqtt/mqttv5/MqttV5TestCallback.java:56 log-placeholder-mismatch
 application/src/test/java/org/thingsboard/server/transport/mqtt/mqttv5/MqttV5TestClient.java:67 throw-generic-exception
 application/src/test/java/org/thingsboard/server/transport/mqtt/mqttv5/MqttV5TestClient.java:74 default-charset
 application/src/test/java/org/thingsboard/server/transport/mqtt/mqttv5/MqttV5TestClient.java:81 throw-generic-exception
@@ -3204,7 +3186,6 @@ application/src/test/java/org/thingsboard/server/transport/mqtt/mqttv5/provision
 application/src/test/java/org/thingsboard/server/transport/mqtt/mqttv5/provision/MqttV5ProvisionDeviceTest.java:77 ignored-status-result
 application/src/test/java/org/thingsboard/server/transport/mqtt/mqttv5/rpc/AbstractMqttV5RpcTest.java:41 ignored-status-result
 application/src/test/java/org/thingsboard/server/transport/mqtt/mqttv5/rpc/AbstractMqttV5RpcTest.java:56 ignored-status-result
-application/src/test/java/org/thingsboard/server/transport/mqtt/mqttv5/rpc/MqttV5CloseTransportSessionOnRpcDeliveryTimeoutIntegrationTest.java:119 log-placeholder-mismatch
 application/src/test/java/org/thingsboard/server/transport/mqtt/mqttv5/rpc/MqttV5CloseTransportSessionOnRpcDeliveryTimeoutIntegrationTest.java:80 ignored-status-result
 application/src/test/java/org/thingsboard/server/transport/mqtt/mqttv5/rpc/MqttV5CloseTransportSessionOnRpcDeliveryTimeoutIntegrationTest.java:85 ignored-status-result
 application/src/test/java/org/thingsboard/server/transport/mqtt/mqttv5/timeseries/AbstractMqttV5TimeseriesTest.java:25 cognitive-complexity
@@ -3243,7 +3224,6 @@ common/actor/src/main/java/org/thingsboard/server/actors/TbActorMailbox.java:103
 common/actor/src/main/java/org/thingsboard/server/actors/TbActorMailbox.java:135 cognitive-complexity
 common/actor/src/main/java/org/thingsboard/server/actors/TbActorMailbox.java:191 enum-compared-with-equals
 common/actor/src/main/java/org/thingsboard/server/actors/TbActorMailbox.java:236 catch-throwable
-common/actor/src/main/java/org/thingsboard/server/actors/TbActorNotRegisteredException.java:10 mutable-exception
 common/actor/src/test/java/org/thingsboard/server/actors/ActorSystemTest.java:246 interrupted-exception-swallowed
 common/actor/src/test/java/org/thingsboard/server/actors/SlowCreateActor.java:19 ignored-status-result
 common/actor/src/test/java/org/thingsboard/server/actors/SlowCreateActor.java:20 interrupted-exception-swallowed
@@ -3489,7 +3469,6 @@ common/data/src/main/java/org/thingsboard/server/common/data/event/RuleNodeDebug
 common/data/src/main/java/org/thingsboard/server/common/data/event/StatisticsEvent.java:18 private-constructor-class-not-final
 common/data/src/main/java/org/thingsboard/server/common/data/event/StatisticsEventFilter.java:31 complex-boolean-expression
 common/data/src/main/java/org/thingsboard/server/common/data/exception/ThingsboardErrorCode.java:27 mutable-enum-field
-common/data/src/main/java/org/thingsboard/server/common/data/exception/ThingsboardException.java:9 mutable-exception
 common/data/src/main/java/org/thingsboard/server/common/data/group/ConfigurationDeserializer.java:26 throw-generic-exception
 common/data/src/main/java/org/thingsboard/server/common/data/group/EntityField.java:52 enum-keyed-hash-collection
 common/data/src/main/java/org/thingsboard/server/common/data/group/EntityGroup.java:21 unused-import
@@ -3731,7 +3710,6 @@ common/data/src/main/java/org/thingsboard/server/common/data/util/TemplateUtils.
 common/data/src/main/java/org/thingsboard/server/common/data/util/TypeCastUtil.java:12 private-constructor-class-not-final
 common/data/src/main/java/org/thingsboard/server/common/data/widget/WidgetType.java:49 catch-return-null
 common/data/src/main/java/org/thingsboard/server/common/data/wl/WhiteLabelingParams.java:52 cognitive-complexity
-common/data/src/main/java/org/thingsboard/server/exception/ThingsboardRuntimeException.java:9 mutable-exception
 common/data/src/test/java/org/thingsboard/server/common/data/UUIDConverterTest.java:29 test-without-assertion
 common/data/src/test/java/org/thingsboard/server/common/data/UUIDConverterTest.java:36 assertion-argument-order
 common/data/src/test/java/org/thingsboard/server/common/data/UUIDConverterTest.java:54 unused-local-variable
@@ -3962,10 +3940,6 @@ common/integration/http-integrations/src/main/java/org/thingsboard/integration/h
 common/integration/http-integrations/src/main/java/org/thingsboard/integration/http/thingpark/ThingParkIntegrationEnterprise.java:298 log-placeholder-mismatch
 common/integration/http-integrations/src/main/java/org/thingsboard/integration/http/thingpark/ThingParkIntegrationEnterprise.java:325 cognitive-complexity
 common/integration/http-integrations/src/main/java/org/thingsboard/integration/http/thingpark/ThingParkIntegrationEnterprise.java:46 hardcoded-credentials
-common/integration/http-integrations/src/main/java/org/thingsboard/integration/http/thingpark/ThingParkIntegrationEnterprise.java:50 hardcoded-credentials
-common/integration/http-integrations/src/main/java/org/thingsboard/integration/http/thingpark/ThingParkIntegrationEnterprise.java:51 hardcoded-credentials
-common/integration/http-integrations/src/main/java/org/thingsboard/integration/http/thingpark/ThingParkIntegrationEnterprise.java:52 hardcoded-credentials
-common/integration/http-integrations/src/main/java/org/thingsboard/integration/http/thingpark/ThingParkIntegrationEnterprise.java:53 hardcoded-credentials
 common/integration/http-integrations/src/main/java/org/thingsboard/integration/http/thingpark/ThingParkIntegrationEnterprise.java:66 unused-private-field
 common/integration/http-integrations/src/main/java/org/thingsboard/integration/http/thingpark/ThingParkIntegrationEnterprise.java:80 cognitive-complexity
 common/integration/integration-api/src/main/java/org/thingsboard/integration/api/AbstractIntegration.java:129 throw-generic-exception
@@ -4638,16 +4612,12 @@ common/script/script-api/src/main/java/org/thingsboard/script/api/tbel/TbelCfTsR
 common/script/script-api/src/main/java/org/thingsboard/script/api/tbel/TbelCfTsRollingData.java:12 unused-import
 common/script/script-api/src/main/java/org/thingsboard/script/api/tbel/TbelCfTsRollingData.java:8 unused-import
 common/script/script-api/src/test/java/org/thingsboard/script/api/tbel/TbDateTest.java:101 ignored-status-result
-common/script/script-api/src/test/java/org/thingsboard/script/api/tbel/TbDateTest.java:129 int-overflow-in-long-context
 common/script/script-api/src/test/java/org/thingsboard/script/api/tbel/TbDateTest.java:69 test-without-assertion
 common/script/script-api/src/test/java/org/thingsboard/script/api/tbel/TbDateTest.java:84 throw-generic-exception
 common/script/script-api/src/test/java/org/thingsboard/script/api/tbel/TbDateTestEntity.java:15 cognitive-complexity
 common/script/script-api/src/test/java/org/thingsboard/script/api/tbel/TbDateTestEntity.java:45 switch-fallthrough
 common/script/script-api/src/test/java/org/thingsboard/script/api/tbel/TbUtilsTest.java:1287 assertion-argument-order
 common/script/script-api/src/test/java/org/thingsboard/script/api/tbel/TbUtilsTest.java:532 dead-store
-common/script/script-api/src/test/java/org/thingsboard/script/api/tbel/TbUtilsTest.java:556 bigdecimal-from-double
-common/script/script-api/src/test/java/org/thingsboard/script/api/tbel/TbUtilsTest.java:564 bigdecimal-from-double
-common/script/script-api/src/test/java/org/thingsboard/script/api/tbel/TbUtilsTest.java:569 bigdecimal-from-double
 common/script/script-api/src/test/java/org/thingsboard/script/api/tbel/TbUtilsTest.java:663 default-charset
 common/script/script-api/src/test/java/org/thingsboard/script/api/tbel/TbUtilsTest.java:680 default-charset
 common/script/script-api/src/test/java/org/thingsboard/script/api/tbel/TbUtilsTest.java:686 default-charset
@@ -4775,7 +4745,6 @@ common/transport/lwm2m/src/main/java/org/thingsboard/server/transport/lwm2m/boot
 common/transport/lwm2m/src/main/java/org/thingsboard/server/transport/lwm2m/bootstrap/secure/LwM2MBootstrapConfig.java:52 stray-semicolon
 common/transport/lwm2m/src/main/java/org/thingsboard/server/transport/lwm2m/bootstrap/secure/LwM2MBootstrapConfig.java:99 default-charset
 common/transport/lwm2m/src/main/java/org/thingsboard/server/transport/lwm2m/bootstrap/secure/LwM2mDefaultBootstrapSessionManager.java:104 log-string-concatenation
-common/transport/lwm2m/src/main/java/org/thingsboard/server/transport/lwm2m/bootstrap/secure/TbLwM2MDtlsBootstrapCertificateVerifier.java:105 log-placeholder-mismatch
 common/transport/lwm2m/src/main/java/org/thingsboard/server/transport/lwm2m/bootstrap/secure/TbLwM2MDtlsBootstrapCertificateVerifier.java:109 deep-nesting
 common/transport/lwm2m/src/main/java/org/thingsboard/server/transport/lwm2m/bootstrap/secure/TbLwM2MDtlsBootstrapCertificateVerifier.java:119 deep-nesting
 common/transport/lwm2m/src/main/java/org/thingsboard/server/transport/lwm2m/bootstrap/secure/TbLwM2MDtlsBootstrapCertificateVerifier.java:147 empty-method
@@ -4814,7 +4783,6 @@ common/transport/lwm2m/src/main/java/org/thingsboard/server/transport/lwm2m/secu
 common/transport/lwm2m/src/main/java/org/thingsboard/server/transport/lwm2m/secure/TbLwM2MAuthorizer.java:49 complex-boolean-expression
 common/transport/lwm2m/src/main/java/org/thingsboard/server/transport/lwm2m/secure/TbLwM2MDtlsCertificateVerifier.java:100 deep-nesting
 common/transport/lwm2m/src/main/java/org/thingsboard/server/transport/lwm2m/secure/TbLwM2MDtlsCertificateVerifier.java:104 deep-nesting
-common/transport/lwm2m/src/main/java/org/thingsboard/server/transport/lwm2m/secure/TbLwM2MDtlsCertificateVerifier.java:116 log-placeholder-mismatch
 common/transport/lwm2m/src/main/java/org/thingsboard/server/transport/lwm2m/secure/TbLwM2MDtlsCertificateVerifier.java:122 deep-nesting
 common/transport/lwm2m/src/main/java/org/thingsboard/server/transport/lwm2m/secure/TbLwM2MDtlsCertificateVerifier.java:130 deep-nesting
 common/transport/lwm2m/src/main/java/org/thingsboard/server/transport/lwm2m/secure/TbLwM2MDtlsCertificateVerifier.java:132 enum-compared-with-equals
@@ -5102,7 +5070,6 @@ common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTr
 common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportContext.java:79 missing-override
 common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportHandler.java:1009 deep-nesting
 common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportHandler.java:1110 default-charset
-common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportHandler.java:1110 deprecated-api-usage
 common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportHandler.java:1165 exception-message-only-logged
 common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportHandler.java:1212 system-exit
 common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportHandler.java:1255 unused-parameter
@@ -5110,9 +5077,6 @@ common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTr
 common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportHandler.java:1358 new-date-gettime
 common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportHandler.java:1366 cognitive-complexity
 common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportHandler.java:1549 new-date-gettime
-common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportHandler.java:232 unused-private-method
-common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportHandler.java:236 unused-private-method
-common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportHandler.java:244 unused-private-method
 common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportHandler.java:310 cognitive-complexity
 common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportHandler.java:323 deep-nesting
 common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportHandler.java:490 cognitive-complexity
@@ -5120,7 +5084,6 @@ common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTr
 common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportHandler.java:602 identical-branches
 common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportHandler.java:614 identical-branches
 common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportHandler.java:659 identical-branches
-common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportHandler.java:733 unused-private-method
 common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportHandler.java:775 enum-compared-with-equals
 common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportHandler.java:846 default-charset
 common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/MqttTransportHandler.java:850 cognitive-complexity
@@ -5146,7 +5109,6 @@ common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/sessio
 common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/session/AbstractGatewayDeviceSessionContext.java:65 constructor-calls-overridable-method
 common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/session/AbstractGatewaySessionHandler.java:133 constructor-calls-overridable-method
 common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/session/AbstractGatewaySessionHandler.java:212 empty-method
-common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/session/AbstractGatewaySessionHandler.java:484 unused-private-method
 common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/session/AbstractGatewaySessionHandler.java:494 catch-throwable
 common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/session/AbstractGatewaySessionHandler.java:528 catch-throwable
 common/transport/mqtt/src/main/java/org/thingsboard/server/transport/mqtt/session/AbstractGatewaySessionHandler.java:581 catch-throwable
@@ -5222,7 +5184,6 @@ common/transport/transport-api/src/main/java/org/thingsboard/server/common/trans
 common/transport/transport-api/src/main/java/org/thingsboard/server/common/transport/TransportServiceCallback.java:14 empty-method
 common/transport/transport-api/src/main/java/org/thingsboard/server/common/transport/TransportServiceCallback.java:9 empty-method
 common/transport/transport-api/src/main/java/org/thingsboard/server/common/transport/activity/AbstractActivityManager.java:24 field-injection
-common/transport/transport-api/src/main/java/org/thingsboard/server/common/transport/activity/AbstractActivityManager.java:28 inner-class-could-be-static
 common/transport/transport-api/src/main/java/org/thingsboard/server/common/transport/activity/AbstractActivityManager.java:28 private-constructor-class-not-final
 common/transport/transport-api/src/main/java/org/thingsboard/server/common/transport/activity/AbstractActivityManager.java:38 random-used-once
 common/transport/transport-api/src/main/java/org/thingsboard/server/common/transport/auth/DeviceAuthResult.java:7 private-constructor-class-not-final
@@ -5928,7 +5889,6 @@ dao/src/main/java/org/thingsboard/server/dao/relation/BaseRelationService.java:5
 dao/src/main/java/org/thingsboard/server/dao/relation/BaseRelationService.java:664 private-constructor-class-not-final
 dao/src/main/java/org/thingsboard/server/dao/relation/BaseRelationService.java:681 cognitive-complexity
 dao/src/main/java/org/thingsboard/server/dao/relation/BaseRelationService.java:88 field-injection
-dao/src/main/java/org/thingsboard/server/dao/relation/RelationWriteLock.java:94 threadlocal-not-removed
 dao/src/main/java/org/thingsboard/server/dao/report/ReportTemplateInfoDao.java:11 unused-import
 dao/src/main/java/org/thingsboard/server/dao/report/ReportTemplateInfoDao.java:5 unused-import
 dao/src/main/java/org/thingsboard/server/dao/report/ReportTemplateInfoDao.java:6 unused-import
@@ -5952,7 +5912,6 @@ dao/src/main/java/org/thingsboard/server/dao/resource/BaseResourceService.java:4
 dao/src/main/java/org/thingsboard/server/dao/resource/BaseResourceService.java:614 cognitive-complexity
 dao/src/main/java/org/thingsboard/server/dao/resource/BaseResourceService.java:95 enum-keyed-hash-collection
 dao/src/main/java/org/thingsboard/server/dao/resource/BaseResourceService.java:96 enum-keyed-hash-collection
-dao/src/main/java/org/thingsboard/server/dao/resource/DefaultTbResourceDataCache.java:35 singleton-mutable-state
 dao/src/main/java/org/thingsboard/server/dao/role/RoleDao.java:22 missing-override
 dao/src/main/java/org/thingsboard/server/dao/role/RoleServiceImpl.java:52 field-injection
 dao/src/main/java/org/thingsboard/server/dao/role/RoleServiceImpl.java:55 field-injection
@@ -6187,7 +6146,6 @@ dao/src/main/java/org/thingsboard/server/dao/sql/asset/JpaAssetInfoDao.java:27 f
 dao/src/main/java/org/thingsboard/server/dao/sql/asset/JpaAssetInfoDao.java:30 field-injection
 dao/src/main/java/org/thingsboard/server/dao/sql/asset/JpaAssetProfileDao.java:35 field-injection
 dao/src/main/java/org/thingsboard/server/dao/sql/attributes/AttributeKvInsertRepository.java:21 field-injection
-dao/src/main/java/org/thingsboard/server/dao/sql/attributes/JpaAttributeDao.java:124 singleton-mutable-state
 dao/src/main/java/org/thingsboard/server/dao/sql/attributes/JpaAttributeDao.java:349 cognitive-complexity
 dao/src/main/java/org/thingsboard/server/dao/sql/attributes/JpaAttributeDao.java:57 field-injection
 dao/src/main/java/org/thingsboard/server/dao/sql/attributes/JpaAttributeDao.java:60 field-injection
@@ -6487,7 +6445,6 @@ dao/src/main/java/org/thingsboard/server/dao/sqlts/SqlTimeseriesLatestDao.java:1
 dao/src/main/java/org/thingsboard/server/dao/sqlts/SqlTimeseriesLatestDao.java:107 field-injection
 dao/src/main/java/org/thingsboard/server/dao/sqlts/SqlTimeseriesLatestDao.java:110 field-injection
 dao/src/main/java/org/thingsboard/server/dao/sqlts/SqlTimeseriesLatestDao.java:113 field-injection
-dao/src/main/java/org/thingsboard/server/dao/sqlts/SqlTimeseriesLatestDao.java:149 singleton-mutable-state
 dao/src/main/java/org/thingsboard/server/dao/sqlts/SqlTimeseriesLatestDao.java:312 cognitive-complexity
 dao/src/main/java/org/thingsboard/server/dao/sqlts/SqlTimeseriesLatestDao.java:69 field-injection
 dao/src/main/java/org/thingsboard/server/dao/sqlts/SqlTimeseriesLatestDao.java:72 field-injection
@@ -6698,8 +6655,6 @@ dao/src/test/java/org/thingsboard/server/dao/service/AssetServiceTest.java:155 t
 dao/src/test/java/org/thingsboard/server/dao/service/AssetServiceTest.java:262 deprecated-api-usage
 dao/src/test/java/org/thingsboard/server/dao/service/CitusRelationWriteSerializationTest.java:213 ignored-status-result
 dao/src/test/java/org/thingsboard/server/dao/service/CitusRelationWriteSerializationTest.java:255 thread-sleep-in-test
-dao/src/test/java/org/thingsboard/server/dao/service/CitusRelationWriteSerializationTest.java:350 assertion-argument-order
-dao/src/test/java/org/thingsboard/server/dao/service/CitusRelationWriteSerializationTest.java:354 assertion-argument-order
 dao/src/test/java/org/thingsboard/server/dao/service/CitusRelationWriteSerializationTest.java:441 ignored-status-result
 dao/src/test/java/org/thingsboard/server/dao/service/DashboardServiceTest.java:148 cognitive-complexity
 dao/src/test/java/org/thingsboard/server/dao/service/DeviceGroupOtaPackageServiceTest.java:70 unused-parameter
@@ -6717,8 +6672,6 @@ dao/src/test/java/org/thingsboard/server/dao/service/QueueStatsServiceTest.java:
 dao/src/test/java/org/thingsboard/server/dao/service/UserServiceTest.java:41 unused-private-field
 dao/src/test/java/org/thingsboard/server/dao/service/UserServiceTest.java:63 unused-local-variable
 dao/src/test/java/org/thingsboard/server/dao/service/WidgetsBundleServiceTest.java:263 cognitive-complexity
-dao/src/test/java/org/thingsboard/server/dao/service/WidgetsBundleServiceTest.java:277 odd-check-remainder
-dao/src/test/java/org/thingsboard/server/dao/service/WidgetsBundleServiceTest.java:356 odd-check-remainder
 dao/src/test/java/org/thingsboard/server/dao/service/attributes/BaseAttributesServiceTest.java:388 throw-generic-exception
 dao/src/test/java/org/thingsboard/server/dao/service/attributes/BaseAttributesServiceTest.java:398 throw-generic-exception
 dao/src/test/java/org/thingsboard/server/dao/service/attributes/BaseAttributesServiceTest.java:417 throw-generic-exception
@@ -6738,7 +6691,6 @@ dao/src/test/java/org/thingsboard/server/dao/sql/event/JpaBaseEventDaoTest.java:
 dao/src/test/java/org/thingsboard/server/dao/sql/user/JpaUserDaoTest.java:59 assertion-argument-order
 dao/src/test/java/org/thingsboard/server/dao/sql/user/JpaUserInfoDaoTest.java:92 unused-parameter
 dao/src/test/java/org/thingsboard/server/dao/sql/widget/JpaWidgetTypeDaoTest.java:171 thread-sleep-in-test
-dao/src/test/java/org/thingsboard/server/dao/sql/widget/JpaWidgetsBundleDaoTest.java:398 odd-check-remainder
 dao/src/test/java/org/thingsboard/server/dao/sqlts/dictionary/KeyDictionaryDaoTest.java:64 ignored-status-result
 dao/src/test/java/org/thingsboard/server/dao/sqlts/dictionary/KeyDictionaryDaoTest.java:68 ignored-status-result
 dao/src/test/java/org/thingsboard/server/dao/util/DeviceConnectivityUtilTest.java:135 regex-compiled-in-loop
@@ -7085,7 +7037,6 @@ netty-mqtt/src/main/java/org/thingsboard/mqtt/MqttPendingPublish.java:34 too-man
 netty-mqtt/src/main/java/org/thingsboard/mqtt/MqttPingHandler.java:75 todo-comment
 netty-mqtt/src/main/java/org/thingsboard/mqtt/ReconnectStrategyExponential.java:25 constructor-calls-overridable-method
 netty-mqtt/src/main/java/org/thingsboard/mqtt/ReconnectStrategyExponential.java:26 constructor-calls-overridable-method
-netty-mqtt/src/test/java/org/thingsboard/mqtt/MqttTestProxy.java:65 log-placeholder-mismatch
 netty-mqtt/src/test/java/org/thingsboard/mqtt/MqttTestProxy.java:77 throw-generic-exception
 rest-client/src/main/java/org/thingsboard/rest/client/RestClient.java:2444 too-many-parameters
 rest-client/src/main/java/org/thingsboard/rest/client/RestClient.java:2448 too-many-parameters
@@ -7342,7 +7293,6 @@ rule-engine/rule-engine-components/src/test/java/org/thingsboard/rule/engine/mat
 rule-engine/rule-engine-components/src/test/java/org/thingsboard/rule/engine/math/TbMathNodeTest.java:681 throw-generic-exception
 rule-engine/rule-engine-components/src/test/java/org/thingsboard/rule/engine/math/TbMathNodeTest.java:754 throw-generic-exception
 rule-engine/rule-engine-components/src/test/java/org/thingsboard/rule/engine/math/TbMathNodeTest.java:798 throw-generic-exception
-rule-engine/rule-engine-components/src/test/java/org/thingsboard/rule/engine/math/TbMathNodeTest.java:865 bigdecimal-from-double
 rule-engine/rule-engine-components/src/test/java/org/thingsboard/rule/engine/metadata/CalculateDeltaNodeTest.java:103 assertion-argument-order
 rule-engine/rule-engine-components/src/test/java/org/thingsboard/rule/engine/metadata/CalculateDeltaNodeTest.java:104 assertion-argument-order
 rule-engine/rule-engine-components/src/test/java/org/thingsboard/rule/engine/metadata/CalculateDeltaNodeTest.java:107 assertion-argument-order

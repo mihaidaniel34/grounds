@@ -183,8 +183,6 @@ spring-aop/src/main/java/org/springframework/aop/aspectj/annotation/AspectJProxy
 spring-aop/src/main/java/org/springframework/aop/aspectj/annotation/BeanFactoryAspectJAdvisorsBuilder.java:109 deep-nesting
 spring-aop/src/main/java/org/springframework/aop/aspectj/annotation/BeanFactoryAspectJAdvisorsBuilder.java:52 volatile-array-or-collection
 spring-aop/src/main/java/org/springframework/aop/aspectj/annotation/BeanFactoryAspectJAdvisorsBuilder.java:87 cognitive-complexity
-spring-aop/src/main/java/org/springframework/aop/aspectj/annotation/InstantiationModelAwarePointcutAdvisorImpl.java:199 boxed-reference-equality
-spring-aop/src/main/java/org/springframework/aop/aspectj/annotation/InstantiationModelAwarePointcutAdvisorImpl.java:207 boxed-reference-equality
 spring-aop/src/main/java/org/springframework/aop/aspectj/autoproxy/AspectJAwareAdvisorAutoProxyCreator.java:140 compareto-without-equals
 spring-aop/src/main/java/org/springframework/aop/config/ConfigBeanDefinitionParser.java:216 deep-nesting
 spring-aop/src/main/java/org/springframework/aop/config/ConfigBeanDefinitionParser.java:267 complex-boolean-expression
@@ -235,7 +233,6 @@ spring-aop/src/main/java/org/springframework/aop/interceptor/AsyncExecutionAspec
 spring-aop/src/main/java/org/springframework/aop/interceptor/AsyncExecutionAspectSupport.java:316 catch-throwable
 spring-aop/src/main/java/org/springframework/aop/interceptor/ConcurrencyThrottleInterceptor.java:61 constructor-calls-overridable-method
 spring-aop/src/main/java/org/springframework/aop/interceptor/DebugInterceptor.java:55 constructor-calls-overridable-method
-spring-aop/src/main/java/org/springframework/aop/interceptor/ExposeInvocationInterceptor.java:61 threadlocal-not-removed
 spring-aop/src/main/java/org/springframework/aop/interceptor/PerformanceMonitorInterceptor.java:52 constructor-calls-overridable-method
 spring-aop/src/main/java/org/springframework/aop/interceptor/SimpleTraceInterceptor.java:54 constructor-calls-overridable-method
 spring-aop/src/main/java/org/springframework/aop/scope/ScopedProxyFactoryBean.java:73 constructor-calls-overridable-method
@@ -271,7 +268,6 @@ spring-aop/src/test/java/org/springframework/aop/aspectj/annotation/AbstractAspe
 spring-aop/src/test/java/org/springframework/aop/aspectj/annotation/AbstractAspectJAdvisorFactoryTests.java:598 inner-class-could-be-static
 spring-aop/src/test/java/org/springframework/aop/aspectj/annotation/AspectJAdvisorBeanRegistrationAotProcessorTests.java:77 unused-private-field
 spring-aop/src/test/java/org/springframework/aop/aspectj/annotation/AspectJAdvisorBeanRegistrationAotProcessorTests.java:81 unused-private-field
-spring-aop/src/test/java/org/springframework/aop/framework/AbstractProxyExceptionHandlingTests.java:74 catch-throwable
 spring-aop/src/test/java/org/springframework/aop/framework/IntroductionBenchmarkTests.java:56 test-without-assertion
 spring-aop/src/test/java/org/springframework/aop/framework/MethodInvocationTests.java:52 test-without-assertion
 spring-aop/src/test/java/org/springframework/aop/framework/ProxyProcessorSupportTests.java:47 class-name-comparison
@@ -452,8 +448,6 @@ spring-beans/src/main/java/org/springframework/beans/factory/annotation/Injectio
 spring-beans/src/main/java/org/springframework/beans/factory/annotation/InjectionMetadata.java:64 empty-method
 spring-beans/src/main/java/org/springframework/beans/factory/annotation/InjectionMetadata.java:67 empty-method
 spring-beans/src/main/java/org/springframework/beans/factory/annotation/InjectionMetadata.java:76 volatile-array-or-collection
-spring-beans/src/main/java/org/springframework/beans/factory/annotation/QualifierAnnotationAutowireCandidateResolver.java:154 boxed-reference-equality
-spring-beans/src/main/java/org/springframework/beans/factory/annotation/QualifierAnnotationAutowireCandidateResolver.java:166 boxed-reference-equality
 spring-beans/src/main/java/org/springframework/beans/factory/annotation/QualifierAnnotationAutowireCandidateResolver.java:176 cognitive-complexity
 spring-beans/src/main/java/org/springframework/beans/factory/annotation/QualifierAnnotationAutowireCandidateResolver.java:200 deep-nesting
 spring-beans/src/main/java/org/springframework/beans/factory/annotation/QualifierAnnotationAutowireCandidateResolver.java:203 deep-nesting
@@ -630,7 +624,6 @@ spring-beans/src/main/java/org/springframework/beans/factory/support/DefaultList
 spring-beans/src/main/java/org/springframework/beans/factory/support/DefaultListableBeanFactory.java:1793 cognitive-complexity
 spring-beans/src/main/java/org/springframework/beans/factory/support/DefaultListableBeanFactory.java:1959 cognitive-complexity
 spring-beans/src/main/java/org/springframework/beans/factory/support/DefaultListableBeanFactory.java:1986 complex-boolean-expression
-spring-beans/src/main/java/org/springframework/beans/factory/support/DefaultListableBeanFactory.java:1997 null-dereference
 spring-beans/src/main/java/org/springframework/beans/factory/support/DefaultListableBeanFactory.java:2038 cognitive-complexity
 spring-beans/src/main/java/org/springframework/beans/factory/support/DefaultListableBeanFactory.java:206 volatile-array-or-collection
 spring-beans/src/main/java/org/springframework/beans/factory/support/DefaultListableBeanFactory.java:209 volatile-array-or-collection
@@ -776,7 +769,6 @@ spring-beans/src/test/java/org/springframework/beans/BeanUtilsTests.java:133 tes
 spring-beans/src/test/java/org/springframework/beans/BeanUtilsTests.java:916 too-many-parameters
 spring-beans/src/test/java/org/springframework/beans/BeanWrapperAutoGrowingTests.java:255 disabled-test-without-reason
 spring-beans/src/test/java/org/springframework/beans/BeanWrapperTests.java:346 throw-generic-exception
-spring-beans/src/test/java/org/springframework/beans/ConcurrentBeanWrapperTests.java:127 synchronized-on-non-final-field
 spring-beans/src/test/java/org/springframework/beans/ConcurrentBeanWrapperTests.java:67 interrupted-exception-swallowed
 spring-beans/src/test/java/org/springframework/beans/ExtendedBeanInfoTests.java:126 collection-method-returns-null
 spring-beans/src/test/java/org/springframework/beans/ExtendedBeanInfoTests.java:431 collection-method-returns-null
@@ -821,7 +813,6 @@ spring-beans/src/test/java/org/springframework/beans/factory/config/ServiceLocat
 spring-beans/src/test/java/org/springframework/beans/factory/config/ServiceLocatorFactoryBeanTests.java:250 test-without-assertion
 spring-beans/src/test/java/org/springframework/beans/factory/config/YamlMapFactoryBeanTests.java:111 default-charset
 spring-beans/src/test/java/org/springframework/beans/factory/config/YamlMapFactoryBeanTests.java:126 default-charset
-spring-beans/src/test/java/org/springframework/beans/factory/config/YamlMapFactoryBeanTests.java:57 ignored-return-value
 spring-beans/src/test/java/org/springframework/beans/factory/config/YamlMapFactoryBeanTests.java:63 default-charset
 spring-beans/src/test/java/org/springframework/beans/factory/config/YamlMapFactoryBeanTests.java:70 default-charset
 spring-beans/src/test/java/org/springframework/beans/factory/config/YamlMapFactoryBeanTests.java:71 default-charset
@@ -1664,7 +1655,6 @@ spring-context/src/test/java/org/springframework/jmx/export/NotificationPublishe
 spring-context/src/test/java/org/springframework/jmx/export/TestDynamicMBean.java:56 collection-method-returns-null
 spring-context/src/test/java/org/springframework/jmx/export/TestDynamicMBean.java:61 collection-method-returns-null
 spring-context/src/test/java/org/springframework/jmx/export/annotation/AnnotationTestBean.java:102 throw-generic-exception
-spring-context/src/test/java/org/springframework/jndi/JndiObjectFactoryBeanTests.java:387 identical-operands
 spring-context/src/test/java/org/springframework/mock/env/MockEnvironment.java:41 constructor-calls-overridable-method
 spring-context/src/test/java/org/springframework/resilience/ConcurrencyLimitTests.java:135 thread-sleep-in-test
 spring-context/src/test/java/org/springframework/resilience/ConcurrencyLimitTests.java:177 thread-sleep-in-test
@@ -1696,8 +1686,6 @@ spring-context/src/test/java/org/springframework/scheduling/annotation/AsyncExec
 spring-context/src/test/java/org/springframework/scheduling/annotation/AsyncExecutionTests.java:273 resource-leak
 spring-context/src/test/java/org/springframework/scheduling/annotation/AsyncExecutionTests.java:288 resource-leak
 spring-context/src/test/java/org/springframework/scheduling/annotation/AsyncExecutionTests.java:302 resource-leak
-spring-context/src/test/java/org/springframework/scheduling/annotation/AsyncExecutionTests.java:657 volatile-increment
-spring-context/src/test/java/org/springframework/scheduling/annotation/AsyncExecutionTests.java:672 volatile-increment
 spring-context/src/test/java/org/springframework/scheduling/annotation/AsyncExecutionTests.java:71 resource-leak
 spring-context/src/test/java/org/springframework/scheduling/annotation/EnableSchedulingTests.java:115 thread-sleep-in-test
 spring-context/src/test/java/org/springframework/scheduling/annotation/EnableSchedulingTests.java:119 thread-sleep-in-test
@@ -1728,11 +1716,9 @@ spring-context/src/test/java/org/springframework/scheduling/annotation/Scheduled
 spring-context/src/test/java/org/springframework/scheduling/annotation/ScheduledAnnotationBeanPostProcessorObservabilityTests.java:244 interrupted-exception-swallowed
 spring-context/src/test/java/org/springframework/scheduling/annotation/ScheduledAnnotationBeanPostProcessorTests.java:932 scheduled-method-with-parameters
 spring-context/src/test/java/org/springframework/scheduling/annotation/TestableAsyncUncaughtExceptionHandler.java:69 ignored-status-result
-spring-context/src/test/java/org/springframework/scheduling/concurrent/AbstractSchedulingTaskExecutorTests.java:254 ignored-status-result
 spring-context/src/test/java/org/springframework/scheduling/concurrent/AbstractSchedulingTaskExecutorTests.java:289 interrupted-exception-swallowed
 spring-context/src/test/java/org/springframework/scheduling/concurrent/AbstractSchedulingTaskExecutorTests.java:323 interrupted-exception-swallowed
 spring-context/src/test/java/org/springframework/scheduling/concurrent/AbstractSchedulingTaskExecutorTests.java:327 throw-generic-exception
-spring-context/src/test/java/org/springframework/scheduling/concurrent/ConcurrentTaskSchedulerTests.java:184 ignored-status-result
 spring-context/src/test/java/org/springframework/scheduling/concurrent/CronTriggerExecutionTests.java:107 thread-sleep-in-test
 spring-context/src/test/java/org/springframework/scheduling/concurrent/CronTriggerExecutionTests.java:51 throw-generic-exception
 spring-context/src/test/java/org/springframework/scheduling/concurrent/CronTriggerExecutionTests.java:70 thread-sleep-in-test
@@ -1742,8 +1728,6 @@ spring-context/src/test/java/org/springframework/scheduling/concurrent/CronTrigg
 spring-context/src/test/java/org/springframework/scheduling/concurrent/CronTriggerExecutionTests.java:99 thread-sleep-in-test
 spring-context/src/test/java/org/springframework/scheduling/concurrent/ScheduledExecutorFactoryBeanTests.java:200 test-without-assertion
 spring-context/src/test/java/org/springframework/scheduling/concurrent/ScheduledExecutorFactoryBeanTests.java:224 interrupted-exception-swallowed
-spring-context/src/test/java/org/springframework/scheduling/concurrent/SimpleAsyncTaskSchedulerTests.java:169 ignored-status-result
-spring-context/src/test/java/org/springframework/scheduling/concurrent/ThreadPoolTaskSchedulerTests.java:159 ignored-status-result
 spring-context/src/test/java/org/springframework/scheduling/config/LazyScheduledTasksBeanDefinitionParserTests.java:38 test-without-assertion
 spring-context/src/test/java/org/springframework/scheduling/config/LazyScheduledTasksBeanDefinitionParserTests.java:46 thread-sleep-in-test
 spring-context/src/test/java/org/springframework/scheduling/config/TaskTests.java:102 throw-generic-exception
@@ -1946,11 +1930,8 @@ spring-core/src/main/java/org/springframework/cglib/beans/BulkBeanEmitter.java:1
 spring-core/src/main/java/org/springframework/cglib/beans/BulkBeanEmitter.java:164 lost-stack-trace
 spring-core/src/main/java/org/springframework/cglib/beans/BulkBeanEmitter.java:61 constructor-calls-overridable-method
 spring-core/src/main/java/org/springframework/cglib/beans/BulkBeanEmitter.java:65 constructor-calls-overridable-method
-spring-core/src/main/java/org/springframework/cglib/beans/BulkBeanException.java:21 mutable-exception
-spring-core/src/main/java/org/springframework/cglib/beans/BulkBeanException.java:22 mutable-exception
 spring-core/src/main/java/org/springframework/cglib/beans/ImmutableBean.java:142 todo-comment
 spring-core/src/main/java/org/springframework/cglib/beans/ImmutableBean.java:37 private-constructor-class-not-final
-spring-core/src/main/java/org/springframework/cglib/core/AbstractClassGenerator.java:39 threadlocal-not-removed
 spring-core/src/main/java/org/springframework/cglib/core/AbstractClassGenerator.java:41 field-naming
 spring-core/src/main/java/org/springframework/cglib/core/AbstractClassGenerator.java:41 volatile-array-or-collection
 spring-core/src/main/java/org/springframework/cglib/core/AbstractClassGenerator.java:46 constant-naming
@@ -2040,7 +2021,6 @@ spring-core/src/main/java/org/springframework/cglib/core/CodeEmitter.java:899 me
 spring-core/src/main/java/org/springframework/cglib/core/CodeEmitter.java:900 commented-out-code
 spring-core/src/main/java/org/springframework/cglib/core/CodeEmitter.java:919 method-naming
 spring-core/src/main/java/org/springframework/cglib/core/CodeEmitter.java:946 method-naming
-spring-core/src/main/java/org/springframework/cglib/core/CodeGenerationException.java:23 mutable-exception
 spring-core/src/main/java/org/springframework/cglib/core/CollectionUtils.java:32 private-constructor-class-not-final
 spring-core/src/main/java/org/springframework/cglib/core/CollectionUtils.java:49 map-keyset-then-get
 spring-core/src/main/java/org/springframework/cglib/core/Constants.java:28 redundant-modifier
@@ -2225,11 +2205,9 @@ spring-core/src/main/java/org/springframework/cglib/core/ReflectUtils.java:448 c
 spring-core/src/main/java/org/springframework/cglib/core/ReflectUtils.java:466 catch-instanceof-dispatch
 spring-core/src/main/java/org/springframework/cglib/core/ReflectUtils.java:47 private-constructor-class-not-final
 spring-core/src/main/java/org/springframework/cglib/core/ReflectUtils.java:472 empty-catch-block
-spring-core/src/main/java/org/springframework/cglib/core/ReflectUtils.java:506 catch-throwable
 spring-core/src/main/java/org/springframework/cglib/core/ReflectUtils.java:541 catch-instanceof-dispatch
 spring-core/src/main/java/org/springframework/cglib/core/ReflectUtils.java:547 empty-catch-block
 spring-core/src/main/java/org/springframework/cglib/core/ReflectUtils.java:677 todo-comment
-spring-core/src/main/java/org/springframework/cglib/core/ReflectUtils.java:80 catch-throwable
 spring-core/src/main/java/org/springframework/cglib/core/Signature.java:29 todo-comment
 spring-core/src/main/java/org/springframework/cglib/core/TinyBitSet.java:41 loop-counter-modified-in-body
 spring-core/src/main/java/org/springframework/cglib/core/TinyBitSet.java:49 loop-counter-modified-in-body
@@ -2567,7 +2545,6 @@ spring-core/src/main/java/org/springframework/core/type/filter/AbstractTypeHiera
 spring-core/src/main/java/org/springframework/core/type/filter/AbstractTypeHierarchyTraversingFilter.java:88 deep-nesting
 spring-core/src/main/java/org/springframework/core/type/filter/AnnotationTypeFilter.java:130 catch-throwable
 spring-core/src/main/java/org/springframework/core/type/filter/AssignableTypeFilter.java:80 catch-throwable
-spring-core/src/main/java/org/springframework/objenesis/SpringObjenesis.java:86 boxed-reference-equality
 spring-core/src/main/java/org/springframework/util/AntPathMatcher.java:210 cognitive-complexity
 spring-core/src/main/java/org/springframework/util/AntPathMatcher.java:351 use-isempty
 spring-core/src/main/java/org/springframework/util/AntPathMatcher.java:502 loop-counter-modified-in-body
@@ -2594,7 +2571,6 @@ spring-core/src/main/java/org/springframework/util/ConcurrentReferenceHashMap.ja
 spring-core/src/main/java/org/springframework/util/ConcurrentReferenceHashMap.java:741 cognitive-complexity
 spring-core/src/main/java/org/springframework/util/ConcurrentReferenceHashMap.java:772 deep-nesting
 spring-core/src/main/java/org/springframework/util/ConcurrentReferenceHashMap.java:796 deep-nesting
-spring-core/src/main/java/org/springframework/util/ConcurrentReferenceHashMap.java:946 inner-class-could-be-static
 spring-core/src/main/java/org/springframework/util/CustomizableThreadCreator.java:123 thread-group-usage
 spring-core/src/main/java/org/springframework/util/CustomizableThreadCreator.java:44 non-serializable-field
 spring-core/src/main/java/org/springframework/util/CustomizableThreadCreator.java:53 constructor-calls-overridable-method
@@ -2697,14 +2673,12 @@ spring-core/src/test/java/org/springframework/core/BridgeMethodResolverTests.jav
 spring-core/src/test/java/org/springframework/core/BridgeMethodResolverTests.java:1088 collection-method-returns-null
 spring-core/src/test/java/org/springframework/core/BridgeMethodResolverTests.java:1417 collection-method-returns-null
 spring-core/src/test/java/org/springframework/core/BridgeMethodResolverTests.java:1438 collection-method-returns-null
-spring-core/src/test/java/org/springframework/core/BridgeMethodResolverTests.java:553 inner-class-could-be-static
 spring-core/src/test/java/org/springframework/core/ConventionsTests.java:140 collection-method-returns-null
 spring-core/src/test/java/org/springframework/core/ConventionsTests.java:142 collection-method-returns-null
 spring-core/src/test/java/org/springframework/core/GenericTypeResolverTests.java:439 inner-class-could-be-static
 spring-core/src/test/java/org/springframework/core/MethodParameterTests.java:304 inner-class-could-be-static
 spring-core/src/test/java/org/springframework/core/ParameterizedTypeReferenceTests.java:71 collection-method-returns-null
 spring-core/src/test/java/org/springframework/core/ParameterizedTypeReferenceTests.java:75 collection-method-returns-null
-spring-core/src/test/java/org/springframework/core/ResolvableTypeTests.java:1923 inner-class-could-be-static
 spring-core/src/test/java/org/springframework/core/SpringCoreBlockHoundIntegrationTests.java:65 thread-sleep-in-test
 spring-core/src/test/java/org/springframework/core/annotation/AnnotatedElementUtilsTests.java:1532 inner-class-could-be-static
 spring-core/src/test/java/org/springframework/core/annotation/AnnotationEnclosingClassSample.java:44 inner-class-could-be-static
@@ -2744,7 +2718,6 @@ spring-core/src/test/java/org/springframework/core/io/ResourceTests.java:526 inn
 spring-core/src/test/java/org/springframework/core/io/ResourceTests.java:538 inner-class-could-be-static
 spring-core/src/test/java/org/springframework/core/io/buffer/DataBufferTests.java:258 default-charset
 spring-core/src/test/java/org/springframework/core/io/buffer/DataBufferUtilsTests.java:1004 throw-generic-exception
-spring-core/src/test/java/org/springframework/core/io/buffer/DataBufferUtilsTests.java:1040 ignored-read-result
 spring-core/src/test/java/org/springframework/core/io/buffer/DataBufferUtilsTests.java:1045 throw-generic-exception
 spring-core/src/test/java/org/springframework/core/io/buffer/DataBufferUtilsTests.java:355 default-charset
 spring-core/src/test/java/org/springframework/core/io/buffer/DataBufferUtilsTests.java:926 throw-generic-exception
@@ -2752,10 +2725,6 @@ spring-core/src/test/java/org/springframework/core/io/buffer/DataBufferUtilsTest
 spring-core/src/test/java/org/springframework/core/io/buffer/DataBufferUtilsTests.java:963 throw-generic-exception
 spring-core/src/test/java/org/springframework/core/io/buffer/LimitedDataBufferListTests.java:43 test-without-assertion
 spring-core/src/test/java/org/springframework/core/io/buffer/LimitedDataBufferListTests.java:48 test-without-assertion
-spring-core/src/test/java/org/springframework/core/io/buffer/PooledDataBufferTests.java:34 test-class-without-tests
-spring-core/src/test/java/org/springframework/core/io/buffer/PooledDataBufferTests.java:44 test-class-without-tests
-spring-core/src/test/java/org/springframework/core/io/buffer/PooledDataBufferTests.java:54 test-class-without-tests
-spring-core/src/test/java/org/springframework/core/io/buffer/PooledDataBufferTests.java:64 test-class-without-tests
 spring-core/src/test/java/org/springframework/core/io/support/ConstructorArgsDummyFactory.java:32 unused-parameter
 spring-core/src/test/java/org/springframework/core/io/support/PathMatchingResourcePatternResolverTests.java:123 default-charset
 spring-core/src/test/java/org/springframework/core/io/support/PathMatchingResourcePatternResolverTests.java:133 default-charset
@@ -2830,8 +2799,6 @@ spring-core/src/test/java/org/springframework/util/AssertTests.java:89 test-with
 spring-core/src/test/java/org/springframework/util/ClassUtilsTests.java:1068 inner-class-could-be-static
 spring-core/src/test/java/org/springframework/util/CollectionUtilsTests.java:348 legacy-synchronized-collection
 spring-core/src/test/java/org/springframework/util/ConcurrentReferenceHashMapTests.java:711 test-without-assertion
-spring-core/src/test/java/org/springframework/util/FastByteArrayOutputStreamTests.java:65 resource-leak
-spring-core/src/test/java/org/springframework/util/FastByteArrayOutputStreamTests.java:70 resource-leak
 spring-core/src/test/java/org/springframework/util/FileCopyUtilsTests.java:106 default-charset
 spring-core/src/test/java/org/springframework/util/FileCopyUtilsTests.java:113 default-charset
 spring-core/src/test/java/org/springframework/util/FileCopyUtilsTests.java:42 default-charset
@@ -2860,10 +2827,6 @@ spring-core/src/test/java/org/springframework/util/StopWatchTests.java:130 threa
 spring-core/src/test/java/org/springframework/util/StopWatchTests.java:135 thread-sleep-in-test
 spring-core/src/test/java/org/springframework/util/StopWatchTests.java:75 thread-sleep-in-test
 spring-core/src/test/java/org/springframework/util/StopWatchTests.java:97 thread-sleep-in-test
-spring-core/src/test/java/org/springframework/util/StreamUtilsTests.java:129 ignored-read-result
-spring-core/src/test/java/org/springframework/util/StreamUtilsTests.java:130 ignored-read-result
-spring-core/src/test/java/org/springframework/util/StreamUtilsTests.java:134 ignored-read-result
-spring-core/src/test/java/org/springframework/util/StreamUtilsTests.java:135 ignored-read-result
 spring-core/src/test/java/org/springframework/util/StreamUtilsTests.java:52 random-used-once
 spring-core/src/test/java/org/springframework/util/TypeUtilsTests.java:38 public-static-non-final-field
 spring-core/src/test/java/org/springframework/util/TypeUtilsTests.java:40 public-static-non-final-field
@@ -2913,17 +2876,14 @@ spring-expression/src/main/java/org/springframework/expression/spel/ast/Indexer.
 spring-expression/src/main/java/org/springframework/expression/spel/ast/Indexer.java:1091 deep-nesting
 spring-expression/src/main/java/org/springframework/expression/spel/ast/Indexer.java:170 cognitive-complexity
 spring-expression/src/main/java/org/springframework/expression/spel/ast/Indexer.java:339 cognitive-complexity
-spring-expression/src/main/java/org/springframework/expression/spel/ast/Indexer.java:925 null-dereference
 spring-expression/src/main/java/org/springframework/expression/spel/ast/Indexer.java:949 catch-throwable
 spring-expression/src/main/java/org/springframework/expression/spel/ast/Indexer.java:950 catch-return-null
-spring-expression/src/main/java/org/springframework/expression/spel/ast/InlineList.java:190 null-dereference
 spring-expression/src/main/java/org/springframework/expression/spel/ast/InlineMap.java:103 loop-counter-modified-in-body
 spring-expression/src/main/java/org/springframework/expression/spel/ast/InlineMap.java:125 loop-counter-modified-in-body
 spring-expression/src/main/java/org/springframework/expression/spel/ast/MethodReference.java:139 cognitive-complexity
 spring-expression/src/main/java/org/springframework/expression/spel/ast/MethodReference.java:143 optional-null-comparison
 spring-expression/src/main/java/org/springframework/expression/spel/ast/MethodReference.java:203 optional-null-comparison
 spring-expression/src/main/java/org/springframework/expression/spel/ast/MethodReference.java:381 cognitive-complexity
-spring-expression/src/main/java/org/springframework/expression/spel/ast/MethodReference.java:422 null-dereference
 spring-expression/src/main/java/org/springframework/expression/spel/ast/MethodReference.java:431 nested-ternary
 spring-expression/src/main/java/org/springframework/expression/spel/ast/OpAnd.java:88 commented-out-code
 spring-expression/src/main/java/org/springframework/expression/spel/ast/OpDec.java:109 lost-stack-trace
@@ -2955,7 +2915,6 @@ spring-expression/src/main/java/org/springframework/expression/spel/ast/OpOr.jav
 spring-expression/src/main/java/org/springframework/expression/spel/ast/OpPlus.java:123 cognitive-complexity
 spring-expression/src/main/java/org/springframework/expression/spel/ast/OpPlus.java:325 collapsible-if
 spring-expression/src/main/java/org/springframework/expression/spel/ast/OpPlus.java:344 complex-boolean-expression
-spring-expression/src/main/java/org/springframework/expression/spel/ast/OpPlus.java:459 null-dereference
 spring-expression/src/main/java/org/springframework/expression/spel/ast/Operator.java:263 cognitive-complexity
 spring-expression/src/main/java/org/springframework/expression/spel/ast/Operator.java:271 float-equality
 spring-expression/src/main/java/org/springframework/expression/spel/ast/Operator.java:274 float-equality
@@ -2993,7 +2952,6 @@ spring-expression/src/main/java/org/springframework/expression/spel/standard/Int
 spring-expression/src/main/java/org/springframework/expression/spel/standard/InternalSpelExpressionParser.java:476 commented-out-code
 spring-expression/src/main/java/org/springframework/expression/spel/standard/InternalSpelExpressionParser.java:550 complex-boolean-expression
 spring-expression/src/main/java/org/springframework/expression/spel/standard/InternalSpelExpressionParser.java:660 cognitive-complexity
-spring-expression/src/main/java/org/springframework/expression/spel/standard/InternalSpelExpressionParser.java:764 null-dereference
 spring-expression/src/main/java/org/springframework/expression/spel/standard/InternalSpelExpressionParser.java:815 cognitive-complexity
 spring-expression/src/main/java/org/springframework/expression/spel/standard/SpelCompiler.java:186 commented-out-code
 spring-expression/src/main/java/org/springframework/expression/spel/standard/SpelCompiler.java:186 todo-comment
@@ -3275,7 +3233,6 @@ spring-jdbc/src/main/java/org/springframework/jdbc/core/namedparam/NamedParamete
 spring-jdbc/src/main/java/org/springframework/jdbc/core/simple/AbstractJdbcCall.java:305 lost-stack-trace
 spring-jdbc/src/main/java/org/springframework/jdbc/core/simple/AbstractJdbcInsert.java:284 lost-stack-trace
 spring-jdbc/src/main/java/org/springframework/jdbc/core/simple/AbstractJdbcInsert.java:451 cognitive-complexity
-spring-jdbc/src/main/java/org/springframework/jdbc/core/simple/AbstractJdbcInsert.java:493 sql-injection
 spring-jdbc/src/main/java/org/springframework/jdbc/core/simple/DefaultJdbcClient.java:353 private-constructor-class-not-final
 spring-jdbc/src/main/java/org/springframework/jdbc/core/simple/DefaultJdbcClient.java:499 private-constructor-class-not-final
 spring-jdbc/src/main/java/org/springframework/jdbc/core/simple/DefaultJdbcClient.java:551 private-constructor-class-not-final
@@ -3285,7 +3242,6 @@ spring-jdbc/src/main/java/org/springframework/jdbc/datasource/DataSourceTransact
 spring-jdbc/src/main/java/org/springframework/jdbc/datasource/DataSourceTransactionManager.java:148 constructor-calls-overridable-method
 spring-jdbc/src/main/java/org/springframework/jdbc/datasource/DataSourceTransactionManager.java:394 catch-throwable
 spring-jdbc/src/main/java/org/springframework/jdbc/datasource/DataSourceTransactionManager.java:422 catch-throwable
-spring-jdbc/src/main/java/org/springframework/jdbc/datasource/DataSourceTransactionManager.java:437 boxed-reference-equality
 spring-jdbc/src/main/java/org/springframework/jdbc/datasource/DataSourceTransactionManager.java:485 private-constructor-class-not-final
 spring-jdbc/src/main/java/org/springframework/jdbc/datasource/DataSourceUtils.java:284 catch-throwable
 spring-jdbc/src/main/java/org/springframework/jdbc/datasource/DataSourceUtils.java:317 catch-throwable
@@ -3400,13 +3356,9 @@ spring-jdbc/src/main/java/org/springframework/jdbc/support/SQLExceptionSubclassT
 spring-jdbc/src/main/java/org/springframework/jdbc/support/SQLStateSQLExceptionTranslator.java:108 cognitive-complexity
 spring-jdbc/src/main/java/org/springframework/jdbc/support/incrementer/AbstractIdentityColumnMaxValueIncrementer.java:105 deep-nesting
 spring-jdbc/src/main/java/org/springframework/jdbc/support/incrementer/MySQLMaxValueIncrementer.java:117 cognitive-complexity
-spring-jdbc/src/main/java/org/springframework/jdbc/support/incrementer/MySQLMaxValueIncrementer.java:149 sql-injection
 spring-jdbc/src/main/java/org/springframework/jdbc/support/incrementer/MySQLMaxValueIncrementer.java:176 deep-nesting
 spring-jdbc/src/main/java/org/springframework/jdbc/support/incrementer/MySQLMaxValueIncrementer.java:184 abrupt-finally
-spring-jdbc/src/main/java/org/springframework/jdbc/support/incrementer/SqliteMaxValueIncrementer.java:68 sql-injection
 spring-jdbc/src/main/java/org/springframework/jdbc/support/incrementer/SqliteMaxValueIncrementer.java:69 resource-leak
-spring-jdbc/src/main/java/org/springframework/jdbc/support/incrementer/SqliteMaxValueIncrementer.java:69 sql-injection
-spring-jdbc/src/main/java/org/springframework/jdbc/support/incrementer/SqliteMaxValueIncrementer.java:74 sql-injection
 spring-jdbc/src/main/java/org/springframework/jdbc/support/lob/DefaultLobHandler.java:254 cognitive-complexity
 spring-jdbc/src/main/java/org/springframework/jdbc/support/lob/DefaultLobHandler.java:321 cognitive-complexity
 spring-jdbc/src/main/java/org/springframework/jdbc/support/lob/DefaultLobHandler.java:360 cognitive-complexity
@@ -3419,7 +3371,6 @@ spring-jdbc/src/test/java/org/springframework/jdbc/core/namedparam/MapSqlParamet
 spring-jdbc/src/test/java/org/springframework/jdbc/core/support/SqlLobValueTests.java:101 default-charset
 spring-jdbc/src/test/java/org/springframework/jdbc/core/support/SqlLobValueTests.java:101 default-charset
 spring-jdbc/src/test/java/org/springframework/jdbc/core/support/SqlLobValueTests.java:116 default-charset
-spring-jdbc/src/test/java/org/springframework/jdbc/core/support/SqlLobValueTests.java:121 ignored-read-result
 spring-jdbc/src/test/java/org/springframework/jdbc/core/support/SqlLobValueTests.java:127 default-charset
 spring-jdbc/src/test/java/org/springframework/jdbc/core/support/SqlLobValueTests.java:129 default-charset
 spring-jdbc/src/test/java/org/springframework/jdbc/core/support/SqlLobValueTests.java:137 default-charset
@@ -3436,7 +3387,6 @@ spring-jdbc/src/test/java/org/springframework/jdbc/core/support/SqlLobValueTests
 spring-jdbc/src/test/java/org/springframework/jdbc/datasource/DataSourceJtaTransactionTests.java:199 cognitive-complexity
 spring-jdbc/src/test/java/org/springframework/jdbc/datasource/DataSourceJtaTransactionTests.java:451 cognitive-complexity
 spring-jdbc/src/test/java/org/springframework/jdbc/datasource/DataSourceJtaTransactionTests.java:567 interrupted-exception-swallowed
-spring-jdbc/src/test/java/org/springframework/jdbc/datasource/DataSourceTransactionManagerTests.java:1732 catch-throwable
 spring-jdbc/src/test/java/org/springframework/jdbc/datasource/DataSourceTransactionManagerTests.java:976 thread-sleep-in-test
 spring-jdbc/src/test/java/org/springframework/jdbc/datasource/DataSourceTransactionManagerTests.java:978 interrupted-exception-swallowed
 spring-jdbc/src/test/java/org/springframework/jdbc/datasource/DelegatingDataSourceTests.java:62 default-charset
@@ -3668,7 +3618,6 @@ spring-jms/src/test/java/org/springframework/jms/core/JmsTemplateObservationTest
 spring-jms/src/test/java/org/springframework/jms/core/JmsTemplateObservationTests.java:80 throw-generic-exception
 spring-jms/src/test/java/org/springframework/jms/core/JmsTemplateTests.java:502 cognitive-complexity
 spring-jms/src/test/java/org/springframework/jms/listener/DefaultMessageListenerContainerTests.java:121 test-without-assertion
-spring-jms/src/test/java/org/springframework/jms/listener/DefaultMessageListenerContainerTests.java:290 ignored-status-result
 spring-jms/src/test/java/org/springframework/jms/listener/MessageListenerContainerObservationTests.java:131 ignored-status-result
 spring-jms/src/test/java/org/springframework/jms/listener/MessageListenerContainerObservationTests.java:77 ignored-status-result
 spring-jms/src/test/java/org/springframework/jms/listener/SimpleMessageListenerContainerTests.java:189 catch-throwable
@@ -3679,8 +3628,6 @@ spring-jms/src/test/java/org/springframework/jms/listener/adapter/MessageListene
 spring-jms/src/test/java/org/springframework/jms/support/converter/JacksonJsonMessageConverterTests.java:84 default-charset
 spring-jms/src/test/java/org/springframework/jms/support/converter/MappingJackson2MessageConverterTests.java:88 default-charset
 spring-jms/src/test/java/org/springframework/jms/support/converter/SimpleMessageConverterTests.java:78 default-charset
-spring-messaging/src/main/java/org/springframework/messaging/converter/JacksonJsonMessageConverter.java:253 null-dereference
-spring-messaging/src/main/java/org/springframework/messaging/converter/MappingJackson2MessageConverter.java:343 null-dereference
 spring-messaging/src/main/java/org/springframework/messaging/converter/ProtobufMessageConverter.java:111 constructor-calls-overridable-method
 spring-messaging/src/main/java/org/springframework/messaging/handler/CompositeMessageCondition.java:119 collapsible-if
 spring-messaging/src/main/java/org/springframework/messaging/handler/annotation/MessageMappingReflectiveProcessor.java:105 complex-boolean-expression
@@ -3700,13 +3647,10 @@ spring-messaging/src/main/java/org/springframework/messaging/handler/invocation/
 spring-messaging/src/main/java/org/springframework/messaging/handler/invocation/AbstractMethodMessageHandler.java:257 catch-throwable
 spring-messaging/src/main/java/org/springframework/messaging/handler/invocation/AbstractMethodMessageHandler.java:578 catch-throwable
 spring-messaging/src/main/java/org/springframework/messaging/handler/invocation/AbstractMethodMessageHandler.java:606 catch-throwable
-spring-messaging/src/main/java/org/springframework/messaging/handler/invocation/AbstractMethodMessageHandler.java:665 inner-class-could-be-static
-spring-messaging/src/main/java/org/springframework/messaging/handler/invocation/AbstractMethodMessageHandler.java:683 inner-class-could-be-static
 spring-messaging/src/main/java/org/springframework/messaging/handler/invocation/InvocableHandlerMethod.java:128 cognitive-complexity
 spring-messaging/src/main/java/org/springframework/messaging/handler/invocation/reactive/AbstractEncoderMethodReturnValueHandler.java:138 class-name-comparison
 spring-messaging/src/main/java/org/springframework/messaging/handler/invocation/reactive/AbstractMethodMessageHandler.java:273 cognitive-complexity
 spring-messaging/src/main/java/org/springframework/messaging/handler/invocation/reactive/AbstractMethodMessageHandler.java:296 catch-throwable
-spring-messaging/src/main/java/org/springframework/messaging/handler/invocation/reactive/AbstractMethodMessageHandler.java:571 inner-class-could-be-static
 spring-messaging/src/main/java/org/springframework/messaging/handler/invocation/reactive/ChannelSendOperator.java:179 fixme-comment
 spring-messaging/src/main/java/org/springframework/messaging/handler/invocation/reactive/ChannelSendOperator.java:382 inner-class-could-be-static
 spring-messaging/src/main/java/org/springframework/messaging/handler/invocation/reactive/ChannelSendOperator.java:415 empty-method
@@ -3936,7 +3880,6 @@ spring-orm/src/main/java/org/springframework/orm/jpa/hibernate/SpringBeanContain
 spring-orm/src/main/java/org/springframework/orm/jpa/hibernate/SpringSessionContext.java:114 enum-compared-with-equals
 spring-orm/src/main/java/org/springframework/orm/jpa/hibernate/SpringSessionContext.java:95 cognitive-complexity
 spring-orm/src/main/java/org/springframework/orm/jpa/hibernate/SpringSessionSynchronization.java:144 empty-method
-spring-orm/src/main/java/org/springframework/orm/jpa/persistenceunit/ClassFileTransformerAdapter.java:60 boxed-reference-equality
 spring-orm/src/main/java/org/springframework/orm/jpa/persistenceunit/DefaultPersistenceUnitManager.java:466 cognitive-complexity
 spring-orm/src/main/java/org/springframework/orm/jpa/persistenceunit/DefaultPersistenceUnitManager.java:557 cognitive-complexity
 spring-orm/src/main/java/org/springframework/orm/jpa/persistenceunit/PersistenceManagedTypesBeanRegistrationAotProcessor.java:256 catch-return-null
@@ -4181,7 +4124,6 @@ spring-test/src/main/java/org/springframework/test/web/reactive/server/DefaultWe
 spring-test/src/main/java/org/springframework/test/web/reactive/server/DefaultWebTestClientBuilder.java:290 collapsible-if
 spring-test/src/main/java/org/springframework/test/web/reactive/server/ExchangeResult.java:101 too-many-parameters
 spring-test/src/main/java/org/springframework/test/web/reactive/server/JsonEncoderDecoder.java:129 private-constructor-class-not-final
-spring-test/src/main/java/org/springframework/test/web/reactive/server/WiretapConnector.java:192 boxed-reference-equality
 spring-test/src/main/java/org/springframework/test/web/reactive/server/assertj/ResponseCookieMapAssert.java:42 constructor-calls-overridable-method
 spring-test/src/main/java/org/springframework/test/web/reactive/server/assertj/ResponseCookieMapAssert.java:42 ignored-return-value
 spring-test/src/main/java/org/springframework/test/web/servlet/MockMvcBuilderSupport.java:52 too-many-parameters
@@ -4226,8 +4168,6 @@ spring-test/src/main/java/org/springframework/test/web/servlet/setup/StubWebAppl
 spring-test/src/main/java/org/springframework/test/web/support/AbstractJsonPathAssertions.java:193 useless-override
 spring-test/src/main/java/org/springframework/test/web/support/AbstractXpathAssertions.java:191 useless-override
 spring-test/src/test/java/org/springframework/mock/web/MockHttpServletRequestTests.java:101 test-without-assertion
-spring-test/src/test/java/org/springframework/mock/web/MockHttpServletRequestTests.java:103 ignored-read-result
-spring-test/src/test/java/org/springframework/mock/web/MockHttpServletRequestTests.java:107 ignored-read-result
 spring-test/src/test/java/org/springframework/mock/web/MockHttpServletRequestTests.java:125 default-charset
 spring-test/src/test/java/org/springframework/mock/web/MockHttpServletRequestTests.java:649 new-date-gettime
 spring-test/src/test/java/org/springframework/mock/web/MockHttpServletRequestTests.java:90 test-without-assertion
@@ -4283,8 +4223,6 @@ spring-test/src/test/java/org/springframework/test/context/jdbc/MergedSqlConfigT
 spring-test/src/test/java/org/springframework/test/context/junit/jupiter/AutowiredConfigurationErrorsIntegrationTests.java:158 inject-static-field
 spring-test/src/test/java/org/springframework/test/context/junit/jupiter/AutowiredConfigurationErrorsIntegrationTests.java:194 inject-static-field
 spring-test/src/test/java/org/springframework/test/context/junit/jupiter/AutowiredConfigurationErrorsIntegrationTests.java:287 test-without-assertion
-spring-test/src/test/java/org/springframework/test/context/junit/jupiter/defaultmethods/CatInterfaceDefaultMethodsTests.java:30 test-class-without-tests
-spring-test/src/test/java/org/springframework/test/context/junit/jupiter/defaultmethods/DogInterfaceDefaultMethodsTests.java:30 test-class-without-tests
 spring-test/src/test/java/org/springframework/test/context/junit/jupiter/event/ParallelApplicationEventsIntegrationTests.java:215 ignored-status-result
 spring-test/src/test/java/org/springframework/test/context/junit/jupiter/parallel/ParallelExecutionSpringExtensionTests.java:70 disabled-test-without-reason
 spring-test/src/test/java/org/springframework/test/context/junit/jupiter/transaction/TimedTransactionalSpringExtensionTests.java:104 thread-sleep-in-test
@@ -4727,10 +4665,8 @@ spring-web/src/main/java/org/springframework/http/client/reactive/HttpComponents
 spring-web/src/main/java/org/springframework/http/client/reactive/JettyResourceFactory.java:149 catch-throwable
 spring-web/src/main/java/org/springframework/http/client/reactive/JettyResourceFactory.java:157 catch-throwable
 spring-web/src/main/java/org/springframework/http/client/reactive/ReactorClientHttpResponse.java:174 complex-boolean-expression
-spring-web/src/main/java/org/springframework/http/codec/AbstractJacksonEncoder.java:123 null-dereference
 spring-web/src/main/java/org/springframework/http/codec/AbstractJacksonEncoder.java:138 cognitive-complexity
 spring-web/src/main/java/org/springframework/http/codec/AbstractJacksonEncoder.java:164 resource-leak
-spring-web/src/main/java/org/springframework/http/codec/AbstractJacksonEncoder.java:379 null-dereference
 spring-web/src/main/java/org/springframework/http/codec/AbstractJacksonEncoder.java:421 private-constructor-class-not-final
 spring-web/src/main/java/org/springframework/http/codec/CodecConfigurer.java:102 missing-override
 spring-web/src/main/java/org/springframework/http/codec/JacksonCodecSupport.java:121 static-field-written-from-instance-method
@@ -4743,10 +4679,8 @@ spring-web/src/main/java/org/springframework/http/codec/KotlinSerializationSuppo
 spring-web/src/main/java/org/springframework/http/codec/ServerSentEvent.java:130 complex-boolean-expression
 spring-web/src/main/java/org/springframework/http/codec/ServerSentEventHttpMessageReader.java:139 cognitive-complexity
 spring-web/src/main/java/org/springframework/http/codec/ServerSentEventHttpMessageReader.java:251 private-constructor-class-not-final
-spring-web/src/main/java/org/springframework/http/codec/json/AbstractJackson2Encoder.java:121 null-dereference
 spring-web/src/main/java/org/springframework/http/codec/json/AbstractJackson2Encoder.java:150 cognitive-complexity
 spring-web/src/main/java/org/springframework/http/codec/json/AbstractJackson2Encoder.java:176 resource-leak
-spring-web/src/main/java/org/springframework/http/codec/json/AbstractJackson2Encoder.java:405 null-dereference
 spring-web/src/main/java/org/springframework/http/codec/json/AbstractJackson2Encoder.java:447 private-constructor-class-not-final
 spring-web/src/main/java/org/springframework/http/codec/json/GsonDecoder.java:91 default-charset
 spring-web/src/main/java/org/springframework/http/codec/json/GsonEncoder.java:181 private-constructor-class-not-final
@@ -4763,7 +4697,6 @@ spring-web/src/main/java/org/springframework/http/codec/json/KotlinSerialization
 spring-web/src/main/java/org/springframework/http/codec/multipart/MultipartParser.java:426 complex-boolean-expression
 spring-web/src/main/java/org/springframework/http/codec/multipart/MultipartParser.java:529 cognitive-complexity
 spring-web/src/main/java/org/springframework/http/codec/multipart/MultipartParser.java:671 empty-method
-spring-web/src/main/java/org/springframework/http/codec/multipart/MultipartWriterSupport.java:152 resource-leak
 spring-web/src/main/java/org/springframework/http/codec/multipart/PartEventHttpMessageReader.java:184 cognitive-complexity
 spring-web/src/main/java/org/springframework/http/codec/multipart/PartGenerator.java:272 empty-method
 spring-web/src/main/java/org/springframework/http/codec/multipart/PartGenerator.java:744 empty-method
@@ -4800,9 +4733,7 @@ spring-web/src/main/java/org/springframework/http/converter/AbstractJacksonHttpM
 spring-web/src/main/java/org/springframework/http/converter/AbstractJacksonHttpMessageConverter.java:165 constructor-calls-overridable-method
 spring-web/src/main/java/org/springframework/http/converter/AbstractJacksonHttpMessageConverter.java:170 static-field-written-from-instance-method
 spring-web/src/main/java/org/springframework/http/converter/AbstractJacksonHttpMessageConverter.java:183 useless-override
-spring-web/src/main/java/org/springframework/http/converter/AbstractJacksonHttpMessageConverter.java:278 null-dereference
 spring-web/src/main/java/org/springframework/http/converter/AbstractJacksonHttpMessageConverter.java:321 nested-ternary
-spring-web/src/main/java/org/springframework/http/converter/AbstractJacksonHttpMessageConverter.java:502 null-dereference
 spring-web/src/main/java/org/springframework/http/converter/AbstractJacksonHttpMessageConverter.java:96 volatile-array-or-collection
 spring-web/src/main/java/org/springframework/http/converter/BufferedImageHttpMessageConverter.java:302 empty-method
 spring-web/src/main/java/org/springframework/http/converter/BufferedImageHttpMessageConverter.java:310 empty-method
@@ -4819,8 +4750,6 @@ spring-web/src/main/java/org/springframework/http/converter/StringHttpMessageCon
 spring-web/src/main/java/org/springframework/http/converter/json/AbstractJackson2HttpMessageConverter.java:117 constructor-calls-overridable-method
 spring-web/src/main/java/org/springframework/http/converter/json/AbstractJackson2HttpMessageConverter.java:122 constructor-calls-overridable-method
 spring-web/src/main/java/org/springframework/http/converter/json/AbstractJackson2HttpMessageConverter.java:127 useless-override
-spring-web/src/main/java/org/springframework/http/converter/json/AbstractJackson2HttpMessageConverter.java:279 null-dereference
-spring-web/src/main/java/org/springframework/http/converter/json/AbstractJackson2HttpMessageConverter.java:553 null-dereference
 spring-web/src/main/java/org/springframework/http/converter/json/AbstractJsonHttpMessageConverter.java:64 constructor-calls-overridable-method
 spring-web/src/main/java/org/springframework/http/converter/json/GsonBuilderUtils.java:57 private-constructor-class-not-final
 spring-web/src/main/java/org/springframework/http/converter/json/Jackson2ObjectMapperBuilder.java:698 cognitive-complexity
@@ -4840,7 +4769,6 @@ spring-web/src/main/java/org/springframework/http/converter/protobuf/ProtobufHtt
 spring-web/src/main/java/org/springframework/http/converter/xml/Jaxb2RootElementHttpMessageConverter.java:155 catch-null-pointer
 spring-web/src/main/java/org/springframework/http/converter/xml/Jaxb2RootElementHttpMessageConverter.java:177 cognitive-complexity
 spring-web/src/main/java/org/springframework/http/converter/xml/SourceHttpMessageConverter.java:233 catch-null-pointer
-spring-web/src/main/java/org/springframework/http/converter/xml/SourceHttpMessageConverter.java:322 resource-leak
 spring-web/src/main/java/org/springframework/http/converter/xml/SourceHttpMessageConverter.java:360 private-constructor-class-not-final
 spring-web/src/main/java/org/springframework/http/server/PathContainer.java:137 private-constructor-class-not-final
 spring-web/src/main/java/org/springframework/http/server/ServletRequestHeadersAdapter.java:256 private-constructor-class-not-final
@@ -4940,7 +4868,6 @@ spring-web/src/main/java/org/springframework/web/bind/support/DefaultDataBinderF
 spring-web/src/main/java/org/springframework/web/bind/support/DefaultDataBinderFactory.java:147 utility-class-instantiable
 spring-web/src/main/java/org/springframework/web/bind/support/DefaultDataBinderFactory.java:151 class-name-comparison
 spring-web/src/main/java/org/springframework/web/client/DefaultRestClient.java:128 too-many-parameters
-spring-web/src/main/java/org/springframework/web/client/DefaultRestClient.java:224 resource-leak
 spring-web/src/main/java/org/springframework/web/client/DefaultRestClient.java:236 catch-instanceof-dispatch
 spring-web/src/main/java/org/springframework/web/client/DefaultRestClient.java:543 cognitive-complexity
 spring-web/src/main/java/org/springframework/web/client/DefaultRestClient.java:599 close-in-finally-unguarded
@@ -4961,7 +4888,6 @@ spring-web/src/main/java/org/springframework/web/client/HttpClientErrorException
 spring-web/src/main/java/org/springframework/web/client/HttpMessageConverterExtractor.java:102 deep-nesting
 spring-web/src/main/java/org/springframework/web/client/HttpMessageConverterExtractor.java:112 deep-nesting
 spring-web/src/main/java/org/springframework/web/client/HttpMessageConverterExtractor.java:91 cognitive-complexity
-spring-web/src/main/java/org/springframework/web/client/HttpMessageConverterExtractor.java:92 resource-leak
 spring-web/src/main/java/org/springframework/web/client/HttpServerErrorException.java:157 exception-class-naming
 spring-web/src/main/java/org/springframework/web/client/HttpServerErrorException.java:175 exception-class-naming
 spring-web/src/main/java/org/springframework/web/client/HttpServerErrorException.java:193 exception-class-naming
@@ -4970,7 +4896,6 @@ spring-web/src/main/java/org/springframework/web/client/HttpServerErrorException
 spring-web/src/main/java/org/springframework/web/client/RestClient.java:531 missing-override
 spring-web/src/main/java/org/springframework/web/client/RestClientResponseException.java:59 mutable-exception
 spring-web/src/main/java/org/springframework/web/client/RestClientUtils.java:75 cognitive-complexity
-spring-web/src/main/java/org/springframework/web/client/RestClientUtils.java:79 resource-leak
 spring-web/src/main/java/org/springframework/web/client/RestClientUtils.java:89 deep-nesting
 spring-web/src/main/java/org/springframework/web/client/RestClientUtils.java:98 deep-nesting
 spring-web/src/main/java/org/springframework/web/client/RestTemplate.java:1051 private-constructor-class-not-final
@@ -4993,21 +4918,16 @@ spring-web/src/main/java/org/springframework/web/context/request/FacesRequestAtt
 spring-web/src/main/java/org/springframework/web/context/request/RequestContextHolder.java:145 private-constructor-class-not-final
 spring-web/src/main/java/org/springframework/web/context/request/RequestContextHolder.java:145 utility-class-instantiable
 spring-web/src/main/java/org/springframework/web/context/request/ServletRequestAttributes.java:279 deep-nesting
-spring-web/src/main/java/org/springframework/web/context/request/async/CallableInterceptorChain.java:103 catch-throwable
 spring-web/src/main/java/org/springframework/web/context/request/async/CallableInterceptorChain.java:116 catch-throwable
-spring-web/src/main/java/org/springframework/web/context/request/async/CallableInterceptorChain.java:133 catch-throwable
 spring-web/src/main/java/org/springframework/web/context/request/async/CallableInterceptorChain.java:145 catch-throwable
-spring-web/src/main/java/org/springframework/web/context/request/async/CallableInterceptorChain.java:76 catch-throwable
 spring-web/src/main/java/org/springframework/web/context/request/async/DeferredResult.java:222 catch-throwable
 spring-web/src/main/java/org/springframework/web/context/request/async/DeferredResult.java:301 private-constructor-class-not-final
 spring-web/src/main/java/org/springframework/web/context/request/async/DeferredResult.java:318 catch-throwable
 spring-web/src/main/java/org/springframework/web/context/request/async/DeferredResult.java:337 catch-throwable
 spring-web/src/main/java/org/springframework/web/context/request/async/DeferredResultInterceptorChain.java:110 catch-throwable
-spring-web/src/main/java/org/springframework/web/context/request/async/DeferredResultInterceptorChain.java:69 catch-throwable
 spring-web/src/main/java/org/springframework/web/context/request/async/StandardServletAsyncWebRequest.java:179 empty-method
 spring-web/src/main/java/org/springframework/web/context/request/async/StandardServletAsyncWebRequest.java:238 interrupted-exception-swallowed
 spring-web/src/main/java/org/springframework/web/context/request/async/WebAsyncManager.java:303 cognitive-complexity
-spring-web/src/main/java/org/springframework/web/context/request/async/WebAsyncManager.java:367 catch-throwable
 spring-web/src/main/java/org/springframework/web/context/request/async/WebAsyncManager.java:86 volatile-array-or-collection
 spring-web/src/main/java/org/springframework/web/context/support/AbstractRefreshableWebApplicationContext.java:87 constructor-calls-overridable-method
 spring-web/src/main/java/org/springframework/web/context/support/AnnotationConfigWebApplicationContext.java:234 cognitive-complexity
@@ -5027,8 +4947,6 @@ spring-web/src/main/java/org/springframework/web/context/support/WebApplicationC
 spring-web/src/main/java/org/springframework/web/context/support/WebApplicationContextUtils.java:399 private-constructor-class-not-final
 spring-web/src/main/java/org/springframework/web/context/support/WebApplicationContextUtils.java:399 utility-class-instantiable
 spring-web/src/main/java/org/springframework/web/context/support/XmlWebApplicationContext.java:106 empty-method
-spring-web/src/main/java/org/springframework/web/cors/CorsConfiguration.java:549 boxed-reference-equality
-spring-web/src/main/java/org/springframework/web/cors/CorsConfiguration.java:568 boxed-reference-equality
 spring-web/src/main/java/org/springframework/web/cors/CorsConfiguration.java:671 cognitive-complexity
 spring-web/src/main/java/org/springframework/web/cors/CorsConfiguration.java:724 cognitive-complexity
 spring-web/src/main/java/org/springframework/web/cors/CorsConfiguration.java:747 deep-nesting
@@ -5255,9 +5173,6 @@ spring-web/src/test/java/org/springframework/http/client/HttpComponentsClientHtt
 spring-web/src/test/java/org/springframework/http/client/InterceptingClientHttpRequestFactoryTests.java:188 default-charset
 spring-web/src/test/java/org/springframework/http/client/SimpleClientHttpRequestFactoryTests.java:107 close-in-finally-unguarded
 spring-web/src/test/java/org/springframework/http/client/SimpleClientHttpRequestFactoryTests.java:79 test-without-assertion
-spring-web/src/test/java/org/springframework/http/client/SimpleClientHttpResponseTests.java:71 ignored-read-result
-spring-web/src/test/java/org/springframework/http/client/SimpleClientHttpResponseTests.java:89 ignored-read-result
-spring-web/src/test/java/org/springframework/http/client/SubscriberInputStreamTests.java:226 catch-throwable
 spring-web/src/test/java/org/springframework/http/client/reactive/ClientHttpConnectorTests.java:226 resource-leak
 spring-web/src/test/java/org/springframework/http/codec/CancelWithoutDemandCodecTests.java:137 test-without-assertion
 spring-web/src/test/java/org/springframework/http/codec/CancelWithoutDemandCodecTests.java:151 test-without-assertion
@@ -5313,7 +5228,6 @@ spring-web/src/test/java/org/springframework/web/client/AbstractMockWebServerTes
 spring-web/src/test/java/org/springframework/web/client/AbstractMockWebServerTests.java:333 catch-throwable
 spring-web/src/test/java/org/springframework/web/client/DefaultRestClientTests.java:168 default-charset
 spring-web/src/test/java/org/springframework/web/client/ExtractingResponseErrorHandlerTests.java:143 test-without-assertion
-spring-web/src/test/java/org/springframework/web/client/ExtractingResponseErrorHandlerTests.java:162 mutable-exception
 spring-web/src/test/java/org/springframework/web/client/HttpMessageConverterExtractorTests.java:113 default-charset
 spring-web/src/test/java/org/springframework/web/client/HttpMessageConverterExtractorTests.java:135 default-charset
 spring-web/src/test/java/org/springframework/web/client/HttpMessageConverterExtractorTests.java:148 default-charset
@@ -5565,8 +5479,6 @@ spring-webflux/src/main/java/org/springframework/web/reactive/result/condition/R
 spring-webflux/src/main/java/org/springframework/web/reactive/result/method/AbstractHandlerMethodMapping.java:102 todo-comment
 spring-webflux/src/main/java/org/springframework/web/reactive/result/method/AbstractHandlerMethodMapping.java:183 catch-throwable
 spring-webflux/src/main/java/org/springframework/web/reactive/result/method/AbstractHandlerMethodMapping.java:319 cognitive-complexity
-spring-webflux/src/main/java/org/springframework/web/reactive/result/method/AbstractHandlerMethodMapping.java:623 inner-class-could-be-static
-spring-webflux/src/main/java/org/springframework/web/reactive/result/method/AbstractHandlerMethodMapping.java:649 inner-class-could-be-static
 spring-webflux/src/main/java/org/springframework/web/reactive/result/method/AbstractHandlerMethodMapping.java:664 private-constructor-class-not-final
 spring-webflux/src/main/java/org/springframework/web/reactive/result/method/AbstractHandlerMethodMapping.java:92 permissive-cors
 spring-webflux/src/main/java/org/springframework/web/reactive/result/method/InvocableHandlerMethod.java:181 cognitive-complexity
@@ -5620,7 +5532,6 @@ spring-webflux/src/main/java/org/springframework/web/reactive/result/view/ViewRe
 spring-webflux/src/main/java/org/springframework/web/reactive/result/view/ViewResolutionResultHandler.java:422 cognitive-complexity
 spring-webflux/src/main/java/org/springframework/web/reactive/result/view/ViewResolutionResultHandler.java:551 private-constructor-class-not-final
 spring-webflux/src/main/java/org/springframework/web/reactive/result/view/freemarker/FreeMarkerConfigurer.java:71 constructor-calls-overridable-method
-spring-webflux/src/main/java/org/springframework/web/reactive/result/view/freemarker/FreeMarkerView.java:315 resource-leak
 spring-webflux/src/main/java/org/springframework/web/reactive/result/view/freemarker/FreeMarkerView.java:335 optional-orelse-eager-call
 spring-webflux/src/main/java/org/springframework/web/reactive/result/view/freemarker/FreeMarkerViewResolver.java:40 constructor-calls-overridable-method
 spring-webflux/src/main/java/org/springframework/web/reactive/result/view/freemarker/FreeMarkerViewResolver.java:40 constructor-calls-overridable-method
@@ -5644,7 +5555,6 @@ spring-webflux/src/main/java/org/springframework/web/reactive/socket/adapter/Abs
 spring-webflux/src/main/java/org/springframework/web/reactive/socket/adapter/JettyWebSocketSession.java:138 empty-method
 spring-webflux/src/main/java/org/springframework/web/reactive/socket/adapter/ReactorNettyWebSocketSession.java:162 private-constructor-class-not-final
 spring-webflux/src/main/java/org/springframework/web/reactive/socket/adapter/TomcatWebSocketSession.java:53 constructor-calls-overridable-method
-spring-webflux/src/test/java/org/springframework/web/reactive/function/client/WebClientIntegrationTests.java:1363 ignored-read-result
 spring-webflux/src/test/java/org/springframework/web/reactive/function/client/WebClientIntegrationTests.java:1376 throw-generic-exception
 spring-webflux/src/test/java/org/springframework/web/reactive/function/client/support/WebClientAdapterTests.java:202 default-charset
 spring-webflux/src/test/java/org/springframework/web/reactive/function/client/support/WebClientProxyRegistryIntegrationTests.java:148 constructor-calls-overridable-method
@@ -5822,8 +5732,6 @@ spring-webmvc/src/main/java/org/springframework/web/servlet/handler/AbstractHand
 spring-webmvc/src/main/java/org/springframework/web/servlet/handler/AbstractHandlerMapping.java:552 enum-compared-with-equals
 spring-webmvc/src/main/java/org/springframework/web/servlet/handler/AbstractHandlerMethodMapping.java:254 catch-throwable
 spring-webmvc/src/main/java/org/springframework/web/servlet/handler/AbstractHandlerMethodMapping.java:393 cognitive-complexity
-spring-webmvc/src/main/java/org/springframework/web/servlet/handler/AbstractHandlerMethodMapping.java:768 inner-class-could-be-static
-spring-webmvc/src/main/java/org/springframework/web/servlet/handler/AbstractHandlerMethodMapping.java:794 inner-class-could-be-static
 spring-webmvc/src/main/java/org/springframework/web/servlet/handler/AbstractHandlerMethodMapping.java:809 private-constructor-class-not-final
 spring-webmvc/src/main/java/org/springframework/web/servlet/handler/AbstractHandlerMethodMapping.java:88 permissive-cors
 spring-webmvc/src/main/java/org/springframework/web/servlet/handler/AbstractUrlHandlerMapping.java:147 cognitive-complexity
@@ -5882,7 +5790,6 @@ spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotatio
 spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/AbstractMessageConverterMethodArgumentResolver.java:403 private-constructor-class-not-final
 spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/AbstractMessageConverterMethodProcessor.java:205 catch-throwable
 spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/AbstractMessageConverterMethodProcessor.java:227 catch-throwable
-spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/AbstractMessageConverterMethodProcessor.java:271 null-dereference
 spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/AbstractMessageConverterMethodProcessor.java:325 cognitive-complexity
 spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/AbstractMessageConverterMethodProcessor.java:459 deep-nesting
 spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/AbstractMessageConverterMethodProcessor.java:468 deep-nesting
@@ -5895,7 +5802,6 @@ spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotatio
 spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/HttpEntityMethodProcessor.java:209 collapsible-if
 spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/HttpEntityMethodProcessor.java:271 cognitive-complexity
 spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/HttpEntityMethodProcessor.java:282 deep-nesting
-spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/HttpHeadersReturnValueHandler.java:56 resource-leak
 spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/KotlinRequestBodyAdvice.java:63 collapsible-if
 spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/MatrixVariableMethodArgumentResolver.java:79 cognitive-complexity
 spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/MvcUriComponentsBuilder.java:759 cognitive-complexity
@@ -5907,7 +5813,6 @@ spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotatio
 spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/ResponseBodyEmitter.java:173 empty-method
 spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/ResponseBodyEmitter.java:425 private-constructor-class-not-final
 spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/ResponseBodyEmitter.java:443 private-constructor-class-not-final
-spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/ResponseBodyEmitterReturnValueHandler.java:192 resource-leak
 spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/ResponseBodyEmitterReturnValueHandler.java:443 default-charset
 spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/ResponseEntityExceptionHandler.java:139 cognitive-complexity
 spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/ResponseEntityReturnValueHandler.java:72 collapsible-if
@@ -5916,7 +5821,6 @@ spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotatio
 spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/ServletRequestMethodArgumentResolver.java:124 cognitive-complexity
 spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/ServletRequestMethodArgumentResolver.java:76 complex-boolean-expression
 spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/SseEmitter.java:196 private-constructor-class-not-final
-spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/method/annotation/StreamingResponseBodyReturnValueHandler.java:71 resource-leak
 spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/support/DefaultHandlerExceptionResolver.java:182 constructor-calls-overridable-method
 spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/support/DefaultHandlerExceptionResolver.java:183 constructor-calls-overridable-method
 spring-webmvc/src/main/java/org/springframework/web/servlet/mvc/support/DefaultHandlerExceptionResolver.java:188 cognitive-complexity
@@ -5929,7 +5833,6 @@ spring-webmvc/src/main/java/org/springframework/web/servlet/resource/EncodedReso
 spring-webmvc/src/main/java/org/springframework/web/servlet/resource/NoResourceFoundException.java:52 constructor-calls-overridable-method
 spring-webmvc/src/main/java/org/springframework/web/servlet/resource/ResourceHandlerUtils.java:186 cognitive-complexity
 spring-webmvc/src/main/java/org/springframework/web/servlet/resource/ResourceHttpRequestHandler.java:429 cognitive-complexity
-spring-webmvc/src/main/java/org/springframework/web/servlet/resource/ResourceHttpRequestHandler.java:556 resource-leak
 spring-webmvc/src/main/java/org/springframework/web/servlet/resource/ResourceUrlEncodingFilter.java:85 collapsible-if
 spring-webmvc/src/main/java/org/springframework/web/servlet/support/BindStatus.java:89 cognitive-complexity
 spring-webmvc/src/main/java/org/springframework/web/servlet/support/JspAwareRequestContext.java:112 private-constructor-class-not-final
@@ -6046,7 +5949,6 @@ spring-webmvc/src/test/java/org/springframework/web/servlet/config/MvcNamespaceT
 spring-webmvc/src/test/java/org/springframework/web/servlet/config/MvcNamespaceTests.java:1141 collection-method-returns-null
 spring-webmvc/src/test/java/org/springframework/web/servlet/function/DefaultAsyncServerResponseTests.java:80 thread-sleep-in-test
 spring-webmvc/src/test/java/org/springframework/web/servlet/function/DefaultAsyncServerResponseTests.java:84 throw-generic-exception
-spring-webmvc/src/test/java/org/springframework/web/servlet/function/ResourceHandlerFunctionTests.java:112 ignored-read-result
 spring-webmvc/src/test/java/org/springframework/web/servlet/function/support/HandlerFunctionAdapterTests.java:74 throw-generic-exception
 spring-webmvc/src/test/java/org/springframework/web/servlet/function/support/RouterFunctionMappingVersionTests.java:57 resource-leak
 spring-webmvc/src/test/java/org/springframework/web/servlet/handler/CorsAbstractHandlerMappingTests.java:218 constructor-calls-overridable-method

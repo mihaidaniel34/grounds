@@ -1,12 +1,9 @@
 dolphinscheduler-alert/dolphinscheduler-alert-plugins/dolphinscheduler-alert-aliyunVoice/src/main/java/org/apache/dolphinscheduler/plugin/alert/voice/VoiceAlertConstants.java:20 private-constructor-class-not-final
 dolphinscheduler-alert/dolphinscheduler-alert-plugins/dolphinscheduler-alert-api/src/main/java/org/apache/dolphinscheduler/alert/api/AlertChannelFactory.java:47 missing-override
-dolphinscheduler-alert/dolphinscheduler-alert-plugins/dolphinscheduler-alert-dingtalk/src/main/java/org/apache/dolphinscheduler/plugin/alert/dingtalk/DingTalkParamsConstants.java:31 hardcoded-credentials
-dolphinscheduler-alert/dolphinscheduler-alert-plugins/dolphinscheduler-alert-dingtalk/src/main/java/org/apache/dolphinscheduler/plugin/alert/dingtalk/DingTalkParamsConstants.java:58 hardcoded-credentials
 dolphinscheduler-alert/dolphinscheduler-alert-plugins/dolphinscheduler-alert-email/src/main/java/org/apache/dolphinscheduler/plugin/alert/email/ExcelUtils.java:56 cognitive-complexity
 dolphinscheduler-alert/dolphinscheduler-alert-plugins/dolphinscheduler-alert-email/src/main/java/org/apache/dolphinscheduler/plugin/alert/email/MailSender.java:155 cognitive-complexity
 dolphinscheduler-alert/dolphinscheduler-alert-plugins/dolphinscheduler-alert-email/src/main/java/org/apache/dolphinscheduler/plugin/alert/email/MailSender.java:341 ignored-status-result
 dolphinscheduler-alert/dolphinscheduler-alert-plugins/dolphinscheduler-alert-email/src/test/java/org/apache/dolphinscheduler/plugin/alert/email/ExcelUtilsTest.java:84 ignored-status-result
-dolphinscheduler-alert/dolphinscheduler-alert-plugins/dolphinscheduler-alert-feishu/src/main/java/org/apache/dolphinscheduler/plugin/alert/feishu/FeiShuParamsConstants.java:39 hardcoded-credentials
 dolphinscheduler-alert/dolphinscheduler-alert-plugins/dolphinscheduler-alert-feishu/src/main/java/org/apache/dolphinscheduler/plugin/alert/feishu/FeiShuSender.java:125 stringbuilder-append-concat
 dolphinscheduler-alert/dolphinscheduler-alert-plugins/dolphinscheduler-alert-http/src/main/java/org/apache/dolphinscheduler/plugin/alert/http/HttpSender.java:107 throw-generic-exception
 dolphinscheduler-alert/dolphinscheduler-alert-plugins/dolphinscheduler-alert-http/src/main/java/org/apache/dolphinscheduler/plugin/alert/http/HttpSender.java:142 throw-generic-exception
@@ -20,7 +17,6 @@ dolphinscheduler-alert/dolphinscheduler-alert-plugins/dolphinscheduler-alert-scr
 dolphinscheduler-alert/dolphinscheduler-alert-plugins/dolphinscheduler-alert-script/src/main/java/org/apache/dolphinscheduler/plugin/alert/script/StreamGobbler.java:52 exception-message-only-logged
 dolphinscheduler-alert/dolphinscheduler-alert-plugins/dolphinscheduler-alert-script/src/main/java/org/apache/dolphinscheduler/plugin/alert/script/StreamGobbler.java:58 exception-message-only-logged
 dolphinscheduler-alert/dolphinscheduler-alert-plugins/dolphinscheduler-alert-slack/src/test/java/org/apache/dolphinscheduler/plugin/alert/slack/SlackAlertChannelFactoryTest.java:46 assert-true-with-comparison
-dolphinscheduler-alert/dolphinscheduler-alert-plugins/dolphinscheduler-alert-telegram/src/main/java/org/apache/dolphinscheduler/plugin/alert/telegram/TelegramParamsConstants.java:46 hardcoded-credentials
 dolphinscheduler-alert/dolphinscheduler-alert-plugins/dolphinscheduler-alert-telegram/src/main/java/org/apache/dolphinscheduler/plugin/alert/telegram/TelegramSender.java:107 exception-message-only-logged
 dolphinscheduler-alert/dolphinscheduler-alert-plugins/dolphinscheduler-alert-telegram/src/test/java/org/apache/dolphinscheduler/plugin/alert/telegram/TelegramAlertChannelFactoryTest.java:46 assert-true-with-comparison
 dolphinscheduler-alert/dolphinscheduler-alert-plugins/dolphinscheduler-alert-wechat/src/main/java/org/apache/dolphinscheduler/plugin/alert/wechat/WeChatSender.java:117 throw-generic-exception
@@ -239,11 +235,9 @@ dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/security/impl
 dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/security/impl/AbstractAuthenticator.java:53 field-injection
 dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/security/impl/AbstractAuthenticator.java:56 field-injection
 dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/security/impl/ldap/LdapAuthenticator.java:30 field-injection
-dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/security/impl/ldap/LdapAuthenticator.java:30 injection-in-non-bean
 dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/security/impl/oidc/OidcAuthenticator.java:112 default-charset
 dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/security/impl/oidc/OidcAuthenticator.java:112 default-charset
 dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/security/impl/sso/CasdoorAuthenticator.java:41 field-injection
-dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/security/impl/sso/CasdoorAuthenticator.java:41 injection-in-non-bean
 dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/security/impl/sso/CasdoorAuthenticator.java:43 field-injection
 dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/security/impl/sso/CasdoorAuthenticator.java:62 default-charset
 dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/security/impl/sso/CasdoorAuthenticator.java:62 default-charset
@@ -270,8 +264,6 @@ dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/service/impl/
 dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/service/impl/AlertGroupServiceImpl.java:143 unused-local-variable
 dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/service/impl/AlertGroupServiceImpl.java:59 field-injection
 dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/service/impl/AlertGroupServiceImpl.java:70 enum-compared-with-equals
-dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/service/impl/AlertPluginInstanceServiceImpl.java:110 boxed-reference-equality
-dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/service/impl/AlertPluginInstanceServiceImpl.java:200 boxed-reference-equality
 dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/service/impl/AlertPluginInstanceServiceImpl.java:241 fixme-comment
 dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/service/impl/AlertPluginInstanceServiceImpl.java:247 todo-comment
 dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/service/impl/AlertPluginInstanceServiceImpl.java:74 field-injection
@@ -371,7 +363,6 @@ dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/service/impl/
 dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/service/impl/ProjectWorkerGroupRelationServiceImpl.java:77 field-injection
 dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/service/impl/ProjectWorkerGroupRelationServiceImpl.java:81 cognitive-complexity
 dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/service/impl/QueueServiceImpl.java:123 enum-compared-with-equals
-dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/service/impl/QueueServiceImpl.java:292 boxed-reference-equality
 dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/service/impl/QueueServiceImpl.java:59 field-injection
 dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/service/impl/QueueServiceImpl.java:62 field-injection
 dolphinscheduler-api/src/main/java/org/apache/dolphinscheduler/api/service/impl/QueueServiceImpl.java:65 field-injection
@@ -943,9 +934,7 @@ dolphinscheduler-dao/src/test/java/org/apache/dolphinscheduler/dao/mapper/Projec
 dolphinscheduler-dao/src/test/java/org/apache/dolphinscheduler/dao/mapper/ProjectWorkerGroupMapperTest.java:72 assertion-argument-order
 dolphinscheduler-dao/src/test/java/org/apache/dolphinscheduler/dao/mapper/ProjectWorkerGroupMapperTest.java:80 unused-local-variable
 dolphinscheduler-dao/src/test/java/org/apache/dolphinscheduler/dao/mapper/QueueMapperTest.java:124 assert-true-with-comparison
-dolphinscheduler-dao/src/test/java/org/apache/dolphinscheduler/dao/mapper/QueueMapperTest.java:124 boxed-reference-equality
 dolphinscheduler-dao/src/test/java/org/apache/dolphinscheduler/dao/mapper/QueueMapperTest.java:125 assert-true-with-comparison
-dolphinscheduler-dao/src/test/java/org/apache/dolphinscheduler/dao/mapper/QueueMapperTest.java:125 boxed-reference-equality
 dolphinscheduler-dao/src/test/java/org/apache/dolphinscheduler/dao/mapper/QueueMapperTest.java:83 unused-local-variable
 dolphinscheduler-dao/src/test/java/org/apache/dolphinscheduler/dao/mapper/ScheduleMapperTest.java:100 unused-local-variable
 dolphinscheduler-dao/src/test/java/org/apache/dolphinscheduler/dao/mapper/ScheduleMapperTest.java:215 unused-local-variable
@@ -1399,7 +1388,6 @@ dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/
 dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/utils/SwitchTaskUtils.java:84 replaceall-with-literal
 dolphinscheduler-master/src/main/java/org/apache/dolphinscheduler/server/master/utils/TaskGroupUtils.java:22 utility-class-instantiable
 dolphinscheduler-master/src/test/java/org/apache/dolphinscheduler/server/master/ParamsTest.java:40 test-without-assertion
-dolphinscheduler-master/src/test/java/org/apache/dolphinscheduler/server/master/cluster/loadbalancer/BaseWorkerLoadBalancerTest.java:29 test-class-without-tests
 dolphinscheduler-master/src/test/java/org/apache/dolphinscheduler/server/master/integration/cases/WorkflowInstancePauseTestCase.java:325 assertj-assertion-without-check
 dolphinscheduler-master/src/test/java/org/apache/dolphinscheduler/server/master/integration/cases/WorkflowInstanceRecoverPauseTestCase.java:80 assertj-assertion-without-check
 dolphinscheduler-master/src/test/java/org/apache/dolphinscheduler/server/master/integration/cases/WorkflowInstanceStopTestCase.java:116 assertj-assertion-without-check
@@ -1991,7 +1979,6 @@ dolphinscheduler-tools/src/main/java/org/apache/dolphinscheduler/tools/datasourc
 dolphinscheduler-tools/src/main/java/org/apache/dolphinscheduler/tools/datasource/upgrader/UpgradeDao.java:123 throw-generic-exception
 dolphinscheduler-tools/src/main/java/org/apache/dolphinscheduler/tools/datasource/upgrader/UpgradeDao.java:142 throw-generic-exception
 dolphinscheduler-tools/src/main/java/org/apache/dolphinscheduler/tools/datasource/upgrader/UpgradeDao.java:146 throw-generic-exception
-dolphinscheduler-tools/src/main/java/org/apache/dolphinscheduler/tools/datasource/upgrader/UpgradeDao.java:164 sql-injection
 dolphinscheduler-tools/src/main/java/org/apache/dolphinscheduler/tools/datasource/upgrader/UpgradeDao.java:170 throw-generic-exception
 dolphinscheduler-tools/src/main/java/org/apache/dolphinscheduler/tools/datasource/upgrader/UpgradeDao.java:46 field-injection
 dolphinscheduler-tools/src/main/java/org/apache/dolphinscheduler/tools/datasource/upgrader/UpgradeDao.java:49 field-injection
