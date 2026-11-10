@@ -13,6 +13,13 @@ thread_local! {
     /// (class, field) constant initializers being evaluated on this thread
     static CONSTANTS_IN_PROGRESS: std::cell::RefCell<Vec<(Name, Name)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
+
+/// Longest qualified type name resolved, in segments. Resolution tries every
+/// split into package and nested classes, which is quadratic in the length:
+/// a file cut off in `@a.x.x.x...` (a million segments) never finished. No
+/// name in the corpus has 21.
+const MAX_NAME_SEGMENTS: usize = 256;
+
 use dashmap::DashMap;
 use grounds_classfile::ClassContainer;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -67,6 +74,9 @@ pub struct Classpath {
     jdk_home: Option<std::path::PathBuf>,
     /// The classes and packages of other releases' APIs, read from ct.sym when asked.
     other_releases: DashMap<u32, Option<Arc<OtherRelease>>>,
+    /// Directory entries too large to be directories of classes
+    /// (`grounds_classfile::DIR_LIMIT`); nothing was read from them.
+    pub oversized: Vec<std::path::PathBuf>,
 }
 
 impl std::fmt::Debug for Classpath {
@@ -77,18 +87,29 @@ impl std::fmt::Debug for Classpath {
 
 impl Classpath {
     pub fn empty() -> Classpath {
-        Classpath { containers: Vec::new(), names: FxHashMap::default(), packages: FxHashSet::default(), cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false, jdk_packages: FxHashSet::default(), api_packages: FxHashSet::default(), jar_packages: FxHashSet::default(), jdk_home: None, other_releases: DashMap::new() }
+        Classpath { containers: Vec::new(), names: FxHashMap::default(), packages: FxHashSet::default(), cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false, jdk_packages: FxHashSet::default(), api_packages: FxHashSet::default(), jar_packages: FxHashSet::default(), jdk_home: None, other_releases: DashMap::new(), oversized: Vec::new() }
     }
 
     /// Build from containers in priority order (first definition wins).
     pub fn from_containers(containers: Vec<ClassContainer>) -> Classpath {
-        let lists: Vec<Vec<String>> = {
+        Self::from_containers_within(containers, grounds_classfile::DIR_LIMIT)
+    }
+
+    fn from_containers_within(containers: Vec<ClassContainer>, dir_limit: usize) -> Classpath {
+        let lists: Vec<Option<Vec<String>>> = {
             use rayon::prelude::*;
-            containers.par_iter().map(|c| c.class_names()).collect()
+            containers.par_iter().map(|c| c.class_names_within(dir_limit)).collect()
         };
         let mut names = FxHashMap::default();
         let mut packages = FxHashSet::default();
+        let mut oversized: Vec<(u32, std::path::PathBuf)> = Vec::new();
         for (i, list) in lists.into_iter().enumerate() {
+            let Some(list) = list else {
+                if let ClassContainer::Dir(d) = &containers[i] {
+                    oversized.push((i as u32, d.clone()));
+                }
+                continue;
+            };
             for n in list {
                 let b = binary::internal_to_binary(&n);
                 if let Some(pos) = b.rfind('.') {
@@ -105,10 +126,14 @@ impl Classpath {
                         }
                     }
                 }
-                names.entry(Arc::from(b.as_str())).or_insert(i as u32);
+                // a directory that was not listed still comes first for a
+                // class it holds: a later entry's copy is not the one in use
+                let from = oversized.iter().find(|(_, d)| d.join(format!("{n}.class")).is_file()).map_or(i as u32, |(j, _)| *j);
+                names.entry(Arc::from(b.as_str())).or_insert(from);
             }
         }
-        Classpath { containers, names, packages, cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false, jdk_packages: FxHashSet::default(), api_packages: FxHashSet::default(), jar_packages: FxHashSet::default(), jdk_home: None, other_releases: DashMap::new() }
+        let oversized = oversized.into_iter().map(|(_, d)| d).collect();
+        Classpath { containers, names, packages, cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false, jdk_packages: FxHashSet::default(), api_packages: FxHashSet::default(), jar_packages: FxHashSet::default(), jdk_home: None, other_releases: DashMap::new(), oversized }
     }
 
     /// JDK classes for a release (see `ClassContainer::open_jdk`), followed by the given jars/dirs.
@@ -1104,6 +1129,9 @@ impl Index {
 
     /// Resolve a (possibly qualified) type name to a binary class name.
     pub fn resolve_type_name(&self, segs: &[&str], scope: &Scope) -> Option<Name> {
+        if segs.len() > MAX_NAME_SEGMENTS {
+            return None;
+        }
         let first = *segs.first()?;
         if let Some(n) = self.resolve_simple_type(first, scope) {
             let mut cur = n;
@@ -1125,6 +1153,9 @@ impl Index {
             return Some(Arc::from(dotted));
         }
         let segs: Vec<&str> = dotted.split('.').collect();
+        if segs.len() > MAX_NAME_SEGMENTS {
+            return None;
+        }
         for i in (1..segs.len()).rev() {
             let pkg = segs[..i].join(".");
             let top = format!("{}.{}", pkg, segs[i]);
@@ -1629,5 +1660,28 @@ mod resolving_tests {
         assert_eq!(module_dir("/r/src/mdo/java/C.java"), "/r");
         assert_eq!(module_dir("/r/a/src/C.java"), "/r/a");
         assert_eq!(module_dir("C.java"), "");
+    }
+}
+
+#[cfg(test)]
+mod oversized_tests {
+    use super::*;
+    #[test]
+    fn a_directory_too_large_to_list_still_comes_before_later_entries() {
+        // `entries = ["cp", "old"]` with `cp` over the limit: its classes are not
+        // listed, but `old`'s copy of a class `cp` holds is not the one in use
+        let dir = std::env::temp_dir().join(format!("grounds-index-oversized-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for f in ["cp/lib/Lib.class", "cp/lib/OnlyHere.class", "cp/a.txt", "cp/b.txt", "old/lib/Lib.class", "old/lib/Other.class"] {
+            std::fs::create_dir_all(dir.join(f).parent().unwrap()).unwrap();
+            std::fs::write(dir.join(f), b"").unwrap();
+        }
+        let containers = vec![ClassContainer::open_dir(&dir.join("cp")), ClassContainer::open_dir(&dir.join("old"))];
+        let cp = Classpath::from_containers_within(containers, 4);
+        assert_eq!(cp.oversized, [dir.join("cp")]);
+        assert_eq!(cp.names.get("lib.Lib"), Some(&0), "the unlisted directory's copy");
+        assert_eq!(cp.names.get("lib.Other"), Some(&1));
+        assert!(!cp.contains("lib.OnlyHere"), "unknown, not missing: nothing lists it");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

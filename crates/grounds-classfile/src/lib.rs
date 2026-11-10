@@ -32,6 +32,12 @@ impl std::fmt::Debug for ClassContainer {
     }
 }
 
+/// Files and directories a directory of classes may hold. More than this and
+/// the entry is something else (`/`, a home directory, a jar cache): listing
+/// it takes minutes and finds no packages. It is then not read at all, since
+/// the part listed before the limit would depend on the file system's order.
+pub const DIR_LIMIT: usize = 200_000;
+
 /// Release character used by ct.sym directory names: 8, 9, A=10, B=11, ...
 pub fn ct_sym_release_char(release: u32) -> char {
     match release {
@@ -97,10 +103,16 @@ impl ClassContainer {
     }
 
     /// All internal class names in this container (excluding module-info and
-    /// package-info).
+    /// package-info). A directory over [`DIR_LIMIT`] has none.
     pub fn class_names(&self) -> Vec<String> {
+        self.class_names_within(DIR_LIMIT).unwrap_or_default()
+    }
+
+    /// As [`ClassContainer::class_names`]; None for a directory with more
+    /// than `limit` files and directories below it.
+    pub fn class_names_within(&self, limit: usize) -> Option<Vec<String>> {
         let keep = |n: &str| !n.ends_with("module-info") && !n.ends_with("package-info");
-        match self {
+        Some(match self {
             ClassContainer::Jar(z) => z
                 .entries()
                 .iter()
@@ -113,14 +125,45 @@ impl ClassContainer {
             ClassContainer::JImage(j) => j.class_names().filter(|n| keep(n)).map(str::to_string).collect(),
             ClassContainer::Dir(root) => {
                 let mut out = Vec::new();
-                let mut stack = vec![root.clone()];
-                while let Some(d) = stack.pop() {
+                // Every directory is listed under each path that leads to
+                // it, links included, as a compiler finds it (build tools
+                // link output directories). Only a directory that is already
+                // above the path it would be listed under is not entered:
+                // `up -> ..`, or `/proc/self/root` under `/`, never ended.
+                struct Above {
+                    real: PathBuf,
+                    up: Option<std::rc::Rc<Above>>,
+                }
+                let within = |real: &Path, mut above: Option<&std::rc::Rc<Above>>| {
+                    while let Some(a) = above {
+                        if a.real == real {
+                            return true;
+                        }
+                        above = a.up.as_ref();
+                    }
+                    false
+                };
+                let top = std::rc::Rc::new(Above { real: root.canonicalize().unwrap_or_else(|_| root.clone()), up: None });
+                let mut todo = vec![(root.clone(), top)];
+                let mut seen = 0usize;
+                while let Some((d, above)) = todo.pop() {
                     let Ok(rd) = std::fs::read_dir(&d) else { continue };
                     for e in rd.flatten() {
+                        seen += 1;
+                        if seen > limit {
+                            return None;
+                        }
                         let p = e.path();
-                        if p.is_dir() {
-                            stack.push(p);
-                        } else if p.extension().is_some_and(|x| x == "class") {
+                        // the entry's own type costs no call; only a link is followed
+                        let Ok(kind) = e.file_type() else { continue };
+                        let link = kind.is_symlink();
+                        if kind.is_dir() || (link && p.is_dir()) {
+                            let real = if link { p.canonicalize().ok() } else { Some(above.real.join(e.file_name())) };
+                            if let Some(real) = real.filter(|r| !within(r, Some(&above))) {
+                                todo.push((p, std::rc::Rc::new(Above { real, up: Some(above.clone()) })));
+                            }
+                        // a regular file: a pipe named `A.class` would block the read
+                        } else if (kind.is_file() || (link && p.is_file())) && p.extension().is_some_and(|x| x == "class") {
                             if let Ok(rel) = p.strip_prefix(root) {
                                 let s = rel.with_extension("").to_string_lossy().replace('\\', "/");
                                 if keep(&s) {
@@ -132,7 +175,7 @@ impl ClassContainer {
                 }
                 out
             }
-        }
+        })
     }
 
     pub fn read_class_bytes(&self, internal_name: &str) -> Option<Vec<u8>> {
@@ -236,6 +279,64 @@ pub fn find_java_home() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_class_directory_with_a_symlink_loop_is_listed_once() {
+        // found by scripts/fuzz_robust.py: `[classpath] entries = ["/"]` never ended
+        let dir = std::env::temp_dir().join(format!("grounds-classdir-loop-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("p")).unwrap();
+        std::fs::write(dir.join("p/A.class"), b"").unwrap();
+        std::os::unix::fs::symlink("..", dir.join("p/up")).unwrap();
+        std::os::unix::fs::symlink(".", dir.join("self")).unwrap();
+        // aliases of a package directory are packages too, whichever read_dir lists first
+        for alias in ["a", "z"] {
+            std::os::unix::fs::symlink("p", dir.join(alias)).unwrap();
+        }
+        // two links that lead to each other
+        std::fs::create_dir_all(dir.join("q/r")).unwrap();
+        std::os::unix::fs::symlink("../q", dir.join("p/toq")).unwrap();
+        std::os::unix::fs::symlink("../../p", dir.join("q/r/top")).unwrap();
+        let mut names = super::ClassContainer::open_dir(&dir).class_names();
+        names.sort();
+        // (`q/r/top` is `p` again, and its `toq` would be `q` inside `q`)
+        assert_eq!(names, ["a/A", "p/A", "q/r/top/A", "z/A"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_package_linked_to_a_directory_inside_the_class_directory_is_listed() {
+        // a store beside the links into it; the walk used to list each real directory once, under the store's name
+        let dir = std::env::temp_dir().join(format!("grounds-classdir-store-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".store/lib")).unwrap();
+        std::fs::write(dir.join(".store/lib/Lib.class"), b"").unwrap();
+        std::os::unix::fs::symlink(".store/lib", dir.join("lib")).unwrap();
+        // not a file: reading it would wait for a writer
+        let fifo = std::process::Command::new("mkfifo").arg(dir.join(".store/lib/Pipe.class")).status();
+        let mut names = super::ClassContainer::open_dir(&dir).class_names();
+        names.sort();
+        assert_eq!(names, [".store/lib/Lib", "lib/Lib"], "{fifo:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_directory_over_the_limit_is_not_listed() {
+        // found by scripts/fuzz_robust.py: `[classpath] entries = ["/"]` listed the whole file system
+        let dir = std::env::temp_dir().join(format!("grounds-classdir-limit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("p/q")).unwrap();
+        for f in ["p/A.class", "p/B.class", "p/q/C.class", "p/notes.txt"] {
+            std::fs::write(dir.join(f), b"").unwrap();
+        }
+        let c = super::ClassContainer::open_dir(&dir);
+        // p, q and four files
+        let mut names = c.class_names_within(6).unwrap();
+        names.sort();
+        assert_eq!(names, vec!["p/A".to_string(), "p/B".to_string(), "p/q/C".to_string()]);
+        assert_eq!(c.class_names_within(5), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::*;
 
     #[test]

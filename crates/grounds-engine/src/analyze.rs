@@ -146,37 +146,83 @@ pub fn analyze_text(project: &Project, rules: &RuleSet, options: &RuleOptions, p
     let diags = rules.check(&fm, &info, Some(&project.di), options);
     let rel = path.strip_prefix(&project.workspace.root).unwrap_or(path).to_string_lossy().to_string();
     let mut out: Vec<Finding> = Vec::with_capacity(diags.len());
-    let mut seen_fp: rustc_hash::FxHashMap<String, u32> = Default::default();
+    let mut fps = Fingerprints::default();
     for d in diags {
-        out.push(to_finding(project, &pf, &fm, &rel, d, &mut seen_fp));
+        out.push(to_finding(project, &pf, &fm, &rel, d, &mut fps));
     }
     out
 }
 
-fn to_finding(project: &Project, pf: &ParsedFile, fm: &FileModel, rel: &str, d: Diagnostic, seen: &mut rustc_hash::FxHashMap<String, u32>) -> Finding {
-    let s = pf.lines.line_col(&pf.text, d.range.start);
-    let e = pf.lines.line_col(&pf.text, d.range.end);
-    let line_text = pf.lines.line_text(&pf.text, (s.line - 1) as usize).trim().to_string();
+/// Fingerprints of a file's findings, numbered per identical key. A key is
+/// `rule|path|member|line text`; the line text is hashed once per line and
+/// the hash state of a key is kept, so a finding costs the same on a line of
+/// a million characters (a generated table, a file cut mid-edit) as on a
+/// short one: before, 100,000 stray semicolons on one line took a minute.
+#[derive(Default)]
+struct Fingerprints<'t> {
+    /// line (0-based) -> trimmed text, whole line ASCII?, hash of the trimmed text
+    lines: rustc_hash::FxHashMap<u32, (&'t str, bool, u128)>,
+    /// (legacy?, rule, member, line text hash) -> findings so far
+    seen: rustc_hash::FxHashMap<(bool, &'static str, String, u128), u32>,
+    /// (legacy?, rule, member, line) -> xxh3 state after the key
+    states: rustc_hash::FxHashMap<(bool, &'static str, String, u32), xxhash_rust::xxh3::Xxh3Default>,
+}
+
+impl<'t> Fingerprints<'t> {
+    fn line(&mut self, pf: &'t ParsedFile, line0: u32) -> (&'t str, bool, u128) {
+        *self.lines.entry(line0).or_insert_with(|| {
+            let raw = pf.lines.line_text(&pf.text, line0 as usize);
+            let t = raw.trim();
+            (t, raw.is_ascii(), xxhash_rust::xxh3::xxh3_128(t.as_bytes()))
+        })
+    }
+
+    /// `xxh3_64("{rule}|{rel}|{member}|{line text}|{n}")` with `n` counting
+    /// findings of the same key.
+    fn next(&mut self, legacy: bool, rule: &'static str, rel: &str, member: &str, line0: u32, line: (&str, bool, u128)) -> String {
+        let n = self.seen.entry((legacy, rule, member.to_string(), line.2)).or_insert(0);
+        *n += 1;
+        let n = *n;
+        let state = self.states.entry((legacy, rule, member.to_string(), line0)).or_insert_with(|| {
+            let mut h = xxhash_rust::xxh3::Xxh3Default::new();
+            for part in [rule, "|", rel, "|", member, "|", line.0] {
+                h.update(part.as_bytes());
+            }
+            h
+        });
+        let mut h = state.clone();
+        h.update(format!("|{n}").as_bytes());
+        format!("{:016x}", h.digest())
+    }
+}
+
+fn to_finding<'t>(project: &Project, pf: &'t ParsedFile, fm: &FileModel, rel: &str, d: Diagnostic, fps: &mut Fingerprints<'t>) -> Finding {
+    let line_col = |fps: &mut Fingerprints<'t>, offset: u32| {
+        let line0 = pf.lines.line_of(offset) as u32;
+        let start = pf.lines.line_start(line0 as usize) as usize;
+        let end = (offset as usize).min(pf.text.len());
+        // a column counts characters: on an ASCII line, bytes
+        if fps.line(pf, line0).1 && end >= start && end <= start + pf.lines.line_text(&pf.text, line0 as usize).len() {
+            grounds_syntax::LineCol { line: line0 + 1, col: (end - start) as u32 + 1 }
+        } else {
+            pf.lines.line_col(&pf.text, offset)
+        }
+    };
+    let s = line_col(fps, d.range.start);
+    let e = line_col(fps, d.range.end);
+    let line0 = s.line - 1;
+    let line = fps.line(pf, line0);
     // enclosing member for fingerprint stability: every enclosing type and
     // the member with its parameter types (`Outer.Inner.f(String,int)`), so
     // the same statement in another class or overload is a different finding
     let node = pf.root().descendant_for_byte_range(d.range.start as usize, d.range.start as usize);
     let member = node.map(|n| member_path(n, fm.src, false)).unwrap_or_default();
-    let base = format!("{}|{}|{}|{}", d.rule, rel, member, line_text);
-    let n = seen.entry(base.clone()).or_insert(0);
-    *n += 1;
-    let fp = format!("{:016x}", xxhash_rust::xxh3::xxh3_64(format!("{base}|{n}").as_bytes()));
+    let fp = fps.next(false, d.rule, rel, &member, line0, line);
     // the legacy fingerprint numbers repeated findings by its own key, as
     // 0.0.5 did (two overloads that differ only in a qualified varargs type
     // shared one legacy member path)
     let legacy_member = node.map(|n| member_path(n, fm.src, true)).unwrap_or_default();
-    let legacy_base = format!("{}|{}|{}|{}", d.rule, rel, legacy_member, line_text);
-    let ln = {
-        let e = seen.entry(format!("legacy|{legacy_base}")).or_insert(0);
-        *e += 1;
-        *e
-    };
-    let legacy_fp = format!("{:016x}", xxhash_rust::xxh3::xxh3_64(format!("{legacy_base}|{ln}").as_bytes()));
+    let legacy_fp = fps.next(true, d.rule, rel, &legacy_member, line0, line);
     let legacy_fingerprint = (legacy_fp != fp).then_some(legacy_fp);
     let category = grounds_rules::meta_of(d.rule).map(|m| m.category.as_str()).unwrap_or("bug");
     Finding {
@@ -202,7 +248,7 @@ pub fn analyze_files(project: &Project, rules: &RuleSet, options: &RuleOptions, 
     let mut all: Vec<Finding> = files
         .par_iter()
         .filter(|p| classify(p) != SourceKind::Generated)
-        .flat_map_iter(|p| match std::fs::read_to_string(p) {
+        .flat_map_iter(|p| match crate::fsutil::read_text(p) {
             Ok(text) => analyze_text(project, rules, options, p, &text),
             Err(_) => Vec::new(),
         })
@@ -250,8 +296,8 @@ pub fn shared_key(p: &Path) -> Arc<str> {
 /// type came from a child-kind search that missed qualified types.
 fn member_path(n: grounds_syntax::Node, src: &str, legacy: bool) -> String {
     let mut parts: Vec<String> = Vec::new();
-    let mut cur = Some(n);
-    while let Some(a) = cur {
+    // `ancestors()`, not a `parent()` loop, which is quadratic in the depth
+    for a in std::iter::once(n).chain(n.ancestors()) {
         let name = || a.field("name").map(|x| x.text(src).to_string()).unwrap_or_default();
         match a.kind() {
             "class_declaration" | "interface_declaration" | "enum_declaration" | "record_declaration" | "annotation_type_declaration" => parts.push(name()),
@@ -285,7 +331,6 @@ fn member_path(n: grounds_syntax::Node, src: &str, legacy: bool) -> String {
             "field_declaration" => parts.push(a.fields("declarator").into_iter().filter_map(|d| d.field("name")).map(|x| x.text(src).to_string()).collect::<Vec<_>>().join(",")),
             _ => {}
         }
-        cur = a.parent();
     }
     parts.reverse();
     parts.join(".")

@@ -75,7 +75,7 @@ pub fn module_evidence(ws: &Workspace) -> Vec<Evidence> {
         let mut scripts = Vec::new();
         gradle_scripts(&ws.root.join(dir), 0, &mut scripts);
         for s in scripts {
-            if let Ok(t) = std::fs::read_to_string(&s) {
+            if let Ok(t) = crate::fsutil::read_text(&s) {
                 conventions.merge(&GradleSettings::read(&t));
             }
         }
@@ -83,7 +83,7 @@ pub fn module_evidence(ws: &Workspace) -> Vec<Evidence> {
     // the root's `subprojects { }` and `allprojects { }` apply to every
     // module; the rest of the root script to the root project only
     for f in ["build.gradle", "build.gradle.kts"] {
-        if let Ok(t) = std::fs::read_to_string(ws.root.join(f)) {
+        if let Ok(t) = crate::fsutil::read_text(ws.root.join(f)) {
             let t = strip_script_comments(&t, false);
             for block in ["subprojects", "allprojects"] {
                 for b in blocks(&t, block) {
@@ -103,7 +103,7 @@ pub fn module_evidence(ws: &Workspace) -> Vec<Evidence> {
                 BuildSystem::Gradle => {
                     let mut own = GradleSettings::default();
                     for f in ["build.gradle", "build.gradle.kts"] {
-                        if let Ok(t) = std::fs::read_to_string(m.dir.join(f)) {
+                        if let Ok(t) = crate::fsutil::read_text(m.dir.join(f)) {
                             own.merge(&GradleSettings::read(&t));
                         }
                     }
@@ -532,7 +532,7 @@ impl PomCache {
     fn load(&mut self, path: &Path) -> Option<&Pom> {
         let path = path.canonicalize().ok()?;
         if !self.poms.contains_key(&path) {
-            let pom = std::fs::read_to_string(&path).ok().map(|t| parse_pom(&t, &path));
+            let pom = crate::fsutil::read_text(&path).ok().map(|t| parse_pom(&t, &path));
             self.poms.insert(path.clone(), pom);
         }
         self.poms.get(&path)?.as_ref()

@@ -77,7 +77,7 @@ pub struct SourceSets {
 impl SourceSets {
     pub fn load(root: &Path) -> SourceSets {
         let mut tasks = HashMap::new();
-        if let Ok(text) = std::fs::read_to_string(root.join(".grounds/source-sets.txt")) {
+        if let Ok(text) = crate::fsutil::read_text(root.join(".grounds/source-sets.txt")) {
             for line in text.lines() {
                 let mut parts = line.split('\t');
                 let (Some(module), Some(set)) = (parts.next(), parts.next()) else { continue };
@@ -228,7 +228,7 @@ impl Workspace {
 pub fn modules_built_against_own_release(ws: &Workspace) -> Vec<PathBuf> {
     use crate::java_release::{element, elements, strip_comments, strip_script_comments};
     let fixture = |p: &Path| p.strip_prefix(&ws.root).is_ok_and(|r| r.components().any(|c| c.as_os_str() == "src" || c.as_os_str() == "buildSrc" || c.as_os_str() == "build-logic"));
-    let read = |p: &Path| std::fs::read_to_string(p).ok();
+    let read = |p: &Path| crate::fsutil::read_text(p).ok();
     let mut groups: Vec<String> = Vec::new();
     let mut artifacts: Vec<String> = Vec::new();
     let mut out: Vec<PathBuf> = Vec::new();

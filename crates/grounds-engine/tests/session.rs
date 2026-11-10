@@ -430,7 +430,8 @@ fn a_changed_build_file_reloads_the_project() {
     write(&dir, "lib/build.gradle", "plugins { id 'java-library' }\n");
     write(&dir, "lib/src/main/java/demo/Lib.java", "package demo;\npublic class Lib {}\n");
     write(&dir, "settings.gradle", "include 'app', 'lib'\n");
-    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+    // (far enough ahead that the dump written below is older than it however slowly the test runs)
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(3600);
     std::fs::File::options().write(true).open(dir.join("settings.gradle")).unwrap().set_modified(later).unwrap();
     s.sync(&[dir.join("lib/src/main/java/demo/Lib.java")]);
     let fresh = Session::open(&dir).unwrap();
@@ -443,6 +444,10 @@ fn a_changed_build_file_reloads_the_project() {
     write(&dir, "grounds.toml", "exclude = [\"lib/**\"]\n");
     s.sync(&[]);
     assert_eq!(s.project.config.exclude, ["lib/**"]);
+    // one reload settles it: the next request, moments later, loads nothing
+    let loaded = s.project.load_began;
+    s.sync(&[]);
+    assert_eq!(s.project.load_began, loaded, "a configuration file just written must not reload the project on every request");
     assert_eq!(module_of(&s, "lib/src/main/java/demo/Lib.java"), None, "the excluded file is gone, as in a fresh load");
 
     // a registration file that did not exist: Spring's imports of the app module
@@ -452,7 +457,7 @@ fn a_changed_build_file_reloads_the_project() {
     assert_eq!(s.project.registered, ["demo.App"]);
 
     // the classpath dump `grounds classpath` writes, created after the session opened
-    // (it lists a jar that is not there, which a load warns about)
+    // (a load warns that it is older than the build file above)
     assert!(s.project.classpath_warnings.is_empty(), "{:?}", s.project.classpath_warnings);
     write(&dir, ".grounds/classpath.txt", &format!("{}\n", dir.join("libs/some.jar").display()));
     s.sync(&[]);
@@ -470,5 +475,101 @@ fn a_changed_build_file_reloads_the_project() {
         s.sync(&[]);
         assert!(s.project.index.class_exists("lib.Dep"), "the jar is read once it is there");
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_file_written_while_the_project_loads_is_read_again() {
+    let dir = std::env::temp_dir().join(format!("grounds-session-loadrace-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, "src/main/java/demo/Api.java", "package demo;\npublic class Api {\n    public void old() {}\n}\n");
+    write(&dir, "src/main/java/demo/Caller.java", "package demo;\npublic class Caller {\n    void m(Api a) { a.old(); }\n}\n");
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+    let classes = |index: &grounds_index::Index| {
+        let mut names: Vec<_> = index.source_class_names().cloned().collect();
+        names.sort();
+        names.iter().map(|n| format!("{:?}", index.class(n))).collect::<Vec<_>>()
+    };
+    // a daemon starting: the contents are read ...
+    let project = grounds_engine::Project::load(&dir).unwrap();
+    // ... an edit lands ...
+    write(&dir, "src/main/java/demo/Api.java", "package demo;\npublic class Api {\n    public void renamed() {}\n}\n");
+    // ... and only then does the session note the files' times
+    let mut s = Session::from_project(project);
+    s.sync(&[]);
+    let fresh = grounds_engine::Project::load(&dir).unwrap();
+    assert_eq!(classes(&s.project.index), classes(&fresh.index), "the edit made during the load must not be lost");
+    // and what it broke is reported, as a run from scratch reports it
+    let opts = CheckOptions { mode: Mode::Edit, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None };
+    let r = s.check(&opts);
+    assert_eq!(r.pending.len(), 1, "the caller of the renamed method: {:?}", r.pending);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Writes `content` and puts the file's time back to `time`: a write in the
+/// same tick of a file system that keeps whole seconds.
+fn write_at(dir: &std::path::Path, file: &str, content: &str, time: std::time::SystemTime) {
+    write(dir, file, content);
+    std::fs::File::options().write(true).open(dir.join(file)).unwrap().set_modified(time).unwrap();
+}
+
+#[test]
+fn a_second_write_at_the_same_time_is_read() {
+    let dir = std::env::temp_dir().join(format!("grounds-session-sametime-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    // the build file is old, so nothing here loads the project again
+    write_at(&dir, "build.gradle", "plugins { id 'java' }\n", long_ago);
+    write_at(&dir, "src/main/java/demo/Api.java", "package demo;\npublic class Api {}\n", long_ago);
+    let methods = |s: &Session| {
+        let api = s.project.index.source_class_names().find(|n| n.ends_with("Api")).cloned().unwrap();
+        format!("{:?}", s.project.index.class(&api))
+    };
+    let mut s = Session::open(&dir).unwrap();
+    let loaded = s.project.load_began;
+    // (the time is taken after the load, however long that took: the writes below are recent at each sync)
+    let now = std::time::SystemTime::now();
+    write_at(&dir, "src/main/java/demo/Api.java", "package demo;\npublic class Api {\n    public void first() {}\n}\n", now);
+    s.sync(&[]);
+    assert!(methods(&s).contains("first"));
+    // read, and then written again within the same tick: the time says nothing
+    write_at(&dir, "src/main/java/demo/Api.java", "package demo;\npublic class Api {\n    public void second() {}\n}\n", now);
+    s.sync(&[]);
+    assert!(methods(&s).contains("second"), "{}", methods(&s));
+    write_at(&dir, "src/main/java/demo/Api.java", "package demo;\npublic class Api {\n    public void third() {}\n}\n", now);
+    s.sync(&[]);
+    assert!(methods(&s).contains("third"), "{}", methods(&s));
+    assert_eq!(s.project.load_began, loaded, "source files alone never load the project again");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_configuration_file_written_twice_at_the_same_time_is_read() {
+    let dir = std::env::temp_dir().join(format!("grounds-session-sametime-config-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    write_at(&dir, "build.gradle", "plugins { id 'java' }\n", long_ago);
+    write_at(&dir, "src/main/java/demo/Api.java", "package demo;\npublic class Api {}\n", long_ago);
+    let mut s = Session::open(&dir).unwrap();
+    let now = std::time::SystemTime::now();
+    write_at(&dir, "grounds.toml", "exclude = [\"a/**\"]\n", now);
+    s.sync(&[]);
+    assert_eq!(s.project.config.exclude, ["a/**"]);
+    // written again in the tick it was read in
+    write_at(&dir, "grounds.toml", "exclude = [\"b/**\"]\n", now);
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    // the tick is over: one more load is right, whatever was written in it
+    s.sync(&[]);
+    assert_eq!(s.project.config.exclude, ["b/**"]);
+    // and that load is the last
+    let loaded = s.project.load_began;
+    s.sync(&[]);
+    assert_eq!(s.project.load_began, loaded);
     let _ = std::fs::remove_dir_all(&dir);
 }
