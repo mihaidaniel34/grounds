@@ -260,6 +260,22 @@ impl Rule for ThrowRawException {
     }
 }
 
+/// Exceptions that report invalid input (an unparsable number, date or
+/// pattern, a value of the wrong type or state).
+const INPUT_VALIDATION: &[&str] = &[
+    "java.lang.IllegalArgumentException",
+    "java.lang.IllegalStateException",
+    "java.lang.ClassCastException",
+    "java.time.DateTimeException",
+    "java.text.ParseException",
+];
+
+/// Charsets every Java platform supports (`java.nio.charset.StandardCharsets`).
+const STANDARD_CHARSETS: &[&str] = &["UTF-8", "UTF8", "US-ASCII", "ISO-8859-1", "UTF-16", "UTF-16BE", "UTF-16LE"];
+
+/// `MessageDigest` algorithms every Java platform supports (and their aliases).
+const STANDARD_DIGESTS: &[&str] = &["MD5", "SHA", "SHA1", "SHA-1", "SHA-256"];
+
 declare_rule!(LostStackTrace {
     id: "lost-stack-trace",
     name: "Exception rethrown without its cause",
@@ -376,8 +392,59 @@ impl Rule for LostStackTrace {
             return;
         }
         // exception assigned to a variable that later gets the cause
-        if catch_types(c, cx).iter().any(|t| matches!(t.class_name(), Some("java.lang.NumberFormatException" | "java.lang.InterruptedException"))) {
+        let caught = catch_types(c, cx);
+        if caught.iter().any(|t| matches!(t.class_name(), Some("java.lang.NumberFormatException" | "java.lang.InterruptedException"))) {
             return;
+        }
+        let try_stmt = c.parent().filter(|t| matches!(t.kind(), "try_statement" | "try_with_resources_statement"));
+        // A failure to parse or validate input, translated into an error that
+        // carries the caught message or names the input: the stack of the
+        // parser adds nothing to that, and the translation is deliberate.
+        let validation = !caught.is_empty()
+            && caught.iter().all(|t| {
+                t.class_name().is_some_and(|tn| INPUT_VALIDATION.iter().any(|f| tn == *f || cx.fm.is_subclass(tn, f).is_yes()))
+            });
+        if validation {
+            let carries_message = e.descendants().any(|d| {
+                d.kind() == "method_invocation"
+                    && d.field("object").is_some_and(|o| names.contains(&o.text(cx.src)))
+                    && d.field("name").is_some_and(|nm| matches!(nm.text(cx.src), "getMessage" | "getLocalizedMessage"))
+            });
+            let read_in_try: Vec<usize> = try_stmt
+                .map(|t| {
+                    t.kids()
+                        .into_iter()
+                        .filter(|k| matches!(k.kind(), "block" | "resource_specification"))
+                        .flat_map(|k| k.descendants())
+                        .filter_map(|d| cx.fm.local_ref(d))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let names_input = e.field("arguments").is_some_and(|a| a.descendants().any(|d| cx.fm.local_ref(d).is_some_and(|i| read_in_try.contains(&i))));
+            if carries_message || names_input {
+                return;
+            }
+        }
+        // a checked exception the JDK guarantees never happens: a charset or
+        // a message digest every Java platform must support, named by a literal
+        if let Some(t) = try_stmt {
+            let literals: Vec<String> = t
+                .kids()
+                .into_iter()
+                .filter(|k| matches!(k.kind(), "block" | "resource_specification"))
+                .flat_map(|k| k.descendants())
+                .filter(|d| d.kind() == "string_literal")
+                .map(|d| d.text(cx.src).trim_matches('"').to_ascii_uppercase())
+                .collect();
+            let impossible = !caught.is_empty()
+                && caught.iter().all(|t| match t.class_name() {
+                    Some("java.io.UnsupportedEncodingException") => literals.iter().any(|l| STANDARD_CHARSETS.contains(&l.as_str())),
+                    Some("java.security.NoSuchAlgorithmException") => literals.iter().any(|l| STANDARD_DIGESTS.contains(&l.as_str())),
+                    _ => false,
+                });
+            if impossible {
+                return;
+            }
         }
         cx.report(e, format!("The caught exception `{v}` is not passed as the cause; its stack trace is lost"));
     }
