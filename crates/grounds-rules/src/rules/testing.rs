@@ -146,6 +146,23 @@ impl Rule for TestWithoutAssertion {
         if text.contains("assert ") || text.contains("fail(") {
             return;
         }
+        // the name says the test only checks that nothing throws
+        // (`shouldNotFailWhen...`, `acceptsHttpScheme`, `maximumSupply_Ok`):
+        // the call itself is the assertion
+        if n.field("name").is_some_and(|nm| names_no_throw_test(cx.text(nm))) {
+            return;
+        }
+        // vert.x tests assert through their context (`ctx.asyncAssertSuccess()`,
+        // `async.complete()`, `testContext.verify(..)`)
+        let async_context = n.field("parameters").is_some_and(|ps| {
+            ps.kids().iter().filter_map(|p| p.field("type")).any(|t| {
+                matches!(cx.fm.resolve_type_node(t).class_name(), Some("io.vertx.ext.unit.TestContext" | "io.vertx.junit5.VertxTestContext"))
+                    || matches!(cx.text(t).rsplit('.').next(), Some("TestContext" | "VertxTestContext")) && cx.src.contains("io.vertx.")
+            })
+        });
+        if async_context {
+            return;
+        }
         // lambdas count too (assertions in callbacks)
         let mut seen = Vec::new();
         let has = body.descendants().any(|c| match c.kind() {
@@ -173,6 +190,12 @@ const MATCHER_TYPES: &[&str] = &["org.hamcrest.Matcher", "org.springframework.te
 fn call_asserts<'t>(c: Node<'t>, test: Node<'t>, cx: &Ctx<'_, 't>, depth: u32, seen: &mut Vec<usize>) -> bool {
     let name = cx.fm.call_name(c).unwrap_or("");
     if is_assertion_name(name) {
+        return true;
+    }
+    // Guava's testers (`new EqualsTester()...testEquals()`,
+    // `new NullPointerTester().testAllPublicStaticMethods(..)`) throw
+    // AssertionError when a check fails
+    if name.starts_with("test") && guava_tester(cx, c) {
         return true;
     }
     // Awaitility's `await().atMost(t).until(condition)` fails when the
@@ -207,6 +230,63 @@ fn call_asserts<'t>(c: Node<'t>, test: Node<'t>, cx: &Ctx<'_, 't>, depth: u32, s
                 && test.ancestors().filter(|a| grounds_syntax::is_type_declaration(a.kind())).filter_map(|d| cx.fm.class_of_decl(d)).any(|oc| m.owner != oc.name && cx.fm.is_subclass(&oc.name, &m.owner).is_yes())
         }
     }
+}
+
+/// Is the receiver chain of `c` rooted in a `com.google.common.testing` tester?
+fn guava_tester<'t>(cx: &Ctx<'_, 't>, c: Node<'t>) -> bool {
+    let mut root = c.field("object");
+    while let Some(r) = root.map(|r| r.unparen()) {
+        if r.kind() == "method_invocation" {
+            root = r.field("object");
+            continue;
+        }
+        let guava = |n: &str| n.starts_with("com.google.common.testing.") && n.ends_with("Tester");
+        if r.kind() == "object_creation_expression" {
+            let Some(t) = r.field("type") else { return false };
+            // without Guava's jar the type stays unresolved: go by the name
+            // written or imported
+            let written = cx.text(t).split('<').next().unwrap_or("");
+            return cx.fm.resolve_type_node(t).class_name().is_some_and(guava)
+                || guava(written)
+                || written.ends_with("Tester") && cx.src.contains(&format!("import com.google.common.testing.{written};"));
+        }
+        return cx.type_of(r).class_name().is_some_and(guava);
+    }
+    false
+}
+
+/// Does a test name say that the test checks only that nothing is thrown?
+/// Words: not/no/never/without followed by fail/throw/crash/blow/error/
+/// exception; accepts/allows/tolerates/permits; a final `Ok`.
+fn names_no_throw_test(name: &str) -> bool {
+    let mut words: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut prev_lower = false;
+    for ch in name.chars() {
+        if ch == '_' || ch.is_ascii_digit() {
+            if !cur.is_empty() {
+                words.push(std::mem::take(&mut cur));
+            }
+            prev_lower = false;
+            continue;
+        }
+        if ch.is_ascii_uppercase() && prev_lower && !cur.is_empty() {
+            words.push(std::mem::take(&mut cur));
+        }
+        prev_lower = ch.is_ascii_lowercase();
+        cur.push(ch.to_ascii_lowercase());
+    }
+    if !cur.is_empty() {
+        words.push(cur);
+    }
+    let negation = |w: &str| matches!(w, "not" | "no" | "never" | "without" | "doesnt" | "dont");
+    let failure = |w: &str| matches!(w, "fail" | "fails" | "failing" | "throw" | "throws" | "throwing" | "crash" | "crashes" | "blow" | "blows" | "error" | "errors" | "exception" | "exceptions");
+    words.windows(2).any(|p| negation(&p[0]) && failure(&p[1]))
+        || words.windows(3).any(|p| negation(&p[0]) && matches!(&*p[1], "to" | "any") && failure(&p[2]))
+        // the test's verb (`acceptsHttpScheme`, `createAllowsSlashes`), not a
+        // relative clause (`createsClassWithConstructorThatAccepts...`)
+        || words.iter().take(3).any(|w| matches!(w.as_str(), "accepts" | "accept" | "allows" | "allow" | "tolerates" | "tolerate" | "permits"))
+        || words.len() > 1 && words.last().is_some_and(|w| w == "ok")
 }
 
 /// A verifying method passed to a helper (`StepVerifier.LastStep::verifyComplete`).
