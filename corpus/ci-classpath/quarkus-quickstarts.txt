@@ -118,7 +118,6 @@ jta-quickstart/src/main/java/org/acme/quickstart/TransactionalResource.java:25 u
 jta-quickstart/src/main/java/org/acme/quickstart/TransactionalResource.java:32 unused-import
 jta-quickstart/src/main/java/org/acme/quickstart/TransactionalResource.java:39 unused-private-field
 jta-quickstart/src/main/java/org/acme/quickstart/TransactionalResource.java:4 unused-import
-kafka-avro-schema-quickstart/src/test/java/org/acme/kafka/MovieResourceTest.java:54 ignored-status-result
 kafka-avro-schema-quickstart/src/test/java/org/acme/kafka/MovieResourceTest.java:79 interrupted-exception-swallowed
 kafka-bare-quickstart/src/main/java/org/acme/kafka/KafkaEndpoint.java:33 field-injection
 kafka-bare-quickstart/src/main/java/org/acme/kafka/KafkaEndpoint.java:36 field-injection

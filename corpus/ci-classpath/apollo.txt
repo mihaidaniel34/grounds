@@ -59,7 +59,6 @@ apollo-biz/src/main/java/com/ctrip/framework/apollo/biz/registry/configuration/s
 apollo-biz/src/main/java/com/ctrip/framework/apollo/biz/registry/configuration/support/ApolloServiceRegistryProperties.java:74 field-injection
 apollo-biz/src/main/java/com/ctrip/framework/apollo/biz/registry/configuration/support/ApolloServiceRegistryProperties.java:77 field-injection
 apollo-biz/src/main/java/com/ctrip/framework/apollo/biz/service/BizDBPropertySource.java:82 cognitive-complexity
-apollo-biz/src/main/java/com/ctrip/framework/apollo/biz/service/ItemService.java:267 lost-stack-trace
 apollo-biz/src/main/java/com/ctrip/framework/apollo/biz/service/ReleaseHistoryService.java:130 too-many-parameters
 apollo-biz/src/main/java/com/ctrip/framework/apollo/biz/service/ReleaseHistoryService.java:156 collapsible-if
 apollo-biz/src/main/java/com/ctrip/framework/apollo/biz/service/ReleaseHistoryService.java:183 cognitive-complexity
@@ -84,7 +83,6 @@ apollo-biz/src/test/java/com/ctrip/framework/apollo/biz/service/ItemServiceTest.
 apollo-biz/src/test/java/com/ctrip/framework/apollo/biz/service/ItemSetServiceTest.java:100 assert-true-with-comparison
 apollo-biz/src/test/java/com/ctrip/framework/apollo/biz/service/NamespacePublishInfoTest.java:134 random-used-once
 apollo-biz/src/test/java/com/ctrip/framework/apollo/biz/service/NamespaceServiceIntegrationTest.java:175 assert-true-with-comparison
-apollo-biz/src/test/java/com/ctrip/framework/apollo/biz/utils/ReleaseKeyGeneratorTest.java:64 ignored-status-result
 apollo-biz/src/test/java/com/ctrip/framework/apollo/biz/utils/ReleaseKeyGeneratorTest.java:91 interrupted-exception-swallowed
 apollo-build-sql-converter/src/main/java/com/ctrip/framework/apollo/build/sql/converter/ApolloH2ConverterUtil.java:118 unused-parameter
 apollo-build-sql-converter/src/main/java/com/ctrip/framework/apollo/build/sql/converter/ApolloH2ConverterUtil.java:143 unused-parameter
@@ -172,7 +170,6 @@ apollo-configservice/src/main/java/com/ctrip/framework/apollo/configservice/cont
 apollo-configservice/src/main/java/com/ctrip/framework/apollo/configservice/controller/ConfigFileController.java:159 too-many-parameters
 apollo-configservice/src/main/java/com/ctrip/framework/apollo/configservice/controller/ConfigFileController.java:193 too-many-parameters
 apollo-configservice/src/main/java/com/ctrip/framework/apollo/configservice/controller/ConfigFileController.java:257 too-many-parameters
-apollo-configservice/src/main/java/com/ctrip/framework/apollo/configservice/controller/ConfigFileController.java:342 mutable-enum-field
 apollo-configservice/src/main/java/com/ctrip/framework/apollo/configservice/controller/ConfigFileController.java:75 field-naming
 apollo-configservice/src/main/java/com/ctrip/framework/apollo/configservice/controller/NotificationControllerV2.java:111 catch-throwable
 apollo-configservice/src/main/java/com/ctrip/framework/apollo/configservice/controller/NotificationControllerV2.java:260 cognitive-complexity
@@ -258,8 +255,6 @@ apollo-portal/src/main/java/com/ctrip/framework/apollo/openapi/v1/controller/Por
 apollo-portal/src/main/java/com/ctrip/framework/apollo/openapi/v1/controller/PortalManagementController.java:740 deprecated-api-usage
 apollo-portal/src/main/java/com/ctrip/framework/apollo/openapi/v1/controller/PortalManagementController.java:807 catch-throwable
 apollo-portal/src/main/java/com/ctrip/framework/apollo/openapi/v1/controller/PortalManagementController.java:842 lost-stack-trace
-apollo-portal/src/main/java/com/ctrip/framework/apollo/openapi/v1/controller/PortalManagementController.java:933 lost-stack-trace
-apollo-portal/src/main/java/com/ctrip/framework/apollo/openapi/v1/controller/PortalManagementController.java:944 lost-stack-trace
 apollo-portal/src/main/java/com/ctrip/framework/apollo/openapi/v1/controller/ReleaseController.java:62 unused-private-field
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/api/API.java:26 field-injection
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/api/AdminServiceAPI.java:380 too-many-parameters
@@ -307,7 +302,6 @@ apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/environment/Portal
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/environment/PortalMetaDomainService.java:92 map-contains-then-put
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/filter/UserTokenAuthenticationFilter.java:144 throw-generic-exception
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/listener/AppInfoChangedListener.java:54 catch-throwable
-apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/listener/ConfigPublishEvent.java:25 non-serializable-field
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/listener/ConfigPublishListener.java:111 nested-ternary
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/listener/ConfigPublishListener.java:157 catch-throwable
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/listener/CreationListener.java:56 catch-throwable
@@ -348,7 +342,6 @@ apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/ConfigToFileU
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/ConfigToFileUtils.java:44 default-charset
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/KeyValueUtils.java:27 utility-class-instantiable
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/NamespaceBOUtils.java:38 utility-class-instantiable
-apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/NamespaceTextSyntaxChecker.java:46 lost-stack-trace
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/RelativeDateFormat.java:27 utility-class-instantiable
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/RelativeDateFormat.java:36 cognitive-complexity
 apollo-portal/src/main/java/com/ctrip/framework/apollo/portal/util/RoleUtils.java:25 utility-class-instantiable
@@ -380,7 +373,6 @@ apollo-portal/src/test/java/com/ctrip/framework/apollo/portal/controller/Configs
 apollo-portal/src/test/java/com/ctrip/framework/apollo/portal/controller/ConfigsExportControllerTest.java:96 default-charset
 apollo-portal/src/test/java/com/ctrip/framework/apollo/portal/controller/ConfigsImportControllerTest.java:155 default-charset
 apollo-portal/src/test/java/com/ctrip/framework/apollo/portal/controller/ConfigsImportControllerTest.java:78 default-charset
-apollo-portal/src/test/java/com/ctrip/framework/apollo/portal/controller/ItemControllerTest.java:59 test-without-assertion
 apollo-portal/src/test/java/com/ctrip/framework/apollo/portal/controller/ItemControllerTest.java:90 deprecated-api-usage
 apollo-portal/src/test/java/com/ctrip/framework/apollo/portal/controller/ServerConfigControllerTest.java:88 default-charset
 apollo-portal/src/test/java/com/ctrip/framework/apollo/portal/controller/ServerConfigControllerTest.java:97 default-charset

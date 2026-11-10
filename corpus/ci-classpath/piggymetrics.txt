@@ -23,10 +23,6 @@ auth-service/src/main/java/com/piggymetrics/auth/service/security/MongoUserDetai
 config/src/main/java/com/piggymetrics/config/SecurityConfig.java:15 csrf-protection-disabled
 notification-service/src/main/java/com/piggymetrics/notification/NotificationServiceApplication.java:35 deprecated-api-usage
 notification-service/src/main/java/com/piggymetrics/notification/controller/RecipientController.java:18 field-injection
-notification-service/src/main/java/com/piggymetrics/notification/domain/Frequency.java:9 mutable-enum-field
-notification-service/src/main/java/com/piggymetrics/notification/domain/NotificationType.java:10 mutable-enum-field
-notification-service/src/main/java/com/piggymetrics/notification/domain/NotificationType.java:8 mutable-enum-field
-notification-service/src/main/java/com/piggymetrics/notification/domain/NotificationType.java:9 mutable-enum-field
 notification-service/src/main/java/com/piggymetrics/notification/service/EmailServiceImpl.java:27 field-injection
 notification-service/src/main/java/com/piggymetrics/notification/service/EmailServiceImpl.java:30 field-injection
 notification-service/src/main/java/com/piggymetrics/notification/service/EmailServiceImpl.java:47 default-charset
@@ -46,7 +42,6 @@ statistics-service/src/main/java/com/piggymetrics/statistics/StatisticsApplicati
 statistics-service/src/main/java/com/piggymetrics/statistics/config/ResourceServerConfig.java:18 field-injection
 statistics-service/src/main/java/com/piggymetrics/statistics/controller/StatisticsController.java:17 field-injection
 statistics-service/src/main/java/com/piggymetrics/statistics/domain/TimePeriod.java:16 bigdecimal-from-double
-statistics-service/src/main/java/com/piggymetrics/statistics/domain/TimePeriod.java:9 mutable-enum-field
 statistics-service/src/main/java/com/piggymetrics/statistics/service/ExchangeRatesServiceImpl.java:23 singleton-mutable-state
 statistics-service/src/main/java/com/piggymetrics/statistics/service/ExchangeRatesServiceImpl.java:25 field-injection
 statistics-service/src/main/java/com/piggymetrics/statistics/service/ExchangeRatesServiceImpl.java:52 deprecated-api-usage
