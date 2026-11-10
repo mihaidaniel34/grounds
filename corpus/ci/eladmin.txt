@@ -4,13 +4,8 @@ eladmin-common/src/main/java/me/zhengjie/config/AsyncExecutor.java:38 public-sta
 eladmin-common/src/main/java/me/zhengjie/config/AsyncExecutor.java:40 public-static-non-final-field
 eladmin-common/src/main/java/me/zhengjie/config/AsyncExecutor.java:42 public-static-non-final-field
 eladmin-common/src/main/java/me/zhengjie/config/AsyncExecutor.java:44 public-static-non-final-field
-eladmin-common/src/main/java/me/zhengjie/config/AsyncExecutor.java:48 static-field-written-from-instance-method
-eladmin-common/src/main/java/me/zhengjie/config/AsyncExecutor.java:53 static-field-written-from-instance-method
-eladmin-common/src/main/java/me/zhengjie/config/AsyncExecutor.java:58 static-field-written-from-instance-method
-eladmin-common/src/main/java/me/zhengjie/config/AsyncExecutor.java:63 static-field-written-from-instance-method
 eladmin-common/src/main/java/me/zhengjie/config/RedisConfiguration.java:125 default-charset
 eladmin-common/src/main/java/me/zhengjie/config/properties/RsaProperties.java:32 public-static-non-final-field
-eladmin-common/src/main/java/me/zhengjie/config/properties/RsaProperties.java:36 static-field-written-from-instance-method
 eladmin-common/src/main/java/me/zhengjie/config/webConfig/ConfigurerAdapter.java:16 package-naming
 eladmin-common/src/main/java/me/zhengjie/config/webConfig/ConfigurerAdapter.java:58 permissive-cors
 eladmin-common/src/main/java/me/zhengjie/config/webConfig/MultipartConfig.java:16 package-naming
@@ -71,8 +66,6 @@ eladmin-common/src/main/java/me/zhengjie/utils/RsaUtils.java:82 insecure-cipher-
 eladmin-common/src/main/java/me/zhengjie/utils/RsaUtils.java:85 default-charset
 eladmin-common/src/main/java/me/zhengjie/utils/SecurityUtils.java:46 public-static-non-final-field
 eladmin-common/src/main/java/me/zhengjie/utils/SecurityUtils.java:48 public-static-non-final-field
-eladmin-common/src/main/java/me/zhengjie/utils/SecurityUtils.java:52 static-field-written-from-instance-method
-eladmin-common/src/main/java/me/zhengjie/utils/SecurityUtils.java:57 static-field-written-from-instance-method
 eladmin-common/src/main/java/me/zhengjie/utils/StringUtils.java:212 deep-nesting
 eladmin-common/src/main/java/me/zhengjie/utils/ThrowableUtil.java:25 utility-class-instantiable
 eladmin-common/src/main/java/me/zhengjie/utils/ValidationUtil.java:28 utility-class-instantiable

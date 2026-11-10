@@ -155,8 +155,6 @@ mall-admin/src/main/java/com/macro/mall/service/impl/UmsRoleServiceImpl.java:28 
 mall-admin/src/main/java/com/macro/mall/service/impl/UmsRoleServiceImpl.java:30 field-injection
 mall-admin/src/main/java/com/macro/mall/service/impl/UmsRoleServiceImpl.java:32 field-injection
 mall-admin/src/test/com/macro/mall/PmsDaoTests.java:47 test-without-assertion
-mall-common/src/main/java/com/macro/mall/common/api/ResultCode.java:13 mutable-enum-field
-mall-common/src/main/java/com/macro/mall/common/api/ResultCode.java:14 mutable-enum-field
 mall-common/src/main/java/com/macro/mall/common/api/ResultCode.java:21 missing-override
 mall-common/src/main/java/com/macro/mall/common/api/ResultCode.java:25 missing-override
 mall-common/src/main/java/com/macro/mall/common/config/BaseRedisConfig.java:55 bean-method-call-in-lite-mode
@@ -812,7 +810,6 @@ mall-security/src/main/java/com/macro/mall/security/aspect/RedisCacheAspect.java
 mall-security/src/main/java/com/macro/mall/security/component/DynamicAuthorizationManager.java:28 field-injection
 mall-security/src/main/java/com/macro/mall/security/component/DynamicAuthorizationManager.java:30 field-injection
 mall-security/src/main/java/com/macro/mall/security/component/DynamicSecurityMetadataSource.java:21 field-injection
-mall-security/src/main/java/com/macro/mall/security/component/DynamicSecurityMetadataSource.java:26 static-field-written-from-instance-method
 mall-security/src/main/java/com/macro/mall/security/component/DynamicSecurityMetadataSource.java:31 static-field-written-from-instance-method
 mall-security/src/main/java/com/macro/mall/security/component/DynamicSecurityMetadataSource.java:61 collection-method-returns-null
 mall-security/src/main/java/com/macro/mall/security/component/JwtAuthenticationTokenFilter.java:27 field-injection
@@ -831,4 +828,3 @@ mall-security/src/main/java/com/macro/mall/security/config/SecurityConfig.java:3
 mall-security/src/main/java/com/macro/mall/security/util/JwtTokenUtil.java:125 unused-private-method
 mall-security/src/main/java/com/macro/mall/security/util/JwtTokenUtil.java:64 collection-method-returns-null
 mall-security/src/main/java/com/macro/mall/security/util/JwtTokenUtil.java:70 collection-method-returns-null
-mall-security/src/main/java/com/macro/mall/security/util/SpringUtil.java:25 static-field-written-from-instance-method

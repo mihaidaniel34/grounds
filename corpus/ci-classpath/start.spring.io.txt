@@ -6,7 +6,6 @@ start-site/src/main/java/io/spring/start/site/extension/dependency/jooq/JooqVers
 start-site/src/main/java/io/spring/start/site/extension/dependency/mongodb/MongoDbProjectGenerationConfiguration.java:70 complex-boolean-expression
 start-site/src/main/java/io/spring/start/site/extension/dependency/solace/SolaceBinderBuildCustomizer.java:49 catch-return-null
 start-site/src/main/java/io/spring/start/site/extension/dependency/springcloud/SpringCloudFunctionHelpDocumentCustomizer.java:107 enum-keyed-hash-collection
-start-site/src/main/java/io/spring/start/site/extension/dependency/springcloud/SpringCloudFunctionHelpDocumentCustomizer.java:143 mutable-enum-field
 start-site/src/main/java/io/spring/start/site/extension/dependency/springrestdocs/SpringRestDocsBuildCustomizer.java:48 redundant-if-return-boolean
 start-site/src/main/java/io/spring/start/site/extension/dependency/timefold/TimefoldVersionProjectDescriptionCustomizer.java:64 catch-return-null
 start-site/src/main/java/io/spring/start/site/extension/dependency/vaadin/VaadinVersionProjectDescriptionCustomizer.java:64 catch-return-null

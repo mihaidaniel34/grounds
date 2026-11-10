@@ -45,7 +45,6 @@ spring-modulith-core/src/main/java/org/springframework/modulith/core/EntryPoints
 spring-modulith-core/src/main/java/org/springframework/modulith/core/EventType.java:45 constructor-calls-overridable-method
 spring-modulith-core/src/main/java/org/springframework/modulith/core/FormattableType.java:43 private-constructor-class-not-final
 spring-modulith-core/src/main/java/org/springframework/modulith/core/JavaPackage.java:57 private-constructor-class-not-final
-spring-modulith-core/src/main/java/org/springframework/modulith/core/JavaPackage.java:572 negated-compareto
 spring-modulith-core/src/main/java/org/springframework/modulith/core/JavaPackages.java:35 field-naming
 spring-modulith-core/src/main/java/org/springframework/modulith/core/JavaPackages.java:35 public-static-non-final-field
 spring-modulith-core/src/main/java/org/springframework/modulith/core/ModulithMetadata.java:39 redundant-modifier
@@ -96,7 +95,6 @@ spring-modulith-core/src/test/java/org/springframework/modulith/core/Architectur
 spring-modulith-core/src/test/java/org/springframework/modulith/core/FormattableTypeUnitTests.java:137 test-without-assertion
 spring-modulith-core/src/test/java/org/springframework/modulith/core/JavaPackageUnitTests.java:95 assertj-assertion-without-check
 spring-modulith-core/src/test/java/org/springframework/modulith/core/JavaPackageUnitTests.java:98 assertj-assertion-without-check
-spring-modulith-core/src/test/java/org/springframework/modulith/core/PackageNameUnitTests.java:43 negated-compareto
 spring-modulith-core/src/test/java/reproducers/gh1778/bidding/BidService.java:27 unused-private-field
 spring-modulith-docs/src/main/java/org/springframework/modulith/docs/Asciidoctor.java:207 stringbuilder-append-concat
 spring-modulith-docs/src/main/java/org/springframework/modulith/docs/Asciidoctor.java:304 string-reference-equality
@@ -134,11 +132,6 @@ spring-modulith-docs/src/main/java/org/springframework/modulith/docs/SpringModul
 spring-modulith-docs/src/main/java/org/springframework/modulith/docs/util/BuildSystemUtils.java:32 utility-class-instantiable
 spring-modulith-docs/src/test/java/org/springframework/modulith/docs/SpringModulithDocumentationSourceUnitTests.java:39 default-charset
 spring-modulith-docs/src/test/java/org/springframework/modulith/docs/SpringModulithDocumentationSourceUnitTests.java:51 default-charset
-spring-modulith-events/spring-modulith-events-amqp/src/test/java/org/springframework/modulith/events/amqp/RabbitEventExternalizerConfigurationIntegrationTests.java:130 null-passed-to-nonnull-parameter
-spring-modulith-events/spring-modulith-events-amqp/src/test/java/org/springframework/modulith/events/amqp/RabbitEventExternalizerConfigurationIntegrationTests.java:187 null-passed-to-nonnull-parameter
-spring-modulith-events/spring-modulith-events-amqp/src/test/java/org/springframework/modulith/events/amqp/RabbitEventExternalizerConfigurationIntegrationTests.java:239 null-passed-to-nonnull-parameter
-spring-modulith-events/spring-modulith-events-amqp/src/test/java/org/springframework/modulith/events/amqp/RabbitEventExternalizerConfigurationIntegrationTests.java:240 null-passed-to-nonnull-parameter
-spring-modulith-events/spring-modulith-events-amqp/src/test/java/org/springframework/modulith/events/amqp/RabbitEventExternalizerConfigurationIntegrationTests.java:252 null-passed-to-nonnull-parameter
 spring-modulith-events/spring-modulith-events-amqp/src/test/java/org/springframework/modulith/events/amqp/RabbitEventPublicationIntegrationTests.java:87 thread-sleep-in-test
 spring-modulith-events/spring-modulith-events-api/src/main/java/org/springframework/modulith/events/AnnotationTargetLookup.java:172 catch-return-null
 spring-modulith-events/spring-modulith-events-api/src/main/java/org/springframework/modulith/events/AnnotationTargetLookup.java:45 private-constructor-class-not-final
@@ -185,7 +178,6 @@ spring-modulith-events/spring-modulith-events-core/src/test/java/org/springframe
 spring-modulith-events/spring-modulith-events-core/src/test/java/org/springframework/modulith/events/support/CompletionRegisteringAdvisorUnitTests.java:180 interrupted-exception-swallowed
 spring-modulith-events/spring-modulith-events-core/src/test/java/org/springframework/modulith/events/support/CompletionRegisteringAdvisorUnitTests.java:78 thread-sleep-in-test
 spring-modulith-events/spring-modulith-events-core/src/test/java/org/springframework/modulith/events/support/CompletionRegisteringAdvisorUnitTests.java:92 thread-sleep-in-test
-spring-modulith-events/spring-modulith-events-core/src/test/java/org/springframework/modulith/events/support/EventExternalizerModuleListenerUnitTests.java:111 ignored-status-result
 spring-modulith-events/spring-modulith-events-core/src/test/java/org/springframework/modulith/events/support/EventExternalizerModuleListenerUnitTests.java:75 thread-sleep-in-test
 spring-modulith-events/spring-modulith-events-core/src/test/java/org/springframework/modulith/events/support/EventExternalizerModuleListenerUnitTests.java:81 interrupted-exception-swallowed
 spring-modulith-events/spring-modulith-events-jackson/src/main/java/org/springframework/modulith/events/jackson2/Jackson2EventSerializer.java:61 throw-generic-exception
@@ -261,7 +253,6 @@ spring-modulith-events/spring-modulith-events-jdbc/src/test/java/org/springframe
 spring-modulith-events/spring-modulith-events-jdbc/src/test/java/org/springframework/modulith/events/jdbc/JdbcEventPublicationRepositoryV2IntegrationTests.java:853 inner-class-could-be-static
 spring-modulith-events/spring-modulith-events-jdbc/src/test/java/org/springframework/modulith/events/jdbc/JdbcEventPublicationRepositoryV2IntegrationTests.java:856 inner-class-could-be-static
 spring-modulith-events/spring-modulith-events-jdbc/src/test/java/org/springframework/modulith/events/jdbc/JdbcEventPublicationRepositoryV2IntegrationTests.java:859 inner-class-could-be-static
-spring-modulith-events/spring-modulith-events-jms/src/test/java/org/springframework/modulith/events/jms/JmsEventExternalizerConfigurationIntegrationTests.java:121 null-passed-to-nonnull-parameter
 spring-modulith-events/spring-modulith-events-jms/src/test/java/org/springframework/modulith/events/jms/JmsEventPublicationIntegrationTests.java:67 thread-sleep-in-test
 spring-modulith-events/spring-modulith-events-jpa/src/main/java/org/springframework/modulith/events/jpa/JpaEventPublication.java:67 too-many-parameters
 spring-modulith-events/spring-modulith-events-jpa/src/main/java/org/springframework/modulith/events/jpa/JpaEventPublication.java:96 too-many-parameters
@@ -272,9 +263,6 @@ spring-modulith-events/spring-modulith-events-jpa/src/test/java/org/springframew
 spring-modulith-events/spring-modulith-events-jpa/src/test/java/org/springframework/modulith/events/jpa/JpaEventPublicationRepositoryIntegrationTests.java:484 test-without-assertion
 spring-modulith-events/spring-modulith-events-jpa/src/test/java/org/springframework/modulith/events/jpa/JpaEventPublicationRepositoryIntegrationTests.java:513 thread-sleep-in-test
 spring-modulith-events/spring-modulith-events-kafka/src/main/java/org/springframework/modulith/events/kafka/KafkaJackson2Configuration.java:51 deprecated-api-usage
-spring-modulith-events/spring-modulith-events-kafka/src/test/java/org/springframework/modulith/events/kafka/KafkaEventExternalizerConfigurationIntegrationTests.java:152 null-passed-to-nonnull-parameter
-spring-modulith-events/spring-modulith-events-kafka/src/test/java/org/springframework/modulith/events/kafka/KafkaEventExternalizerConfigurationIntegrationTests.java:210 null-passed-to-nonnull-parameter
-spring-modulith-events/spring-modulith-events-messaging/src/test/java/org/springframework/modulith/events/messaging/SpringMessagingEventExternalizerConfigurationTests.java:99 null-passed-to-nonnull-parameter
 spring-modulith-events/spring-modulith-events-messaging/src/test/java/org/springframework/modulith/events/messaging/SpringMessagingEventPublicationIntegrationTests.java:97 thread-sleep-in-test
 spring-modulith-events/spring-modulith-events-mongodb/src/main/java/org/springframework/modulith/events/mongodb/MongoDbEventPublication.java:57 too-many-parameters
 spring-modulith-events/spring-modulith-events-mongodb/src/main/java/org/springframework/modulith/events/mongodb/MongoDbEventPublication.java:71 nested-ternary
@@ -452,7 +440,6 @@ spring-modulith-test/src/main/java/org/springframework/modulith/test/ScenarioCus
 spring-modulith-test/src/main/java/org/springframework/modulith/test/TestApplicationModules.java:28 utility-class-instantiable
 spring-modulith-test/src/main/java/org/springframework/modulith/test/TestApplicationModules.java:30 field-naming
 spring-modulith-test/src/test/java/org/springframework/modulith/test/ModuleTestAutoConfigurationIntegrationTests.java:53 test-class-without-tests
-spring-modulith-test/src/test/java/org/springframework/modulith/test/PublishedEventsParameterResolverUnitTests.java:88 ignored-status-result
 spring-modulith-test/src/test/java/org/springframework/modulith/test/ScenarioUnitTests.java:558 throw-generic-exception
 spring-modulith-test/src/test/java/org/springframework/modulith/test/ScenarioUnitTests.java:626 throw-generic-exception
 spring-modulith-test/src/test/java/org/springframework/modulith/test/ScenarioUnitTests.java:656 throw-generic-exception

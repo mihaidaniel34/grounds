@@ -109,7 +109,6 @@ embedding-store-filter-parsers/langchain4j-embedding-store-filter-parser-sql/src
 embedding-store-filter-parsers/langchain4j-embedding-store-filter-parser-sql/src/test/java/dev/langchain4j/store/embedding/filter/builder/sql/ColumnDefinitionTest.java:60 assert-true-with-comparison
 embedding-store-filter-parsers/langchain4j-embedding-store-filter-parser-sql/src/test/java/dev/langchain4j/store/embedding/filter/builder/sql/TableDefinitionTest.java:76 assert-true-with-comparison
 embedding-store-filter-parsers/langchain4j-embedding-store-filter-parser-sql/src/test/java/dev/langchain4j/store/embedding/filter/parser/sql/SqlFilterParserTest.java:211 method-too-long
-embeddings/langchain4j-embeddings-all-minilm-l6-v2-q/src/test/java/dev/langchain4j/model/embedding/onnx/allminilml6v2q/AllMiniLmL6V2QuantizedEmbeddingModelIT.java:135 ignored-status-result
 embeddings/langchain4j-embeddings/src/main/java/dev/langchain4j/model/embedding/onnx/AbstractInProcessEmbeddingModel.java:84 throw-generic-exception
 embeddings/langchain4j-embeddings/src/main/java/dev/langchain4j/model/embedding/onnx/AbstractInProcessEmbeddingModel.java:86 throw-generic-exception
 embeddings/langchain4j-embeddings/src/main/java/dev/langchain4j/model/embedding/onnx/HuggingFaceTokenCountEstimator.java:59 throw-generic-exception
@@ -121,7 +120,6 @@ embeddings/langchain4j-embeddings/src/main/java/dev/langchain4j/model/embedding/
 embeddings/langchain4j-embeddings/src/main/java/dev/langchain4j/model/embedding/onnx/OnnxBertBiEncoder.java:66 throw-generic-exception
 embeddings/langchain4j-embeddings/src/main/java/dev/langchain4j/model/embedding/onnx/OnnxBertBiEncoder.java:96 throw-generic-exception
 embeddings/langchain4j-embeddings/src/main/java/dev/langchain4j/model/embedding/onnx/internal/VectorUtils.java:5 utility-class-instantiable
-embeddings/langchain4j-embeddings/src/test/java/dev/langchain4j/model/embedding/onnx/OnnxEmbeddingModelIT.java:152 ignored-status-result
 embeddings/langchain4j-embeddings/src/test/java/dev/langchain4j/model/embedding/onnx/OnnxEmbeddingModelIT.java:42 deprecated-api-usage
 embeddings/langchain4j-embeddings/src/test/java/dev/langchain4j/model/embedding/onnx/OnnxEmbeddingModelIT.java:48 deprecated-api-usage
 experimental/langchain4j-experimental-hibernate/src/main/java/dev/langchain4j/rag/content/retriever/hibernate/HibernateContentRetriever.java:199 throw-generic-exception
@@ -161,10 +159,8 @@ integration-tests/integration-tests-class-instance-loader/integration-tests-clas
 integration-tests/integration-tests-class-instance-loader/integration-tests-class-instance-loader-quarkus/src/main/java/com/example/Application.java:9 unused-private-field
 integration-tests/integration-tests-guardrails/src/main/java/com/example/SingletonClassInstanceFactory.java:46 throw-generic-exception
 integration-tests/integration-tests-guardrails/src/test/java/dev/langchain4j/service/guardrail/BaseGuardrailTests.java:30 throw-generic-exception
-integration-tests/integration-tests-guardrails/src/test/java/dev/langchain4j/service/guardrail/BaseGuardrailTests.java:39 ignored-status-result
 integration-tests/integration-tests-guardrails/src/test/java/dev/langchain4j/service/guardrail/InputGuardrailChainTests.java:106 interrupted-exception-swallowed
 integration-tests/integration-tests-guardrails/src/test/java/dev/langchain4j/service/guardrail/InputGuardrailChainTests.java:81 interrupted-exception-swallowed
-integration-tests/integration-tests-guardrails/src/test/java/dev/langchain4j/service/guardrail/InputGuardrailValidationTests.java:67 ignored-status-result
 integration-tests/integration-tests-guardrails/src/test/java/dev/langchain4j/service/guardrail/OutputGuardrailChainOnStreamedResponseTests.java:190 interrupted-exception-swallowed
 integration-tests/integration-tests-guardrails/src/test/java/dev/langchain4j/service/guardrail/OutputGuardrailChainOnStreamedResponseTests.java:226 interrupted-exception-swallowed
 integration-tests/integration-tests-guardrails/src/test/java/dev/langchain4j/service/guardrail/OutputGuardrailChainTests.java:449 interrupted-exception-swallowed
@@ -651,7 +647,6 @@ langchain4j-bedrock/src/main/java/dev/langchain4j/model/bedrock/BedrockBatchConv
 langchain4j-bedrock/src/main/java/dev/langchain4j/model/bedrock/BedrockChatRequestParameters.java:13 private-constructor-class-not-final
 langchain4j-bedrock/src/main/java/dev/langchain4j/model/bedrock/BedrockChatRequestParameters.java:85 complex-boolean-expression
 langchain4j-bedrock/src/main/java/dev/langchain4j/model/bedrock/BedrockCohereEmbeddingModel.java:93 optional-orelse-eager-call
-langchain4j-bedrock/src/main/java/dev/langchain4j/model/bedrock/BedrockExceptionMapper.java:19 identical-branches
 langchain4j-bedrock/src/main/java/dev/langchain4j/model/bedrock/BedrockStreamingChatModel.java:116 cognitive-complexity
 langchain4j-bedrock/src/main/java/dev/langchain4j/model/bedrock/BedrockStreamingChatModel.java:138 cognitive-complexity
 langchain4j-bedrock/src/main/java/dev/langchain4j/model/bedrock/BedrockStreamingChatModel.java:223 empty-method
@@ -1020,7 +1015,6 @@ langchain4j-core/src/test/java/dev/langchain4j/model/chat/common/AbstractStreami
 langchain4j-core/src/test/java/dev/langchain4j/model/chat/common/AbstractStreamingChatModelIT.java:630 throw-generic-exception
 langchain4j-core/src/test/java/dev/langchain4j/model/chat/common/AbstractStreamingChatModelPublisherListenerTest.java:148 thread-sleep-in-test
 langchain4j-core/src/test/java/dev/langchain4j/model/chat/common/AbstractStreamingChatModelPublisherListenerTest.java:172 throw-generic-exception
-langchain4j-core/src/test/java/dev/langchain4j/model/chat/common/AbstractStreamingChatModelPublisherListenerTest.java:182 ignored-status-result
 langchain4j-core/src/test/java/dev/langchain4j/model/chat/common/AbstractStreamingChatModelPublisherListenerTest.java:183 thread-sleep-in-test
 langchain4j-core/src/test/java/dev/langchain4j/model/chat/mock/StreamingChatModelMock.java:77 cognitive-complexity
 langchain4j-core/src/test/java/dev/langchain4j/model/decision/DecisionModelTest.java:291 throw-generic-exception
@@ -1220,7 +1214,6 @@ langchain4j-google-genai/src/main/java/dev/langchain4j/model/google/genai/Google
 langchain4j-google-genai/src/main/java/dev/langchain4j/model/google/genai/GoogleGenAiEmbeddingModel.java:130 cognitive-complexity
 langchain4j-google-genai/src/main/java/dev/langchain4j/model/google/genai/GoogleGenAiEmbeddingModel.java:274 cognitive-complexity
 langchain4j-google-genai/src/main/java/dev/langchain4j/model/google/genai/GoogleGenAiEmbeddingModel.java:332 deep-nesting
-langchain4j-google-genai/src/main/java/dev/langchain4j/model/google/genai/GoogleGenAiExceptionMapper.java:19 identical-branches
 langchain4j-google-genai/src/main/java/dev/langchain4j/model/google/genai/GoogleGenAiExceptionMapper.java:9 private-constructor-class-not-final
 langchain4j-google-genai/src/main/java/dev/langchain4j/model/google/genai/GoogleGenAiFiles.java:66 throw-generic-exception
 langchain4j-google-genai/src/main/java/dev/langchain4j/model/google/genai/GoogleGenAiImageModel.java:200 throw-generic-exception
@@ -1420,7 +1413,6 @@ langchain4j-mariadb/src/main/java/dev/langchain4j/store/embedding/mariadb/MariaD
 langchain4j-mariadb/src/main/java/dev/langchain4j/store/embedding/mariadb/MariaDbValidator.java:6 utility-class-instantiable
 langchain4j-mariadb/src/main/java/dev/langchain4j/store/embedding/mariadb/MetadataColumDefinition.java:13 constant-naming
 langchain4j-mariadb/src/main/java/dev/langchain4j/store/embedding/mariadb/MetadataHandlerFactory.java:46 throw-generic-exception
-langchain4j-mariadb/src/test/java/dev/langchain4j/store/embedding/mariadb/JSONMetadataHandlerTest.java:104 null-passed-to-nonnull-parameter
 langchain4j-mariadb/src/test/java/dev/langchain4j/store/embedding/mariadb/MariaDbEmbeddingStoreConfigIT.java:53 throw-generic-exception
 langchain4j-mariadb/src/test/java/dev/langchain4j/store/embedding/mariadb/MariaDbEmbeddingStoreConfigIT.java:67 throw-generic-exception
 langchain4j-mcp-docker/src/main/java/dev/langchain4j/mcp/client/transport/docker/DockerMcpTransport.java:128 throw-generic-exception
@@ -1611,7 +1603,6 @@ langchain4j-mcp/src/test/java/dev/langchain4j/mcp/client/integration/McpToolsWeb
 langchain4j-mcp/src/test/java/dev/langchain4j/mcp/client/integration/TestMcpLogHandler.java:29 throw-generic-exception
 langchain4j-mcp/src/test/java/dev/langchain4j/mcp/client/integration/registryclient/McpRegistryClientIT.java:24 unused-private-field
 langchain4j-mcp/src/test/java/dev/langchain4j/mcp/client/transport/McpPendingOperationTest.java:83 deprecated-api-usage
-langchain4j-mcp/src/test/java/dev/langchain4j/mcp/client/transport/StreamableHttpMcpTransportSendMessageTest.java:51 ignored-status-result
 langchain4j-mcp/src/test/java/dev/langchain4j/mcp/client/transport/StreamableHttpMcpTransportSessionExpiryTest.java:40 unused-private-field
 langchain4j-mcp/src/test/java/dev/langchain4j/mcp/client/transport/stdio/ProcessStderrHandlerTest.java:28 default-charset
 langchain4j-mcp/src/test/java/dev/langchain4j/mcp/client/transport/stdio/StdioMcpTransportTest.java:178 close-in-finally-unguarded
@@ -1624,11 +1615,6 @@ langchain4j-mcp/src/test/java/dev/langchain4j/mcp/registryclient/RegistryClientR
 langchain4j-mcp/src/test/java/dev/langchain4j/mcp/registryclient/RegistryClientResponsesParsingTest.java:216 deprecated-api-usage
 langchain4j-mcp/src/test/java/dev/langchain4j/mcp/registryclient/RegistryClientResponsesParsingTest.java:217 deprecated-api-usage
 langchain4j-mcp/src/test/java/dev/langchain4j/mcp/registryclient/RegistryClientResponsesParsingTest.java:218 deprecated-api-usage
-langchain4j-mcp/src/test/java/dev/langchain4j/mcp/transport/stdio/JsonRpcIoHandlerTest.java:26 resource-leak
-langchain4j-mcp/src/test/java/dev/langchain4j/mcp/transport/stdio/JsonRpcIoHandlerTest.java:43 resource-leak
-langchain4j-mcp/src/test/java/dev/langchain4j/mcp/transport/stdio/JsonRpcIoHandlerTest.java:66 resource-leak
-langchain4j-mcp/src/test/java/dev/langchain4j/mcp/transport/stdio/JsonRpcIoHandlerTest.java:83 resource-leak
-langchain4j-mcp/src/test/java/dev/langchain4j/mcp/transport/stdio/JsonRpcIoHandlerTest.java:98 resource-leak
 langchain4j-milvus-v2/src/main/java/dev/langchain4j/store/embedding/milvus/v2/CollectionOperationsExecutor.java:33 utility-class-instantiable
 langchain4j-milvus-v2/src/main/java/dev/langchain4j/store/embedding/milvus/v2/CollectionRequestBuilder.java:181 too-many-parameters
 langchain4j-milvus-v2/src/main/java/dev/langchain4j/store/embedding/milvus/v2/CollectionRequestBuilder.java:30 utility-class-instantiable
@@ -1842,7 +1828,6 @@ langchain4j-open-ai-official/src/main/java/dev/langchain4j/model/openaiofficial/
 langchain4j-open-ai-official/src/main/java/dev/langchain4j/model/openaiofficial/setup/OpenAiOfficialSetup.java:220 cognitive-complexity
 langchain4j-open-ai-official/src/main/java/dev/langchain4j/model/openaiofficial/setup/OpenAiOfficialSetup.java:23 utility-class-instantiable
 langchain4j-open-ai-official/src/main/java/dev/langchain4j/model/openaiofficial/setup/OpenAiOfficialSetup.java:260 lost-stack-trace
-langchain4j-open-ai-official/src/main/java/dev/langchain4j/model/openaiofficial/setup/OpenAiOfficialSetup.java:273 identical-branches
 langchain4j-open-ai-official/src/main/java/dev/langchain4j/model/openaiofficial/setup/OpenAiOfficialSetup.java:39 too-many-parameters
 langchain4j-open-ai-official/src/test/java/dev/langchain4j/model/openaiofficial/OpenAiOfficialResponsesStreamingChatModelTest.java:543 throw-generic-exception
 langchain4j-open-ai-official/src/test/java/dev/langchain4j/model/openaiofficial/OpenAiOfficialResponsesStreamingChatModelTest.java:569 throw-generic-exception
@@ -2078,7 +2063,6 @@ langchain4j-skills/src/main/java/dev/langchain4j/skills/AbstractSkill.java:94 co
 langchain4j-skills/src/main/java/dev/langchain4j/skills/AbstractSkillToolExecutor.java:27 collection-method-returns-null
 langchain4j-skills/src/main/java/dev/langchain4j/skills/AbstractSkillToolExecutor.java:36 null-dereference
 langchain4j-skills/src/main/java/dev/langchain4j/skills/ActivateSkillToolConfig.java:10 private-constructor-class-not-final
-langchain4j-skills/src/main/java/dev/langchain4j/skills/ActivateSkillToolExecutor.java:42 null-dereference
 langchain4j-skills/src/main/java/dev/langchain4j/skills/ClassPathSkillLoader.java:144 throw-generic-exception
 langchain4j-skills/src/main/java/dev/langchain4j/skills/ClassPathSkillLoader.java:177 throw-generic-exception
 langchain4j-skills/src/main/java/dev/langchain4j/skills/ClassPathSkillLoader.java:183 throw-generic-exception
@@ -2170,10 +2154,8 @@ langchain4j-vertex-ai-gemini/src/main/java/dev/langchain4j/model/vertexai/gemini
 langchain4j-vertex-ai-gemini/src/test/java/dev/langchain4j/model/vertexai/gemini/VertexAiGeminiChatModelIT.java:257 enum-keyed-hash-collection
 langchain4j-vertex-ai-gemini/src/test/java/dev/langchain4j/model/vertexai/gemini/VertexAiGeminiChatModelIT.java:285 inner-class-could-be-static
 langchain4j-vertex-ai-gemini/src/test/java/dev/langchain4j/model/vertexai/gemini/VertexAiGeminiChatModelIT.java:293 inner-class-could-be-static
-langchain4j-vertex-ai-gemini/src/test/java/dev/langchain4j/model/vertexai/gemini/VertexAiGeminiChatModelIT.java:92 resource-leak
 langchain4j-vertex-ai-gemini/src/test/java/dev/langchain4j/model/vertexai/gemini/VertexAiGeminiStreamingChatModelIT.java:165 enum-keyed-hash-collection
 langchain4j-vertex-ai-gemini/src/test/java/dev/langchain4j/model/vertexai/gemini/VertexAiGeminiStreamingChatModelIT.java:189 inner-class-could-be-static
-langchain4j-vertex-ai-gemini/src/test/java/dev/langchain4j/model/vertexai/gemini/VertexAiGeminiStreamingChatModelIT.java:83 resource-leak
 langchain4j-vertex-ai/src/main/java/dev/langchain4j/model/vertexai/Json.java:6 utility-class-instantiable
 langchain4j-vertex-ai/src/main/java/dev/langchain4j/model/vertexai/VertexAiChatInstance.java:17 unused-private-field
 langchain4j-vertex-ai/src/main/java/dev/langchain4j/model/vertexai/VertexAiChatInstance.java:18 unused-private-field
@@ -2481,7 +2463,6 @@ langchain4j/src/main/java/dev/langchain4j/service/DefaultAiServices.java:1201 co
 langchain4j/src/main/java/dev/langchain4j/service/DefaultAiServices.java:1317 cognitive-complexity
 langchain4j/src/main/java/dev/langchain4j/service/DefaultAiServices.java:1661 collapsible-if
 langchain4j/src/main/java/dev/langchain4j/service/DefaultAiServices.java:1720 cognitive-complexity
-langchain4j/src/main/java/dev/langchain4j/service/DefaultAiServices.java:1744 null-dereference
 langchain4j/src/main/java/dev/langchain4j/service/DefaultAiServices.java:180 complex-boolean-expression
 langchain4j/src/main/java/dev/langchain4j/service/DefaultAiServices.java:1801 trim-isempty
 langchain4j/src/main/java/dev/langchain4j/service/DefaultAiServices.java:1809 trim-isempty
@@ -2502,7 +2483,6 @@ langchain4j/src/main/java/dev/langchain4j/service/ParameterNameResolver.java:18 
 langchain4j/src/main/java/dev/langchain4j/service/ParameterNameResolver.java:24 loop-executes-at-most-once
 langchain4j/src/main/java/dev/langchain4j/service/ToolErrorHandlingNotice.java:22 private-constructor-class-not-final
 langchain4j/src/main/java/dev/langchain4j/service/TypeUtils.java:121 identical-branches
-langchain4j/src/main/java/dev/langchain4j/service/TypeUtils.java:125 identical-branches
 langchain4j/src/main/java/dev/langchain4j/service/TypeUtils.java:21 private-constructor-class-not-final
 langchain4j/src/main/java/dev/langchain4j/service/decision/DecisionServices.java:80 private-constructor-class-not-final
 langchain4j/src/main/java/dev/langchain4j/service/decision/DecisionServices.java:80 utility-class-instantiable
@@ -2511,7 +2491,6 @@ langchain4j/src/main/java/dev/langchain4j/service/decision/internal/DecisionMeth
 langchain4j/src/main/java/dev/langchain4j/service/decision/internal/DecisionMethod.java:397 complex-boolean-expression
 langchain4j/src/main/java/dev/langchain4j/service/decision/internal/DecisionMethod.java:482 cognitive-complexity
 langchain4j/src/main/java/dev/langchain4j/service/decision/internal/DecisionMethod.java:579 cognitive-complexity
-langchain4j/src/main/java/dev/langchain4j/service/decision/internal/DecisionMethod.java:706 lost-stack-trace
 langchain4j/src/main/java/dev/langchain4j/service/guardrail/GuardrailServiceBuilder.java:232 unused-parameter
 langchain4j/src/main/java/dev/langchain4j/service/memory/ChatMemoryService.java:38 nested-ternary
 langchain4j/src/main/java/dev/langchain4j/service/output/EnumCollectionOutputParser.java:83 throw-generic-exception
@@ -2577,7 +2556,6 @@ langchain4j/src/test/java/dev/langchain4j/service/AbstractAiServicesWithToolErro
 langchain4j/src/test/java/dev/langchain4j/service/AbstractAiServicesWithToolErrorHandlerTest.java:442 throw-generic-exception
 langchain4j/src/test/java/dev/langchain4j/service/AbstractAiServicesWithToolErrorHandlerTest.java:444 throw-generic-exception
 langchain4j/src/test/java/dev/langchain4j/service/AiServiceStreamingPublisherTest.java:1027 thread-sleep-in-test
-langchain4j/src/test/java/dev/langchain4j/service/AiServiceStreamingPublisherTest.java:1050 ignored-status-result
 langchain4j/src/test/java/dev/langchain4j/service/AiServiceStreamingPublisherTest.java:1112 thread-sleep-in-test
 langchain4j/src/test/java/dev/langchain4j/service/AiServiceStreamingPublisherTest.java:1194 dead-store
 langchain4j/src/test/java/dev/langchain4j/service/AiServiceStreamingPublisherTest.java:1220 throw-generic-exception
@@ -2588,29 +2566,22 @@ langchain4j/src/test/java/dev/langchain4j/service/AiServiceStreamingPublisherTes
 langchain4j/src/test/java/dev/langchain4j/service/AiServiceStreamingPublisherTest.java:254 thread-sleep-in-test
 langchain4j/src/test/java/dev/langchain4j/service/AiServiceStreamingPublisherTest.java:647 thread-sleep-in-test
 langchain4j/src/test/java/dev/langchain4j/service/AiServiceStreamingPublisherTest.java:839 throw-generic-exception
-langchain4j/src/test/java/dev/langchain4j/service/AiServiceStreamingPublisherTest.java:978 ignored-status-result
 langchain4j/src/test/java/dev/langchain4j/service/AiServiceTokenStreamTest.java:326 throw-generic-exception
 langchain4j/src/test/java/dev/langchain4j/service/AiServicesAsyncTest.java:1420 throw-generic-exception
 langchain4j/src/test/java/dev/langchain4j/service/AiServicesAsyncTest.java:1422 throw-generic-exception
-langchain4j/src/test/java/dev/langchain4j/service/AiServicesAsyncTest.java:897 ignored-status-result
 langchain4j/src/test/java/dev/langchain4j/service/AiServicesAsyncTest.java:918 thread-sleep-in-test
-langchain4j/src/test/java/dev/langchain4j/service/AiServicesContextPropagationTest.java:157 ignored-status-result
 langchain4j/src/test/java/dev/langchain4j/service/AiServicesIT.java:534 record-array-component
 langchain4j/src/test/java/dev/langchain4j/service/AiServicesModerationTest.java:73 reference-equality-value-type
 langchain4j/src/test/java/dev/langchain4j/service/AiServicesNonBlockingTest.java:1205 thread-sleep-in-test
 langchain4j/src/test/java/dev/langchain4j/service/AiServicesNonBlockingTest.java:1380 thread-sleep-in-test
 langchain4j/src/test/java/dev/langchain4j/service/AiServicesNonBlockingTest.java:889 thread-sleep-in-test
 langchain4j/src/test/java/dev/langchain4j/service/AiServicesNonBlockingTest.java:926 throw-generic-exception
-langchain4j/src/test/java/dev/langchain4j/service/AiServicesObservabilityTests.java:167 ignored-status-result
 langchain4j/src/test/java/dev/langchain4j/service/AiServicesObservabilityTests.java:169 abrupt-finally
 langchain4j/src/test/java/dev/langchain4j/service/AiServicesObservabilityTests.java:169 throw-generic-exception
-langchain4j/src/test/java/dev/langchain4j/service/AiServicesObservabilityTests.java:256 ignored-status-result
 langchain4j/src/test/java/dev/langchain4j/service/AiServicesObservabilityTests.java:258 abrupt-finally
 langchain4j/src/test/java/dev/langchain4j/service/AiServicesObservabilityTests.java:258 throw-generic-exception
-langchain4j/src/test/java/dev/langchain4j/service/AiServicesObservabilityTests.java:414 ignored-status-result
 langchain4j/src/test/java/dev/langchain4j/service/AiServicesObservabilityTests.java:416 abrupt-finally
 langchain4j/src/test/java/dev/langchain4j/service/AiServicesObservabilityTests.java:416 throw-generic-exception
-langchain4j/src/test/java/dev/langchain4j/service/AiServicesObservabilityTests.java:516 ignored-status-result
 langchain4j/src/test/java/dev/langchain4j/service/AiServicesObservabilityTests.java:518 abrupt-finally
 langchain4j/src/test/java/dev/langchain4j/service/AiServicesObservabilityTests.java:518 throw-generic-exception
 langchain4j/src/test/java/dev/langchain4j/service/AiServicesObservabilityTests.java:585 throw-generic-exception
@@ -2741,7 +2712,6 @@ langchain4j/src/test/java/dev/langchain4j/service/output/ServiceOutputParserTest
 langchain4j/src/test/java/dev/langchain4j/service/tool/DefaultToolExecutorTest.java:45 too-many-parameters
 langchain4j/src/test/java/dev/langchain4j/service/tool/DefaultToolExecutorTest.java:809 throw-generic-exception
 langchain4j/src/test/java/dev/langchain4j/service/tool/DefaultToolExecutorTest.java:924 throw-generic-exception
-langchain4j/src/test/java/dev/langchain4j/service/tool/HallucinatedToolNameStrategyTest.java:127 identical-branches
 langchain4j/src/test/java/dev/langchain4j/service/tool/LazyCalculationIntegrationTest.java:61 unused-local-variable
 langchain4j/src/test/java/dev/langchain4j/service/tool/ReturnBehaviorCombinationsTest.java:477 unused-private-method
 langchain4j/src/test/java/dev/langchain4j/service/tool/ToolErrorLoggingTest.java:36 throw-generic-exception

@@ -648,7 +648,6 @@ dolphinscheduler-common/src/main/java/org/apache/dolphinscheduler/common/log/rem
 dolphinscheduler-common/src/main/java/org/apache/dolphinscheduler/common/log/remote/GcsRemoteLogHandler.java:41 private-constructor-class-not-final
 dolphinscheduler-common/src/main/java/org/apache/dolphinscheduler/common/log/remote/OssRemoteLogHandler.java:38 private-constructor-class-not-final
 dolphinscheduler-common/src/main/java/org/apache/dolphinscheduler/common/log/remote/RemoteLogUtils.java:41 field-injection
-dolphinscheduler-common/src/main/java/org/apache/dolphinscheduler/common/log/remote/RemoteLogUtils.java:46 static-field-written-from-instance-method
 dolphinscheduler-common/src/main/java/org/apache/dolphinscheduler/common/log/remote/RemoteLogUtils.java:74 ignored-status-result
 dolphinscheduler-common/src/main/java/org/apache/dolphinscheduler/common/log/remote/S3RemoteLogHandler.java:39 private-constructor-class-not-final
 dolphinscheduler-common/src/main/java/org/apache/dolphinscheduler/common/model/AlertServerHeartBeat.java:30 unused-private-field
@@ -710,7 +709,6 @@ dolphinscheduler-common/src/main/java/org/apache/dolphinscheduler/common/utils/O
 dolphinscheduler-common/src/main/java/org/apache/dolphinscheduler/common/utils/PropertyUtils.java:43 todo-comment
 dolphinscheduler-common/src/main/java/org/apache/dolphinscheduler/common/utils/placeholder/BusinessTimeUtils.java:32 private-constructor-class-not-final
 dolphinscheduler-common/src/main/java/org/apache/dolphinscheduler/common/utils/placeholder/BusinessTimeUtils.java:46 dead-store
-dolphinscheduler-common/src/main/java/org/apache/dolphinscheduler/common/utils/placeholder/BusinessTimeUtils.java:53 switch-fallthrough
 dolphinscheduler-common/src/test/java/org/apache/dolphinscheduler/common/graph/DAGTest.java:124 assertion-argument-order
 dolphinscheduler-common/src/test/java/org/apache/dolphinscheduler/common/graph/DAGTest.java:139 assertion-argument-order
 dolphinscheduler-common/src/test/java/org/apache/dolphinscheduler/common/graph/DAGTest.java:150 assertion-argument-order
@@ -1401,8 +1399,6 @@ dolphinscheduler-meter/src/main/java/org/apache/dolphinscheduler/meter/metrics/S
 dolphinscheduler-meter/src/main/java/org/apache/dolphinscheduler/meter/metrics/SystemMetrics.java:52 todo-comment
 dolphinscheduler-microbench/src/main/java/org/apache/dolphinscheduler/microbench/base/AbstractBaseBenchmark.java:103 unused-private-method
 dolphinscheduler-microbench/src/main/java/org/apache/dolphinscheduler/microbench/base/AbstractBaseBenchmark.java:87 log-string-concatenation
-dolphinscheduler-microbench/src/main/java/org/apache/dolphinscheduler/microbench/common/EnumBenchMark.java:76 mutable-enum-field
-dolphinscheduler-microbench/src/main/java/org/apache/dolphinscheduler/microbench/common/EnumBenchMark.java:77 mutable-enum-field
 dolphinscheduler-registry/dolphinscheduler-registry-api/src/main/java/org/apache/dolphinscheduler/registry/api/RegistryClient.java:121 todo-comment
 dolphinscheduler-registry/dolphinscheduler-registry-api/src/main/java/org/apache/dolphinscheduler/registry/api/RegistryClient.java:53 singleton-mutable-state
 dolphinscheduler-registry/dolphinscheduler-registry-api/src/main/java/org/apache/dolphinscheduler/registry/api/RegistryConstants.java:20 utility-class-instantiable
@@ -1444,7 +1440,6 @@ dolphinscheduler-service/src/main/java/org/apache/dolphinscheduler/service/alert
 dolphinscheduler-service/src/main/java/org/apache/dolphinscheduler/service/alert/WorkflowAlertManager.java:54 field-injection
 dolphinscheduler-service/src/main/java/org/apache/dolphinscheduler/service/alert/WorkflowAlertManager.java:57 field-injection
 dolphinscheduler-service/src/main/java/org/apache/dolphinscheduler/service/alert/WorkflowAlertManager.java:60 field-injection
-dolphinscheduler-service/src/main/java/org/apache/dolphinscheduler/service/bean/SpringApplicationContext.java:33 static-field-written-from-instance-method
 dolphinscheduler-service/src/main/java/org/apache/dolphinscheduler/service/command/CommandServiceImpl.java:54 field-injection
 dolphinscheduler-service/src/main/java/org/apache/dolphinscheduler/service/command/CommandServiceImpl.java:57 field-injection
 dolphinscheduler-service/src/main/java/org/apache/dolphinscheduler/service/command/CommandServiceImpl.java:60 field-injection
@@ -1527,11 +1522,7 @@ dolphinscheduler-service/src/test/java/org/apache/dolphinscheduler/service/cron/
 dolphinscheduler-service/src/test/java/org/apache/dolphinscheduler/service/cron/CronUtilsTest.java:204 constant-assertion
 dolphinscheduler-spi/src/main/java/org/apache/dolphinscheduler/spi/params/PluginParamsTransfer.java:35 utility-class-instantiable
 dolphinscheduler-spi/src/main/java/org/apache/dolphinscheduler/spi/params/PluginParamsTransfer.java:80 collection-method-returns-null
-dolphinscheduler-spi/src/main/java/org/apache/dolphinscheduler/spi/params/base/DataType.java:32 mutable-enum-field
-dolphinscheduler-spi/src/main/java/org/apache/dolphinscheduler/spi/params/base/FormType.java:29 mutable-enum-field
-dolphinscheduler-spi/src/main/java/org/apache/dolphinscheduler/spi/params/base/ResizeType.java:27 mutable-enum-field
 dolphinscheduler-spi/src/main/java/org/apache/dolphinscheduler/spi/params/base/ResizeType.java:27 unused-private-field
-dolphinscheduler-spi/src/main/java/org/apache/dolphinscheduler/spi/params/base/TriggerType.java:26 mutable-enum-field
 dolphinscheduler-spi/src/main/java/org/apache/dolphinscheduler/spi/params/base/Validate.java:31 private-constructor-class-not-final
 dolphinscheduler-spi/src/main/java/org/apache/dolphinscheduler/spi/params/input/InputParam.java:31 private-constructor-class-not-final
 dolphinscheduler-spi/src/main/java/org/apache/dolphinscheduler/spi/params/input/InputParam.java:33 field-hides-superclass-field
@@ -1561,7 +1552,6 @@ dolphinscheduler-storage-plugin/dolphinscheduler-storage-oss/src/main/java/org/a
 dolphinscheduler-storage-plugin/dolphinscheduler-storage-oss/src/main/java/org/apache/dolphinscheduler/plugin/storage/oss/OssStorageOperator.java:226 cognitive-complexity
 dolphinscheduler-storage-plugin/dolphinscheduler-storage-s3/src/main/java/org/apache/dolphinscheduler/plugin/storage/s3/S3StorageOperator.java:200 default-charset
 dolphinscheduler-storage-plugin/dolphinscheduler-storage-s3/src/main/java/org/apache/dolphinscheduler/plugin/storage/s3/S3StorageOperator.java:70 constructor-calls-overridable-method
-dolphinscheduler-storage-plugin/dolphinscheduler-storage-s3/src/test/java/org/apache/dolphinscheduler/plugin/storage/s3/S3StorageOperatorTest.java:271 resource-leak
 dolphinscheduler-task-executor/src/main/java/org/apache/dolphinscheduler/task/executor/AbstractTaskExecutor.java:55 constructor-calls-overridable-method
 dolphinscheduler-task-executor/src/main/java/org/apache/dolphinscheduler/task/executor/TaskExecutorStateMappings.java:22 utility-class-instantiable
 dolphinscheduler-task-executor/src/main/java/org/apache/dolphinscheduler/task/executor/TaskExecutorStateMappings.java:24 todo-comment
@@ -1572,9 +1562,7 @@ dolphinscheduler-task-executor/src/main/java/org/apache/dolphinscheduler/task/ex
 dolphinscheduler-task-executor/src/main/java/org/apache/dolphinscheduler/task/executor/eventbus/TaskExecutorEventBusCoordinator.java:86 todo-comment
 dolphinscheduler-task-executor/src/main/java/org/apache/dolphinscheduler/task/executor/eventbus/TaskExecutorLifecycleEventRemoteReporter.java:266 lock-without-unlock-in-finally
 dolphinscheduler-task-executor/src/main/java/org/apache/dolphinscheduler/task/executor/eventbus/TaskExecutorLifecycleEventRemoteReporter.java:294 todo-comment
-dolphinscheduler-task-executor/src/main/java/org/apache/dolphinscheduler/task/executor/exceptions/TaskExecutorRuntimeExceptionEnum.java:26 mutable-enum-field
 dolphinscheduler-task-executor/src/main/java/org/apache/dolphinscheduler/task/executor/exceptions/TaskExecutorRuntimeExceptionEnum.java:26 unused-private-field
-dolphinscheduler-task-executor/src/main/java/org/apache/dolphinscheduler/task/executor/exceptions/TaskExecutorRuntimeExceptionEnum.java:28 mutable-enum-field
 dolphinscheduler-task-executor/src/main/java/org/apache/dolphinscheduler/task/executor/exceptions/TaskExecutorRuntimeExceptionEnum.java:28 unused-private-field
 dolphinscheduler-task-executor/src/main/java/org/apache/dolphinscheduler/task/executor/log/TaskExecutorMDCUtils.java:24 utility-class-instantiable
 dolphinscheduler-task-executor/src/main/java/org/apache/dolphinscheduler/task/executor/worker/TaskExecutorWorker.java:58 cognitive-complexity
@@ -1866,15 +1854,12 @@ dolphinscheduler-task-plugin/dolphinscheduler-task-kubeflow/src/test/java/org/ap
 dolphinscheduler-task-plugin/dolphinscheduler-task-kubeflow/src/test/java/org/apache/dolphinscheduler/plugin/kubeflow/KubeflowTaskTest.java:94 assertion-argument-order
 dolphinscheduler-task-plugin/dolphinscheduler-task-kubeflow/src/test/java/org/apache/dolphinscheduler/plugin/kubeflow/KubeflowTaskTest.java:98 assertion-argument-order
 dolphinscheduler-task-plugin/dolphinscheduler-task-linkis/src/main/java/org/apache/dolphinscheduler/plugin/task/linkis/Constants.java:20 private-constructor-class-not-final
-dolphinscheduler-task-plugin/dolphinscheduler-task-linkis/src/main/java/org/apache/dolphinscheduler/plugin/task/linkis/LinkisJobStatus.java:37 mutable-enum-field
 dolphinscheduler-task-plugin/dolphinscheduler-task-linkis/src/main/java/org/apache/dolphinscheduler/plugin/task/linkis/LinkisJobStatus.java:37 unused-private-field
-dolphinscheduler-task-plugin/dolphinscheduler-task-linkis/src/main/java/org/apache/dolphinscheduler/plugin/task/linkis/LinkisJobStatus.java:38 mutable-enum-field
 dolphinscheduler-task-plugin/dolphinscheduler-task-linkis/src/main/java/org/apache/dolphinscheduler/plugin/task/linkis/LinkisJobStatus.java:38 unused-private-field
 dolphinscheduler-task-plugin/dolphinscheduler-task-linkis/src/main/java/org/apache/dolphinscheduler/plugin/task/linkis/LinkisParameters.java:49 use-isempty
 dolphinscheduler-task-plugin/dolphinscheduler-task-linkis/src/main/java/org/apache/dolphinscheduler/plugin/task/linkis/LinkisTask.java:197 collapsible-if
 dolphinscheduler-task-plugin/dolphinscheduler-task-linkis/src/main/java/org/apache/dolphinscheduler/plugin/task/linkis/LinkisTask.java:75 throw-generic-exception
 dolphinscheduler-task-plugin/dolphinscheduler-task-mlflow/src/main/java/org/apache/dolphinscheduler/plugin/task/mlflow/MlflowConstants.java:20 private-constructor-class-not-final
-dolphinscheduler-task-plugin/dolphinscheduler-task-mlflow/src/main/java/org/apache/dolphinscheduler/plugin/task/mlflow/MlflowTask.java:82 identical-branches
 dolphinscheduler-task-plugin/dolphinscheduler-task-mlflow/src/main/java/org/apache/dolphinscheduler/plugin/task/mlflow/MlflowTask.java:95 throw-generic-exception
 dolphinscheduler-task-plugin/dolphinscheduler-task-mlflow/src/test/java/org/apache/dolphinler/plugin/task/mlflow/MlflowTaskTest.java:114 assertion-argument-order
 dolphinscheduler-task-plugin/dolphinscheduler-task-mlflow/src/test/java/org/apache/dolphinler/plugin/task/mlflow/MlflowTaskTest.java:132 assertion-argument-order

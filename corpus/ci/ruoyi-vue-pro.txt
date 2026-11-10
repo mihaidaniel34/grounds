@@ -141,7 +141,6 @@ yudao-framework/yudao-spring-boot-starter-excel/src/test/java/cn/iocoder/yudao/f
 yudao-framework/yudao-spring-boot-starter-excel/src/test/java/cn/iocoder/yudao/framework/excel/core/convert/MultiDictConvertTest.java:178 assert-true-with-comparison
 yudao-framework/yudao-spring-boot-starter-excel/src/test/java/cn/iocoder/yudao/framework/excel/core/convert/MultiDictConvertTest.java:227 assert-true-with-comparison
 yudao-framework/yudao-spring-boot-starter-job/src/main/java/cn/iocoder/yudao/framework/quartz/core/util/CronUtils.java:17 utility-class-instantiable
-yudao-framework/yudao-spring-boot-starter-job/src/main/java/cn/iocoder/yudao/framework/quartz/core/util/CronUtils.java:42 lost-stack-trace
 yudao-framework/yudao-spring-boot-starter-monitor/src/main/java/cn/iocoder/yudao/framework/tracer/core/util/TracerFrameworkUtils.java:14 utility-class-instantiable
 yudao-framework/yudao-spring-boot-starter-mq/src/main/java/cn/iocoder/yudao/framework/mq/redis/core/stream/AbstractRedisStreamMessageListener.java:72 todo-comment
 yudao-framework/yudao-spring-boot-starter-mybatis/src/main/java/cn/iocoder/yudao/framework/datasource/core/enums/DataSourceEnum.java:9 constant-interface
@@ -246,7 +245,6 @@ yudao-module-ai/src/main/java/cn/iocoder/yudao/module/ai/framework/ai/core/model
 yudao-module-ai/src/main/java/cn/iocoder/yudao/module/ai/framework/ai/core/model/AiModelFactoryImpl.java:473 todo-comment
 yudao-module-ai/src/main/java/cn/iocoder/yudao/module/ai/framework/ai/core/model/AiModelFactoryImpl.java:584 unused-parameter
 yudao-module-ai/src/main/java/cn/iocoder/yudao/module/ai/framework/ai/core/model/AiModelFactoryImpl.java:585 todo-comment
-yudao-module-ai/src/main/java/cn/iocoder/yudao/module/ai/framework/ai/core/model/AiModelFactoryImpl.java:610 ignored-status-result
 yudao-module-ai/src/main/java/cn/iocoder/yudao/module/ai/framework/ai/core/model/midjourney/api/MidjourneyApi.java:33 field-naming
 yudao-module-ai/src/main/java/cn/iocoder/yudao/module/ai/framework/ai/core/model/midjourney/api/MidjourneyApi.java:35 field-naming
 yudao-module-ai/src/main/java/cn/iocoder/yudao/module/ai/framework/ai/core/model/siliconflow/SiliconFlowApiConstants.java:24 utility-class-instantiable
@@ -586,7 +584,6 @@ yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/framework/permission/
 yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/clue/CrmClueServiceImpl.java:10 unused-import
 yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/customer/CrmCustomerServiceImpl.java:432 todo-comment
 yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/customer/CrmCustomerServiceImpl.java:458 catch-throwable
-yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/service/permission/CrmPermissionServiceImpl.java:240 null-dereference
 yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/util/CrmAuditStatusUtils.java:12 utility-class-instantiable
 yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/util/CrmAuditStatusUtils.java:20 nested-ternary
 yudao-module-crm/src/main/java/cn/iocoder/yudao/module/crm/util/CrmPermissionUtils.java:27 utility-class-instantiable
@@ -951,7 +948,6 @@ yudao-module-im/src/main/java/cn/iocoder/yudao/module/im/service/group/ImGroupSe
 yudao-module-im/src/main/java/cn/iocoder/yudao/module/im/service/rtc/ImRtcCallServiceImpl.java:1072 unused-parameter
 yudao-module-im/src/main/java/cn/iocoder/yudao/module/im/service/sensitiveword/ImSensitiveWordServiceImpl.java:68 private-constructor-class-not-final
 yudao-module-im/src/main/java/cn/iocoder/yudao/module/im/util/ImMessageUtils.java:20 utility-class-instantiable
-yudao-module-im/src/main/java/cn/iocoder/yudao/module/im/util/ImMessageUtils.java:62 identical-branches
 yudao-module-im/src/test/java/cn/iocoder/yudao/module/im/service/message/ImGroupMessageServiceImplTest.java:887 complex-boolean-expression
 yudao-module-im/src/test/java/cn/iocoder/yudao/module/im/service/message/ImGroupMessageServiceImplTest.java:906 complex-boolean-expression
 yudao-module-im/src/test/java/cn/iocoder/yudao/module/im/service/message/ImGroupMessageServiceImplTest.java:925 complex-boolean-expression
@@ -1160,15 +1156,12 @@ yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/
 yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/modbus/tcpserver/codec/IotModbusFrameDecoder.java:163 private-constructor-class-not-final
 yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/modbus/tcpserver/codec/IotModbusFrameDecoder.java:203 private-constructor-class-not-final
 yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/modbus/tcpserver/codec/IotModbusFrameDecoder.java:272 private-constructor-class-not-final
-yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/modbus/tcpserver/codec/IotModbusFrameDecoder.java:349 identical-branches
-yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/modbus/tcpserver/codec/IotModbusFrameDecoder.java:403 identical-branches
 yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/modbus/tcpserver/handler/upstream/IotModbusTcpServerUpstreamHandler.java:67 too-many-parameters
 yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/modbus/tcpserver/manager/IotModbusTcpServerConfigCacheService.java:98 collection-method-returns-null
 yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/mqtt/IotMqttProtocol.java:159 log-and-rethrow
 yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/mqtt/IotMqttProtocol.java:298 exception-message-only-logged
 yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/mqtt/IotMqttProtocol.java:339 exception-message-only-logged
 yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/mqtt/handler/downstream/IotMqttDownstreamHandler.java:60 throw-generic-exception
-yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/mqtt/handler/downstream/IotMqttDownstreamHandler.java:63 null-dereference
 yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/mqtt/handler/upstream/IotMqttAuthHandler.java:100 unused-parameter
 yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/mqtt/handler/upstream/IotMqttAuthHandler.java:91 exception-message-only-logged
 yudao-module-iot/yudao-module-iot-gateway/src/main/java/cn/iocoder/yudao/module/iot/gateway/protocol/mqtt/handler/upstream/IotMqttRegisterHandler.java:78 exception-message-only-logged
@@ -1237,7 +1230,6 @@ yudao-module-iot/yudao-module-iot-gateway/src/test/java/cn/iocoder/yudao/module/
 yudao-module-iot/yudao-module-iot-gateway/src/test/java/cn/iocoder/yudao/module/iot/gateway/protocol/modbus/ModbusRtuOverTcpDemo.java:91 close-in-finally-unguarded
 yudao-module-iot/yudao-module-iot-gateway/src/test/java/cn/iocoder/yudao/module/iot/gateway/protocol/modbus/tcpclient/IoTModbusTcpClientIntegrationTest.java:35 disabled-test-without-reason
 yudao-module-iot/yudao-module-iot-gateway/src/test/java/cn/iocoder/yudao/module/iot/gateway/protocol/modbus/tcpclient/IoTModbusTcpClientIntegrationTest.java:48 test-without-assertion
-yudao-module-iot/yudao-module-iot-gateway/src/test/java/cn/iocoder/yudao/module/iot/gateway/protocol/modbus/tcpclient/IoTModbusTcpClientIntegrationTest.java:97 infinite-loop
 yudao-module-iot/yudao-module-iot-gateway/src/test/java/cn/iocoder/yudao/module/iot/gateway/protocol/modbus/tcpclient/IoTModbusTcpClientIntegrationTest.java:98 thread-sleep-in-test
 yudao-module-iot/yudao-module-iot-gateway/src/test/java/cn/iocoder/yudao/module/iot/gateway/protocol/modbus/tcpserver/IotModbusTcpServerRtuIntegrationTest.java:134 unused-local-variable
 yudao-module-iot/yudao-module-iot-gateway/src/test/java/cn/iocoder/yudao/module/iot/gateway/protocol/modbus/tcpserver/IotModbusTcpServerRtuIntegrationTest.java:158 thread-sleep-in-test
@@ -2153,7 +2145,6 @@ yudao-module-pms/src/main/java/cn/iocoder/yudao/module/pms/service/kb/interactio
 yudao-module-pms/src/main/java/cn/iocoder/yudao/module/pms/service/kb/library/PmsKnowledgeLibraryServiceImpl.java:24 unused-import
 yudao-module-pms/src/main/java/cn/iocoder/yudao/module/pms/service/kb/recycle/PmsKnowledgeRecycleServiceImpl.java:418 collapsible-if
 yudao-module-pms/src/main/java/cn/iocoder/yudao/module/pms/service/pm/iteration/PmsIterationService.java:11 unused-import
-yudao-module-pms/src/main/java/cn/iocoder/yudao/module/pms/service/pm/project/PmsProjectServiceImpl.java:145 identical-branches
 yudao-module-pms/src/main/java/cn/iocoder/yudao/module/pms/service/pm/project/PmsProjectServiceImpl.java:181 cognitive-complexity
 yudao-module-pms/src/main/java/cn/iocoder/yudao/module/pms/service/pm/project/PmsProjectTemplateServiceImpl.java:137 cognitive-complexity
 yudao-module-pms/src/main/java/cn/iocoder/yudao/module/pms/service/pm/project/PmsProjectTemplateServiceImpl.java:17 unused-import

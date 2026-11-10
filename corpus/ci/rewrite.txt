@@ -230,8 +230,6 @@ rewrite-core/src/main/java/org/openrewrite/rpc/RpcReceiveQueue.java:115 cognitiv
 rewrite-core/src/main/java/org/openrewrite/rpc/RpcReceiveQueue.java:151 todo-comment
 rewrite-core/src/main/java/org/openrewrite/rpc/RpcReceiveQueue.java:193 collection-method-returns-null
 rewrite-core/src/main/java/org/openrewrite/rpc/RpcReceiveQueue.java:253 throw-generic-exception
-rewrite-core/src/main/java/org/openrewrite/rpc/RpcSendQueue.java:129 identical-branches
-rewrite-core/src/main/java/org/openrewrite/rpc/RpcSendQueue.java:135 identical-branches
 rewrite-core/src/main/java/org/openrewrite/rpc/RpcSendQueue.java:148 cognitive-complexity
 rewrite-core/src/main/java/org/openrewrite/rpc/RpcSendQueue.java:287 cognitive-complexity
 rewrite-core/src/main/java/org/openrewrite/rpc/RpcSendQueue.java:290 complex-boolean-expression
@@ -333,8 +331,6 @@ rewrite-core/src/test/java/org/openrewrite/RecipeLifecycleTest.java:313 test-wit
 rewrite-core/src/test/java/org/openrewrite/RecipeLifecycleTest.java:420 default-charset
 rewrite-core/src/test/java/org/openrewrite/RecipeLifecycleTest.java:430 default-charset
 rewrite-core/src/test/java/org/openrewrite/RecipeLifecycleTest.java:440 default-charset
-rewrite-core/src/test/java/org/openrewrite/RecipeRunTimeoutTest.java:247 infinite-loop
-rewrite-core/src/test/java/org/openrewrite/RecipeRunTimeoutTest.java:307 infinite-loop
 rewrite-core/src/test/java/org/openrewrite/config/CategoryTreeTest.java:70 test-without-assertion
 rewrite-core/src/test/java/org/openrewrite/config/ClasspathScanningLoaderTest.java:59 throw-generic-exception
 rewrite-core/src/test/java/org/openrewrite/config/ClasspathScanningLoaderTest.java:99 throw-generic-exception
@@ -349,12 +345,6 @@ rewrite-core/src/test/java/org/openrewrite/config/YamlResourceLoaderTest.java:46
 rewrite-core/src/test/java/org/openrewrite/config/YamlResourceLoaderTest.java:52 default-charset
 rewrite-core/src/test/java/org/openrewrite/config/YamlResourceLoaderTest.java:63 default-charset
 rewrite-core/src/test/java/org/openrewrite/internal/AdaptiveRadixTreeTest.java:64 test-without-assertion
-rewrite-core/src/test/java/org/openrewrite/internal/EncodingDetectingInputStreamTest.java:106 resource-leak
-rewrite-core/src/test/java/org/openrewrite/internal/EncodingDetectingInputStreamTest.java:129 resource-leak
-rewrite-core/src/test/java/org/openrewrite/internal/EncodingDetectingInputStreamTest.java:170 resource-leak
-rewrite-core/src/test/java/org/openrewrite/internal/EncodingDetectingInputStreamTest.java:193 resource-leak
-rewrite-core/src/test/java/org/openrewrite/internal/EncodingDetectingInputStreamTest.java:205 resource-leak
-rewrite-core/src/test/java/org/openrewrite/internal/EncodingDetectingInputStreamTest.java:216 resource-leak
 rewrite-core/src/test/java/org/openrewrite/internal/InMemoryDiffEntryTest.java:273 octal-literal
 rewrite-core/src/test/java/org/openrewrite/internal/InMemoryDiffEntryTest.java:296 octal-literal
 rewrite-core/src/test/java/org/openrewrite/internal/InMemoryDiffEntryTest.java:319 octal-literal
@@ -387,7 +377,6 @@ rewrite-core/src/test/java/org/openrewrite/remote/RemoteFileTest.java:206 throw-
 rewrite-core/src/test/java/org/openrewrite/rpc/RewriteRpcExecutionContextViewTest.java:110 throw-generic-exception
 rewrite-core/src/test/java/org/openrewrite/rpc/RewriteRpcExecutionContextViewTest.java:84 thread-sleep-in-test
 rewrite-core/src/test/java/org/openrewrite/rpc/RewriteRpcProcessTest.java:127 thread-sleep-in-test
-rewrite-core/src/test/java/org/openrewrite/rpc/RewriteRpcProcessTest.java:374 infinite-loop
 rewrite-core/src/test/java/org/openrewrite/rpc/RewriteRpcProcessTest.java:66 default-charset
 rewrite-core/src/test/java/org/openrewrite/rpc/RewriteRpcProcessTest.java:82 thread-sleep-in-test
 rewrite-core/src/test/java/org/openrewrite/rpc/RewriteRpcTest.java:347 thread-sleep-in-test
@@ -443,7 +432,6 @@ rewrite-csharp/src/main/java/org/openrewrite/csharp/service/CSharpNamingService.
 rewrite-csharp/src/main/java/org/openrewrite/csharp/service/CSharpNamingService.java:46 loop-counter-modified-in-body
 rewrite-csharp/src/main/java/org/openrewrite/csharp/sln/RemoveNjsprojFromSolution.java:172 private-constructor-class-not-final
 rewrite-csharp/src/main/java/org/openrewrite/csharp/sln/RemoveNjsprojFromSolution.java:89 cognitive-complexity
-rewrite-csharp/src/main/java/org/openrewrite/csharp/tree/CsLeftPadded.java:58 mutable-enum-field
 rewrite-csharp/src/test/java/org/openrewrite/csharp/rpc/InstallToolPathConcurrencyTest.java:123 lost-stack-trace
 rewrite-csharp/src/test/java/org/openrewrite/csharp/rpc/InstallToolPathConcurrencyTest.java:125 throw-generic-exception
 rewrite-csharp/src/test/java/org/openrewrite/csharp/rpc/InstallToolPathConcurrencyTest.java:133 throw-generic-exception
@@ -745,7 +733,6 @@ rewrite-gradle/src/main/java/org/openrewrite/gradle/ChangeDependencyExtension.ja
 rewrite-gradle/src/main/java/org/openrewrite/gradle/ChangeDependencyExtension.java:78 cognitive-complexity
 rewrite-gradle/src/main/java/org/openrewrite/gradle/ChangeDependencyGroupId.java:74 cognitive-complexity
 rewrite-gradle/src/main/java/org/openrewrite/gradle/ChangeManagedDependency.java:124 cognitive-complexity
-rewrite-gradle/src/main/java/org/openrewrite/gradle/ChangeManagedDependency.java:138 null-dereference
 rewrite-gradle/src/main/java/org/openrewrite/gradle/ChangeTaskToTasksRegister.java:110 commented-out-code
 rewrite-gradle/src/main/java/org/openrewrite/gradle/ChangeTaskToTasksRegister.java:140 cognitive-complexity
 rewrite-gradle/src/main/java/org/openrewrite/gradle/ChangeTaskToTasksRegister.java:160 deep-nesting
@@ -998,7 +985,6 @@ rewrite-gradle/src/main/java/org/openrewrite/gradle/trait/GradleDependency.java:
 rewrite-gradle/src/main/java/org/openrewrite/gradle/trait/GradleDependency.java:1506 cognitive-complexity
 rewrite-gradle/src/main/java/org/openrewrite/gradle/trait/GradleDependency.java:1520 complex-boolean-expression
 rewrite-gradle/src/main/java/org/openrewrite/gradle/trait/GradleDependency.java:1543 deep-nesting
-rewrite-gradle/src/main/java/org/openrewrite/gradle/trait/GradleDependency.java:1550 null-dereference
 rewrite-gradle/src/main/java/org/openrewrite/gradle/trait/GradleDependency.java:1552 deep-nesting
 rewrite-gradle/src/main/java/org/openrewrite/gradle/trait/GradleDependency.java:1595 cognitive-complexity
 rewrite-gradle/src/main/java/org/openrewrite/gradle/trait/GradleDependency.java:194 cognitive-complexity
@@ -1045,8 +1031,6 @@ rewrite-gradle/src/main/java/org/openrewrite/gradle/trait/SpringDependencyManage
 rewrite-gradle/src/main/java/org/openrewrite/gradle/trait/SpringDependencyManagementPluginEntry.java:524 cognitive-complexity
 rewrite-gradle/src/main/java/org/openrewrite/gradle/trait/SpringDependencyManagementPluginEntry.java:540 deep-nesting
 rewrite-gradle/src/main/java/org/openrewrite/gradle/trait/SpringDependencyManagementPluginEntry.java:546 deep-nesting
-rewrite-gradle/src/main/java/org/openrewrite/gradle/trait/SpringDependencyManagementPluginEntry.java:582 null-dereference
-rewrite-gradle/src/main/java/org/openrewrite/gradle/trait/SpringDependencyManagementPluginEntry.java:583 null-dereference
 rewrite-gradle/src/main/java/org/openrewrite/gradle/trait/SpringDependencyManagementPluginEntry.java:739 private-constructor-class-not-final
 rewrite-gradle/src/main/java/org/openrewrite/gradle/trait/SpringDependencyManagementPluginEntry.java:98 cognitive-complexity
 rewrite-gradle/src/main/java/org/openrewrite/gradle/trait/TomlVersionCatalog.java:71 cognitive-complexity
@@ -1063,9 +1047,6 @@ rewrite-gradle/src/test/java/org/openrewrite/gradle/UpdateGradleWrapperTest.java
 rewrite-gradle/src/test/java/org/openrewrite/gradle/UpdateGradleWrapperTest.java:698 throw-generic-exception
 rewrite-gradle/src/test/java/org/openrewrite/gradle/UpdateGradleWrapperTest.java:943 throw-generic-exception
 rewrite-gradle/src/test/java/org/openrewrite/gradle/internal/GradleWrapperScriptDownloader.java:157 catch-throwable
-rewrite-gradle/src/test/java/org/openrewrite/gradle/internal/GradleWrapperScriptDownloader.java:223 identical-branches
-rewrite-gradle/src/test/java/org/openrewrite/gradle/internal/GradleWrapperScriptDownloader.java:256 identical-branches
-rewrite-gradle/src/test/java/org/openrewrite/gradle/internal/GradleWrapperScriptDownloader.java:260 identical-branches
 rewrite-gradle/src/test/java/org/openrewrite/gradle/internal/GradleWrapperTest.java:26 test-without-assertion
 rewrite-gradle/src/test/java/org/openrewrite/gradle/internal/GradleWrapperTest.java:27 unused-local-variable
 rewrite-gradle/src/test/java/org/openrewrite/gradle/search/DependencyInsightTest.java:128 too-many-parameters
@@ -1094,7 +1075,6 @@ rewrite-groovy/src/main/java/org/openrewrite/groovy/GroovyParserVisitor.java:112
 rewrite-groovy/src/main/java/org/openrewrite/groovy/GroovyParserVisitor.java:113 unused-private-field
 rewrite-groovy/src/main/java/org/openrewrite/groovy/GroovyParserVisitor.java:1131 deep-nesting
 rewrite-groovy/src/main/java/org/openrewrite/groovy/GroovyParserVisitor.java:1170 local-variable-naming
-rewrite-groovy/src/main/java/org/openrewrite/groovy/GroovyParserVisitor.java:1315 legacy-synchronized-collection
 rewrite-groovy/src/main/java/org/openrewrite/groovy/GroovyParserVisitor.java:1402 cognitive-complexity
 rewrite-groovy/src/main/java/org/openrewrite/groovy/GroovyParserVisitor.java:1423 complex-boolean-expression
 rewrite-groovy/src/main/java/org/openrewrite/groovy/GroovyParserVisitor.java:1469 deep-nesting
@@ -1109,7 +1089,6 @@ rewrite-groovy/src/main/java/org/openrewrite/groovy/GroovyParserVisitor.java:207
 rewrite-groovy/src/main/java/org/openrewrite/groovy/GroovyParserVisitor.java:209 deep-nesting
 rewrite-groovy/src/main/java/org/openrewrite/groovy/GroovyParserVisitor.java:2164 cognitive-complexity
 rewrite-groovy/src/main/java/org/openrewrite/groovy/GroovyParserVisitor.java:2180 todo-comment
-rewrite-groovy/src/main/java/org/openrewrite/groovy/GroovyParserVisitor.java:2389 optional-ispresent-then-get
 rewrite-groovy/src/main/java/org/openrewrite/groovy/GroovyParserVisitor.java:2433 cognitive-complexity
 rewrite-groovy/src/main/java/org/openrewrite/groovy/GroovyParserVisitor.java:2495 local-variable-naming
 rewrite-groovy/src/main/java/org/openrewrite/groovy/GroovyParserVisitor.java:2502 cognitive-complexity
@@ -1195,7 +1174,6 @@ rewrite-groovy/src/main/java/org/openrewrite/groovy/format/MergeSpacesVisitor.ja
 rewrite-groovy/src/main/java/org/openrewrite/groovy/format/MergeSpacesVisitor.java:1773 null-dereference
 rewrite-groovy/src/main/java/org/openrewrite/groovy/format/MergeSpacesVisitor.java:247 cognitive-complexity
 rewrite-groovy/src/main/java/org/openrewrite/groovy/format/MergeSpacesVisitor.java:252 collapsible-if
-rewrite-groovy/src/main/java/org/openrewrite/groovy/format/MergeSpacesVisitor.java:252 null-dereference
 rewrite-groovy/src/main/java/org/openrewrite/groovy/format/MergeSpacesVisitor.java:288 collapsible-if
 rewrite-groovy/src/main/java/org/openrewrite/groovy/format/MergeSpacesVisitor.java:439 local-variable-naming
 rewrite-groovy/src/main/java/org/openrewrite/groovy/format/MergeSpacesVisitor.java:566 local-variable-naming
@@ -1447,8 +1425,6 @@ rewrite-hcl/src/main/java/org/openrewrite/hcl/tree/HclContainer.java:34 private-
 rewrite-hcl/src/main/java/org/openrewrite/hcl/tree/Space.java:148 cognitive-complexity
 rewrite-hcl/src/main/java/org/openrewrite/hcl/tree/Space.java:165 identical-branches
 rewrite-hcl/src/main/java/org/openrewrite/hcl/tree/Space.java:167 identical-branches
-rewrite-hcl/src/main/java/org/openrewrite/hcl/tree/Space.java:192 identical-branches
-rewrite-hcl/src/main/java/org/openrewrite/hcl/tree/Space.java:218 identical-branches
 rewrite-hcl/src/main/java/org/openrewrite/hcl/tree/Space.java:41 private-constructor-class-not-final
 rewrite-hcl/src/main/java/org/openrewrite/hcl/tree/Space.java:69 string-constructor
 rewrite-hcl/src/test/java/org/openrewrite/hcl/JsonPathMatcherTest.java:294 cognitive-complexity
@@ -1871,7 +1847,6 @@ rewrite-java-test/src/main/java/org/openrewrite/java/JavaTypeGoat.java:30 field-
 rewrite-java-test/src/main/java/org/openrewrite/java/JavaTypeGoat.java:30 public-static-non-final-field
 rewrite-java-test/src/main/java/org/openrewrite/java/JavaTypeGoat.java:31 field-naming
 rewrite-java-test/src/main/java/org/openrewrite/java/JavaTypeGoat.java:31 public-static-non-final-field
-rewrite-java-test/src/main/java/org/openrewrite/java/JavaTypeGoat.java:47 mutable-enum-field
 rewrite-java-test/src/main/java/org/openrewrite/java/JavaTypeGoat.java:47 unused-private-field
 rewrite-java-test/src/test/java/org/openrewrite/ResultTest.java:73 test-without-assertion
 rewrite-java-test/src/test/java/org/openrewrite/java/ChangeMethodTargetToStaticTest.java:478 disabled-test-without-reason
@@ -1988,7 +1963,6 @@ rewrite-java/src/main/java/org/openrewrite/java/DeleteMethodArgument.java:96 cog
 rewrite-java/src/main/java/org/openrewrite/java/ExtractField.java:72 reference-equality-value-type
 rewrite-java/src/main/java/org/openrewrite/java/ExtractInterface.java:148 throw-generic-exception
 rewrite-java/src/main/java/org/openrewrite/java/ImplementInterface.java:40 local-variable-naming
-rewrite-java/src/main/java/org/openrewrite/java/ImplementInterface.java:42 null-dereference
 rewrite-java/src/main/java/org/openrewrite/java/ImplementInterface.java:52 local-variable-naming
 rewrite-java/src/main/java/org/openrewrite/java/ImplementInterface.java:57 cognitive-complexity
 rewrite-java/src/main/java/org/openrewrite/java/InlineMethodCalls.java:165 collapsible-if
@@ -2078,13 +2052,11 @@ rewrite-java/src/main/java/org/openrewrite/java/RemoveAnnotationAttribute.java:5
 rewrite-java/src/main/java/org/openrewrite/java/RemoveAnnotationAttribute.java:93 reference-equality-value-type
 rewrite-java/src/main/java/org/openrewrite/java/RemoveAnnotationVisitor.java:103 reference-equality-value-type
 rewrite-java/src/main/java/org/openrewrite/java/RemoveAnnotationVisitor.java:163 null-dereference
-rewrite-java/src/main/java/org/openrewrite/java/RemoveAnnotationVisitor.java:192 null-dereference
 rewrite-java/src/main/java/org/openrewrite/java/RemoveAnnotationVisitor.java:41 reference-equality-value-type
 rewrite-java/src/main/java/org/openrewrite/java/RemoveAnnotationVisitor.java:75 reference-equality-value-type
 rewrite-java/src/main/java/org/openrewrite/java/RemoveImplements.java:57 cognitive-complexity
 rewrite-java/src/main/java/org/openrewrite/java/RemoveImport.java:104 collapsible-if
 rewrite-java/src/main/java/org/openrewrite/java/RemoveImport.java:106 deep-nesting
-rewrite-java/src/main/java/org/openrewrite/java/RemoveImport.java:141 identical-branches
 rewrite-java/src/main/java/org/openrewrite/java/RemoveImport.java:149 complex-boolean-expression
 rewrite-java/src/main/java/org/openrewrite/java/RemoveImport.java:57 cognitive-complexity
 rewrite-java/src/main/java/org/openrewrite/java/RemoveImport.java:90 deep-nesting
@@ -2098,9 +2070,7 @@ rewrite-java/src/main/java/org/openrewrite/java/RemoveUnusedImports.java:161 dee
 rewrite-java/src/main/java/org/openrewrite/java/RemoveUnusedImports.java:182 deep-nesting
 rewrite-java/src/main/java/org/openrewrite/java/RemoveUnusedImports.java:191 deep-nesting
 rewrite-java/src/main/java/org/openrewrite/java/RemoveUnusedImports.java:211 complex-boolean-expression
-rewrite-java/src/main/java/org/openrewrite/java/RemoveUnusedImports.java:215 identical-branches
 rewrite-java/src/main/java/org/openrewrite/java/RemoveUnusedImports.java:260 deep-nesting
-rewrite-java/src/main/java/org/openrewrite/java/RemoveUnusedImports.java:274 identical-branches
 rewrite-java/src/main/java/org/openrewrite/java/RemoveUnusedImports.java:281 identical-branches
 rewrite-java/src/main/java/org/openrewrite/java/RemoveUnusedImports.java:322 deep-nesting
 rewrite-java/src/main/java/org/openrewrite/java/RemoveUnusedImports.java:506 local-variable-naming
@@ -2157,8 +2127,6 @@ rewrite-java/src/main/java/org/openrewrite/java/cleanup/SimplifyBooleanExpressio
 rewrite-java/src/main/java/org/openrewrite/java/cleanup/SimplifyBooleanExpressionVisitor.java:195 cognitive-complexity
 rewrite-java/src/main/java/org/openrewrite/java/cleanup/SimplifyBooleanExpressionVisitor.java:33 cognitive-complexity
 rewrite-java/src/main/java/org/openrewrite/java/cleanup/SimplifyBooleanExpressionVisitor.java:437 complex-boolean-expression
-rewrite-java/src/main/java/org/openrewrite/java/cleanup/SimplifyBooleanExpressionVisitor.java:47 identical-branches
-rewrite-java/src/main/java/org/openrewrite/java/cleanup/SimplifyBooleanExpressionVisitor.java:60 identical-branches
 rewrite-java/src/main/java/org/openrewrite/java/cleanup/UnnecessaryParenthesesVisitor.java:102 complex-boolean-expression
 rewrite-java/src/main/java/org/openrewrite/java/cleanup/UnnecessaryParenthesesVisitor.java:129 local-variable-naming
 rewrite-java/src/main/java/org/openrewrite/java/cleanup/UnnecessaryParenthesesVisitor.java:149 complex-boolean-expression
@@ -2202,7 +2170,6 @@ rewrite-java/src/main/java/org/openrewrite/java/format/MergeSpacesVisitor.java:7
 rewrite-java/src/main/java/org/openrewrite/java/format/MergeSpacesVisitor.java:720 local-variable-naming
 rewrite-java/src/main/java/org/openrewrite/java/format/MergeSpacesVisitor.java:751 local-variable-naming
 rewrite-java/src/main/java/org/openrewrite/java/format/MergeSpacesVisitor.java:76 collapsible-if
-rewrite-java/src/main/java/org/openrewrite/java/format/MergeSpacesVisitor.java:76 null-dereference
 rewrite-java/src/main/java/org/openrewrite/java/format/MethodParamPad.java:114 collapsible-if
 rewrite-java/src/main/java/org/openrewrite/java/format/MethodParamPad.java:49 private-constructor-class-not-final
 rewrite-java/src/main/java/org/openrewrite/java/format/MinimumViableSpacingVisitor.java:165 local-variable-naming
@@ -2300,7 +2267,6 @@ rewrite-java/src/main/java/org/openrewrite/java/format/WrappingAndBracesVisitor.
 rewrite-java/src/main/java/org/openrewrite/java/format/WrappingAndBracesVisitor.java:282 deep-nesting
 rewrite-java/src/main/java/org/openrewrite/java/format/WrappingAndBracesVisitor.java:351 deep-nesting
 rewrite-java/src/main/java/org/openrewrite/java/format/WrappingAndBracesVisitor.java:369 deep-nesting
-rewrite-java/src/main/java/org/openrewrite/java/format/WrappingAndBracesVisitor.java:372 switch-fallthrough
 rewrite-java/src/main/java/org/openrewrite/java/format/WrappingAndBracesVisitor.java:374 deep-nesting
 rewrite-java/src/main/java/org/openrewrite/java/format/WrappingAndBracesVisitor.java:374 indexof-positive-check
 rewrite-java/src/main/java/org/openrewrite/java/format/WrappingAndBracesVisitor.java:387 collapsible-if
@@ -2409,7 +2375,6 @@ rewrite-java/src/main/java/org/openrewrite/java/internal/parser/RewriteClasspath
 rewrite-java/src/main/java/org/openrewrite/java/internal/parser/RewriteClasspathJarClasspathLoader.java:74 deep-nesting
 rewrite-java/src/main/java/org/openrewrite/java/internal/parser/RewriteClasspathJarClasspathLoader.java:86 deep-nesting
 rewrite-java/src/main/java/org/openrewrite/java/internal/parser/TypeSignature.java:165 catch-return-null
-rewrite-java/src/main/java/org/openrewrite/java/internal/parser/TypeTable.java:110 url-equals-hashcode
 rewrite-java/src/main/java/org/openrewrite/java/internal/parser/TypeTable.java:117 legacy-synchronized-collection
 rewrite-java/src/main/java/org/openrewrite/java/internal/parser/TypeTable.java:1403 too-many-parameters
 rewrite-java/src/main/java/org/openrewrite/java/internal/parser/TypeTable.java:1426 too-many-parameters
@@ -2450,7 +2415,7 @@ rewrite-java/src/main/java/org/openrewrite/java/internal/template/AnnotationTemp
 rewrite-java/src/main/java/org/openrewrite/java/internal/template/AnnotationTemplateGenerator.java:63 cognitive-complexity
 rewrite-java/src/main/java/org/openrewrite/java/internal/template/BlockStatementTemplateGenerator.java:112 reference-equality-value-type
 rewrite-java/src/main/java/org/openrewrite/java/internal/template/BlockStatementTemplateGenerator.java:159 cognitive-complexity
-rewrite-java/src/main/java/org/openrewrite/java/internal/template/BlockStatementTemplateGenerator.java:168 null-dereference
+rewrite-java/src/main/java/org/openrewrite/java/internal/template/BlockStatementTemplateGenerator.java:183 null-dereference
 rewrite-java/src/main/java/org/openrewrite/java/internal/template/BlockStatementTemplateGenerator.java:221 cognitive-complexity
 rewrite-java/src/main/java/org/openrewrite/java/internal/template/BlockStatementTemplateGenerator.java:245 complex-boolean-expression
 rewrite-java/src/main/java/org/openrewrite/java/internal/template/BlockStatementTemplateGenerator.java:271 cognitive-complexity
@@ -2458,7 +2423,6 @@ rewrite-java/src/main/java/org/openrewrite/java/internal/template/BlockStatement
 rewrite-java/src/main/java/org/openrewrite/java/internal/template/BlockStatementTemplateGenerator.java:339 nested-ternary
 rewrite-java/src/main/java/org/openrewrite/java/internal/template/BlockStatementTemplateGenerator.java:359 todo-comment
 rewrite-java/src/main/java/org/openrewrite/java/internal/template/BlockStatementTemplateGenerator.java:406 deep-nesting
-rewrite-java/src/main/java/org/openrewrite/java/internal/template/BlockStatementTemplateGenerator.java:615 identical-branches
 rewrite-java/src/main/java/org/openrewrite/java/internal/template/BlockStatementTemplateGenerator.java:662 cognitive-complexity
 rewrite-java/src/main/java/org/openrewrite/java/internal/template/BlockStatementTemplateGenerator.java:701 cognitive-complexity
 rewrite-java/src/main/java/org/openrewrite/java/internal/template/BlockStatementTemplateGenerator.java:709 collapsible-if
@@ -2602,7 +2566,6 @@ rewrite-java/src/main/java/org/openrewrite/java/search/SemanticallyEqual.java:41
 rewrite-java/src/main/java/org/openrewrite/java/search/SemanticallyEqual.java:533 local-variable-naming
 rewrite-java/src/main/java/org/openrewrite/java/search/SemanticallyEqual.java:564 local-variable-naming
 rewrite-java/src/main/java/org/openrewrite/java/search/SemanticallyEqual.java:603 cognitive-complexity
-rewrite-java/src/main/java/org/openrewrite/java/search/SemanticallyEqual.java:617 identical-branches
 rewrite-java/src/main/java/org/openrewrite/java/search/SemanticallyEqual.java:708 cognitive-complexity
 rewrite-java/src/main/java/org/openrewrite/java/search/SemanticallyEqual.java:805 local-variable-naming
 rewrite-java/src/main/java/org/openrewrite/java/search/SemanticallyEqual.java:929 float-equality
@@ -2673,7 +2636,6 @@ rewrite-java/src/main/java/org/openrewrite/java/style/CheckstyleConfigLoader.jav
 rewrite-java/src/main/java/org/openrewrite/java/style/CheckstyleConfigLoader.java:57 throw-generic-exception
 rewrite-java/src/main/java/org/openrewrite/java/style/CheckstyleConfigLoader.java:597 cognitive-complexity
 rewrite-java/src/main/java/org/openrewrite/java/style/CheckstyleConfigLoader.java:618 trim-isempty
-rewrite-java/src/main/java/org/openrewrite/java/style/CheckstyleConfigLoader.java:646 identical-branches
 rewrite-java/src/main/java/org/openrewrite/java/style/CheckstyleConfigLoader.java:763 cognitive-complexity
 rewrite-java/src/main/java/org/openrewrite/java/style/CheckstyleConfigLoader.java:845 complex-boolean-expression
 rewrite-java/src/main/java/org/openrewrite/java/style/CheckstyleConfigLoader.java:899 complex-boolean-expression
@@ -2723,7 +2685,6 @@ rewrite-java/src/main/java/org/openrewrite/java/tree/JContainer.java:41 private-
 rewrite-java/src/main/java/org/openrewrite/java/tree/JRightPadded.java:130 cognitive-complexity
 rewrite-java/src/main/java/org/openrewrite/java/tree/JavaSourceFile.java:71 identical-branches
 rewrite-java/src/main/java/org/openrewrite/java/tree/JavaSourceFile.java:73 identical-branches
-rewrite-java/src/main/java/org/openrewrite/java/tree/JavaSourceFile.java:82 identical-branches
 rewrite-java/src/main/java/org/openrewrite/java/tree/JavaSourceFile.java:84 identical-branches
 rewrite-java/src/main/java/org/openrewrite/java/tree/JavaSourceFile.java:90 throw-generic-exception
 rewrite-java/src/main/java/org/openrewrite/java/tree/JavaType.java:104 cognitive-complexity
@@ -2756,8 +2717,6 @@ rewrite-java/src/main/java/org/openrewrite/java/tree/JavaType.java:78 cognitive-
 rewrite-java/src/main/java/org/openrewrite/java/tree/JavaType.java:993 equals-without-hashcode
 rewrite-java/src/main/java/org/openrewrite/java/tree/JavaVarKeyword.java:25 private-constructor-class-not-final
 rewrite-java/src/main/java/org/openrewrite/java/tree/Space.java:142 cognitive-complexity
-rewrite-java/src/main/java/org/openrewrite/java/tree/Space.java:177 identical-branches
-rewrite-java/src/main/java/org/openrewrite/java/tree/Space.java:203 identical-branches
 rewrite-java/src/main/java/org/openrewrite/java/tree/Space.java:34 private-constructor-class-not-final
 rewrite-java/src/main/java/org/openrewrite/java/tree/TypeTree.java:43 cognitive-complexity
 rewrite-java/src/main/java/org/openrewrite/java/tree/TypeTree.java:74 deep-nesting
@@ -2865,8 +2824,6 @@ rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/PackageJson
 rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/PackageJsonHelper.java:483 cognitive-complexity
 rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/PackageJsonHelper.java:531 cognitive-complexity
 rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/PackageJsonHelper.java:631 complex-boolean-expression
-rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/PackageJsonOverrides.java:205 null-dereference
-rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/PackageJsonOverrides.java:228 null-dereference
 rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/PackageJsonOverrides.java:46 cognitive-complexity
 rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/PackageJsonOverrides.java:68 deep-nesting
 rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/PackageJsonOverrides.java:80 deep-nesting
@@ -2916,7 +2873,6 @@ rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/lock/Native
 rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/lock/NativeLockEngine.java:2846 cognitive-complexity
 rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/lock/NativeLockEngine.java:2862 deep-nesting
 rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/lock/NativeLockEngine.java:292 null-dereference
-rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/lock/NativeLockEngine.java:2930 null-dereference
 rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/lock/NativeLockEngine.java:3020 cognitive-complexity
 rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/lock/NativeLockEngine.java:3028 deep-nesting
 rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/lock/NativeLockEngine.java:3040 deep-nesting
@@ -2930,7 +2886,6 @@ rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/lock/Native
 rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/lock/NativeLockEngine.java:3828 lost-stack-trace
 rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/lock/NativeLockEngine.java:510 cognitive-complexity
 rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/lock/NativeLockEngine.java:720 cognitive-complexity
-rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/lock/NativeLockEngine.java:766 null-dereference
 rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/lock/NativeLockEngine.java:802 cognitive-complexity
 rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/lock/NpmGraphBuilder.java:325 cognitive-complexity
 rewrite-javascript/src/main/java/org/openrewrite/javascript/internal/lock/NpmGraphBuilder.java:372 cognitive-complexity
@@ -3167,8 +3122,6 @@ rewrite-json/src/main/java/org/openrewrite/json/style/Autodetect.java:89 private
 rewrite-json/src/main/java/org/openrewrite/json/style/TabsAndIndentsStyle.java:47 todo-comment
 rewrite-json/src/main/java/org/openrewrite/json/tree/JsonRightPadded.java:66 cognitive-complexity
 rewrite-json/src/main/java/org/openrewrite/json/tree/Space.java:153 cognitive-complexity
-rewrite-json/src/main/java/org/openrewrite/json/tree/Space.java:188 identical-branches
-rewrite-json/src/main/java/org/openrewrite/json/tree/Space.java:214 identical-branches
 rewrite-json/src/main/java/org/openrewrite/json/tree/Space.java:39 private-constructor-class-not-final
 rewrite-json/src/main/java/org/openrewrite/json/tree/Space.java:67 string-constructor
 rewrite-json/src/test/java/org/openrewrite/json/CreateJsonFileTest.java:144 default-charset
@@ -3272,7 +3225,6 @@ rewrite-kotlin/src/main/java/org/openrewrite/kotlin/format/MergeSpacesVisitor.ja
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/format/MergeSpacesVisitor.java:659 reference-equality-value-type
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/format/MergeSpacesVisitor.java:688 cognitive-complexity
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/format/MergeSpacesVisitor.java:693 collapsible-if
-rewrite-kotlin/src/main/java/org/openrewrite/kotlin/format/MergeSpacesVisitor.java:693 null-dereference
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/format/MergeSpacesVisitor.java:729 collapsible-if
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/format/MergeSpacesVisitor.java:880 local-variable-naming
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/format/MinimumViableSpacingVisitor.java:110 complex-boolean-expression
@@ -3302,7 +3254,6 @@ rewrite-kotlin/src/main/java/org/openrewrite/kotlin/format/SpacesVisitor.java:49
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/format/SpacesVisitor.java:631 local-variable-naming
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/format/SpacesVisitor.java:655 local-variable-naming
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/format/SpacesVisitor.java:942 cognitive-complexity
-rewrite-kotlin/src/main/java/org/openrewrite/kotlin/format/TabsAndIndentsVisitor.java:102 identical-branches
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/format/TabsAndIndentsVisitor.java:105 complex-boolean-expression
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/format/TabsAndIndentsVisitor.java:123 complex-boolean-expression
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/format/TabsAndIndentsVisitor.java:150 cognitive-complexity
@@ -3371,9 +3322,6 @@ rewrite-kotlin/src/main/java/org/openrewrite/kotlin/internal/KotlinTreeParserVis
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/internal/KotlinTreeParserVisitor.java:3172 commented-out-code
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/internal/KotlinTreeParserVisitor.java:3275 todo-comment
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/internal/KotlinTreeParserVisitor.java:3292 cognitive-complexity
-rewrite-kotlin/src/main/java/org/openrewrite/kotlin/internal/KotlinTreeParserVisitor.java:3322 legacy-synchronized-collection
-rewrite-kotlin/src/main/java/org/openrewrite/kotlin/internal/KotlinTreeParserVisitor.java:3339 null-dereference
-rewrite-kotlin/src/main/java/org/openrewrite/kotlin/internal/KotlinTreeParserVisitor.java:3358 null-dereference
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/internal/KotlinTreeParserVisitor.java:3414 redundant-null-check
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/internal/KotlinTreeParserVisitor.java:3456 cognitive-complexity
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/internal/KotlinTreeParserVisitor.java:3519 identical-branches
@@ -3399,8 +3347,6 @@ rewrite-kotlin/src/main/java/org/openrewrite/kotlin/internal/KotlinTreeParserVis
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/internal/KotlinTreeParserVisitor.java:686 todo-comment
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/internal/KotlinTreeParserVisitor.java:742 todo-comment
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/internal/KotlinTreeParserVisitor.java:844 cognitive-complexity
-rewrite-kotlin/src/main/java/org/openrewrite/kotlin/internal/KotlinTreeParserVisitor.java:87 legacy-synchronized-collection
-rewrite-kotlin/src/main/java/org/openrewrite/kotlin/internal/KotlinTreeParserVisitor.java:884 legacy-synchronized-collection
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/internal/KotlinTreeParserVisitor.java:932 todo-comment
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/internal/KotlinTreeParserVisitor.java:964 todo-comment
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/internal/PsiTreePrinter.java:202 cognitive-complexity
@@ -3477,7 +3423,6 @@ rewrite-kotlin/src/main/java/org/openrewrite/kotlin/style/ImportLayoutStyle.java
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/style/ImportLayoutStyle.java:841 deep-nesting
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/style/ImportLayoutStyle.java:879 todo-comment
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/style/IntelliJ.java:56 useless-override
-rewrite-kotlin/src/main/java/org/openrewrite/kotlin/tree/K.java:354 identical-branches
 rewrite-kotlin/src/main/java/org/openrewrite/kotlin/tree/K.java:363 throw-generic-exception
 rewrite-kotlin/src/test/java/org/openrewrite/kotlin/KotlinParserTest.java:102 throw-generic-exception
 rewrite-kotlin/src/test/java/org/openrewrite/kotlin/KotlinTemplateTest.java:259 throw-generic-exception
@@ -3625,7 +3570,6 @@ rewrite-maven/src/main/java/org/openrewrite/maven/MavenSettings.java:252 private
 rewrite-maven/src/main/java/org/openrewrite/maven/MavenTagInsertionComparator.java:80 cognitive-complexity
 rewrite-maven/src/main/java/org/openrewrite/maven/MavenVisitor.java:119 cognitive-complexity
 rewrite-maven/src/main/java/org/openrewrite/maven/MavenVisitor.java:140 deep-nesting
-rewrite-maven/src/main/java/org/openrewrite/maven/MavenVisitor.java:141 null-dereference
 rewrite-maven/src/main/java/org/openrewrite/maven/MavenVisitor.java:187 cognitive-complexity
 rewrite-maven/src/main/java/org/openrewrite/maven/MavenVisitor.java:207 collapsible-if
 rewrite-maven/src/main/java/org/openrewrite/maven/MavenVisitor.java:263 collapsible-if
@@ -3821,7 +3765,6 @@ rewrite-maven/src/main/java/org/openrewrite/maven/tree/DependencyNotation.java:2
 rewrite-maven/src/main/java/org/openrewrite/maven/tree/DependencyNotation.java:24 private-constructor-class-not-final
 rewrite-maven/src/main/java/org/openrewrite/maven/tree/DependencyNotation.java:72 cognitive-complexity
 rewrite-maven/src/main/java/org/openrewrite/maven/tree/License.java:28 cognitive-complexity
-rewrite-maven/src/main/java/org/openrewrite/maven/tree/License.java:66 identical-branches
 rewrite-maven/src/main/java/org/openrewrite/maven/tree/MavenRepository.java:116 private-constructor-class-not-final
 rewrite-maven/src/main/java/org/openrewrite/maven/tree/MavenRepository.java:93 too-many-parameters
 rewrite-maven/src/main/java/org/openrewrite/maven/tree/MavenRepositoryMirror.java:66 cognitive-complexity
@@ -3937,13 +3880,8 @@ rewrite-properties/src/main/java/org/openrewrite/properties/DeleteProperty.java:
 rewrite-properties/src/main/java/org/openrewrite/properties/DeleteProperty.java:57 cognitive-complexity
 rewrite-properties/src/main/java/org/openrewrite/properties/DeleteProperty.java:81 reference-equality-value-type
 rewrite-properties/src/main/java/org/openrewrite/properties/PropertiesParser.java:166 cognitive-complexity
-rewrite-properties/src/main/java/org/openrewrite/properties/PropertiesParser.java:180 switch-fallthrough
-rewrite-properties/src/main/java/org/openrewrite/properties/PropertiesParser.java:189 switch-fallthrough
 rewrite-properties/src/main/java/org/openrewrite/properties/PropertiesParser.java:210 redundant-modifier
 rewrite-properties/src/main/java/org/openrewrite/properties/PropertiesParser.java:220 cognitive-complexity
-rewrite-properties/src/main/java/org/openrewrite/properties/PropertiesParser.java:238 switch-fallthrough
-rewrite-properties/src/main/java/org/openrewrite/properties/PropertiesParser.java:281 switch-fallthrough
-rewrite-properties/src/main/java/org/openrewrite/properties/PropertiesParser.java:297 switch-fallthrough
 rewrite-properties/src/main/java/org/openrewrite/properties/PropertiesParser.java:60 cognitive-complexity
 rewrite-properties/src/main/java/org/openrewrite/properties/tree/Properties.java:195 nested-ternary
 rewrite-properties/src/main/java/org/openrewrite/properties/tree/Properties.java:197 trim-isempty
@@ -4051,8 +3989,6 @@ rewrite-protobuf/src/main/java/org/openrewrite/protobuf/internal/grammar/Protobu
 rewrite-protobuf/src/main/java/org/openrewrite/protobuf/internal/grammar/Protobuf2ParserBaseListener.java:95 empty-method
 rewrite-protobuf/src/main/java/org/openrewrite/protobuf/tree/ProtoContainer.java:34 private-constructor-class-not-final
 rewrite-protobuf/src/main/java/org/openrewrite/protobuf/tree/Space.java:144 cognitive-complexity
-rewrite-protobuf/src/main/java/org/openrewrite/protobuf/tree/Space.java:170 identical-branches
-rewrite-protobuf/src/main/java/org/openrewrite/protobuf/tree/Space.java:194 identical-branches
 rewrite-protobuf/src/main/java/org/openrewrite/protobuf/tree/Space.java:39 private-constructor-class-not-final
 rewrite-protobuf/src/main/java/org/openrewrite/protobuf/tree/Space.java:66 string-constructor
 rewrite-python/src/integTest/java/org/openrewrite/python/PythonRpcThroughputTest.java:119 test-without-assertion
@@ -4268,7 +4204,6 @@ rewrite-python/src/main/java/org/openrewrite/python/internal/uvlock/UvLockMarker
 rewrite-python/src/main/java/org/openrewrite/python/internal/uvlock/UvLockMetadataBuilder.java:118 cognitive-complexity
 rewrite-python/src/main/java/org/openrewrite/python/internal/uvlock/UvLockMetadataBuilder.java:193 cognitive-complexity
 rewrite-python/src/main/java/org/openrewrite/python/internal/uvlock/UvLockMetadataBuilder.java:238 cognitive-complexity
-rewrite-python/src/main/java/org/openrewrite/python/internal/uvlock/UvLockMetadataBuilder.java:318 lost-stack-trace
 rewrite-python/src/main/java/org/openrewrite/python/internal/uvlock/UvLockMetadataBuilder.java:369 nested-ternary
 rewrite-python/src/main/java/org/openrewrite/python/internal/uvlock/UvLockMetadataBuilder.java:89 cognitive-complexity
 rewrite-python/src/main/java/org/openrewrite/python/internal/uvlock/UvLockNormalization.java:50 regex-compiled-in-loop
@@ -4454,9 +4389,7 @@ rewrite-scala/src/main/java/org/openrewrite/scala/ScalaVisitor.java:101 referenc
 rewrite-scala/src/main/java/org/openrewrite/scala/ScalaVisitor.java:104 reference-equality-value-type
 rewrite-scala/src/main/java/org/openrewrite/scala/ScalaVisitor.java:97 redundant-cast
 rewrite-scala/src/main/java/org/openrewrite/scala/ScalaVisitor.java:98 reference-equality-value-type
-rewrite-scala/src/main/java/org/openrewrite/scala/internal/ScalaSpace.java:112 identical-branches
 rewrite-scala/src/main/java/org/openrewrite/scala/internal/ScalaSpace.java:44 cognitive-complexity
-rewrite-scala/src/main/java/org/openrewrite/scala/internal/ScalaSpace.java:83 identical-branches
 rewrite-scala/src/main/java/org/openrewrite/scala/internal/ScalaTryBuilder.java:102 cognitive-complexity
 rewrite-scala/src/main/java/org/openrewrite/scala/internal/ScalaTryBuilder.java:74 cognitive-complexity
 rewrite-scala/src/main/java/org/openrewrite/scala/tree/S.java:1256 too-many-parameters
@@ -4861,7 +4794,6 @@ rewrite-yaml/src/main/java/org/openrewrite/yaml/CreateYamlFile.java:95 cognitive
 rewrite-yaml/src/main/java/org/openrewrite/yaml/DeleteKey.java:53 cognitive-complexity
 rewrite-yaml/src/main/java/org/openrewrite/yaml/DeleteProperty.java:113 cognitive-complexity
 rewrite-yaml/src/main/java/org/openrewrite/yaml/DeleteProperty.java:160 cognitive-complexity
-rewrite-yaml/src/main/java/org/openrewrite/yaml/DeleteProperty.java:215 null-dereference
 rewrite-yaml/src/main/java/org/openrewrite/yaml/DeleteProperty.java:74 cognitive-complexity
 rewrite-yaml/src/main/java/org/openrewrite/yaml/DeleteProperty.java:74 method-too-long
 rewrite-yaml/src/main/java/org/openrewrite/yaml/JsonPathMatcher.java:119 cognitive-complexity
@@ -4905,7 +4837,6 @@ rewrite-yaml/src/main/java/org/openrewrite/yaml/UnfoldProperties.java:247 identi
 rewrite-yaml/src/main/java/org/openrewrite/yaml/UnfoldProperties.java:66 cognitive-complexity
 rewrite-yaml/src/main/java/org/openrewrite/yaml/UnfoldProperties.java:66 method-too-long
 rewrite-yaml/src/main/java/org/openrewrite/yaml/UnfoldProperties.java:85 cognitive-complexity
-rewrite-yaml/src/main/java/org/openrewrite/yaml/UnfoldProperties.java:92 null-dereference
 rewrite-yaml/src/main/java/org/openrewrite/yaml/YamlParser.java:1006 too-many-parameters
 rewrite-yaml/src/main/java/org/openrewrite/yaml/YamlParser.java:1041 too-many-parameters
 rewrite-yaml/src/main/java/org/openrewrite/yaml/YamlParser.java:116 complex-boolean-expression
