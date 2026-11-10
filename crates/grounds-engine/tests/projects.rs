@@ -239,3 +239,28 @@ fn inherited_harness_of_test_only_module_asserts() {
     let found = findings(&dir, &["test-without-assertion"]);
     assert!(found.is_empty(), "{found:?}");
 }
+
+#[test]
+fn java_files_under_resources_are_data() {
+    // a test copies a whole fixture project out of src/test/resources; its
+    // stub of a library class (whose jar is missing here) must not stand in
+    // for that class in the build, nor be analyzed itself
+    let dir = project(
+        "resources",
+        &[
+            ("core/pom.xml", "<project/>\n"),
+            ("core/src/main/java/app/Reader.java", "package app;\nimport org.acme.xml.Dom;\nclass Reader {\n    String m(Dom d) { return d.getChild(\"a\").getValue() + d.getAttribute(\"b\"); }\n    void broken(Reader r) { r.missing(); }\n}\n"),
+            ("core/src/test/java/app/ReaderTest.java", "package app;\nimport org.acme.xml.Dom;\nclass ReaderTest {\n    void t(Dom d) { d.addChild(new Dom(\"x\", \"y\")); }\n}\n"),
+            ("core/src/test/resources/fixture-1/pom.xml", "<project/>\n"),
+            ("core/src/test/resources/fixture-1/src/main/java/org/acme/xml/Dom.java", "package org.acme.xml;\npublic class Dom {\n    public Dom(String name) {}\n    public String getName() { return \"\"; }\n}\n"),
+            ("core/src/test/resources/fixture-1/src/main/java/org/acme/Uses.java", "package org.acme;\nclass Uses {\n    void m(org.acme.xml.Dom d) { d.nope(); }\n}\n"),
+            ("core/src/main/resources/templates/Tpl.java", "package tpl;\nclass Tpl {\n    void m(Tpl t) { t.nope(); }\n}\n"),
+        ],
+    );
+    let project = Project::load(&dir).unwrap();
+    let files: Vec<_> = project.workspace.files.iter().map(|f| f.path.strip_prefix(&project.workspace.root).unwrap().to_string_lossy().to_string()).collect();
+    assert_eq!(files, ["core/src/main/java/app/Reader.java", "core/src/test/java/app/ReaderTest.java"]);
+    assert!(!project.index.is_source_class("org.acme.xml.Dom"));
+    let found = findings(&dir, COMPILE);
+    assert_eq!(found, ["core/src/main/java/app/Reader.java:5 unresolved-method"]);
+}

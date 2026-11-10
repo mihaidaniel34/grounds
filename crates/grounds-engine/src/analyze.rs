@@ -146,7 +146,7 @@ fn to_finding(project: &Project, pf: &ParsedFile, fm: &FileModel, rel: &str, d: 
 pub fn analyze_files(project: &Project, rules: &RuleSet, options: &RuleOptions, files: &[PathBuf]) -> Vec<Finding> {
     let mut all: Vec<Finding> = files
         .par_iter()
-        .filter(|p| classify(p) != SourceKind::Generated)
+        .filter(|p| classify(p) != SourceKind::Generated && !crate::workspace::is_resource(p.strip_prefix(&project.workspace.root).unwrap_or(p)))
         .flat_map_iter(|p| match std::fs::read_to_string(p) {
             Ok(text) => analyze_text(project, rules, options, p, &text),
             Err(_) => Vec::new(),

@@ -254,6 +254,9 @@ impl Project {
     /// Re-read one file and update the index. Returns true if its
     /// declaration signature changed.
     pub fn refresh_file(&mut self, path: &Path) -> bool {
+        if crate::workspace::is_resource(path.strip_prefix(&self.workspace.root).unwrap_or(path)) {
+            return false;
+        }
         let key = path_key(path);
         let old = self.index.file(&key).map(|s| s.signature_hash);
         match std::fs::read_to_string(path) {
