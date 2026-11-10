@@ -1275,6 +1275,17 @@ impl Rule for ForLoopWrongVariable {
         if n.field("body").is_some_and(|b| assigned_names(b, cx.src).iter().any(|c| cond_vars.contains(c))) {
             return;
         }
+        // the tested counter is an object whose methods advance it (an
+        // iterator loop keeping a separate index: `it.hasNext(); i++` with
+        // `it.next()` in the body)
+        let advanced_by_call = |c: &str| {
+            std::iter::once(cond).chain(n.field("body")).flat_map(|b| b.descendants()).any(|d| {
+                d.kind() == "method_invocation" && d.field("object").is_some_and(|o| o.unparen().kind() == "identifier" && o.unparen().text(cx.src) == c)
+            })
+        };
+        if counters.iter().any(|c| cond_vars.contains(c) && advanced_by_call(c)) {
+            return;
+        }
         // the condition must test the declared counter for this to be clearly wrong
         if counters.iter().any(|c| cond_vars.contains(c)) && !counters.iter().any(|c| updated.contains(c)) {
             cx.report(updates[0], format!("The loop tests `{}` but updates `{}`", counters.iter().find(|c| cond_vars.contains(c)).unwrap(), updated.join(", ")));
