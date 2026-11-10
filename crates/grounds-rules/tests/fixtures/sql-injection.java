@@ -112,11 +112,11 @@ class IdentifiersFromFields {
         String in = names.stream().map(n -> "'" + n + "'").collect(java.util.stream.Collectors.joining(","));
         st.executeUpdate("DELETE FROM " + table + " WHERE name IN (" + in + ")"); // expect
     }
-    // DDL takes no bind parameters
+    // DDL takes no bind parameters, but a name from the caller still reaches the statement
     void createIndex(java.sql.Statement st, String table, String column) throws java.sql.SQLException {
         String sql = String.format("create index if not exists %s_%s on %s (%s)", table, column, table, column);
-        st.executeUpdate(sql);
-        st.execute("DROP TABLE IF EXISTS " + table);
+        st.executeUpdate(sql); // expect
+        st.execute("DROP TABLE IF EXISTS " + table); // expect
     }
     // the caller names the table and column, the value is bound
     void named(java.sql.Connection c, String owner, String table, String column, String pref) throws java.sql.SQLException {

@@ -610,13 +610,6 @@ impl Rule for SqlInjection {
         }
         let mut parts = Vec::new();
         sql_parts(q, cx, 0, &mut parts);
-        // DDL takes no bind parameters: `"create index on " + table + " (" + column + ")"`
-        if let Some(SqlPart::Text(head)) = parts.first() {
-            let head = head.trim_start().to_ascii_lowercase();
-            if ["create ", "drop ", "truncate ", "alter "].iter().any(|k| head.starts_with(k)) {
-                return;
-            }
-        }
         // values are bound and the caller only names a table or column, which
         // cannot be bound: `"select t." + column + " from " + table + " t where id = ?"`
         if parts.iter().any(|p| matches!(p, SqlPart::Text(t) if t.contains('?'))) {
