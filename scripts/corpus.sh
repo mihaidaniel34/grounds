@@ -8,8 +8,9 @@
 #   scripts/corpus.sh baseline   accept the last snapshot as the new baseline
 #
 # Hard checks fail the run: zero parse errors, zero findings from rules that
-# claim the code would not compile or the Spring context would not start, and
-# every planted bug still reported. Everything else is a snapshot diff to read.
+# claim the code would not compile or the Spring context would not start, the
+# same findings (every field) on one thread and on many, and every planted
+# bug still reported. Everything else is a snapshot diff to read.
 #
 # CORPUS_DIR (default ~/grounds-testbed) holds the checkouts; GROUNDS points at
 # the binary (default target/release/grounds, built if missing).
@@ -36,6 +37,21 @@ findings() {
   { "$grounds" check --root "$1" --format json ${2:+--rules "$2"} 2>/dev/null < /dev/null || true; } |
     python3 -c 'import json,sys
 for f in json.load(sys.stdin): print("%s:%s %s" % (f["path"], f["line"], f["rule"]))' | LC_ALL=C sort
+}
+
+# every field of every finding, one JSON object per line, sorted; on $2
+# threads, or on the default number when $2 is empty
+all_fields() {
+  { env ${2:+RAYON_NUM_THREADS=$2} "$grounds" check --root "$1" --format json 2>/dev/null < /dev/null || true; } |
+    python3 -c 'import json,sys
+for f in json.load(sys.stdin): print(json.dumps(f, sort_keys=True))' | LC_ALL=C sort
+}
+
+# all_fields output as the snapshot's lines: path:line rule, sorted
+snapshot_lines() {
+  python3 -c 'import json,sys
+for l in sys.stdin:
+    f = json.loads(l); print("%s:%s %s" % (f["path"], f["line"], f["rule"]))' | LC_ALL=C sort
 }
 
 selected() { [ -z "${CORPUS_ONLY:-}" ] || [[ ",$CORPUS_ONLY," == *",$1,"* ]]; }
@@ -87,7 +103,7 @@ check() {
   [ -x "$grounds" ] || cargo build --release --quiet --manifest-path "$repo/Cargo.toml" -p grounds-cli
   errors=${ERRORS:-$repo/target/release/examples/errors}
   [ -n "${ERRORS:-}" ] || cargo build --release --quiet --manifest-path "$repo/Cargo.toml" -p grounds-syntax --example errors
-  rm -rf "$out/current" && mkdir -p "$out/current"
+  rm -rf "$out/current" "$out"/threads-*.diff && mkdir -p "$out/current"
   failed=0
 
   while IFS=$'\t' read -r name _ commit <&3; do
@@ -97,16 +113,30 @@ check() {
     head=$(git -C "$dir" rev-parse HEAD)
     [ "$head" = "$commit" ] || echo "$name: at ${head:0:12}, pinned ${commit:0:12}"
 
-    findings "$dir" > "$out/current/$name.txt"
+    # Classes are resolved and files analyzed on all cores: what is reported
+    # must not depend on how many there are or on which thread got there
+    # first. Every field of every finding is compared between the default
+    # number of threads (the snapshot), one, and more than a runner has cores.
+    all_fields "$dir" "" > "$out/threads-default.txt"
+    all_fields "$dir" 1 > "$out/threads-1.txt"
+    all_fields "$dir" 16 > "$out/threads-16.txt"
+    snapshot_lines < "$out/threads-default.txt" > "$out/current/$name.txt"
+    { diff -u --label "1 thread" --label "16 threads" "$out/threads-1.txt" "$out/threads-16.txt"
+      diff -u --label "default threads" --label "1 thread" "$out/threads-default.txt" "$out/threads-1.txt"; } > "$out/threads-$name.diff" || true
+    # (the first twenty: `head` would close the pipe on `sort`, which fails the script under pipefail)
+    threads=$(sed -n 's/^[-+]\({.*\)/\1/p' "$out/threads-$name.diff" | LC_ALL=C sort -u | sed -n '1,20p')
+    [ -n "$threads" ] || rm -f "$out/threads-$name.diff"
+    rm -f "$out/threads-default.txt" "$out/threads-1.txt" "$out/threads-16.txt"
     hard=$(awk -v rules=",$hard_rules," 'index(rules, "," $2 ",")' "$out/current/$name.txt")
     parse=$(cd "$dir" && find . -name '*.java' -not -path '*/.grounds/*' -print0 | xargs -0 "$errors")
     calls=$("$grounds" type-stats "$dir" --color never 2>/dev/null < /dev/null | sed -n 's/^calls resolved //p')
     echo "$name	$calls" >> "$out/current/stats.tsv"
     printf '%-28s %6d findings, calls resolved %s' "$name" "$(wc -l < "$out/current/$name.txt")" "$calls"
-    if [ -n "$hard" ] || [ -n "$parse" ]; then
+    if [ -n "$hard" ] || [ -n "$parse" ] || [ -n "$threads" ]; then
       echo "  FAIL"; failed=1
       [ -n "$hard" ] && sed 's/^/    /' <<< "$hard" | head -20
       [ -n "$parse" ] && sed 's/^/    parse: /' <<< "$parse" | head -20
+      [ -n "$threads" ] && sed 's/^/    differs with the number of threads: /' <<< "$threads"
     else
       echo
     fi

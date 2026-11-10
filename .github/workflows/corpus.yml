@@ -2,8 +2,8 @@ name: corpus
 
 # The regression corpus (corpus/projects.tsv), one parallel job per project:
 # zero parse errors, zero findings from rules that claim the code would not
-# compile or start, the planted bugs still reported, and a findings snapshot
-# diffed against a baseline. Two setups per project:
+# compile or start, the same findings on one thread and on many, the planted
+# bugs still reported, and a findings snapshot diffed against a baseline. Two setups per project:
 # - check: a fresh checkout, no jars at all (baseline corpus/ci); most calls
 #   into libraries stay unknown, as for an agent in a repo never built;
 # - classpath: `grounds classpath` first (Maven/Gradle resolve the exact
@@ -141,6 +141,7 @@ jobs:
             target/corpus/current/*.txt
             target/corpus/current/stats.tsv
             target/corpus/snapshot.diff
+            target/corpus/threads-*.diff
             target/corpus/planted-*.diff
             target/corpus/mutations.json
             target/corpus/replay.json
@@ -185,6 +186,7 @@ jobs:
             target/corpus/current/*.txt
             target/corpus/current/stats.tsv
             target/corpus/snapshot.diff
+            target/corpus/threads-*.diff
 
   # helidon on JDK 27 (early access): the release it infers is 27, so with the JDK
   # at 27 grounds reads that release exactly from lib/modules, and the compile-break
@@ -239,6 +241,7 @@ jobs:
             target/corpus/current/*.txt
             target/corpus/current/stats.tsv
             target/corpus/snapshot.diff
+            target/corpus/threads-*.diff
 
   classpath:
     needs: build
@@ -318,6 +321,7 @@ jobs:
             target/corpus/current/*.txt
             target/corpus/current/stats.tsv
             target/corpus/snapshot.diff
+            target/corpus/threads-*.diff
 
   # pushes the results as a branch, corpus-baseline/<run id>, to open a PR from
   # (also uploaded as the corpus-baseline artifact)

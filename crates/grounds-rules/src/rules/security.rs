@@ -430,21 +430,71 @@ fn dynamically_built<'t>(e: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
 /// "select * from t where name = '" + name + "'"       // parameter `name`: yes
 /// ```
 fn from_parameter<'t>(e: Node<'t>, cx: &Ctx<'_, 't>, seen: &mut Vec<usize>) -> bool {
+    reaches(e, cx, seen, false)
+}
+
+/// Can text of the HTTP request reach `e`, as far as this method shows: a
+/// servlet request getter, a parameter bound to the request
+/// (`@RequestParam String sort`) or any parameter of a handler method?
+/// ```java
+/// "select * from " + req.getParameter("table") + " where id = ?"   // yes
+/// "select * from " + table + " where id = ?"                       // a plain parameter: no
+/// ```
+fn from_request<'t>(e: Node<'t>, cx: &Ctx<'_, 't>, seen: &mut Vec<usize>) -> bool {
+    reaches(e, cx, seen, true)
+}
+
+const REQUEST_GETTERS: &[&str] = &["getParameter", "getParameterValues", "getParameterMap", "getHeader", "getHeaders", "getQueryString", "getPathInfo", "getRequestURI"];
+const REQUEST_TYPES: &[&str] = &["javax.servlet.ServletRequest", "jakarta.servlet.ServletRequest", "org.springframework.web.context.request.WebRequest"];
+const BOUND_PARAMETER: &[&str] = &[
+    "RequestParam", "PathVariable", "RequestBody", "RequestHeader", "CookieValue", "ModelAttribute", "MatrixVariable", "RequestPart", // Spring
+    "QueryParam", "PathParam", "HeaderParam", "FormParam", "CookieParam", "MatrixParam", "BeanParam", // JAX-RS
+    "QueryValue", "Body", "Header", // Micronaut
+];
+const HANDLER_METHOD: &[&str] = &["RequestMapping", "GetMapping", "PostMapping", "PutMapping", "DeleteMapping", "PatchMapping", "GET", "POST", "PUT", "DELETE", "PATCH", "Get", "Post", "Put", "Delete", "Patch"];
+
+/// `req.getParameter("sort")` on a servlet or Spring web request; by the
+/// written type of the receiver when its jar is missing.
+fn reads_request<'t>(e: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+    if e.kind() != "method_invocation" || !cx.fm.call_name(e).is_some_and(|n| REQUEST_GETTERS.contains(&n)) {
+        return false;
+    }
+    let Some(o) = e.field("object").map(|o| o.unparen()) else { return false };
+    let ty = cx.type_of(o);
+    if !ty.is_unknown() {
+        return is_subtype_any(cx.fm, &ty, REQUEST_TYPES);
+    }
+    cx.fm.local_ref(o).and_then(|i| cx.fm.binder.decls[i].type_node).is_some_and(|t| {
+        let t = cx.text(t);
+        matches!(t.rsplit('.').next().unwrap_or(t), "HttpServletRequest" | "ServletRequest" | "WebRequest" | "NativeWebRequest")
+    })
+}
+
+/// The walk behind `from_parameter` and, with `request`, `from_request`,
+/// which counts only parameters the request is bound to.
+fn reaches<'t>(e: Node<'t>, cx: &Ctx<'_, 't>, seen: &mut Vec<usize>, request: bool) -> bool {
     let e = e.unparen();
     if is_literal(e) || cx.fm.constant_value(e).is_some() {
         return false;
+    }
+    if request && reads_request(e, cx) {
+        return true;
     }
     // a number or boolean cannot carry SQL text
     if cx.type_of(e).unboxed().is_some() {
         return false;
     }
     if e.kind() != "identifier" {
-        return e.kids().into_iter().any(|k| from_parameter(k, cx, seen));
+        return e.kids().into_iter().any(|k| reaches(k, cx, seen, request));
     }
     // not a local: a field, a type name, a method name
     let Some(i) = cx.fm.local_ref(e) else { return false };
     let d = &cx.fm.binder.decls[i];
     match d.kind {
+        LocalKind::Param if request => {
+            let annotated = |n: Node<'t>, names: &[&str]| annotation_names(n, cx.src).iter().any(|a| names.contains(a));
+            return annotated(d.decl_node, BOUND_PARAMETER) || d.owner.is_some_and(|m| annotated(m, HANDLER_METHOD));
+        }
         LocalKind::Param => return true,
         LocalKind::CatchParam => return false,
         _ => {}
@@ -455,26 +505,26 @@ fn from_parameter<'t>(e: Node<'t>, cx: &Ctx<'_, 't>, seen: &mut Vec<usize>) -> b
     seen.push(i);
     match d.kind {
         // `for (String c : columns)`: as tainted as what is iterated
-        LocalKind::ForEach => d.decl_node.field("value").is_some_and(|v| from_parameter(v, cx, seen)),
+        LocalKind::ForEach => d.decl_node.field("value").is_some_and(|v| reaches(v, cx, seen, request)),
         // `ids.stream().map(id -> "'" + id + "'")`: as tainted as the stream
         LocalKind::LambdaParam => {
             let call = d.owner.and_then(|l| l.parent_unparen()).filter(|p| p.kind() == "argument_list").and_then(|p| p.parent());
-            call.is_none_or(|c| from_parameter(c, cx, seen))
+            call.is_none_or(|c| reaches(c, cx, seen, request))
         }
-        LocalKind::Pattern => d.decl_node.field("left").is_none_or(|v| from_parameter(v, cx, seen)),
+        LocalKind::Pattern => d.decl_node.field("left").is_none_or(|v| reaches(v, cx, seen, request)),
         _ => {
-            if d.decl_node.field("value").is_some_and(|v| from_parameter(v, cx, seen)) {
+            if d.decl_node.field("value").is_some_and(|v| reaches(v, cx, seen, request)) {
                 return true;
             }
             cx.fm.binder.uses[i].iter().any(|u| {
                 // `q = q + name`, `q += name`
                 if let Some(a) = u.parent_unparen().filter(|p| p.kind() == "assignment_expression" && p.field("left").map(|l| l.unparen()) == Some(*u)) {
-                    return a.field("right").is_some_and(|v| from_parameter(v, cx, seen));
+                    return a.field("right").is_some_and(|v| reaches(v, cx, seen, request));
                 }
                 // `sb.append(name)`, `sb.append("x").append(name)`, `list.add(name)`
                 let mut cur = *u;
                 while let Some(p) = cur.parent().filter(|p| p.kind() == "method_invocation" && p.field("object") == Some(cur)) {
-                    if cx.fm.args_of(p).iter().any(|a| from_parameter(*a, cx, seen)) {
+                    if cx.fm.args_of(p).iter().any(|a| reaches(*a, cx, seen, request)) {
                         return true;
                     }
                     cur = p;
@@ -613,7 +663,7 @@ declare_rule!(SqlInjection {
     severity: Warning,
     sources: ["sonar:S2077", "sonar:S3649", "spotbugs:SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE", "spotbugs:SQL_PREPARED_STATEMENT_GENERATED_FROM_NONCONSTANT_STRING", "spotbugs:SQL_INJECTION_JDBC"],
     kinds: ["method_invocation"],
-    description: "Concatenating values into SQL lets attackers change the query (SQL injection). Use bind parameters (`?` with PreparedStatement, named parameters in JPA/JdbcTemplate).",
+    description: "Concatenating values into SQL lets attackers change the query (SQL injection). Use bind parameters (`?` with PreparedStatement, named parameters in JPA/JdbcTemplate). Only text that reaches the query from a method parameter, or from the request wherever it is held, is reported. A table or column name cannot be bound, so one that a method takes from its caller beside `?` placeholders is not reported, unless it visibly comes from the request (a servlet request getter, a `@RequestParam`-style parameter, a parameter of a handler method): check such a name against the names you allow.",
 });
 
 impl Rule for SqlInjection {
@@ -624,8 +674,11 @@ impl Rule for SqlInjection {
         }
         let Some(q) = cx.fm.args_of(n).first().copied() else { return };
         // only text the caller supplies can inject; identifiers taken from
-        // fields and constants (`"delete from " + table + " where id = ?"`) cannot
-        if !dynamically_built(q, cx) || !from_parameter(q, cx, &mut Vec::new()) {
+        // fields and constants (`"delete from " + table + " where id = ?"`) cannot.
+        // The request is the caller's text wherever it is held: a parameter,
+        // or an injected field (`@Autowired HttpServletRequest request`)
+        let supplied = |e: Node<'t>| from_parameter(e, cx, &mut Vec::new()) || from_request(e, cx, &mut Vec::new());
+        if !dynamically_built(q, cx) || !supplied(q) {
             return;
         }
         let mut parts = Vec::new();
@@ -635,19 +688,27 @@ impl Rule for SqlInjection {
         if parts.iter().any(|p| matches!(p, SqlPart::Text(t) if t.contains('?'))) {
             let mut before = String::new();
             let mut only_identifiers = true;
+            // ... unless the name visibly comes from the request
+            let mut requested = false;
             for p in &parts {
                 match p {
                     SqlPart::Text(t) => before.push_str(t),
                     SqlPart::Dynamic(d) => {
-                        if from_parameter(*d, cx, &mut Vec::new()) && !identifier_position(&before) {
-                            only_identifiers = false;
-                            break;
+                        if supplied(*d) {
+                            if !identifier_position(&before) {
+                                only_identifiers = false;
+                                break;
+                            }
+                            requested |= from_request(*d, cx, &mut Vec::new());
                         }
                         before.push('\u{1}');
                     }
                 }
             }
             if only_identifiers {
+                if requested {
+                    cx.report(q, "Table or column name taken from the request; allow only known names (an identifier cannot be a bind parameter)");
+                }
                 return;
             }
         }
