@@ -264,3 +264,38 @@ fn java_files_under_resources_are_data() {
     let found = findings(&dir, COMPILE);
     assert_eq!(found, ["core/src/main/java/app/Reader.java:5 unresolved-method"]);
 }
+
+#[test]
+fn a_class_declared_in_several_modules_is_read_from_the_copy_the_file_sees() {
+    // `p.BaseTest` and `p.Component` exist in modules a and b with different
+    // members; module c has neither and sees one of them through a module
+    // dependency grounds does not know
+    let dir = project(
+        "duplicates",
+        &[
+            ("a/pom.xml", "<project/>\n"),
+            ("b/pom.xml", "<project/>\n"),
+            ("c/pom.xml", "<project/>\n"),
+            ("a/src/test/java/p/BaseTest.java", "package p;\npublic abstract class BaseTest {\n    protected String fromA() { return \"\"; }\n}\n"),
+            ("b/src/test/java/p/BaseTest.java", "package p;\npublic abstract class BaseTest {\n    protected String fromB() { return \"\"; }\n    protected Object request() { return null; }\n}\n"),
+            ("a/src/main/java/p/Component.java", "package p;\npublic interface Component {\n    void run();\n}\n"),
+            ("b/src/main/java/p/Component.java", "package p;\npublic interface Component {\n    void start();\n}\n"),
+            ("a/src/test/java/p/ATest.java", "package p;\nclass ATest extends BaseTest {\n    void t() { fromA(); fromB(); }\n}\n"),
+            ("b/src/test/java/p/BTest.java", "package p;\nclass BTest extends BaseTest {\n    void t() { fromB(); request(); fromA(); }\n}\n"),
+            ("b/src/test/java/p/Impl.java", "package p;\nclass Impl implements Component {\n    public void start() {}\n}\n"),
+            ("b/src/main/java/p/Started.java", "package p;\nclass Started implements Component {\n    @Override\n    public void start() {}\n    @Override\n    public void stop() {}\n}\n"),
+            ("c/src/test/java/p/CTest.java", "package p;\nclass CTest extends BaseTest {\n    void t() { fromA(); fromB(); nowhere(); }\n}\n"),
+            ("c/src/main/java/p/CImpl.java", "package p;\nclass CImpl implements Component {\n    public void start() {}\n}\n"),
+        ],
+    );
+    let mut found = findings(&dir, COMPILE);
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            "a/src/test/java/p/ATest.java:3 unresolved-method",
+            "b/src/main/java/p/Started.java:6 override-matches-nothing",
+            "b/src/test/java/p/BTest.java:3 unresolved-method",
+        ]
+    );
+}

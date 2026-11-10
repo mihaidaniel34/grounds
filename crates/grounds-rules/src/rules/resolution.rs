@@ -18,8 +18,17 @@ pub fn rules() -> Vec<Box<dyn Rule>> {
 /// than our Lombok model adds members to.
 fn closed_class<'t>(cx: &Ctx<'_, 't>, name: &str) -> Option<std::sync::Arc<ClassInfo>> {
     let c = cx.fm.class(name)?;
-    if !c.is_source() || !cx.fm.hierarchy_complete(name) || cx.fm.index.is_duplicated(name) {
+    if !c.is_source() || !cx.fm.hierarchy_complete(name) {
         return None;
+    }
+    // every project class of the hierarchy must be read from the copy this
+    // file compiles against when its name is declared more than once (the
+    // build's module dependencies are not known)
+    for t in cx.fm.all_supertypes(&c.this_type()) {
+        let Some(n) = t.class_name() else { return None };
+        if !cx.fm.copy_is_certain(n) {
+            return None;
+        }
     }
     // Lombok @Delegate / @ExtensionMethod add members we do not model
     let file = c.source_file()?;
