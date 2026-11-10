@@ -767,3 +767,29 @@ fn a_different_claim_at_the_same_place_is_a_new_break() {
     assert_eq!(msgs(&r), ["`New` has no method `missing`"], "--base: {:?}", r.pending);
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+/// Reordering overloads changes only the order of the `available:` list in an
+/// old claim, which is not a break; a different receiver type still is.
+#[test]
+fn reordered_declarations_do_not_make_an_old_claim_new() {
+    let repo = std::env::temp_dir().join(format!("grounds-reorder-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&repo);
+    let dir = repo.join("app");
+    write(&dir, "settings.gradle", "rootProject.name = 'demo'\n");
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, "src/main/java/demo/Lib.java", "package demo;\npublic class Lib {\n    public void f(int a) {}\n    public void f(int a, int b) {}\n}\n");
+    write(&dir, "src/main/java/demo/Caller.java", "package demo;\nclass Caller {\n    void t(Lib l) { l.f(\"x\"); }\n}\n");
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "init"]);
+    let mut s = Session::open(&dir).unwrap();
+    let before = s.check(&CheckOptions { mode: Mode::Checkpoint, files: vec![dir.join("src/main/java/demo/Caller.java")], all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None });
+    assert!(before.findings.iter().any(|f| f.message.contains("available: f(int), f(int,int)")), "{:?}", before.findings);
+    write(&dir, "src/main/java/demo/Lib.java", "package demo;\npublic class Lib {\n    public void f(int a, int b) {}\n    public void f(int a) {}\n}\n");
+    let opts = |base: Option<String>| CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base };
+    let r = s.check(&opts(Some("HEAD".into())));
+    assert!(r.pending.is_empty() && r.breaks.is_empty(), "--base: {:?}", r.pending);
+    let r = s.check(&opts(None));
+    assert!(r.pending.is_empty() && r.breaks.is_empty(), "per turn: {:?}", r.pending);
+    let _ = std::fs::remove_dir_all(&repo);
+}

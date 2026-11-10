@@ -181,12 +181,47 @@ pub fn stable_in_changed(rule: &str) -> bool {
 
 /// What a compile-break or wiring finding claims, independent of where it
 /// is: the rule and the message, which names the types and members involved
-/// but no position, without the "did you mean" hint (it changes with
-/// unrelated members added nearby). The fingerprint is no use here: it hashes
-/// the text of the line, which an edit to that line changes.
+/// but no position. The fingerprint is no use here: it hashes the text of the
+/// line, which an edit to that line changes.
 fn claim_key(f: &Finding) -> (&'static str, String) {
-    let m = f.message.split("; did you mean").next().unwrap_or(&f.message);
-    (f.rule, m.to_string())
+    (f.rule, canonical_claim(f.rule, &f.message))
+}
+
+/// A message reduced to what it claims. What depends on order or on
+/// unrelated declarations is left out, so that reordering or adding
+/// declarations elsewhere does not make an old claim look new: everything
+/// after the first `; ` (a "did you mean" hint, the `available:` overloads,
+/// constructors or beans, in declaration order and cut to a few), the list of
+/// ambiguous beans (their number stays), the methods left unimplemented (the
+/// class and how many stay), and where a cycle starts (its members stay).
+fn canonical_claim(rule: &str, message: &str) -> String {
+    let head = message.split("; ").next().unwrap_or(message);
+    match rule {
+        // "2 beans of type `X` match `y`: 'a' (A), 'b' (B)"
+        "ambiguous-bean" => head.split(": ").next().unwrap_or(head).to_string(),
+        // "`T` does not implement `A.x()`, `A.y()` and 2 more"
+        "unimplemented-abstract-method" => match head.split_once(" does not implement ") {
+            Some((class, list)) => {
+                let (shown, more) = match list.rsplit_once(" and ") {
+                    Some((l, m)) if m.ends_with(" more") => (l, m.trim_end_matches(" more").parse::<usize>().unwrap_or(0)),
+                    _ => (list, 0),
+                };
+                format!("{class} does not implement {} method(s)", shown.split("`, `").count() + more)
+            }
+            None => head.to_string(),
+        },
+        // "Circular constructor dependency: A -> B -> A"
+        "circular-constructor-dependency" => match head.split_once(": ") {
+            Some((what, chain)) => {
+                let mut members: Vec<&str> = chain.split(" -> ").collect();
+                members.sort_unstable();
+                members.dedup();
+                format!("{what}: {}", members.join(", "))
+            }
+            None => head.to_string(),
+        },
+        _ => head.to_string(),
+    }
 }
 
 /// A finding in a file the change did not touch, as the comparison with the
@@ -1109,6 +1144,24 @@ mod tests {
     fn git(dir: &Path, args: &[&str]) {
         let ok = std::process::Command::new("git").arg("-C").arg(dir).args(args).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t").env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t").status().unwrap().success();
         assert!(ok, "git {args:?}");
+    }
+
+    #[test]
+    fn claims_leave_out_what_depends_on_order() {
+        let c = canonical_claim;
+        // the overloads offered, in declaration order
+        assert_eq!(c("unresolved-method", "No `f` in `Lib` accepts (String); available: f(int), f(int, int)"), c("unresolved-method", "No `f` in `Lib` accepts (String); available: f(int, int), f(int)"));
+        assert_eq!(c("unresolved-method", "`Lib` has no method `fo`; did you mean `foo`?"), "`Lib` has no method `fo`");
+        // what is claimed stays: the receiver, the arguments
+        assert_ne!(c("unresolved-method", "`Old` has no method `missing`"), c("unresolved-method", "`New` has no method `missing`"));
+        assert_ne!(c("unresolved-method", "No `f` in `Lib` accepts (String); available: f(int)"), c("unresolved-method", "No `f` in `Lib` accepts (long); available: f(int)"));
+        assert_eq!(c("unresolved-constructor", "No constructor of `A` takes 3 argument(s); available: A(int), A()"), "No constructor of `A` takes 3 argument(s)");
+        assert_eq!(c("qualifier-not-found", "No `Api` bean is qualified `x`; available: 'a' (A), 'b' (B)"), "No `Api` bean is qualified `x`");
+        assert_eq!(c("ambiguous-bean", "2 beans of type `Api` match `api`: 'a' (A), 'b' (B); add a @Qualifier or @Primary"), c("ambiguous-bean", "2 beans of type `Api` match `api`: 'b' (B), 'a' (A); add a @Qualifier or @Primary"));
+        assert_ne!(c("ambiguous-bean", "2 beans of type `Api` match `api`: 'a' (A), 'b' (B)"), c("ambiguous-bean", "3 beans of type `Api` match `api`: 'a' (A), 'b' (B), 'c' (C)"));
+        assert_eq!(c("unimplemented-abstract-method", "`C` does not implement `I.a()`, `I.b()`, `I.c()` and 2 more"), c("unimplemented-abstract-method", "`C` does not implement `I.e()`, `I.d()`, `I.a()` and 2 more"));
+        assert_ne!(c("unimplemented-abstract-method", "`C` does not implement `I.a()`"), c("unimplemented-abstract-method", "`C` does not implement `I.a()`, `I.b()`"));
+        assert_eq!(c("circular-constructor-dependency", "Circular constructor dependency: A -> B -> A"), c("circular-constructor-dependency", "Circular constructor dependency: B -> A -> B"));
     }
 
     /// A panic while the project is in its base state (the daemon catches it

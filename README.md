@@ -466,8 +466,9 @@ which only `grounds changed --base` reports. "New with the change" means:
 - **On changed lines:** grounds analyzes each changed file's base version, with
   the other changed files at their base version too, and drops a finding when
   the project before the change made the same claim: the same rule and the
-  same message, without its "did you mean" hint (the message names types and
-  members, not positions), in the file's
+  same message (which names types and members, not positions), less what
+  depends on the order of declarations (a "did you mean" hint, the list of
+  overloads, beans or unimplemented methods offered, where a cycle starts), in the file's
   base version, or in an untouched file that mentions every name the message
   quotes. A finding that was there before is therefore not reported when the
   change edits or moves its line, and neither is a new call that the model
