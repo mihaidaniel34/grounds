@@ -30,6 +30,10 @@
 !/scripts/*.baseline.json
 !/corpus/projects.tsv
 !/corpus/classpath-skip.tsv
+!/corpus/replay-known.txt
+# projects the rules were not tuned on, and what was measured on them
+!/corpus/holdout.tsv
+!/docs/holdout/*
 !/corpus/planted/*.patch
 !/corpus/planted/*.expected
 !/corpus/ci/*.txt

@@ -85,7 +85,7 @@ jobs:
           CORPUS_ONLY: ${{ matrix.project }}
           CORPUS_DIR: ${{ runner.temp }}/corpus
           CORPUS_SHALLOW: "1"
-          CORPUS_DEPTH: "16"
+          CORPUS_DEPTH: "61"
       # the planted bugs need Spring's jars to be judged at all
       - if: hashFiles(format('corpus/planted/{0}.patch', matrix.project)) != ''
         uses: actions/cache@v4
@@ -110,14 +110,16 @@ jobs:
         run: python3 -I scripts/ci_mutations.py "$CORPUS_DIR/${{ matrix.project }}" --grounds bin/grounds --safe 8 --breaking 4 --out target/corpus/mutations.json
         env:
           CORPUS_DIR: ${{ runner.temp }}/corpus
-      # The project's last commits, one after the other (scripts/replay.py):
-      # a daemon that has followed them must answer `changed --base` as a
-      # run from scratch does, and a commit of the main line compiled, so
-      # neither may report a compile break. Not a gate yet: its first runs
-      # are being read.
+      # The project's main line, commit by commit (scripts/replay.py): a daemon
+      # that has followed the commits must answer `changed --base` as a run
+      # from scratch does, and a commit of the main line built, so neither may
+      # report a compile or wiring break. The last 15 commits with Java
+      # changes among the 60 fetched, fewer on a project where that many
+      # would take over seven minutes; a report that was read and found right
+      # is listed in corpus/replay-known.txt.
       - name: replay
-        continue-on-error: true
-        run: python3 -I scripts/replay.py "$CORPUS_DIR/${{ matrix.project }}" --grounds bin/grounds --commits 15 --out target/corpus/replay.json
+        timeout-minutes: 25
+        run: python3 -I scripts/replay.py "$CORPUS_DIR/${{ matrix.project }}" --grounds bin/grounds --commits 15 --budget 420 --known corpus/replay-known.txt --out target/corpus/replay.json
         env:
           CORPUS_DIR: ${{ runner.temp }}/corpus
       - name: summary
