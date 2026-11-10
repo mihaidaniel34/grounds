@@ -3,7 +3,7 @@
 use crate::project::{path_key, Project};
 use crate::workspace::{classify, SourceKind};
 use grounds_rules::framework::{FileInfo, RuleOptions};
-use grounds_rules::{all_rules, Diagnostic, Fix, RuleSet, Severity};
+use grounds_rules::{all_rules, Diagnostic, Fix, Maturity, RuleSet, Severity};
 use grounds_semantic::FileModel;
 use grounds_syntax::{NodeExt, ParsedFile};
 use rayon::prelude::*;
@@ -11,7 +11,9 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-#[derive(Clone, Debug, Serialize)]
+/// Serialized by hand (below) to add the rule's `maturity`, which is not
+/// stored on the finding.
+#[derive(Clone, Debug)]
 pub struct Finding {
     pub path: String,
     pub line: u32,
@@ -26,20 +28,49 @@ pub struct Finding {
     pub fingerprint: String,
     /// The fingerprint 0.0.5 and earlier computed, when it differs (member
     /// paths of methods with qualified-type varargs parameters): baselines
-    /// written by those versions still match.
-    #[serde(skip)]
+    /// written by those versions still match. Not serialized.
     pub legacy_fingerprint: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// Serialized only when present.
     pub fix: Option<Fix>,
-    /// Byte range, for fix application.
-    #[serde(skip)]
+    /// Byte range, for fix application (not serialized).
     pub start: u32,
-    #[serde(skip)]
     pub end: u32,
 }
 
+/// Maturity of the rule that reported a finding. Findings that only `grounds
+/// changed --base` makes (`removed-class-still-used`, `breaks-other-files`)
+/// have no catalog entry; they are built from the cross-file rules and are
+/// as proven as those: preview, for now.
+pub fn maturity_of(rule: &str) -> Maturity {
+    grounds_rules::meta_of(rule).map_or(Maturity::Preview, |m| m.maturity)
+}
+
+impl Serialize for Finding {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut st = s.serialize_struct("Finding", 11 + self.fix.is_some() as usize)?;
+        st.serialize_field("path", &self.path)?;
+        st.serialize_field("line", &self.line)?;
+        st.serialize_field("col", &self.col)?;
+        st.serialize_field("end_line", &self.end_line)?;
+        st.serialize_field("end_col", &self.end_col)?;
+        st.serialize_field("rule", &self.rule)?;
+        st.serialize_field("severity", &self.severity)?;
+        st.serialize_field("category", &self.category)?;
+        st.serialize_field("maturity", &maturity_of(self.rule))?;
+        st.serialize_field("message", &self.message)?;
+        st.serialize_field("fingerprint", &self.fingerprint)?;
+        match &self.fix {
+            Some(fix) => st.serialize_field("fix", fix)?,
+            None => st.skip_field("fix")?,
+        }
+        st.end()
+    }
+}
+
 /// The rules the project configuration selects (`[rules] enable/disable`
-/// by id, category or source id).
+/// by id, category or source id; preview rules only with `preview = true` or
+/// when named by id or source id in `enable`).
 pub fn selected_rules(project: &Project) -> Vec<Box<dyn grounds_rules::Rule>> {
     let cfg = &project.config.rules;
     all_rules()
@@ -47,10 +78,13 @@ pub fn selected_rules(project: &Project) -> Vec<Box<dyn grounds_rules::Rule>> {
         .filter(|r| {
             let m = r.meta();
             let named = |list: &[String]| list.iter().any(|x| x == m.id || x == m.category.as_str() || m.sources.iter().any(|s| s == x));
+            // named by itself (its id or one of its source ids), not only through its category
+            let named_alone = |list: &[String]| list.iter().any(|x| x == m.id || m.sources.iter().any(|s| s == x));
+            let maturity_ok = cfg.preview || m.maturity == Maturity::Stable;
             if !cfg.enable.is_empty() {
-                return named(&cfg.enable);
+                return named(&cfg.enable) && (maturity_ok || named_alone(&cfg.enable));
             }
-            m.default_enabled && !named(&cfg.disable)
+            m.default_enabled && maturity_ok && !named(&cfg.disable)
         })
         .collect()
 }

@@ -378,6 +378,7 @@ test_source_sets = ["scenarios"]      # besides test/integration/e2e/functional/
 
 [rules]
 disable = ["field-injection", "style"]   # rule ids or categories
+preview = true                           # run preview rules (default: true for now; see "Stable and preview rules")
 severity = { "todo-comment" = "warning" }
 
 [rules.options.cognitive-complexity]
@@ -411,6 +412,44 @@ classes (an absent member may be one of those APIs). A JDK home without
 the JDK's classes stay silent. A JDK's own release is read from `lib/modules`;
 if that image cannot be read (a compressed `jlink` image, say), grounds warns
 and uses the release before it, with the same silence about JDK subclasses.
+
+### Stable and preview rules
+
+Every rule is either **stable** or **preview**; `grounds rules`,
+`grounds explain <id>` and [docs/RULES.md](docs/RULES.md) say which.
+
+- **Stable** rules are covered by the project's promise about precision:
+  a false positive from a stable rule is a bug in grounds, to be fixed, and
+  stable rules are held to a false-positive rate measured on projects the
+  rules were not tuned on. That bar is still being measured; it will be
+  stated here, with its number, when it is.
+- **Preview** rules are still being proven. They are often right, but they
+  are not held to that promise yet. A rule becomes stable once a
+  measurement shows that it meets the bar.
+
+**Today every rule is preview.** The rules that say the code would not
+compile or the application would not start were the first candidates: CI
+fails on any finding of theirs on the corpus. But on 20 projects they had
+never seen, most of what they reported was wrong
+([docs/holdout/2026-11.md](docs/holdout/2026-11.md)), so they stay preview
+until that is fixed and measured again.
+
+Preview rules run by default for now, so the same findings are reported
+after an upgrade (JSON and SARIF only gain a `maturity` field).
+**A later release will turn them off by default.** To choose now, set
+`preview` under `[rules]` in `grounds.toml`:
+
+```toml
+[rules]
+preview = false   # only stable rules (true runs preview rules too)
+```
+
+A rule named by its id (or one of its source ids, such as `sonar:S2259`)
+in `enable` or in `check --rules` runs whatever its maturity, so
+`grounds check --rules null-dereference` works with `preview = false`.
+Naming a category (`enable = ["bug"]`) selects only its stable rules when
+`preview = false`. JSON findings carry a `maturity` field (`stable` or
+`preview`), and SARIF rules a `maturity` property.
 
 ### Classpath
 
@@ -490,6 +529,7 @@ declare_rule!(StringReferenceEquality {
     name: "Strings compared with == or !=",
     category: Bug,
     severity: Warning,
+    maturity: Preview,   // required; new rules start as preview
     tier: Edit,   // also run on every edit, not only at the end of a turn
     sources: ["sonar:S4973", "spotbugs:ES_COMPARING_STRINGS_WITH_EQ"],
     kinds: ["binary_expression"],
@@ -511,6 +551,8 @@ Add it to the `rules()` list of its module (here
 `crates/grounds-rules/src/rules/equality.rs`) and add
 `crates/grounds-rules/tests/fixtures/<rule-id>.java`, marking the lines that
 must be reported with `// expect`. Then run `cargo test -p grounds-rules`.
+A new rule is `Preview`; making a rule `Stable` also means adding it to the
+`STABLE` list in `crates/grounds-rules/tests/fixtures.rs`.
 
 ## License
 
