@@ -597,3 +597,34 @@ fn per_turn_breaks_in_other_files_are_only_those_the_change_made() {
     assert_eq!(json(&Session::open(&dir).unwrap().check(&opts)), json(&r));
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+#[test]
+fn only_the_promised_rules_are_stable_in_pending_and_sarif_rules_take_the_weaker_maturity() {
+    let (repo, dir) = gap_project("static");
+    write(&dir, "src/main/java/demo/Util.java", "package demo;\npublic class Util {\n    public static void helper() {}\n}\n");
+    write(&dir, "src/main/java/demo/UsesUtil.java", "package demo;\nimport static demo.Util.helper;\nclass UsesUtil {\n    void t() { helper(); }\n}\n");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "util"]);
+    let mut s = Session::open(&dir).unwrap();
+    // a renamed statically imported member: `unresolved-static-import` is not
+    // one of the promised rules, so it stays preview in `pending`
+    write(&dir, "src/main/java/demo/Util.java", "package demo;\npublic class Util {\n    public static void helper2() {}\n}\n");
+    let r = s.check(&CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None });
+    assert!(r.pending.iter().any(|f| f.rule == "unresolved-static-import"), "{:?}", r.pending);
+    for f in &r.pending {
+        let want = if grounds_engine::session::stable_in_changed(f.rule) { grounds_rules::Maturity::Stable } else { grounds_rules::Maturity::Preview };
+        assert_eq!(f.maturity, want, "{f:?}");
+    }
+
+    // `--all-lines`: the pre-existing gap on an unchanged line (preview) and a
+    // new break on a changed line (stable) of the same rule
+    write(&dir, "src/main/java/demo/Util.java", "package demo;\npublic class Util {\n    public static void helper() {}\n}\n");
+    write(&dir, "src/main/java/demo/Use.java", "package demo;\nclass Use {\n    void a(Lib l) { l.gap(); }\n    void b(Lib l) { l.missing(); }\n}\n");
+    let r = s.check(&CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None });
+    let m: Vec<_> = r.findings.iter().filter(|f| f.rule == "unresolved-method").map(|f| (f.line, f.maturity)).collect();
+    assert!(m.contains(&(3, grounds_rules::Maturity::Preview)) && m.contains(&(4, grounds_rules::Maturity::Stable)), "{m:?}");
+    let sarif: serde_json::Value = serde_json::from_str(&grounds_engine::report::sarif_report(&r, &dir, &[])).unwrap();
+    let d = sarif["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap().iter().find(|d| d["id"] == "unresolved-method").unwrap().clone();
+    assert_eq!(d["properties"]["maturity"], "preview", "{d}");
+    let _ = std::fs::remove_dir_all(&repo);
+}

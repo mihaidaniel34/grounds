@@ -4,7 +4,7 @@
 
 Tier `edit` rules run after every edit; all rules run at checkpoints. Rules marked *off* are disabled by default (enable in `grounds.toml`).
 
-Maturity: 0 rules are `stable` (held to the project's precision promise). 11 are `stable in changed`: the compile-break and wiring rules, whose findings `grounds changed` reports only when they are new with the change (on a changed line, or a place in another file the change broke); those findings are stable, while the same rules run over a whole project with `grounds check` are preview. The other 307 are `preview` (still being measured). Preview rules run by default for now; `preview = false` under `[rules]` in `grounds.toml` turns them off, except those named by id in `enable` or `--rules`, and keeps the `stable in changed` rules in `grounds changed` only. See the README.
+Maturity: 0 rules are `stable` (held to the project's precision promise). 11 are `stable in changed`: the compile-break and wiring rules, whose findings `grounds changed` reports only when they are new with the change (on a changed line, or a place in another file the change broke); those findings are stable, while the same rules run over a whole project with `grounds check` are preview. The other 307 are `preview` (still being measured). Preview rules run by default for now; `preview = false` under `[rules]` in `grounds.toml` turns them off, except those named by id in `enable` or `--rules`; it keeps the `stable in changed` rules in `grounds changed`, and they run in `grounds check` only when named by id. See the README.
 
 ## bad-practice (38)
 

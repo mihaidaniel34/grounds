@@ -466,7 +466,8 @@ which only `grounds changed --base` reports. "New with the change" means:
 - **On changed lines:** grounds analyzes each changed file's base version, with
   the other changed files at their base version too, and drops a finding when
   the project before the change made the same claim: the same rule and the
-  same message (which names types and members, not positions) in the file's
+  same message, without its "did you mean" hint (the message names types and
+  members, not positions), in the file's
   base version, or in an untouched file that mentions every name the message
   quotes. A finding that was there before is therefore not reported when the
   change edits or moves its line, and neither is a new call that the model
@@ -546,9 +547,11 @@ choose now, set `preview` under `[rules]` in `grounds.toml`:
 preview = false   # only what is stable (true runs preview rules too)
 ```
 
-With `preview = false`, `grounds changed` and the hooks report only what a
-change broke, and `grounds check` runs no rule, since none is stable over a
-whole project. A rule named by its id (or one of its source ids, such as
+With `preview = false`, `grounds changed` and the hooks run only the eleven
+compile-break and wiring rules, so in a git repository they report only what
+a change broke (with `--all-lines` or outside git, findings of those rules
+that cannot be compared with a base are reported as preview), and
+`grounds check` runs no rule, since none is stable over a whole project. A rule named by its id (or one of its source ids, such as
 `sonar:S2259`) in `enable` or in `check --rules` runs whatever its maturity,
 so `grounds check --rules null-dereference` works with `preview = false`.
 Naming a category (`enable = ["bug"]`) selects only its stable rules when

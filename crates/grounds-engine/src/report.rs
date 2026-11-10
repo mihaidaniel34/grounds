@@ -172,6 +172,11 @@ impl SarifDoc {
     fn rule(&mut self, id: &'static str, severity: Severity, maturity: grounds_rules::Maturity) -> usize {
         use serde_json::json;
         if let Some(&i) = self.rule_index.get(id) {
+            // results of one rule with both maturities (`--all-lines`): the
+            // rule as a whole is held only to the weaker one
+            if maturity == grounds_rules::Maturity::Preview {
+                self.rules[i]["properties"]["maturity"] = serde_json::json!("preview");
+            }
             return i;
         }
         let rule = match grounds_rules::meta_of(id) {

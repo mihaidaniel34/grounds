@@ -478,7 +478,9 @@ impl Session {
                     now.into_iter().filter(|f| !before.contains(&(f.fingerprint.clone(), f.col))).collect()
                 }
             };
-            for f in &mut pending {
+            // the promise covers the compile-break and wiring rules; the per-turn
+            // scan also runs `unresolved-static-import`, which stays preview
+            for f in pending.iter_mut().filter(|f| stable_in_changed(f.rule)) {
                 f.maturity = Maturity::Stable;
             }
             pending.retain(|f| !f.in_baseline(&base));
