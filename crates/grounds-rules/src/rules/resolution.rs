@@ -337,6 +337,11 @@ impl Rule for MissingJdkImport {
         if own_release.is_some_and(|v| v > release) {
             return;
         }
+        // `import module java.base;` (JEP 511) names a module, not a class
+        let mut c = n.walk();
+        if n.children(&mut c).any(|k| !k.is_named() && k.kind() == "module") {
+            return;
+        }
         // `static` and `*` are tokens, not named children
         let words: String = cx.text(n).split_whitespace().collect::<Vec<_>>().join(" ");
         let is_static = words.starts_with("import static ");
