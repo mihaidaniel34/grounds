@@ -181,22 +181,29 @@ pub fn stable_in_changed(rule: &str) -> bool {
 
 /// What a compile-break or wiring finding claims, independent of where it
 /// is: the rule and the assertion. The fingerprint is no use here: it hashes
-/// the text of the line, which an edit to that line changes. Per rule, the
-/// assertion (kept whole, sets sorted) and the presentation (left out):
+/// the text of the line, which an edit to that line changes. The rules hand
+/// the assertion over on the diagnostic (`Diagnostic::claim`), with
+/// qualified names where the message shows simple ones (`a.Api` and `b.Api`
+/// are different claims) and whole sets where the message cuts them. Per rule,
+/// what is asserted (kept, sets sorted) and what is presentation (left out):
 ///
 /// | rule | asserted | presentation |
 /// |---|---|---|
-/// | `unresolved-method` | receiver type, member, arity or argument types, or that it is private / an instance method | `; did you mean ...?`, `; available: <overloads>` |
-/// | `unresolved-constructor` | class and arity | `; available: <constructors>` (first 4) |
-/// | `unresolved-field` | receiver type and field | none |
-/// | `override-matches-nothing` | the method's signature | none |
-/// | `missing-jdk-import` | the import and the release | none |
-/// | `unimplemented-abstract-method` | the class and every missing method, sorted (`Diagnostic::claim`) | the first 3 shown and "and N more" |
-/// | `bean-not-found` | the type and the injection point | none |
-/// | `ambiguous-bean` | type, injection point and every candidate, sorted (`Diagnostic::claim`) | their count, the first 5 shown, `; add a @Qualifier or @Primary` |
-/// | `qualifier-not-found` | the type and the qualifier | `; available: <beans>` (first 5) |
-/// | `bean-name-conflict` | the bean name, the other definition and the exception | none |
-/// | `circular-constructor-dependency` | the members of the cycle, sorted (`Diagnostic::claim`; the rule picks the cycle from the graph alone) | where the cycle is entered |
+/// | `unresolved-method` | qualified receiver class, member, arity or argument types; or the qualified method that is private, or an instance method called on the type | `; did you mean ...?`, `; available: <overloads>` |
+/// | `unresolved-constructor` | qualified class and arity | `; available: <constructors>` (first 4) |
+/// | `unresolved-field` | qualified class and field | none |
+/// | `override-matches-nothing` | the qualified class and the method's erased, qualified signature | none |
+/// | `missing-jdk-import` | the qualified import and the release | none |
+/// | `unimplemented-abstract-method` | the qualified class and every missing method (qualified owner and signature), sorted | the first 3 shown and "and N more" |
+/// | `bean-not-found` | the qualified type, the injection point and its qualified owner | none |
+/// | `ambiguous-bean` | qualified type, injection point and owner, and every candidate (name, qualified class, factory method), sorted | their count, the first 5 shown, `; add a @Qualifier or @Primary` |
+/// | `qualifier-not-found` | the qualified type and the qualifier | `; available: <beans>` (first 5) |
+/// | `bean-name-conflict` | the bean name, both definitions (qualified) and the exception | none |
+/// | `circular-constructor-dependency` | the qualified members of the cycle, sorted (the rule picks the cycle from the graph alone) | where the cycle is entered |
+///
+/// Without a claim on the diagnostic (findings of older baselines aside,
+/// only `missing-jdk-import`, whose message is already qualified), the
+/// message less its recognised presentation suffixes is the claim.
 fn claim_key(f: &Finding) -> (&'static str, String) {
     if let Some(c) = &f.claim {
         return (f.rule, c.clone());
@@ -224,9 +231,9 @@ fn claim_key(f: &Finding) -> (&'static str, String) {
 /// itself names no place, so it is its own gap.
 fn gap_key(f: &Finding) -> Option<(&'static str, String)> {
     match f.rule {
-        // "No bean of type `T` is defined; injection of `p` fails at startup"
-        "bean-not-found" => f.message.split_once("; injection of ").map(|(t, _)| (f.rule, t.to_string())),
-        // claim: "beans of type `T` match `p`: <candidates>"
+        // claim: "No bean of type `a.T`; injection of `p` into `a.Owner`"
+        "bean-not-found" => f.claim.as_deref().and_then(|c| c.split_once("; injection of ")).map(|(t, _)| (f.rule, t.to_string())),
+        // claim: "beans of type `a.T` match `p` into `a.Owner`: <candidates>"
         "ambiguous-bean" => f.claim.as_deref().and_then(|c| {
             let (ty, rest) = c.split_once(" match `")?;
             let (_, candidates) = rest.split_once("`: ")?;
@@ -666,7 +673,9 @@ impl Session {
             // the names of the gap where it is less than the claim: another
             // injection point of the type, not of the same name
             let f = &findings[i];
-            let names = quoted_names(&gap_key(f).map(|g| g.1).unwrap_or_else(|| f.message.clone()));
+            // (the message's simple names: files mention those, not qualified ones)
+            // (the bean rules' gap is the type, quoted first: its simple name)
+            let names = if gap_key(f).is_some() { f.message.split('`').nth(1).map(|t| quoted_names(&format!("`{t}`"))).unwrap_or_default() } else { quoted_names(&f.message) };
             if names.is_empty() {
                 continue;
             }
@@ -1208,13 +1217,16 @@ mod tests {
         let r = "circular-constructor-dependency";
         assert_eq!(with(r, "Circular constructor dependency: A -> B -> A", "constructor cycle through a.A, a.B"), with(r, "Circular constructor dependency: B -> A -> B", "constructor cycle through a.A, a.B"));
         assert_ne!(with(r, "Circular constructor dependency: A -> B -> A", "constructor cycle through a.A, a.B"), with(r, "Circular constructor dependency: A -> C -> A", "constructor cycle through a.A, a.C"));
+        // claims name types by their qualified names; the message may not
+        assert_ne!(with("unresolved-method", "`Lib` has no method `x`", "`a.Lib` has no method `x`"), with("unresolved-method", "`Lib` has no method `x`", "`b.Lib` has no method `x`"));
+        assert_ne!(with("unimplemented-abstract-method", "`Foo` does not implement `I.m(Bar)`", "`a.Foo` does not implement a.I.m(a.Bar)"), with("unimplemented-abstract-method", "`Foo` does not implement `I.m(Bar)`", "`a.Foo` does not implement a.I.m(b.Bar)"));
         // the gap: a missing or ambiguous bean is about the type, not the point
-        let gap = |rule, m: &str, c: Option<&str>| gap_key(&finding(rule, m, c));
-        assert_eq!(gap("bean-not-found", "No bean of type `Api` is defined; injection of `old` fails at startup", None), gap("bean-not-found", "No bean of type `Api` is defined; injection of `fresh` fails at startup", None));
-        assert_ne!(gap("bean-not-found", "No bean of type `Api` is defined; injection of `a` fails at startup", None), gap("bean-not-found", "No bean of type `Other` is defined; injection of `a` fails at startup", None));
-        assert_eq!(gap("ambiguous-bean", "", Some("beans of type `Api` match `x`: 'a' (A), 'b' (B)")), gap("ambiguous-bean", "", Some("beans of type `Api` match `y`: 'a' (A), 'b' (B)")));
-        assert_ne!(gap("ambiguous-bean", "", Some("beans of type `Api` match `x`: 'a' (A), 'b' (B)")), gap("ambiguous-bean", "", Some("beans of type `Api` match `x`: 'a' (A), 'c' (C)")));
-        assert_eq!(gap("unresolved-method", "`Lib` has no method `gap`", None), None);
+        let gap = |rule, c: &str| gap_key(&finding(rule, "", Some(c)));
+        assert_eq!(gap("bean-not-found", "No bean of type `a.Api`; injection of `old` into `a.Old`"), gap("bean-not-found", "No bean of type `a.Api`; injection of `fresh` into `a.Fresh`"));
+        assert_ne!(gap("bean-not-found", "No bean of type `a.Api`; injection of `x` into `a.X`"), gap("bean-not-found", "No bean of type `b.Api`; injection of `x` into `a.X`"));
+        assert_eq!(gap("ambiguous-bean", "beans of type `a.Api` match `x` into `a.X`: 'a' a.A, 'b' a.B"), gap("ambiguous-bean", "beans of type `a.Api` match `y` into `a.Y`: 'a' a.A, 'b' a.B"));
+        assert_ne!(gap("ambiguous-bean", "beans of type `a.Api` match `x` into `a.X`: 'a' a.A, 'b' a.B"), gap("ambiguous-bean", "beans of type `a.Api` match `x` into `a.X`: 'a' a.A, 'b' b.B"));
+        assert_eq!(gap_key(&finding("unresolved-method", "`Lib` has no method `gap`", Some("`a.Lib` has no method `gap`"))), None);
     }
 
     /// A panic while the project is in its base state (the daemon catches it

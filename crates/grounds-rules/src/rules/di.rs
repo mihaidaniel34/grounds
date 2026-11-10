@@ -79,6 +79,15 @@ fn util_find_field<'t>(decl: Node<'t>, name: &str, src: &str) -> Option<Node<'t>
     None
 }
 
+/// A bean's identity for a claim: its name and qualified declaring class,
+/// with the factory method when it has one.
+fn bean_id(b: &grounds_di::Bean) -> String {
+    match &b.source {
+        BeanSource::FactoryMethod(m) => format!("'{}' {}.{}()", b.name, b.declaring_class, m),
+        _ => format!("'{}' {}", b.name, b.declaring_class),
+    }
+}
+
 fn bean_list(di: &DiModel, idx: &[usize]) -> String {
     let mut v: Vec<String> = idx.iter().take(5).map(|&i| di.beans[i].display()).collect();
     if idx.len() > 5 {
@@ -120,7 +129,7 @@ impl Rule for BeanNotFound {
     fn check_file<'t>(&self, cx: &mut Ctx<'_, 't>) {
         for_each_point(cx, |cx, node, p, res, _| {
             if res == Resolution::NotFound {
-                cx.report(node, format!("No bean of type `{}` is defined; injection of `{}` fails at startup", p.ty.display_simple(), p.name));
+                cx.report_claim(node, format!("No bean of type `{}` is defined; injection of `{}` fails at startup", p.ty.display_simple(), p.name), format!("No bean of type `{}`; injection of `{}` into `{}`", p.ty, p.name, p.owner));
             }
         });
     }
@@ -144,9 +153,9 @@ impl Rule for AmbiguousBean {
         for_each_point(cx, |cx, node, p, res, di| {
             if let Resolution::Ambiguous(c) = res {
                 // the claim is every candidate, whatever the message shows
-                let mut all: Vec<String> = c.iter().map(|&i| di.beans[i].display()).collect();
+                let mut all: Vec<String> = c.iter().map(|&i| bean_id(&di.beans[i])).collect();
                 all.sort();
-                let claim = format!("beans of type `{}` match `{}`: {}", p.ty.display_simple(), p.name, all.join(", "));
+                let claim = format!("beans of type `{}` match `{}` into `{}`: {}", p.ty, p.name, p.owner, all.join(", "));
                 cx.report_claim(node, format!("{} beans of type `{}` match `{}`: {}; add a @Qualifier or @Primary", c.len(), p.ty.display_simple(), p.name, bean_list(di, &c)), claim);
             }
         });
@@ -170,7 +179,7 @@ impl Rule for QualifierNotFound {
     fn check_file<'t>(&self, cx: &mut Ctx<'_, 't>) {
         for_each_point(cx, |cx, node, p, res, di| {
             if let Resolution::QualifierNotFound { qualifier, candidates } = res {
-                cx.report(node, format!("No `{}` bean is qualified `{}`; available: {}", p.ty.display_simple(), qualifier.trim_start_matches('@'), bean_list(di, &candidates)));
+                cx.report_claim(node, format!("No `{}` bean is qualified `{}`; available: {}", p.ty.display_simple(), qualifier.trim_start_matches('@'), bean_list(di, &candidates)), format!("No `{}` bean is qualified `{}`", p.ty, qualifier.trim_start_matches('@')));
             }
         });
     }
@@ -966,7 +975,7 @@ impl Rule for BeanNameConflict {
                             } else {
                                 "Spring Boot fails at startup (BeanDefinitionOverrideException) unless bean overriding is enabled"
                             };
-                            cx.report(nd, format!("Bean name '{}' is also used by {by}; {fails}. Give one an explicit name", this.name));
+                            cx.report_claim(nd, format!("Bean name '{}' is also used by {by}; {fails}. Give one an explicit name", this.name), format!("Bean name '{}' of {} is also used by {by}; {fails}", this.name, bean_id(this)));
                         }
                     }
                 }

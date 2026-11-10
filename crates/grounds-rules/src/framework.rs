@@ -263,8 +263,14 @@ impl<'a, 't> Ctx<'a, 't> {
         self.out.push(Diagnostic { rule: self.rule.id, severity, range: TextRange::of(node), message: message.into(), fix: None, claim: None });
     }
 
+    /// A method's identity for a claim: qualified owner and erased,
+    /// qualified parameter types (the message shows simple names).
+    pub fn method_id(owner: &str, m: &grounds_index::MethodInfo) -> String {
+        format!("{owner}.{}({})", m.name, m.params.iter().map(|p| p.ty.erasure().to_string()).collect::<Vec<_>>().join(","))
+    }
+
     /// Report with the full claim behind a message that shows only part of
-    /// it (see [`Diagnostic::claim`]).
+    /// it, or names types by their simple names (see [`Diagnostic::claim`]).
     pub fn report_claim(&mut self, node: Node<'t>, message: impl Into<String>, claim: String) {
         self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range: TextRange::of(node), message: message.into(), fix: None, claim: Some(claim) });
     }

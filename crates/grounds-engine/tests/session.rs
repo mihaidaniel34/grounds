@@ -886,3 +886,22 @@ fn a_new_injection_point_of_a_type_already_missing_is_the_same_gap() {
     assert_eq!(rules_of(&base_check(&dir)), vec![("Fresh.java".into(), "bean-not-found")]);
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+/// Two types with one simple name: an injection point of `b.Api` missing its
+/// bean is not the gap untouched code had for `a.Api`.
+#[test]
+fn a_missing_bean_of_another_type_with_the_same_simple_name_is_reported() {
+    let (repo, dir) = spring_project(
+        "samename",
+        &[
+            ("a/Api.java", "package demo.a;\npublic interface Api {}\n"),
+            ("b/Api.java", "package demo.b;\npublic interface Api {}\n"),
+            ("Old.java", "package demo;\n@org.springframework.stereotype.Component\npublic class Old {\n    Old(demo.a.Api api) {}\n}\n"),
+        ],
+    );
+    write(&dir, "src/main/java/demo/Fresh.java", "package demo;\n@org.springframework.stereotype.Component\npublic class Fresh {\n    Fresh(demo.b.Api api) {}\n}\n");
+    assert_eq!(rules_of(&base_check(&dir)), vec![("Fresh.java".into(), "bean-not-found")]);
+    write(&dir, "src/main/java/demo/Fresh.java", "package demo;\n@org.springframework.stereotype.Component\npublic class Fresh {\n    Fresh(demo.a.Api api) {}\n}\n");
+    assert_eq!(rules_of(&base_check(&dir)), vec![]);
+    let _ = std::fs::remove_dir_all(&repo);
+}

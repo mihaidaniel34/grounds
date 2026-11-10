@@ -220,30 +220,30 @@ impl Rule for UnresolvedMethod {
                     return;
                 }
                 if let Some(m) = private_hit {
-                    cx.report(n.field("name").unwrap_or(n), format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)));
+                    cx.report_claim(n.field("name").unwrap_or(n), format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)), format!("`{}` is private", Ctx::method_id(&m.owner, &m.method)));
                     return;
                 }
                 let hint = similar_names(&ci, cx.fm, name, Some(nargs)).map(|s| format!("; did you mean `{s}`?")).unwrap_or_default();
-                cx.report(n.field("name").unwrap_or(n), format!("Method `{name}` is not defined in `{}` or its enclosing classes{hint}", ci.simple_name()));
+                cx.report_claim(n.field("name").unwrap_or(n), format!("Method `{name}` is not defined in `{}` or its enclosing classes{hint}", ci.simple_name()), format!("Method `{name}` is not defined in `{}` or its enclosing classes", ci.name));
                 return;
             }
         };
         let ms = cx.fm.methods_named(&cls.this_type(), name);
         if ms.is_empty() {
             let hint = similar_names(&cls, cx.fm, name, Some(nargs)).map(|s| format!("; did you mean `{s}`?")).unwrap_or_default();
-            cx.report(n.field("name").unwrap_or(n), format!("`{}` has no method `{name}`{hint}", cls.simple_name()));
+            cx.report_claim(n.field("name").unwrap_or(n), format!("`{}` has no method `{name}`{hint}", cls.simple_name()), format!("`{}` has no method `{name}`", cls.name));
             return;
         }
         if !ms.iter().any(|m| m.method.accepts_arity(nargs)) {
-            cx.report(n.field("name").unwrap_or(n), format!("No `{name}` in `{}` takes {nargs} argument(s); available: {}", cls.simple_name(), signatures(&ms)));
+            cx.report_claim(n.field("name").unwrap_or(n), format!("No `{name}` in `{}` takes {nargs} argument(s); available: {}", cls.simple_name(), signatures(&ms)), format!("No `{name}` in `{}` takes {nargs} argument(s)", cls.name));
             return;
         }
         if let Some(arg_list) = definitely_incompatible(cx, n, &ms) {
-            cx.report(n.field("name").unwrap_or(n), format!("No `{name}` in `{}` accepts ({arg_list}); available: {}", cls.simple_name(), signatures(&ms)));
+            cx.report_claim(n.field("name").unwrap_or(n), format!("No `{name}` in `{}` accepts ({arg_list}); available: {}", cls.simple_name(), signatures(&ms)), format!("No `{name}` in `{}` accepts ({arg_list})", cls.name));
             return;
         }
         if let Some(m) = private_elsewhere(cx, n, &cls, name, &ms, Some(nargs)) {
-            cx.report(n.field("name").unwrap_or(n), format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)));
+            cx.report_claim(n.field("name").unwrap_or(n), format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)), format!("`{}` is private", Ctx::method_id(&m.owner, &m.method)));
             return;
         }
         // calling an instance method through the type name
@@ -251,7 +251,7 @@ impl Rule for UnresolvedMethod {
             // `Outer.method()` inside an inner class reaches the outer instance legally
             let inside = cx.fm.enclosing_class_name(n).is_some_and(|e| e.starts_with(&*cls.name));
             if !inside {
-                cx.report(n.field("name").unwrap_or(n), format!("`{}.{name}()` is an instance method and cannot be called on the type", cls.simple_name()));
+                cx.report_claim(n.field("name").unwrap_or(n), format!("`{}.{name}()` is an instance method and cannot be called on the type", cls.simple_name()), format!("`{}.{name}()` is an instance method and cannot be called on the type", cls.name));
             }
         }
     }
@@ -299,9 +299,9 @@ fn check_method_reference<'t>(n: Node<'t>, cx: &mut Ctx<'_, 't>) {
     let ms = cx.fm.methods_named(&cls.this_type(), mname);
     if ms.is_empty() {
         let hint = similar_names(&cls, cx.fm, mname, None).map(|s| format!("; did you mean `{s}`?")).unwrap_or_default();
-        cx.report(name, format!("`{}` has no method `{mname}`{hint}", cls.simple_name()));
+        cx.report_claim(name, format!("`{}` has no method `{mname}`{hint}", cls.simple_name()), format!("`{}` has no method `{mname}`", cls.name));
     } else if let Some(m) = private_elsewhere(cx, n, &cls, mname, &ms, None) {
-        cx.report(name, format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)));
+        cx.report_claim(name, format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)), format!("`{}` is private", Ctx::method_id(&m.owner, &m.method)));
     }
 }
 
@@ -618,7 +618,7 @@ impl Rule for UnresolvedConstructor {
             return;
         }
         let avail: Vec<String> = ctors.iter().take(4).map(|c| format!("{}({})", cls.simple_name(), c.params.iter().map(|p| p.ty.display_simple()).collect::<Vec<_>>().join(", "))).collect();
-        cx.report(t, format!("No constructor of `{}` takes {nargs} argument(s); available: {}", cls.simple_name(), avail.join(", ")));
+        cx.report_claim(t, format!("No constructor of `{}` takes {nargs} argument(s); available: {}", cls.simple_name(), avail.join(", ")), format!("No constructor of `{}` takes {nargs} argument(s)", cls.name));
     }
 }
 
@@ -668,7 +668,7 @@ impl Rule for UnresolvedField {
             }
         };
         let Some(cls) = cls else { return };
-        cx.report(f, format!("`{}` has no field `{fname}`", cls.simple_name()));
+        cx.report_claim(f, format!("`{}` has no field `{fname}`", cls.simple_name()), format!("`{}` has no field `{fname}`", cls.name));
     }
 }
 
@@ -735,7 +735,7 @@ impl Rule for OverrideWithoutSuper {
         }
         if !found {
             if let Some(nm) = n.field("name") {
-                cx.report(nm, format!("`{}` is marked @Override but overrides no supertype method", m.signature_string()));
+                cx.report_claim(nm, format!("`{}` is marked @Override but overrides no supertype method", m.signature_string()), format!("`{}` is marked @Override but overrides no supertype method", Ctx::method_id(&cls.name, &m)));
             }
         }
     }
@@ -770,6 +770,7 @@ impl Rule for UnimplementedAbstractMethod {
             return;
         }
         let mut missing: Vec<String> = Vec::new();
+        let mut missing_ids: Vec<String> = Vec::new();
         for m in cx.fm.all_methods(&cls.this_type()) {
             if !m.method.flags.is_abstract() || m.method.flags.is_static() {
                 continue;
@@ -785,15 +786,15 @@ impl Rule for UnimplementedAbstractMethod {
             let implemented = implements(cx, &cls, &m.method.name, m.method.params.len());
             if !implemented {
                 missing.push(format!("`{}.{}`", simple_name_of(&m.owner), m.method.signature_string()));
+                missing_ids.push(Ctx::method_id(&m.owner, &m.method));
             }
         }
         if !missing.is_empty() {
             if let Some(nm) = n.field("name") {
                 let more = if missing.len() > 3 { format!(" and {} more", missing.len() - 3) } else { String::new() };
                 // the claim is every missing method, whatever the message shows
-                let mut all = missing.clone();
-                all.sort();
-                cx.report_claim(nm, format!("`{}` does not implement {}{more}", cls.simple_name(), missing.iter().take(3).cloned().collect::<Vec<_>>().join(", ")), format!("`{}` does not implement {}", cls.simple_name(), all.join(", ")));
+                missing_ids.sort();
+                cx.report_claim(nm, format!("`{}` does not implement {}{more}", cls.simple_name(), missing.iter().take(3).cloned().collect::<Vec<_>>().join(", ")), format!("`{}` does not implement {}", cls.name, missing_ids.join(", ")));
             }
         }
     }
