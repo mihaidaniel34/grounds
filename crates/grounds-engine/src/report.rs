@@ -166,9 +166,17 @@ impl SarifDoc {
         SarifDoc { rules: Vec::new(), rule_index: BTreeMap::new(), results: Vec::new(), prefix, warnings: warnings.to_vec() }
     }
 
-    fn rule(&mut self, id: &'static str, severity: Severity) -> usize {
+    /// The rule's descriptor. Its `maturity` is that of the run's findings:
+    /// the compile-break rules are `stable` in `grounds changed`
+    /// and `preview` in `grounds check` (each result carries its own too).
+    fn rule(&mut self, id: &'static str, severity: Severity, maturity: grounds_rules::Maturity) -> usize {
         use serde_json::json;
         if let Some(&i) = self.rule_index.get(id) {
+            // results of one rule with both maturities (`--all-lines`): the
+            // rule as a whole is held only to the weaker one
+            if maturity == grounds_rules::Maturity::Preview {
+                self.rules[i]["properties"]["maturity"] = serde_json::json!("preview");
+            }
             return i;
         }
         let rule = match grounds_rules::meta_of(id) {
@@ -179,7 +187,7 @@ impl SarifDoc {
                 "fullDescription": { "text": m.description },
                 "helpUri": format!("{HOME}/blob/master/docs/RULES.md"),
                 "defaultConfiguration": { "level": level(m.severity) },
-                "properties": { "category": m.category.as_str(), "sources": m.sources, "maturity": m.maturity.as_str() },
+                "properties": { "category": m.category.as_str(), "sources": m.sources, "maturity": maturity.as_str() },
             }),
             // findings only CI mode (`changed --base`) produces
             None => {
@@ -194,7 +202,7 @@ impl SarifDoc {
                     "fullDescription": { "text": text },
                     "helpUri": format!("{HOME}#ci"),
                     "defaultConfiguration": { "level": level(severity) },
-                    "properties": { "maturity": crate::analyze::maturity_of(id).as_str() },
+                    "properties": { "maturity": maturity.as_str() },
                 })
             }
         };
@@ -214,7 +222,7 @@ impl SarifDoc {
 
     fn result(&mut self, f: &Finding, related: Vec<(usize, &Finding)>) {
         use serde_json::json;
-        let idx = self.rule(f.rule, f.severity);
+        let idx = self.rule(f.rule, f.severity, f.maturity);
         let mut r = json!({
             "ruleId": f.rule,
             "ruleIndex": idx,
@@ -222,6 +230,7 @@ impl SarifDoc {
             "message": { "text": f.message },
             "partialFingerprints": { "grounds/v1": f.fingerprint },
             "locations": [self.location(f)],
+            "properties": { "maturity": f.maturity.as_str() },
         });
         if !related.is_empty() {
             let rel: Vec<_> = related

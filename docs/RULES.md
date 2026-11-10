@@ -4,7 +4,7 @@
 
 Tier `edit` rules run after every edit; all rules run at checkpoints. Rules marked *off* are disabled by default (enable in `grounds.toml`).
 
-Maturity: 0 rules are `stable` (held to the project's precision promise), 318 are `preview` (still being measured). Preview rules run by default for now; `preview = false` under `[rules]` in `grounds.toml` turns them off, except those named by id in `enable` or `--rules`. See the README.
+Maturity: 0 rules are `stable` (held to the project's precision promise). 6 are `stable in changed`: the compile-break rules, whose findings `grounds changed` reports only when they are new with the change (on a changed line, or a place in another file the change broke); those findings are stable, while the same rules run over a whole project with `grounds check` are preview. The other 312 are `preview` (still being measured). Preview rules run by default for now; `preview = false` under `[rules]` in `grounds.toml` turns them off, except those named by id in `enable` or `--rules`; it keeps the `stable in changed` rules in `grounds changed`, and they run in `grounds check` only when named by id. The wiring rules are preview in both: their claims depend on order in the wiring model. See the README.
 
 ## bad-practice (38)
 
@@ -160,14 +160,14 @@ Maturity: 0 rules are `stable` (held to the project's precision promise), 318 ar
 | `invalid-date-value` | error | preview | edit | sonar:S2110, spotbugs:DMI_BAD_MONTH |
 | `instant-unsupported-unit` | error | preview | edit | errorprone:JavaInstantGetSecondsGetNano, errorprone:JavaTimeDefaultTimeZone |
 | `invalid-time-zone-id` | warning | preview | checkpoint | errorprone:InvalidTimeZoneID, errorprone:InvalidZoneId |
-| `unresolved-method` | error | preview | edit | javac:cant.resolve.location.args, intellij:UnresolvedReference |
-| `unresolved-constructor` | error | preview | edit | javac:cant.apply.symbol, intellij:UnresolvedReference |
-| `unresolved-field` | error | preview | edit | javac:cant.resolve.location, intellij:UnresolvedReference |
+| `unresolved-method` | error | stable in changed | edit | javac:cant.resolve.location.args, intellij:UnresolvedReference |
+| `unresolved-constructor` | error | stable in changed | edit | javac:cant.apply.symbol, intellij:UnresolvedReference |
+| `unresolved-field` | error | stable in changed | edit | javac:cant.resolve.location, intellij:UnresolvedReference |
 | `unresolved-static-import` | error | preview | edit | javac:cant.resolve.location, intellij:UnresolvedReference |
-| `missing-jdk-import` | warning | preview | edit | javac:doesnt.exist, javac:cant.resolve.location |
+| `missing-jdk-import` | warning | stable in changed | edit | javac:doesnt.exist, javac:cant.resolve.location |
 | `incompatible-assignment` | error | preview | edit | javac:prob.found.req, intellij:IncompatibleTypes |
-| `override-matches-nothing` | error | preview | edit | javac:method.does.not.override.superclass, intellij:MethodDoesntOverride |
-| `unimplemented-abstract-method` | error | preview | edit | javac:does.not.override.abstract, intellij:ClassNotImplementingAbstractMethods |
+| `override-matches-nothing` | error | stable in changed | edit | javac:method.does.not.override.superclass, intellij:MethodDoesntOverride |
+| `unimplemented-abstract-method` | error | stable in changed | edit | javac:does.not.override.abstract, intellij:ClassNotImplementingAbstractMethods |
 
 ## complexity (5)
 

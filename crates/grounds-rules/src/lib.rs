@@ -12,7 +12,7 @@ pub mod runner;
 pub mod text;
 pub mod util;
 
-pub use framework::{Category, Diagnostic, Fix, Maturity, Rule, RuleMeta, Scope, Severity, Tier};
+pub use framework::{Category, Diagnostic, Fix, Maturity, Rule, RuleMeta, Scope, Severity, Tier, STABLE_IN_CHANGED};
 pub use runner::RuleSet;
 
 /// Every rule in the catalog.

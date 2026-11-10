@@ -3,13 +3,13 @@
 //! and impacted tests. The CLI runs these in-process; the daemon keeps a
 //! `Session` warm and runs them per request.
 
-use crate::analyze::{analyze_text, build_ruleset, Finding};
+use crate::analyze::{analyze_text, build_ruleset_for, Finding};
 use crate::git;
 use crate::project::{path_key, Project};
 use crate::workspace::{classify, SourceKind};
 use grounds_index::{simple_name_of, ClassLookup, FileStub, Name};
 use grounds_rules::framework::RuleOptions;
-use grounds_rules::{RuleSet, Severity, Tier};
+use grounds_rules::{Maturity, RuleSet, Severity, Tier};
 use grounds_syntax::{NodeExt, ParsedFile};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -172,6 +172,117 @@ pub const CROSS_FILE_RULES: &[&str] = &[
     "circular-constructor-dependency",
 ];
 
+/// Whether `rule` is a compile-break rule whose findings `grounds changed`
+/// holds to the stable promise when they are new with the change
+/// (`grounds_rules::STABLE_IN_CHANGED`).
+pub fn stable_in_changed(rule: &str) -> bool {
+    grounds_rules::STABLE_IN_CHANGED.contains(&rule)
+}
+
+/// Whether `rule` claims that code would not compile or an application would
+/// not start, so that `grounds changed` reports its findings on changed lines
+/// only when the project before the change did not get the same claim. That
+/// comparison only removes reports, so it runs for the wiring rules too; they
+/// are not stable (their claims depend on the order of maps and annotations
+/// in the wiring model), so their findings stay preview.
+pub fn compared_in_changed(rule: &str) -> bool {
+    stable_in_changed(rule) || CROSS_FILE_RULES.contains(&rule)
+}
+
+/// What a compile-break or wiring finding claims, independent of where it
+/// is: the rule and the assertion. The fingerprint is no use here: it hashes
+/// the text of the line, which an edit to that line changes. The rules hand
+/// the assertion over on the diagnostic (`Diagnostic::claim`), with
+/// qualified names where the message shows simple ones (`a.Api` and `b.Api`
+/// are different claims) and whole sets where the message cuts them. Per rule,
+/// what is asserted (kept, sets sorted) and what is presentation (left out):
+///
+/// | rule | asserted | presentation |
+/// |---|---|---|
+/// | `unresolved-method` | qualified receiver class, member, arity or argument types; or the qualified method that is private, or an instance method called on the type | `; did you mean ...?`, `; available: <overloads>` |
+/// | `unresolved-constructor` | qualified class and arity | `; available: <constructors>` (first 4) |
+/// | `unresolved-field` | qualified class and field | none |
+/// | `override-matches-nothing` | the qualified class and the method's erased, qualified signature | none |
+/// | `missing-jdk-import` | the qualified import and the release | none |
+/// | `unimplemented-abstract-method` | the qualified class and every missing method (qualified owner and signature), sorted | the first 3 shown and "and N more" |
+/// | `bean-not-found` | the qualified type, the injection point and its qualified owner | none |
+/// | `ambiguous-bean` | qualified type, injection point and owner, and every candidate (name, qualified class, factory method), sorted | their count, the first 5 shown, `; add a @Qualifier or @Primary` |
+/// | `qualifier-not-found` | the qualified type and the qualifier | `; available: <beans>` (first 5) |
+/// | `bean-name-conflict` | the bean name, both definitions (qualified) and the exception | none |
+/// | `circular-constructor-dependency` | the message: the cycle as the search meets it | none |
+///
+/// The last five (wiring) rows are compared too, but those rules are not
+/// stable: which pair, qualifier or cycle they report depends on the order of
+/// maps and annotations in the wiring model, so their findings stay preview.
+/// Without a claim on the diagnostic (`missing-jdk-import`, whose message is
+/// already qualified, and the cycle rule), the message less its recognised
+/// presentation suffixes is the claim.
+fn claim_key(f: &Finding) -> (&'static str, String) {
+    if let Some(c) = &f.claim {
+        return (f.rule, c.clone());
+    }
+    let mut m = f.message.as_str();
+    let presentation: &[&str] = match f.rule {
+        "unresolved-method" => &["; did you mean `", "; available: "],
+        "unresolved-constructor" | "qualifier-not-found" => &["; available: "],
+        _ => &[],
+    };
+    for p in presentation {
+        if let Some(i) = m.find(p) {
+            m = &m[..i];
+        }
+    }
+    (f.rule, m.to_string())
+}
+
+/// The gap in the model a claim stands for, where that is less than the
+/// claim: a decision for limit (b), not for comparing places. A missing or
+/// ambiguous bean is a fact about the type (and its candidates), whichever
+/// injection point asks for it; when untouched code that ran before the
+/// change already got it, a new injection point of the same type meets the
+/// same gap, so it is not reported either. For every other rule the claim
+/// itself names no place, so it is its own gap.
+fn gap_key(f: &Finding) -> Option<(&'static str, String)> {
+    match f.rule {
+        // claim: "No bean of type `a.T`; injection of `p` into `a.Owner`"
+        "bean-not-found" => f.claim.as_deref().and_then(|c| c.split_once("; injection of ")).map(|(t, _)| (f.rule, t.to_string())),
+        // claim: "beans of type `a.T` match `p` into `a.Owner`: <candidates>"
+        "ambiguous-bean" => f.claim.as_deref().and_then(|c| {
+            let (ty, rest) = c.split_once(" match `")?;
+            let (_, candidates) = rest.split_once("`: ")?;
+            Some((f.rule, format!("{ty}: {candidates}")))
+        }),
+        _ => None,
+    }
+}
+
+/// A finding in a file the change did not touch, as the comparison with the
+/// project before the change sees it: the place and what is claimed there.
+/// The fingerprint names the line, not the call on it (`a.foo(); a.bar();`
+/// breaking foo while fixing bar keeps the fingerprint, not the column), and
+/// the same place can carry a different claim after the change (a changed
+/// return type: "`Old` has no method `x`" becomes "`New` has no method `x`").
+type PlaceClaim = (String, u32, (&'static str, String));
+
+fn place_claim(f: &Finding) -> PlaceClaim {
+    (f.fingerprint.clone(), f.col, claim_key(f))
+}
+
+/// The identifiers a message quotes in `backticks`, before any `;` (the
+/// hint or list of candidates that follows).
+fn quoted_names(message: &str) -> Vec<String> {
+    let head = message.split(';').next().unwrap_or(message);
+    let mut v: Vec<String> = head
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .flat_map(|q| q.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).filter(|w| !w.is_empty() && !w.chars().next().is_some_and(|c| c.is_ascii_digit())).map(str::to_string).collect::<Vec<_>>())
+        .collect();
+    v.sort();
+    v.dedup();
+    v
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Mode {
     /// After an edit: high-confidence rules, changed lines only.
@@ -201,10 +312,12 @@ impl Session {
     }
 
     pub fn from_project(project: Project) -> Session {
-        let (all_rules, options) = build_ruleset(&project);
+        // the rules `grounds changed` runs: there the compile-break
+        // rules are stable, so `preview = false` keeps them
+        let (all_rules, options) = build_ruleset_for(&project, true);
         // same configuration as full checks, narrowed to edit-tier rules
-        let edit_rules = RuleSet::new(crate::analyze::selected_rules(&project).into_iter().filter(|r| r.meta().tier == Tier::Edit).collect());
-        let resolution_rules = RuleSet::new(crate::analyze::selected_rules(&project).into_iter().filter(|r| r.meta().id.starts_with("unresolved-")).collect());
+        let edit_rules = RuleSet::new(crate::analyze::selected_rules_for(&project, true).into_iter().filter(|r| r.meta().tier == Tier::Edit).collect());
+        let resolution_rules = RuleSet::new(crate::analyze::selected_rules_for(&project, true).into_iter().filter(|r| r.meta().id.starts_with("unresolved-")).collect());
         // The project's files were read some time ago, during the load, and
         // their times are only read now. A file written in between (an edit
         // while a daemon was starting) is noted with its new time and held
@@ -456,18 +569,47 @@ impl Session {
         };
         let mut findings = self.analyze(rules, &files);
         let mut report = Report { files_checked: files.len(), ..Default::default() };
+        let repo = git::is_repo(self.root());
+        // keyed by resolved path: git reports `/private/var/..` for a root
+        // reached through the `/var` symlink
+        let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        let ranges = repo.then(|| git::changed_lines_since(self.root(), &files, rev).into_iter().map(|(p, r)| (canon(&p), r)).collect::<FxHashMap<_, _>>());
+        let root = self.root().to_path_buf();
+        let on_changed_line = |f: &Finding| match ranges.as_ref().and_then(|r| r.get(&canon(&root.join(&f.path)))) {
+            Some(r) => git::in_ranges(f.line, r),
+            None => true,
+        };
+
+        // A compile-break or wiring finding on a changed line is a claim about
+        // the change only if the project before the change did not get the
+        // same claim: a gap in the model is there before and after alike.
+        // Those that are new are stable when the rule is one of the promised
+        // compile-break rules; on unchanged lines (`--all-lines`) they stay
+        // what they are in a whole-project check.
+        if repo {
+            let claims: Vec<usize> = (0..findings.len()).filter(|&i| compared_in_changed(findings[i].rule) && on_changed_line(&findings[i])).collect();
+            let mut drop: FxHashSet<usize> = FxHashSet::default();
+            if !claims.is_empty() {
+                let touched = self.touched(opts, &files, &deleted, rev);
+                let before = self.claims_before(&findings, &claims, &files, &touched, rev);
+                drop = claims.iter().copied().filter(|&i| before.contains(&claim_key(&findings[i])) || gap_key(&findings[i]).is_some_and(|g| before.contains(&g))).collect();
+            }
+            for &i in &claims {
+                if stable_in_changed(findings[i].rule) {
+                    findings[i].maturity = Maturity::Stable;
+                }
+            }
+            let mut i = 0;
+            findings.retain(|_| {
+                i += 1;
+                !drop.contains(&(i - 1))
+            });
+        }
 
         // changed-lines filter
-        if !opts.all_lines && git::is_repo(self.root()) {
-            // keyed by resolved path: git reports `/private/var/..` for a root
-            // reached through the `/var` symlink
-            let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
-            let ranges: FxHashMap<PathBuf, Option<Vec<(u32, u32)>>> = git::changed_lines_since(self.root(), &files, rev).into_iter().map(|(p, r)| (canon(&p), r)).collect();
+        if !opts.all_lines && ranges.is_some() {
             let before = findings.len();
-            findings.retain(|f| match ranges.get(&canon(&self.root().join(&f.path))) {
-                Some(r) => git::in_ranges(f.line, r),
-                None => true,
-            });
+            findings.retain(|f| on_changed_line(f));
             report.outside_changed_lines = before - findings.len();
         }
         let baseline = if opts.use_baseline { Baseline::load(self.root()) } else { Baseline::default() };
@@ -480,18 +622,34 @@ impl Session {
         report.findings = findings;
 
         // callers broken by API changes in these files
-        if git::is_repo(self.root()) {
+        if repo {
             let (changed_apis, names) = self.api_changes(&files, rev);
             report.changed_apis = changed_apis;
             let mut pending = if opts.base.is_some() {
                 // CI: every unchanged file, against both versions of the changed ones
                 self.cross_file_breaks(&files, &deleted, rev)
             } else {
-                // per turn: quick, only unresolved references to changed names
+                // per turn: quick, only unresolved references to changed names,
+                // and of those only the ones the change introduced
                 let exclude: FxHashSet<PathBuf> = files.iter().cloned().collect();
                 let deps = self.dependents(&names, &exclude);
-                if deps.is_empty() { Vec::new() } else { self.analyze(&self.resolution_rules, &deps) }
+                let now = if deps.is_empty() { Vec::new() } else { self.analyze(&self.resolution_rules, &deps) };
+                if now.is_empty() {
+                    now
+                } else {
+                    // (files deleted since HEAD are no longer in the index, so
+                    // no dependent is analyzed against a stub of another version)
+                    let touched = self.touched(opts, &files, &deleted, rev);
+                    let before: FxHashSet<PlaceClaim> = self.at_base(&touched, rev, |s| s.analyze(&s.resolution_rules, &deps)).iter().map(place_claim).collect();
+                    now.into_iter().filter(|f| !before.contains(&place_claim(f))).collect()
+                }
             };
+            // the promise covers the compile-break rules: places broken by a
+            // missing or ambiguous bean, and `unresolved-static-import` from the
+            // per-turn scan, stay preview
+            for f in pending.iter_mut().filter(|f| stable_in_changed(f.rule)) {
+                f.maturity = Maturity::Stable;
+            }
             pending.retain(|f| !f.in_baseline(&base));
             pending.sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
             report.pending = pending;
@@ -500,13 +658,112 @@ impl Session {
         report
     }
 
+    /// The files whose version at `rev` makes up the project before the
+    /// change: the changed and deleted files, and per turn (no explicit
+    /// files) also the files deleted since HEAD. With explicit files (the
+    /// post-edit hook) only those: the change judged is the edit to them.
+    fn touched(&self, opts: &CheckOptions, files: &[PathBuf], deleted: &[PathBuf], rev: &str) -> Vec<PathBuf> {
+        let mut out: Vec<PathBuf> = files.iter().chain(deleted).cloned().collect();
+        if opts.base.is_none() && opts.files.is_empty() {
+            let root = self.root().canonicalize().unwrap_or_else(|_| self.root().to_path_buf());
+            out.extend(git::changed_files_since(self.root(), rev).1.into_iter().filter(|f| f.extension().is_some_and(|x| x == "java") && (f.starts_with(&root) || f.starts_with(self.root()))));
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// The compile-break and wiring claims the project made before the
+    /// change that match `findings[claims]`: in the version at `rev` of the
+    /// files they are in, and in files the change did not touch that mention
+    /// every name the claim quotes. A claim the model already made about code
+    /// before the change (which compiled) is one it cannot back: the same
+    /// gap, whether the line holding it was edited, moved or newly written.
+    fn claims_before(&mut self, findings: &[Finding], claims: &[usize], files: &[PathBuf], touched: &[PathBuf], rev: &str) -> FxHashSet<(&'static str, String)> {
+        let rules = RuleSet::new(crate::analyze::selected_rules_for(&self.project, true).into_iter().filter(|r| compared_in_changed(r.meta().id)).collect());
+        // a finding's path is relative to the root, as `analyze_text` makes it
+        let paths: FxHashSet<&str> = claims.iter().map(|&i| findings[i].path.as_str()).collect();
+        let in_files: Vec<PathBuf> = files.iter().filter(|f| paths.contains(f.strip_prefix(self.root()).unwrap_or(f).to_string_lossy().as_ref())).cloned().collect();
+        let skip: FxHashSet<&PathBuf> = touched.iter().collect();
+        let mut elsewhere: FxHashSet<PathBuf> = FxHashSet::default();
+        for &i in claims {
+            // the names of the gap where it is less than the claim: another
+            // injection point of the type, not of the same name
+            let f = &findings[i];
+            // (the message's simple names: files mention those, not qualified ones)
+            // (the bean rules' gap is the type, quoted first: its simple name)
+            let names = if gap_key(f).is_some() { f.message.split('`').nth(1).map(|t| quoted_names(&format!("`{t}`"))).unwrap_or_default() } else { quoted_names(&f.message) };
+            if names.is_empty() {
+                continue;
+            }
+            for (p, stub) in self.project.index.files() {
+                let pb = PathBuf::from(&**p);
+                if !skip.contains(&pb) && classify(&pb) != SourceKind::Generated && names.iter().all(|n| stub.referenced_names.binary_search_by(|x| (**x).cmp(n.as_str())).is_ok()) {
+                    elsewhere.insert(pb);
+                }
+            }
+        }
+        let mut elsewhere: Vec<PathBuf> = elsewhere.into_iter().collect();
+        elsewhere.sort();
+        let old: Vec<(PathBuf, String)> = in_files.iter().filter_map(|f| git::version_at(self.root(), rev, f).map(|t| (f.clone(), t))).collect();
+        let found = self.at_base(touched, rev, |s| {
+            s.project.index.ensure_resolved();
+            let mut v: Vec<Finding> = old.par_iter().flat_map_iter(|(f, t)| analyze_text(&s.project, &rules, &s.options, f, t)).collect();
+            v.extend(s.analyze(&rules, &elsewhere));
+            v
+        });
+        found.iter().flat_map(|f| std::iter::once(claim_key(f)).chain(gap_key(f))).collect()
+    }
+
+    /// Run `f` on the project as it was at `rev` for the `touched` files
+    /// (their version there, or none), then put the current stubs and bean
+    /// model back as they were, from memory, also when `f` panics: the daemon
+    /// survives a panic in a request, and no file's time would tell a later
+    /// sync that the index holds the base version.
+    fn at_base<R>(&mut self, touched: &[PathBuf], rev: &str, f: impl FnOnce(&Session) -> R) -> R {
+        let saved: Vec<(Arc<str>, Option<Arc<FileStub>>)> = touched.iter().map(|p| {
+            let key = path_key(p);
+            let stub = self.project.index.file(&key).cloned();
+            (key, stub)
+        }).collect();
+        let mut base_di = grounds_di::DiModel::default();
+        base_di.lombok_copies_qualifiers = self.project.di.lombok_copies_qualifiers;
+        base_di.bean_overriding_allowed = self.project.di.bean_overriding_allowed;
+        let di = std::mem::replace(&mut self.project.di, base_di);
+        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for p in touched {
+                let key = path_key(p);
+                match git::version_at(self.root(), rev, p) {
+                    Some(t) => {
+                        let stub = Arc::new(self.project.extract(p, &ParsedFile::parse(t)));
+                        self.project.index.set_file(key, stub);
+                    }
+                    None => self.project.index.remove_file(&key),
+                }
+            }
+            self.project.rebuild_di();
+            f(self)
+        }));
+        for (key, stub) in saved {
+            match stub {
+                Some(stub) => self.project.index.set_file(key, stub),
+                None => self.project.index.remove_file(&key),
+            }
+        }
+        self.project.di = di;
+        match out {
+            Ok(r) => r,
+            Err(e) => std::panic::resume_unwind(e),
+        }
+    }
+
     /// Findings of the cross-file rules in files outside `changed`/`deleted`
     /// that the change introduced: analyzed with the current version of the
     /// changed files and again with their version at `rev`, keeping what is
     /// new. The unchanged files' text is the same both times, so fingerprints
     /// match exactly.
     fn cross_file_breaks(&mut self, changed: &[PathBuf], deleted: &[PathBuf], rev: &str) -> Vec<Finding> {
-        let rules = RuleSet::new(crate::analyze::selected_rules(&self.project).into_iter().filter(|r| CROSS_FILE_RULES.contains(&r.meta().id)).collect());
+        let rules = RuleSet::new(crate::analyze::selected_rules_for(&self.project, true).into_iter().filter(|r| CROSS_FILE_RULES.contains(&r.meta().id)).collect());
         let touched: Vec<PathBuf> = changed.iter().chain(deleted).cloned().collect();
         let skip: FxHashSet<&PathBuf> = touched.iter().collect();
         let others: Vec<PathBuf> = crate::analyze::all_source_files(&self.project).into_iter().filter(|f| !skip.contains(f)).collect();
@@ -514,34 +771,12 @@ impl Session {
             return Vec::new();
         }
         let now = self.analyze(&rules, &others);
-        let install = |s: &mut Session, f: &PathBuf, text: Option<String>| {
-            let key = path_key(f);
-            match text {
-                Some(t) => {
-                    let stub = Arc::new(s.project.extract(f, &ParsedFile::parse(t)));
-                    s.project.index.set_file(key, stub);
-                }
-                None => s.project.index.remove_file(&key),
-            }
-        };
-        let mut base_classes: Vec<Name> = Vec::new();
-        for f in &touched {
-            let old = git::version_at(self.root(), rev, f);
-            install(self, f, old);
-            if let Some(stub) = self.project.index.file(&path_key(f)) {
-                base_classes.extend(stub.classes.iter().map(|c| c.name.clone()));
-            }
-        }
-        self.project.rebuild_di();
-        // the fingerprint names the line, not the call on it: `a.foo(); a.bar();`
-        // breaking foo while fixing bar keeps the fingerprint, not the column
-        let before: FxHashSet<(String, u32)> = self.analyze(&rules, &others).into_iter().map(|f| (f.fingerprint, f.col)).collect();
-        for f in &touched {
-            let cur = std::fs::read_to_string(f).ok();
-            install(self, f, cur);
-        }
-        self.project.rebuild_di();
-        let mut found: Vec<Finding> = now.into_iter().filter(|f| !before.contains(&(f.fingerprint.clone(), f.col))).collect();
+        let (before, base_classes) = self.at_base(&touched, rev, |s| {
+            let classes: Vec<Name> = touched.iter().filter_map(|f| s.project.index.file(&path_key(f))).flat_map(|stub| stub.classes.iter().map(|c| c.name.clone())).collect();
+            let before: FxHashSet<PlaceClaim> = s.analyze(&rules, &others).iter().map(place_claim).collect();
+            (before, classes)
+        });
+        let mut found: Vec<Finding> = now.into_iter().filter(|f| !before.contains(&place_claim(f))).collect();
         // classes the change deleted or renamed: references to them are unknown
         // types, which the rules leave alone (a missing jar looks the same)
         let removed: Vec<Name> = base_classes.into_iter().filter(|c| self.project.index.class(c).is_none()).collect();
@@ -686,9 +921,11 @@ impl Session {
                 severity: Severity::Error,
                 category: "bug",
                 message: format!("`{dotted}` was removed or renamed by this change but is still used here"),
+                maturity: Maturity::Stable,
                 fingerprint,
                 legacy_fingerprint: None,
                 fix: None,
+                claim: None,
                 start: node.start_byte() as u32,
                 end: node.end_byte() as u32,
             });
@@ -798,7 +1035,9 @@ impl Session {
                 let severity = broken.iter().map(|&i| pending[i].severity).min().unwrap_or(Severity::Error);
                 let message = format!("This change breaks {} place(s) in other files: {}{more}", broken.len(), shown.join(", "));
                 let fingerprint = format!("{:016x}", xxhash_rust::xxh3::xxh3_64(format!("breaks-other-files|{path}|{}", broken.iter().map(|&i| pending[i].fingerprint.as_str()).collect::<Vec<_>>().join(",")).as_bytes()));
-                let finding = Finding { path, line, col: 1, end_line: line, end_col: 1, rule: "breaks-other-files", severity, category: "bug", message, fingerprint, legacy_fingerprint: None, fix: None, start: 0, end: 0 };
+                // as mature as the weakest place it stands for
+                let maturity = if broken.iter().all(|&i| pending[i].maturity == Maturity::Stable) { Maturity::Stable } else { Maturity::Preview };
+                let finding = Finding { path, line, col: 1, end_line: line, end_col: 1, rule: "breaks-other-files", severity, category: "bug", message, maturity, fingerprint, legacy_fingerprint: None, fix: None, claim: None, start: 0, end: 0 };
                 Break { finding, broken }
             })
             .collect()
@@ -938,4 +1177,114 @@ pub fn render(report: &Report, max: usize, style: crate::report::Style) -> Strin
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn git(dir: &Path, args: &[&str]) {
+        let ok = std::process::Command::new("git").arg("-C").arg(dir).args(args).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t").env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t").status().unwrap().success();
+        assert!(ok, "git {args:?}");
+    }
+
+    fn finding(rule: &'static str, message: &str, claim: Option<&str>) -> Finding {
+        Finding { path: "A.java".into(), line: 1, col: 1, end_line: 1, end_col: 1, rule, severity: Severity::Error, category: "bug", message: message.into(), maturity: Maturity::Preview, fingerprint: String::new(), legacy_fingerprint: None, fix: None, claim: claim.map(str::to_string), start: 0, end: 0 }
+    }
+
+    /// Per rule, both sides: what the message asserts tells claims apart,
+    /// and what is presentation (hint, candidates, truncation, order) does not.
+    #[test]
+    fn a_claim_is_what_the_message_asserts() {
+        let key = |rule, m: &str| claim_key(&finding(rule, m, None)).1;
+        let same = |rule, a: &str, b: &str| assert_eq!(key(rule, a), key(rule, b), "{rule}: {a} | {b}");
+        let differ = |rule, a: &str, b: &str| assert_ne!(key(rule, a), key(rule, b), "{rule}: {a} | {b}");
+        let r = "unresolved-method";
+        same(r, "`Lib` has no method `fo`; did you mean `foo`?", "`Lib` has no method `fo`; did you mean `fob`?");
+        same(r, "No `f` in `Lib` accepts (String); available: f(int), f(int,int)", "No `f` in `Lib` accepts (String); available: f(int,int), f(int)");
+        same(r, "No `f` in `Lib` takes 3 argument(s); available: f(int)", "No `f` in `Lib` takes 3 argument(s); available: f(long)");
+        differ(r, "`Old` has no method `missing`", "`New` has no method `missing`");
+        differ(r, "`Lib` has no method `a`", "`Lib` has no method `b`");
+        differ(r, "No `f` in `Lib` accepts (String); available: f(int)", "No `f` in `Lib` accepts (long); available: f(int)");
+        differ(r, "No `f` in `Lib` takes 3 argument(s); available: f(int)", "No `f` in `Lib` takes 2 argument(s); available: f(int)");
+        differ(r, "`f(int)` is private in `Lib`", "`f(int)` is private in `Other`");
+        let r = "unresolved-constructor";
+        same(r, "No constructor of `A` takes 3 argument(s); available: A(int), A()", "No constructor of `A` takes 3 argument(s); available: A(), A(long)");
+        differ(r, "No constructor of `A` takes 3 argument(s); available: A()", "No constructor of `B` takes 3 argument(s); available: A()");
+        differ(r, "No constructor of `A` takes 3 argument(s); available: A()", "No constructor of `A` takes 2 argument(s); available: A()");
+        differ("unresolved-field", "`A` has no field `x`", "`A` has no field `y`");
+        differ("override-matches-nothing", "`f(int)` is marked @Override but overrides no supertype method", "`f(long)` is marked @Override but overrides no supertype method");
+        differ("missing-jdk-import", "`java.util.SequencedCollection` is not public API in Java 17", "`java.util.SequencedCollection` is not public API in Java 11");
+        let r = "qualifier-not-found";
+        same(r, "No `Api` bean is qualified `x`; available: 'a' (A), 'b' (B)", "No `Api` bean is qualified `x`; available: 'b' (B)");
+        differ(r, "No `Api` bean is qualified `x`; available: 'a' (A)", "No `Api` bean is qualified `y`; available: 'a' (A)");
+        // the part after `;` is asserted here: kept
+        let r = "bean-not-found";
+        differ(r, "No bean of type `Api` is defined; injection of `old` fails at startup", "No bean of type `Api` is defined; injection of `fresh` fails at startup");
+        differ(r, "No bean of type `Api` is defined; injection of `a` fails at startup", "No bean of type `Other` is defined; injection of `a` fails at startup");
+        let r = "bean-name-conflict";
+        differ(r, "Bean name 'a' is also used by x.A; Spring fails at startup (ConflictingBeanDefinitionException). Give one an explicit name", "Bean name 'a' is also used by @Bean x.Cfg.a(); Spring Boot fails at startup (BeanDefinitionOverrideException) unless bean overriding is enabled. Give one an explicit name");
+        // the rules that pass the whole claim: the message may show less
+        let with = |rule, m: &str, c: &str| claim_key(&finding(rule, m, Some(c))).1;
+        let r = "unimplemented-abstract-method";
+        assert_ne!(with(r, "`C` does not implement `I.old()`", "`C` does not implement `I.old()`"), with(r, "`C` does not implement `I.fresh()`", "`C` does not implement `I.fresh()`"));
+        assert_eq!(with(r, "`C` does not implement `I.a()`, `I.b()`, `I.c()` and 1 more", "`C` does not implement `I.a()`, `I.b()`, `I.c()`, `I.d()`"), with(r, "`C` does not implement `I.d()`, `I.c()`, `I.b()` and 1 more", "`C` does not implement `I.a()`, `I.b()`, `I.c()`, `I.d()`"));
+        let r = "ambiguous-bean";
+        assert_ne!(with(r, "2 beans of type `Api` match `api`: 'one' (One), 'two' (Two); add a @Qualifier or @Primary", "beans of type `Api` match `api`: 'one' (One), 'two' (Two)"), with(r, "2 beans of type `Api` match `api`: 'three' (Three), 'four' (Four); add a @Qualifier or @Primary", "beans of type `Api` match `api`: 'four' (Four), 'three' (Three)"));
+        // the cycle rule hands over no claim: the message, the cycle as the
+        // search meets it, is the claim (the rule is preview for that reason)
+        let r = "circular-constructor-dependency";
+        differ(r, "Circular constructor dependency: A -> B -> A", "Circular constructor dependency: B -> A -> B");
+        same(r, "Circular constructor dependency: A -> B -> A", "Circular constructor dependency: A -> B -> A");
+        // claims name types by their qualified names; the message may not
+        assert_ne!(with("unresolved-method", "`Lib` has no method `x`", "`a.Lib` has no method `x`"), with("unresolved-method", "`Lib` has no method `x`", "`b.Lib` has no method `x`"));
+        assert_ne!(with("unimplemented-abstract-method", "`Foo` does not implement `I.m(Bar)`", "`a.Foo` does not implement a.I.m(a.Bar)"), with("unimplemented-abstract-method", "`Foo` does not implement `I.m(Bar)`", "`a.Foo` does not implement a.I.m(b.Bar)"));
+        // the gap: a missing or ambiguous bean is about the type, not the point
+        let gap = |rule, c: &str| gap_key(&finding(rule, "", Some(c)));
+        assert_eq!(gap("bean-not-found", "No bean of type `a.Api`; injection of `old` into `a.Old`"), gap("bean-not-found", "No bean of type `a.Api`; injection of `fresh` into `a.Fresh`"));
+        assert_ne!(gap("bean-not-found", "No bean of type `a.Api`; injection of `x` into `a.X`"), gap("bean-not-found", "No bean of type `b.Api`; injection of `x` into `a.X`"));
+        assert_eq!(gap("ambiguous-bean", "beans of type `a.Api` match `x` into `a.X`: 'a' a.A, 'b' a.B"), gap("ambiguous-bean", "beans of type `a.Api` match `y` into `a.Y`: 'a' a.A, 'b' a.B"));
+        assert_ne!(gap("ambiguous-bean", "beans of type `a.Api` match `x` into `a.X`: 'a' a.A, 'b' a.B"), gap("ambiguous-bean", "beans of type `a.Api` match `x` into `a.X`: 'a' a.A, 'b' b.B"));
+        assert_eq!(gap_key(&finding("unresolved-method", "`Lib` has no method `gap`", Some("`a.Lib` has no method `gap`"))), None);
+    }
+
+    /// A panic while the project is in its base state (the daemon catches it
+    /// and goes on) must not leave the base version of the files behind: no
+    /// file's time changed, so no later sync would repair it.
+    #[test]
+    fn a_panic_in_the_base_state_leaves_the_session_as_it_was() {
+        let dir = std::env::temp_dir().join(format!("grounds-atbase-panic-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let w = |rel: &str, t: &str| {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, t).unwrap();
+            // older than the window in which `sync` reads a recent file again,
+            // which would repair the index by chance
+            let old = SystemTime::now() - std::time::Duration::from_secs(60);
+            std::fs::File::options().write(true).open(&p).unwrap().set_modified(old).unwrap();
+        };
+        w("build.gradle", "plugins { id 'java' }\n");
+        w("src/main/java/demo/Owner.java", "package demo;\npublic class Owner {\n    public void addPet(String p) {}\n}\n");
+        w("src/main/java/demo/Clinic.java", "package demo;\nclass Clinic {\n    void m(Owner o) { o.addPet(\"rex\"); }\n}\n");
+        git(&dir, &["init", "-q"]);
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-qm", "init"]);
+        w("src/main/java/demo/Owner.java", "package demo;\npublic class Owner {\n    public void registerPet(String p) {}\n}\n");
+        let owner = dir.join("src/main/java/demo/Owner.java").canonicalize().unwrap();
+        let opts = CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None };
+        let mut s = Session::open(&dir).unwrap();
+        let first = serde_json::to_string(&s.check(&opts)).unwrap();
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.at_base(&[owner.clone()], "HEAD", |_| -> () { panic!("in the base state") })));
+        std::panic::set_hook(hook);
+        assert!(r.is_err());
+        let after = serde_json::to_string(&s.check(&opts)).unwrap();
+        let fresh = serde_json::to_string(&Session::open(&dir).unwrap().check(&opts)).unwrap();
+        assert_eq!(after, fresh);
+        assert_eq!(after, first);
+        assert!(after.contains("Clinic.java"), "{after}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
