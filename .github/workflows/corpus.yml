@@ -116,9 +116,12 @@ jobs:
       # report a compile or wiring break. The last 15 commits with Java
       # changes among the 60 fetched, fewer on a project where that many
       # would take over seven minutes; a report that was read and found right
-      # is listed in corpus/replay-known.txt. The daemon logs what it found
-      # changed at each request (GROUNDS_DAEMON_LOG), for a difference that
-      # does not show again.
+      # is listed in corpus/replay-known.txt. Then every Java file is
+      # deleted and restored, and the most imported class deleted once more:
+      # restored files are in no list of changed files, and the daemon must
+      # find them by itself (about 30 s more on the largest project). The
+      # daemon logs what it found changed at each request
+      # (GROUNDS_DAEMON_LOG), for a difference that does not show again.
       - name: replay
         timeout-minutes: 25
         run: mkdir -p target/corpus && python3 -I scripts/replay.py "$CORPUS_DIR/${{ matrix.project }}" --grounds bin/grounds --commits 15 --budget 420 --known corpus/replay-known.txt --out target/corpus/replay.json

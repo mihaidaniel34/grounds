@@ -20,6 +20,17 @@ with --no-daemon, which loads the project from scratch.
 Commits in between that change no Java file are checked out but not asked
 about (the daemon still has to follow what they do to build files).
 
+Then files go and come back, as an edit that deletes a file and a `git
+reset` that restores it do: every tracked Java file is deleted, with the
+directories that are left empty, and both are asked (`changed`); git
+restores them, and both are asked about the whole walk as one change
+(`changed --base <first commit>`). Restored, a file equals HEAD and is in no
+list of changed files, so only a daemon that finds files by itself holds
+them again. A daemon that does not has most of the project unknown, which a
+main line that compiles may not show; so then the class that the most files
+import (up to 20) is deleted and both are asked once more (`--base HEAD`): a fresh run
+reports those files as using a removed class, and so must the daemon.
+
 With --budget SECONDS the newest commit is asked about once first, to see
 what a step costs on this project, and N is lowered to what fits: the walk
 is of the newest commits either way, and every commit chosen is asked
@@ -96,6 +107,25 @@ def difference(a, b):
     return out
 
 
+def most_imported(d, files, most=20):
+    """The tracked Java file of the project class that the most files import
+    by its qualified name, up to `most` (each of them is analysed when the
+    class is deleted), or None."""
+    imports = {}
+    for l in git(d, "grep", "-h", "-E", r"^import [A-Za-z_][A-Za-z0-9_.]*;", "--", "*.java", check=False).splitlines():
+        n = l[len("import "):].strip().rstrip(";")
+        imports[n] = imports.get(n, 0) + 1
+    by_name = {}
+    for f in files:
+        by_name.setdefault(os.path.basename(f)[:-len(".java")], []).append(f)
+    for n, _ in sorted(((n, c) for n, c in imports.items() if c <= most), key=lambda x: (-x[1], x[0])):
+        suffix = n.replace(".", "/") + ".java"
+        for f in by_name.get(n.rsplit(".", 1)[-1], []):
+            if f == suffix or f.endswith("/" + suffix):
+                return f
+    return None
+
+
 def summary(path):
     with open(path) as fh:
         st = json.load(fh)["stats"]
@@ -170,6 +200,28 @@ def main():
     line.reverse()  # oldest first; line[0] is only a starting point
     steps, stats = [], {"commits": 0, "skipped": 0, "differs": 0, "reported": 0, "known": 0}
     failed = False
+
+    def compare(step, what, base):
+        """Ask the daemon and a fresh run; a difference fails the run."""
+        nonlocal failed
+        t = time.monotonic()
+        warm = changed(grounds, d, base, True)
+        step["daemon-seconds"] = round(time.monotonic() - t, 1)
+        fresh = changed(grounds, d, base, False)
+        step["fresh-seconds"] = round(time.monotonic() - t - step["daemon-seconds"], 1)
+        if warm != fresh:
+            stats["differs"] += 1
+            failed = True
+            only_warm, only_fresh = difference(warm, fresh), difference(fresh, warm)
+            step["daemon-only"], step["fresh-only"] = only_warm, only_fresh
+            print(f"DAEMON DIFFERS from a fresh run {what}:")
+            for w in only_warm[:10]:
+                print(f"    daemon only: {w}")
+            for w in only_fresh[:10]:
+                print(f"    fresh only:  {w}")
+        return fresh
+
+    deleted = False
     subprocess.run([grounds, "daemon", "--root", d, "--stop"], capture_output=True)
     try:
         git(d, *move, line[0])
@@ -198,19 +250,8 @@ def main():
                 stats["skipped"] += 1
                 continue
             stats["commits"] += 1
-            warm = changed(grounds, d, parent, True)
-            fresh = changed(grounds, d, parent, False)
             step = {"commit": commit, "files": len(touched)}
-            if warm != fresh:
-                stats["differs"] += 1
-                failed = True
-                only_warm, only_fresh = difference(warm, fresh), difference(fresh, warm)
-                step["daemon-only"], step["fresh-only"] = only_warm, only_fresh
-                print(f"DAEMON DIFFERS from a fresh run at {commit[:12]} ({len(touched)} files):")
-                for w in only_warm[:10]:
-                    print(f"    daemon only: {w}")
-                for w in only_fresh[:10]:
-                    print(f"    fresh only:  {w}")
+            fresh = compare(step, f"at {commit[:12]} ({len(touched)} files)", parent)
             breaks = [where(x) for x in fresh.get("pending", [])]
             breaks += [where(x) for x in fresh.get("findings", []) if json.loads(x)["rule"] in COMPILE_RULES]
             if breaks:
@@ -225,8 +266,46 @@ def main():
                 else:
                     stats["known"] += 1
             steps.append(step)
+        # files that go and come back (see above)
+        t = time.monotonic()
+        files = [f for f in git(d, "ls-files", "-z", "--", "*.java").split("\0") if f]
+        deleted = True
+        emptied = set()
+        for f in files:
+            p = os.path.join(d, f)
+            if os.path.isfile(p):
+                os.remove(p)
+                emptied.add(os.path.dirname(p))
+        for x in sorted(emptied, key=len, reverse=True):
+            while x.startswith(d + os.sep):
+                try:
+                    os.rmdir(x)
+                except OSError:
+                    break
+                x = os.path.dirname(x)
+        step = {"commit": "deleted", "files": len(files)}
+        compare(step, f"with the {len(files)} tracked Java files deleted", None)
+        steps.append(step)
+        git(d, "checkout", "-q", "--", ".")
+        deleted = False
+        step = {"commit": "restored", "files": len(files)}
+        compare(step, f"with them restored, asked about the walk since {line[0][:12]}", line[0])
+        steps.append(step)
+        gone = most_imported(d, files)
+        if gone:
+            deleted = True
+            os.remove(os.path.join(d, gone))
+            step = {"commit": "deleted-class", "files": 1, "file": gone}
+            compare(step, f"with {gone}, the most imported class, deleted", "HEAD")
+            steps.append(step)
+            git(d, "checkout", "-q", "--", ".")
+            deleted = False
+        step["seconds"] = round(time.monotonic() - t, 1)
+        print(f"{project}: files deleted and restored, asked twice each, in {step['seconds']:.0f} s")
     finally:
         subprocess.run([grounds, "daemon", "--root", d, "--stop"], capture_output=True)
+        if deleted:
+            git(d, "checkout", "-q", "--", ".")
         restore()
     print(f"{project}: {stats['commits']} commits replayed ({stats['skipped']} without Java changes), "
           f"daemon differs on {stats['differs']}, compile-break reports on {stats['reported']} ({stats['known']} known)")

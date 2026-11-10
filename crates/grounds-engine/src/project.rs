@@ -50,6 +50,10 @@ pub struct Project {
     /// What each source file was when its stub was made, for telling later
     /// that it changed (taken over by a `Session`).
     pub stamps: rustc_hash::FxHashMap<PathBuf, FileStamp>,
+    /// The directories the discovery of source files went into, and the
+    /// ignore files that decided what it skipped (`None`: not there), for
+    /// telling later that a source file appeared (taken over by a `Session`).
+    pub walked: Walk,
     /// When loading began. A file written after this may have been read
     /// before or after the write.
     pub load_began: std::time::SystemTime,
@@ -334,6 +338,32 @@ impl FileStamp {
     }
 }
 
+/// Stamps of what a walk for source files read: the directories it listed
+/// and the ignore files that applied (see `Workspace::discover_in`).
+#[derive(Clone, Debug, Default)]
+pub struct Walk {
+    pub dirs: rustc_hash::FxHashMap<PathBuf, FileStamp>,
+    pub ignores: Vec<(PathBuf, Option<FileStamp>)>,
+}
+
+impl Walk {
+    /// Stamp `dirs`, which a walk that began at `began` listed, and the ignore
+    /// files in them. The walk does not say when it listed each directory, so
+    /// the stamps are taken after it: one whose time is recent as of `began`
+    /// may have been written while the walk ran, after its listing, and is
+    /// marked `unread`, to be looked at again at the next sync.
+    pub fn stamp(dirs: &[PathBuf], outer: &[PathBuf], began: SystemTime) -> Walk {
+        let mark = |s: FileStamp| FileStamp { unread: s.unread || recent(s.mtime, began), ..s };
+        let dirs: rustc_hash::FxHashMap<PathBuf, FileStamp> = dirs.par_iter().filter_map(|d| FileStamp::of(d, false).map(|s| (d.clone(), mark(s)))).collect();
+        let mut ignores: Vec<(PathBuf, Option<FileStamp>)> = dirs
+            .par_iter()
+            .flat_map_iter(|(d, _)| crate::workspace::IGNORE_FILES.iter().filter_map(move |n| FileStamp::of(&d.join(n), false).map(|s| (d.join(n), Some(mark(s))))))
+            .collect();
+        ignores.extend(outer.iter().map(|p| (p.clone(), FileStamp::of(p, false).map(mark))));
+        Walk { dirs, ignores }
+    }
+}
+
 impl Project {
     pub fn load(root: &Path) -> anyhow::Result<Project> {
         // before grounds.toml is read: it is one of the files that may be
@@ -354,6 +384,7 @@ impl Project {
         crate::workspace::set_extra_test_sets(config.test_source_sets.iter().cloned().chain(source_sets.test_sets()).collect());
         crate::workspace::register_project_root(&root.canonicalize().unwrap_or_else(|_| root.to_path_buf()));
         let workspace = Workspace::discover(root, &config.exclude);
+        let walked = Walk::stamp(&workspace.dirs, &crate::workspace::outer_ignore_files(&workspace.root), load_began);
         stats.t_discover = t.elapsed();
         stats.files = workspace.files.len();
 
@@ -434,7 +465,7 @@ impl Project {
         di.lombok_copies_qualifiers = lombok_copies_qualifiers(&workspace.root);
         di.bean_overriding_allowed = bean_overriding_allowed(&workspace);
         let classpath_warnings = crate::classpath::warnings(&workspace, &config, &index);
-        Ok(Project { config, workspace, index, stats, di, source_sets, lombok, registered, auto_registered, classpath_warnings, classpath_entries: entries, stamps, load_began })
+        Ok(Project { config, workspace, index, stats, di, source_sets, lombok, registered, auto_registered, classpath_warnings, classpath_entries: entries, stamps, walked, load_began })
     }
 
     pub fn source_kind(&self, path: &Path) -> SourceKind {

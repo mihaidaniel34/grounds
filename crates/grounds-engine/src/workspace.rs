@@ -38,6 +38,31 @@ pub struct Workspace {
     pub root: PathBuf,
     pub modules: Vec<Module>,
     pub files: Vec<SourceFile>,
+    /// The directories the discovery went into: those whose entries it
+    /// looked at. Adding, removing or renaming an entry changes a directory's
+    /// time, so they are where a source file that appears, or comes back, is
+    /// noticed (see `Session::sync`).
+    pub dirs: Vec<PathBuf>,
+}
+
+/// The files in a directory that decide which files the discovery skips,
+/// besides `.git/info/exclude` and git's global excludes file.
+pub const IGNORE_FILES: &[&str] = &[".gitignore", ".ignore"];
+
+/// The ignore files that apply to a discovery of `root` besides those in the
+/// directories it goes into: those of the directories above it and git's
+/// `info/exclude`, whether they exist or not.
+pub fn outer_ignore_files(root: &Path) -> Vec<PathBuf> {
+    let mut v = Vec::new();
+    for d in root.ancestors() {
+        if d != root {
+            v.extend(IGNORE_FILES.iter().map(|n| d.join(n)));
+        }
+        if d.join(".git").is_dir() {
+            v.push(d.join(".git/info/exclude"));
+        }
+    }
+    v
 }
 
 const SKIP_DIRS: &[&str] = &["node_modules", ".git", ".gradle", ".idea", "out", ".grounds", "bin"];
@@ -107,16 +132,27 @@ impl SourceSets {
 
 impl Workspace {
     pub fn discover(root: &Path, exclude: &[String]) -> Workspace {
+        Self::discover_in(root, None, None, exclude)
+    }
+
+    /// The discovery of the workspace at `root` in one of its directories,
+    /// `start` (canonical), and `max_depth` levels below it: the source files
+    /// and build files there, as `discover` finds them (with the ignore files
+    /// of `start` and the directories above it), and the directories it went
+    /// into.
+    pub fn discover_in(root: &Path, start: Option<&Path>, max_depth: Option<usize>, exclude: &[String]) -> Workspace {
         let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         let mut modules: Vec<Module> = Vec::new();
         let mut files = Vec::new();
+        let mut dirs = Vec::new();
         let excludes: Vec<glob::Pattern> = exclude.iter().filter_map(|g| glob::Pattern::new(g).ok()).collect();
 
-        let walker = ignore::WalkBuilder::new(&root)
+        let walker = ignore::WalkBuilder::new(start.unwrap_or(&root))
             .hidden(true)
             .git_ignore(true)
             .git_exclude(true)
             .parents(true)
+            .max_depth(max_depth)
             .filter_entry(|e| {
                 let name = e.file_name().to_string_lossy();
                 if e.file_type().is_some_and(|t| t.is_dir()) {
@@ -135,6 +171,9 @@ impl Workspace {
         let mut java_files: Vec<PathBuf> = Vec::new();
         for entry in walker.flatten() {
             let p = entry.path();
+            if entry.file_type().is_some_and(|t| t.is_dir()) {
+                dirs.push(p.to_path_buf());
+            }
             let Some(name) = p.file_name().and_then(|n| n.to_str()) else { continue };
             if entry.file_type().is_some_and(|t| t.is_file()) {
                 match name {
@@ -178,7 +217,7 @@ impl Workspace {
             let kind = classify(&p);
             files.push(SourceFile { path: p, module, kind });
         }
-        Workspace { root, modules, files }
+        Workspace { root, modules, files, dirs }
     }
 
     pub fn module_of(&self, path: &Path) -> Option<usize> {

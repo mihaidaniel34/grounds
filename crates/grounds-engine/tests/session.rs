@@ -917,6 +917,187 @@ fn a_file_that_could_not_be_read_is_read_once_it_can_be() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// What a session holds of the sources, to compare with a fresh load: the
+/// files with their module and kind, the files in the index, and every class
+/// as it resolves.
+fn holdings(s: &Session) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let ws = &s.project.workspace;
+    let mut files: Vec<String> = ws.files.iter().map(|f| format!("{} {} {:?}", f.path.strip_prefix(&ws.root).unwrap_or(&f.path).display(), ws.modules[f.module].name, f.kind)).collect();
+    files.sort();
+    let index = &s.project.index;
+    let mut indexed: Vec<String> = index.files().map(|(p, _)| p.to_string()).collect();
+    indexed.sort();
+    let mut names: Vec<_> = index.source_class_names().cloned().collect();
+    names.sort();
+    (files, indexed, names.iter().map(|n| format!("{:?}", index.class(n))).collect())
+}
+
+/// After `what`, the session holds what a fresh one holds.
+fn holds_as_fresh(s: &mut Session, dir: &Path, what: &str) {
+    s.sync(&[]);
+    let fresh = Session::open(dir).unwrap();
+    assert_eq!(holdings(s), holdings(&fresh), "after {what}, the session must hold the sources a fresh load finds");
+}
+
+/// Every file and directory under `rel` gets time `t`, as a restore that
+/// keeps times (or a clock that is behind) leaves them.
+fn set_tree_mtime(dir: &Path, rel: &str, t: std::time::SystemTime) {
+    let p = dir.join(rel);
+    if p.is_dir() {
+        for e in std::fs::read_dir(&p).unwrap().flatten() {
+            set_tree_mtime(dir, &format!("{rel}/{}", e.file_name().to_string_lossy()), t);
+        }
+        std::fs::File::open(&p).unwrap().set_modified(t).unwrap();
+    } else {
+        set_mtime(dir, rel, t);
+    }
+}
+
+/// An interface, its implementation in another file, and a class the
+/// implementation's signature names; all committed, with old times.
+fn restored_project(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("grounds-session-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, "src/main/java/demo/Req.java", "package demo;\npublic class Req {}\n");
+    write(&dir, "src/main/java/demo/Biz.java", "package demo;\npublic interface Biz {\n    void handle(Req r);\n}\n");
+    write(&dir, "src/main/java/demo/BizImpl.java", "package demo;\npublic class BizImpl implements Biz {\n    public void handle(Req r) {}\n}\n");
+    write(&dir, "src/main/java/demo/sub/Sub.java", "package demo.sub;\npublic class Sub {}\n");
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+    // (old: a reload or a recent time would read everything again and hide what sync does)
+    set_tree_mtime(&dir, ".", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
+    dir
+}
+
+#[test]
+fn a_deleted_file_that_comes_back_is_read_again() {
+    // The hold-out measurement's case: an edit deletes a file, `git reset`
+    // brings it back. Equal to HEAD again, it is in no list of changed files,
+    // and its time may be any (here an old one): the session must find it
+    // all the same, or the classes that name it stay unknown and a break in
+    // a caller goes unreported.
+    let dir = restored_project("restored");
+    let req = "src/main/java/demo/Req.java";
+    let text = std::fs::read_to_string(dir.join(req)).unwrap();
+    let old = mtime(&dir, req);
+    let mut s = Session::open(&dir).unwrap();
+    let opts = CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None };
+    std::fs::remove_file(dir.join(req)).unwrap();
+    s.check(&opts);
+    holds_as_fresh(&mut s, &dir, "a file was deleted");
+    write(&dir, req, &text);
+    set_mtime(&dir, req, old);
+    holds_as_fresh(&mut s, &dir, "the deleted file came back with its old time");
+    // a method added to the interface, committed, breaks the implementation
+    write(&dir, "src/main/java/demo/Biz.java", "package demo;\npublic interface Biz {\n    void handle(Req r);\n    void added();\n}\n");
+    git(&dir, &["commit", "-qam", "added"]);
+    let opts = CheckOptions { base: Some("HEAD~1".into()), ..opts };
+    let warm = s.check(&opts);
+    let fresh = Session::open(&dir).unwrap().check(&opts);
+    assert!(fresh.pending.iter().any(|f| f.rule == "unimplemented-abstract-method"), "{}", json(&fresh));
+    assert_eq!(json(&warm), json(&fresh), "the daemon answers as a fresh run");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn files_that_appear_in_no_list_of_changed_files_are_found() {
+    // A branch switch, a pull, `git stash pop`: files appear (and go) that
+    // equal HEAD afterwards, in an existing package and in a new one.
+    let dir = restored_project("branch");
+    git(&dir, &["checkout", "-qb", "base"]);
+    git(&dir, &["checkout", "-qb", "other"]);
+    write(&dir, "src/main/java/demo/Added.java", "package demo;\npublic class Added extends Req {}\n");
+    write(&dir, "src/main/java/demo/fresh/deep/New.java", "package demo.fresh.deep;\npublic class New {}\n");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "other"]);
+    git(&dir, &["checkout", "-q", "base"]);
+    let mut s = Session::open(&dir).unwrap();
+    git(&dir, &["checkout", "-q", "other"]);
+    holds_as_fresh(&mut s, &dir, "a checkout that adds files");
+    assert!(s.project.index.class_exists("demo.fresh.deep.New"));
+    git(&dir, &["checkout", "-q", "base"]);
+    holds_as_fresh(&mut s, &dir, "a checkout that removes them");
+    git(&dir, &["checkout", "-q", "other"]);
+    git(&dir, &["reset", "-q", "--soft", "base"]);
+    git(&dir, &["reset", "-q"]);
+    git(&dir, &["stash", "push", "-q", "-u", "--", "src"]);
+    holds_as_fresh(&mut s, &dir, "a stash of untracked files");
+    git(&dir, &["stash", "pop", "-q"]);
+    holds_as_fresh(&mut s, &dir, "a stash pop");
+    // a generator writes a tree of sources, with old times
+    write(&dir, "build/generated/sources/annotationProcessor/java/main/demo/gen/Gen.java", "package demo.gen;\npublic class Gen {}\n");
+    set_tree_mtime(&dir, "build", std::time::SystemTime::now() - std::time::Duration::from_secs(600));
+    holds_as_fresh(&mut s, &dir, "a generator wrote sources");
+    assert!(s.project.index.class_exists("demo.gen.Gen"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_directory_that_goes_and_comes_back_is_read_again() {
+    let dir = restored_project("dirback");
+    let mut s = Session::open(&dir).unwrap();
+    let old = mtime(&dir, "src/main/java/demo/sub/Sub.java");
+    std::fs::remove_dir_all(dir.join("src/main/java/demo")).unwrap();
+    holds_as_fresh(&mut s, &dir, "a package directory was removed");
+    git(&dir, &["checkout", "-q", "--", "."]);
+    set_tree_mtime(&dir, "src/main/java/demo", old);
+    holds_as_fresh(&mut s, &dir, "it came back, with old times");
+    assert!(s.project.index.class_exists("demo.sub.Sub"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_file_replaced_by_a_directory_and_back() {
+    let dir = restored_project("filedir");
+    let mut s = Session::open(&dir).unwrap();
+    let req = "src/main/java/demo/Req.java";
+    let old = mtime(&dir, req);
+    std::fs::remove_file(dir.join(req)).unwrap();
+    write(&dir, "src/main/java/demo/Req.java/Inner.java", "package demo;\npublic class Inner {}\n");
+    holds_as_fresh(&mut s, &dir, "a file was replaced by a directory");
+    assert!(s.unread_files().is_empty(), "a directory is no file to read again: {:?}", s.unread_files());
+    std::fs::remove_dir_all(dir.join(req)).unwrap();
+    git(&dir, &["checkout", "-q", "--", req]);
+    set_mtime(&dir, req, old);
+    holds_as_fresh(&mut s, &dir, "the directory was replaced by the file");
+    assert!(s.project.index.class_exists("demo.Req"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_module_directory_that_appears_is_a_module() {
+    // no settings file names it: its build file alone makes it a module
+    let dir = restored_project("newmodule");
+    let mut s = Session::open(&dir).unwrap();
+    write(&dir, "lib/build.gradle", "plugins { id 'java-library' }\n");
+    write(&dir, "lib/src/main/java/lib/Lib.java", "package lib;\npublic class Lib {}\n");
+    write(&dir, "lib/src/test/java/lib/LibTest.java", "package lib;\nclass LibTest {}\n");
+    set_tree_mtime(&dir, "lib", std::time::SystemTime::now() - std::time::Duration::from_secs(600));
+    holds_as_fresh(&mut s, &dir, "a module directory appeared");
+    assert!(s.project.workspace.modules.iter().any(|m| m.name == "lib"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_ignore_file_that_changes_changes_the_sources() {
+    let dir = restored_project("ignorefile");
+    let mut s = Session::open(&dir).unwrap();
+    write(&dir, ".gitignore", "src/main/java/demo/sub/\n");
+    holds_as_fresh(&mut s, &dir, "a .gitignore appeared");
+    assert!(!s.project.index.class_exists("demo.sub.Sub"));
+    // edited in place: the directory's time does not change
+    write(&dir, ".gitignore", "*.log\n");
+    set_mtime(&dir, ".gitignore", std::time::SystemTime::now() - std::time::Duration::from_secs(60));
+    holds_as_fresh(&mut s, &dir, "the .gitignore no longer lists it");
+    assert!(s.project.index.class_exists("demo.sub.Sub"));
+    write(&dir, ".git/info/exclude", "Req.java\n");
+    holds_as_fresh(&mut s, &dir, "git's exclude file lists a file");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The same place, a different claim: a changed return type turns "`Old` has
 /// no method `missing`" (there before the change) into "`New` has no method
 /// `missing`" on an unchanged line of another file. That is a new break.
