@@ -889,8 +889,9 @@ def run_case(exe, i, case, a, tmp_root):
         if why:
             res["failures"].append(("check", why))
         if a.daemon_every and daemon_roll < 1.0 / a.daemon_every and not res["failures"]:
-            res["daemon"] = True
-            res["failures"] += daemon_path(exe, d, spec, a, env)
+            fails, served = daemon_path(exe, d, spec, a, env)
+            res["failures"] += fails
+            res["daemon"] = served
     except Exception as e:  # a bug in the fuzzer itself, not in grounds
         res["failures"].append(("fuzzer", f"{type(e).__name__}: {e}"))
     finally:
@@ -917,7 +918,7 @@ def run_case(exe, i, case, a, tmp_root):
 def daemon_path(exe, d, spec, a, env):
     """The case as a git repository with an uncommitted edit, checked twice by `grounds changed`
     (the first run starts the daemon, the second goes through it), then the daemon stopped."""
-    fails = []
+    fails, served = [], False
     env = dict(env, XDG_RUNTIME_DIR=os.path.join(os.path.dirname(d), "xdg-" + os.path.basename(d)))
     os.makedirs(env["XDG_RUNTIME_DIR"], mode=0o700, exist_ok=True)
     try:
@@ -946,6 +947,7 @@ def daemon_path(exe, d, spec, a, env):
                 for _ in range(100):
                     c, o, _, _ = run([exe, "daemon", "--status", "--root", d], 10, env)
                     if o.startswith("running"):
+                        served = True
                         break
                     time.sleep(0.05)
     finally:
@@ -953,7 +955,8 @@ def daemon_path(exe, d, spec, a, env):
         if code is None or "panicked" in err:
             fails.append(("daemon --stop", judge(code, out, err, (0,)) or f"exit {code}"))
         shutil.rmtree(env["XDG_RUNTIME_DIR"], ignore_errors=True)
-    return fails
+    # served: the second `changed` found a daemon running (else it ran in-process)
+    return fails, served
 
 
 def grounds_exe():
@@ -1012,7 +1015,7 @@ def main():
                            for r in failures]}
     with open(os.path.join(a.keep, "report.json"), "w") as fh:
         json.dump(report, fh, indent=1)
-    print(f"seed {a.seed}: " + "; ".join(f"{f} {c['cases']} cases ({c['daemon']} through the daemon), {c['failed']} failed"
+    print(f"seed {a.seed}: " + "; ".join(f"{f} {c['cases']} cases ({c['daemon']} also through the daemon), {c['failed']} failed"
                                          for f, c in counts.items()) + f"; {report['seconds']} s")
     print("slowest: " + ", ".join(f"case {c} {s:.1f}s ({n})" for s, c, n in slowest[:3]))
     if failures:
