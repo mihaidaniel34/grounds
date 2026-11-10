@@ -721,6 +721,11 @@ fn known_bool<'t>(e: Node<'t>, cx: &Ctx<'_, 't>) -> Option<bool> {
     }
     match e.kind() {
         "unary_expression" if op(e) == "!" => e.field("operand").and_then(|o| known_bool(o, cx)).map(|b| !b),
+        // `again == true`
+        "binary_expression" if matches!(op(e), "==" | "!=") => {
+            let (l, r) = lr(e)?;
+            Some((known_bool(l, cx)? == known_bool(r, cx)?) == (op(e) == "=="))
+        }
         "identifier" => {
             let i = cx.fm.local_ref(e)?;
             let written = cx.fm.binder.uses[i].iter().any(|u| {

@@ -18,6 +18,8 @@ interface StoreContract { @Test default void stores() { } }
 class JdbcStoreContractTest implements StoreContract { }
 // a marker interface brings no tests
 class MarkerOnlyTest implements java.io.Serializable { } // expect
+interface Tagged extends java.io.Serializable { }
+class TaggedTest implements Tagged { } // expect
 // shared fixtures for the classes extending it
 class FixtureTest { void setUp() { } }
 class UsesFixtureTest extends FixtureTest { @Test void t() { } }

@@ -22,7 +22,10 @@ class Keys {
     static final String SECRET_PARAM_TOKEN = "&client_secret=";
     static final String FORM_TOKEN = "password=";
     static final String QUERY_SECRET = "?client_secret=abc123"; // expect
+    static final String GRANT_SECRET = "?client_secret=abc123&grant_type="; // expect
+    static final String FORM_SECRET = "?grant_type=password&client_secret=";
     static final String DB_PASSWORD = "correct_horse_battery_staple"; // expect
+    static final String ADMIN_PASSWORD = "monkey_business"; // expect
     static final String SIGNING_SECRET = "c2VjcmV0LWtleS0xMjM0NTY3ODk="; // expect
     static final String DING_TALK_PASSWORD = "$t('password')";
 }

@@ -57,17 +57,18 @@ fn looks_like_secret_value(v: &str) -> bool {
     }
     // with underscores alone, a name when it is a constant's ("LLM_API_KEY") or
     // says what it holds ("client_credentials", "spas_accessKey");
-    // "correct_horse_battery_staple" is a passphrase
-    if word_chars && v.contains('_') && (v == v.to_ascii_uppercase() || ["key", "token", "secret", "password", "passwd", "pwd", "credential", "auth"].iter().any(|k| l.contains(k))) {
+    // "correct_horse_battery_staple" and "monkey_business" are passphrases
+    if word_chars && v.contains('_') && (v == v.to_ascii_uppercase() || l.split('_').any(|w| matches!(w, "key" | "keys" | "auth") || credential_name(w))) {
         return false;
     }
     // a query-string or form fragment ("&client_secret=", "?grant_type="), or
     // an i18n label ("$t('password')")
     // (not a Base64 value, which ends in padding: "c2VjcmV0LWtleS0xMjM0NTY3ODk=")
     let base64 = v.len() >= 16 && v.len() % 4 == 0 && v.trim_end_matches('=').chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/');
-    // (nor a fragment that carries the value itself: "?client_secret=abc123")
-    let fragment = (v.starts_with('&') || v.starts_with('?')) && v[1..].split('&').all(|p| p.split_once('=').is_none_or(|(_, val)| val.is_empty()));
-    if v.ends_with('=') && !base64 || fragment || v.starts_with("$t(") {
+    // (nor a fragment where a credential parameter has its value: "?client_secret=abc123")
+    let fragment = v.starts_with('&') || v.starts_with('?') || v.ends_with('=') && !base64;
+    let carries = v.trim_start_matches(['&', '?']).split('&').any(|p| p.split_once('=').is_some_and(|(k, val)| !val.is_empty() && credential_name(k)));
+    if fragment && !carries || v.starts_with("$t(") {
         return false;
     }
     let humps = v.chars().zip(v.chars().skip(1)).filter(|(a, b)| a.is_ascii_lowercase() && b.is_ascii_uppercase()).count();
