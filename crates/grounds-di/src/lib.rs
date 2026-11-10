@@ -708,11 +708,14 @@ impl<'a> Builder<'a> {
     }
 
     /// Registrations the model could not turn into beans (see `DiModel::unseen`).
-    fn unseen_registrations(&mut self, names: &[Name], imported_anywhere: &[Name]) {
+    /// (`imported_anywhere`: classes named by an @Import, and whether the
+    /// importing class is in test sources)
+    fn unseen_registrations(&mut self, names: &[Name], imported_anywhere: &[(Name, bool)]) {
         let mut unseen: Vec<(Name, bool)> = Vec::new();
-        for n in imported_anywhere {
+        for (n, by_test) in imported_anywhere {
             if !self.model.component_classes.contains_key(n) {
-                let is_test = self.index.source_file_of(n).is_some_and(|f| is_test_path(f));
+                // registered where the importing class is
+                let is_test = *by_test || self.index.source_file_of(n).is_some_and(|f| is_test_path(f));
                 unseen.push((n.clone(), is_test));
             }
         }
@@ -1018,13 +1021,14 @@ impl<'a> Builder<'a> {
         // classes named by an @Import anywhere: those the walk from scanned
         // classes did not reach may still be registered (by a configuration
         // registered some other way)
-        let mut imported_anywhere: Vec<Name> = Vec::new();
+        let mut imported_anywhere: Vec<(Name, bool)> = Vec::new();
         for n in &names {
             let Some(c) = self.index.class(n) else { continue };
+            let by_test = c.source_file().is_some_and(is_test_path);
             for a in c.annotations.iter().filter(|a| matches!(a.simple_name(), "Import" | "EnableConfigurationProperties")) {
                 for v in a.arg("value").map(|v| v.values()).unwrap_or_default() {
                     if let AnnotationValue::Class(t) = v {
-                        imported_anywhere.extend(t.class_name().map(Arc::from));
+                        imported_anywhere.extend(t.class_name().map(|t| (Arc::from(t), by_test)));
                     }
                 }
             }
@@ -2851,5 +2855,25 @@ mod tests {
         }
         // in main sources, everywhere
         assert_eq!(resolve(("src/main/java/app/Scan.java", filter), "port"), Resolution::Unknown);
+    }
+
+    #[test]
+    fn an_unreached_import_registers_in_the_source_set_of_the_importing_class() {
+        let app = ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication class App {}");
+        let port = ("src/main/java/app/Port.java", "package app; public interface Port {}");
+        let uses = ("src/main/java/app/Uses.java", "package app; import org.springframework.stereotype.*; @Service class Uses { Uses(Port port) {} }");
+        let test_uses = ("src/test/java/app/TestUses.java", "package app; import org.springframework.stereotype.*; @Service class TestUses { TestUses(Port testPort) {} }");
+        let impl_ = ("src/main/java/app/PortImpl.java", "package app; class PortImpl implements Port {}");
+        let resolve = |import: (&'static str, &'static str), name: &str| {
+            let (idx, m) = model(&[app, port, uses, test_uses, impl_, import]);
+            point_resolution(&idx, &m, name)
+        };
+        // a test's @Import of a main class: registered in that test only
+        let in_test = ("src/test/java/app/PortTest.java", "package app; @org.springframework.context.annotation.Import(PortImpl.class) class PortTest {}");
+        assert_eq!(resolve(in_test, "port"), Resolution::NotFound);
+        assert_eq!(resolve(in_test, "testPort"), Resolution::Unknown);
+        // an @Import in main sources may register it in production
+        let in_main = ("src/main/java/other/Wiring.java", "package other; @org.springframework.context.annotation.Import(app.PortImpl.class) class Wiring {}");
+        assert_eq!(resolve(in_main, "port"), Resolution::Unknown);
     }
 }
