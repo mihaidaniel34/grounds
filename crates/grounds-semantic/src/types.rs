@@ -647,10 +647,20 @@ impl<'t> FileModel<'t> {
             return None;
         }
         self.const_eval.set((nesting + 1, cutoffs));
+        // restores the nesting also when a rule panics below: the runner
+        // catches it and runs the file's other rules on this model
+        struct Leave<'a>(&'a std::cell::Cell<(u32, u64)>, u32);
+        impl Drop for Leave<'_> {
+            fn drop(&mut self) {
+                let (_, cutoffs) = self.0.get();
+                self.0.set((self.1, cutoffs));
+            }
+        }
+        let leave = Leave(&self.const_eval, nesting);
         let cycles = self.cycle_hits.get();
         let v = self.constant_value_uncached(n);
         let (_, after) = self.const_eval.get();
-        self.const_eval.set((nesting, after));
+        drop(leave);
         if after == cutoffs && self.cycle_hits.get() == cycles {
             self.constants.borrow_mut().insert(n.id(), v.clone());
         }

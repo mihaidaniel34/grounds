@@ -449,20 +449,31 @@ impl<'t> NodeExt<'t> for Node<'t> {
         Some(p)
     }
     fn modifiers(&self) -> Option<Node<'t>> {
-        // the grammar puts `modifiers` first: looking no further than the
-        // first child that is not a comment keeps this constant on a class
-        // body of a million members or a block of a million `;` (suppression
+        // the grammar puts `modifiers` among the first three children (first
+        // in declarations, third in `for (final X x : xs)` and `o instanceof
+        // final T t`): looking no further keeps this constant on a class body
+        // of a million members or a block of a million `;` (suppression
         // checks ask it of every ancestor of every finding)
         let mut c = self.walk();
         if !c.goto_first_child() {
             return None;
         }
-        while is_comment_node(&c.node()) {
+        let mut seen = 0;
+        loop {
+            let n = c.node();
+            if !is_comment_node(&n) {
+                if n.kind() == "modifiers" {
+                    return Some(n);
+                }
+                seen += 1;
+                if seen == 3 {
+                    return None;
+                }
+            }
             if !c.goto_next_sibling() {
                 return None;
             }
         }
-        Some(c.node()).filter(|n| n.kind() == "modifiers")
     }
     fn has_modifier(&self, keyword: &str) -> bool {
         match self.modifiers() {
@@ -722,6 +733,23 @@ pub fn char_literal_value(node: Node, src: &str) -> Option<char> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn modifiers_are_found_wherever_the_grammar_puts_them() {
+        let src = "class A { @Deprecated /* c */ final int f = 0; void m(final int p, Object o, java.util.List<String> xs) { final int l = 1; for (final String s : xs) {} if (o instanceof final String t) {} } }";
+        let f = ParsedFile::parse(src);
+        let mut found = Vec::new();
+        let mut stack = vec![f.root()];
+        while let Some(n) = stack.pop() {
+            if let Some(m) = n.modifiers() {
+                found.push(format!("{}:{}", n.kind(), m.text(src).split_whitespace().last().unwrap_or("")));
+            }
+            let mut c = n.walk();
+            stack.extend(n.children(&mut c));
+        }
+        found.sort();
+        assert_eq!(found, vec!["enhanced_for_statement:final", "field_declaration:final", "formal_parameter:final", "instanceof_expression:final", "local_variable_declaration:final"]);
+    }
 
     #[test]
     fn ancestors_match_the_parent_chain_and_depth_is_measured() {

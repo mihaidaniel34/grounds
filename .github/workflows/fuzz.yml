@@ -103,6 +103,7 @@ jobs:
           path: target/fuzz-calls/seed-${{ matrix.seed }}
 
   robust:
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -117,7 +118,10 @@ jobs:
           java-version: 25
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: python3 -I scripts/fuzz_robust.py --seed ${{ matrix.seed }} --cases 1500 | tee robust.txt
+      # bash for pipefail: the fuzzer's status, not tee's; 40 s per run, as the
+      # slowest cases take 16 s on a 4-core machine and a runner may be slower
+      - run: python3 -I scripts/fuzz_robust.py --seed ${{ matrix.seed }} --cases 1500 --timeout 40 | tee robust.txt
+        shell: bash
       - if: always()
         run: |
           [ -f robust.txt ] && { echo "### robust seed ${{ matrix.seed }}"; echo '```'; tail -40 robust.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY" || true
