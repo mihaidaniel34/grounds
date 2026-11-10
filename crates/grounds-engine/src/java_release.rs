@@ -366,9 +366,10 @@ fn gradle_setting(text: &str, key: &str) -> Setting {
         let end = v.find(['\n', ';', '}']).unwrap_or(v.len());
         let v = v[..end].trim();
         let v = if v.matches(')').count() > v.matches('(').count() { v[..v.rfind(')').unwrap_or(v.len())].trim() } else { v };
-        // Kotlin's own `languageVersion = "1.9"` (or KOTLIN_2_1) is no Java
-        // version; anything else that is not a literal (a variable) is opaque
-        if key == "languageVersion" && !v.contains("JavaLanguageVersion") && (v.starts_with(['"', '\'']) || v.contains("KOTLIN_") || v.contains("KotlinVersion")) {
+        // Kotlin's compiler has a `languageVersion` too: it is Java's only
+        // in a toolchain (`java { toolchain { } }`, `java.toolchain.`,
+        // `jvmToolchain { }`) or when its value is a JavaLanguageVersion
+        if key == "languageVersion" && !v.contains("JavaLanguageVersion") && !in_toolchain(text, start) {
             continue;
         }
         match parse_version(v) {
@@ -377,6 +378,31 @@ fn gradle_setting(text: &str, key: &str) -> Setting {
         }
     }
     s
+}
+
+/// Whether the text at `at` is in a toolchain: a `toolchain.` qualifier
+/// or an enclosing `toolchain { }` / `jvmToolchain { }` block.
+fn in_toolchain(text: &str, at: usize) -> bool {
+    let is_toolchain = |w: &str| w.to_ascii_lowercase().ends_with("toolchain");
+    if text[..at].strip_suffix('.').is_some_and(|q| is_toolchain(q.rsplit(|c: char| !(c.is_alphanumeric() || c == '_')).next().unwrap_or(""))) {
+        return true;
+    }
+    let mut depth = 0usize;
+    for (i, c) in text[..at].char_indices().rev() {
+        match c {
+            '}' => depth += 1,
+            '{' if depth > 0 => depth -= 1,
+            '{' => {
+                let before = text[..i].trim_end();
+                let name = before.rsplit(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.')).next().unwrap_or("");
+                if is_toolchain(name.rsplit('.').next().unwrap_or("")) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 /// Highest version assigned to `key`: `key = V`, `key.set(V)`, `key V`.
@@ -904,6 +930,17 @@ mod tests {
             ],
         );
         assert_eq!(evidence_of(&dir), vec![(":".into(), Unknown), ("child".into(), Unknown)]);
+        // Kotlin's languageVersion set through a variable is still Kotlin's:
+        // only a toolchain block (or JavaLanguageVersion) makes it Java's
+        let dir = temp(
+            "kotlin-variable",
+            &[
+                ("build.gradle.kts", "subprojects { java { toolchain { languageVersion = JavaLanguageVersion.of(11) } } }\njava { toolchain { languageVersion.set(JavaLanguageVersion.of(17)) } }\nkotlin {\n  compilerOptions {\n    languageVersion.set(kotlinLanguage)\n    apiVersion.set(kotlinLanguage)\n  }\n}\n"),
+                ("dotted/build.gradle.kts", "java.toolchain.languageVersion.set(javaLanguage)\n"),
+                ("jvm/build.gradle.kts", "kotlin { jvmToolchain { languageVersion.set(javaLanguage) } }\n"),
+            ],
+        );
+        assert_eq!(evidence_of(&dir), vec![(":".into(), Exact(17)), ("dotted".into(), Unknown), ("jvm".into(), Unknown)]);
         // Maven: --release is exact, source/target a lower bound, an
         // unresolvable property or a parent outside the repository unknown
         let pom = |inner: &str| format!("<project>{inner}</project>");
