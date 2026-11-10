@@ -33,7 +33,7 @@ pub(crate) fn classpath_files(ws: &Workspace, cfg: &Config) -> Vec<PathBuf> {
 
 /// Entries of a classpath file: one per line or `:`-separated.
 pub(crate) fn read_list(f: &Path) -> Vec<PathBuf> {
-    let Ok(text) = std::fs::read_to_string(f) else { return Vec::new() };
+    let Ok(text) = crate::fsutil::read_text(f) else { return Vec::new() };
     text.lines().flat_map(|l| l.split(':')).map(str::trim).filter(|p| !p.is_empty() && !p.starts_with('#')).map(PathBuf::from).collect()
 }
 
@@ -85,6 +85,9 @@ pub enum Warning {
     JdkUnreadable { release: u32 },
     /// The JDK home has no usable `lib/ct.sym`: its classes are unknown.
     JdkAbsent { home: String },
+    /// A directory entry holds too many files to be a directory of classes
+    /// (`/`, a home directory, a jar cache) and was not read.
+    OversizedEntry { entry: String },
 }
 
 impl std::fmt::Display for Warning {
@@ -109,6 +112,11 @@ impl std::fmt::Display for Warning {
             Warning::JdkAbsent { home } => write!(
                 f,
                 "grounds: warning: {home} has no lib/ct.sym (a JRE, or a JDK older than 9), so the JDK's classes are unknown and checks that need them stay silent. Set `java_home` in grounds.toml to a JDK 9 or newer (silence: `[classpath] warn = false`)"
+            ),
+            Warning::OversizedEntry { entry } => write!(
+                f,
+                "grounds: warning: classpath entry {entry} holds more than {} files and directories, so it is not read as a directory of classes. List the directory that holds the compiled packages, or the jars themselves (silence: `[classpath] warn = false`)",
+                grounds_classfile::DIR_LIMIT
             ),
         }
     }
@@ -140,6 +148,10 @@ pub fn warnings(ws: &Workspace, cfg: &Config, index: &Index) -> Vec<Warning> {
         JdkApi::Unreadable { release } => out.push(Warning::JdkUnreadable { release: *release }),
         JdkApi::Absent { home } => out.push(Warning::JdkAbsent { home: shown(&home.display().to_string()) }),
         JdkApi::Complete => {}
+    }
+    for d in &index.classpath.oversized {
+        let entry = rel(d);
+        out.push(Warning::OversizedEntry { entry: if entry.is_empty() { ".".into() } else { entry } });
     }
     let files = classpath_files(ws, cfg);
     let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
@@ -379,7 +391,7 @@ mod tests {
         }
         let mut index = Index::new(Arc::new(Classpath::from_containers(vec![grounds_classfile::ClassContainer::open_dir(&dir)])));
         for f in &ws.files {
-            let pf = grounds_syntax::ParsedFile::parse(std::fs::read_to_string(&f.path).unwrap());
+            let pf = grounds_syntax::ParsedFile::parse(crate::fsutil::read_text(&f.path).unwrap());
             index.set_file(crate::project::path_key(&f.path), Arc::new(grounds_index::stubs::extract(&pf)));
         }
         warnings(&ws, cfg, &index)
@@ -521,6 +533,26 @@ mod tests {
         silent.classpath.warn = false;
         assert!(warn(&silent, &jre, 21).is_empty());
         assert!(warn(&silent, &home, installed + 1).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_directory_entry_too_large_for_classes_warns() {
+        let dir = temp("oversized-entry");
+        let ws = Workspace::discover(&dir, &[]);
+        let mut cp = Classpath::empty();
+        cp.oversized = vec![PathBuf::from("/"), ws.root.join(".."), ws.root.clone()];
+        let index = Index::new(Arc::new(cp));
+        let w = warnings(&ws, &Config::default(), &index);
+        let entries: Vec<&str> = w.iter().map(|w| match w {
+            Warning::OversizedEntry { entry } => entry.as_str(),
+            other => panic!("{other}"),
+        }).collect();
+        assert_eq!(entries, ["/", "..", "."]);
+        assert!(w[0].to_string().contains(&format!("classpath entry / holds more than {} files and directories", grounds_classfile::DIR_LIMIT)), "{}", w[0]);
+        let mut silent = Config::default();
+        silent.classpath.warn = false;
+        assert!(warnings(&ws, &silent, &index).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

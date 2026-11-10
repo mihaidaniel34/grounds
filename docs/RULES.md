@@ -4,7 +4,7 @@
 
 Tier `edit` rules run after every edit; all rules run at checkpoints. Rules marked *off* are disabled by default (enable in `grounds.toml`).
 
-Maturity: 0 rules are `stable` (held to the project's precision promise), 318 are `preview` (still being measured). Preview rules run by default for now; `preview = false` under `[rules]` in `grounds.toml` turns them off, except those named by id in `enable` or `--rules`. See the README.
+Maturity: 0 rules are `stable` (held to the project's precision promise). 6 are `stable in changed`: the compile-break rules, whose findings `grounds changed` reports only when they are new with the change (on a changed line, or a place in another file the change broke); those findings are stable, while the same rules run over a whole project with `grounds check` are preview. The other 312 are `preview` (still being measured). Preview rules run by default for now; `preview = false` under `[rules]` in `grounds.toml` turns them off, except those named by id in `enable` or `--rules`; it keeps the `stable in changed` rules in `grounds changed`, and they run in `grounds check` only when named by id. The wiring rules are preview in both: their claims depend on order in the wiring model. See the README.
 
 ## bad-practice (38)
 
@@ -65,7 +65,7 @@ Maturity: 0 rules are `stable` (held to the project's precision promise), 318 ar
 | `nan-comparison` | error | preview | edit | spotbugs:FE_TEST_IF_EQUAL_TO_NOT_A_NUMBER, errorprone:EqualsNaN |
 | `equals-null` | error | preview | edit | spotbugs:EC_NULL_ARG, pmd:EqualsNull |
 | `compareto-specific-value` | error | preview | edit | sonar:S2200, spotbugs:RV_CHECK_COMPARETO_FOR_SPECIFIC_RETURN_VALUE |
-| `negated-compareto` | warning | preview | checkpoint | spotbugs:RV_NEGATING_RESULT_OF_COMPARETO |
+| `negated-compareto` *off* | warning | preview | checkpoint | spotbugs:RV_NEGATING_RESULT_OF_COMPARETO |
 | `equals-without-hashcode` | error | preview | edit | sonar:S1206, spotbugs:HE_EQUALS_NO_HASHCODE, spotbugs:HE_HASHCODE_NO_EQUALS, pmd:OverrideBothEqualsAndHashcode, intellij:EqualsAndHashcode |
 | `equals-overload` | error | preview | edit | sonar:S1201, spotbugs:EQ_SELF_NO_OBJECT, errorprone:NonOverridingEquals, intellij:CovariantEquals |
 | `class-name-comparison` | info | preview | checkpoint | sonar:S1872, spotbugs:EQ_COMPARING_CLASS_NAMES |
@@ -160,14 +160,14 @@ Maturity: 0 rules are `stable` (held to the project's precision promise), 318 ar
 | `invalid-date-value` | error | preview | edit | sonar:S2110, spotbugs:DMI_BAD_MONTH |
 | `instant-unsupported-unit` | error | preview | edit | errorprone:JavaInstantGetSecondsGetNano, errorprone:JavaTimeDefaultTimeZone |
 | `invalid-time-zone-id` | warning | preview | checkpoint | errorprone:InvalidTimeZoneID, errorprone:InvalidZoneId |
-| `unresolved-method` | error | preview | edit | javac:cant.resolve.location.args, intellij:UnresolvedReference |
-| `unresolved-constructor` | error | preview | edit | javac:cant.apply.symbol, intellij:UnresolvedReference |
-| `unresolved-field` | error | preview | edit | javac:cant.resolve.location, intellij:UnresolvedReference |
+| `unresolved-method` | error | stable in changed | edit | javac:cant.resolve.location.args, intellij:UnresolvedReference |
+| `unresolved-constructor` | error | stable in changed | edit | javac:cant.apply.symbol, intellij:UnresolvedReference |
+| `unresolved-field` | error | stable in changed | edit | javac:cant.resolve.location, intellij:UnresolvedReference |
 | `unresolved-static-import` | error | preview | edit | javac:cant.resolve.location, intellij:UnresolvedReference |
-| `missing-jdk-import` | warning | preview | edit | javac:doesnt.exist, javac:cant.resolve.location |
+| `missing-jdk-import` | warning | stable in changed | edit | javac:doesnt.exist, javac:cant.resolve.location |
 | `incompatible-assignment` | error | preview | edit | javac:prob.found.req, intellij:IncompatibleTypes |
-| `override-matches-nothing` | error | preview | edit | javac:method.does.not.override.superclass, intellij:MethodDoesntOverride |
-| `unimplemented-abstract-method` | error | preview | edit | javac:does.not.override.abstract, intellij:ClassNotImplementingAbstractMethods |
+| `override-matches-nothing` | error | stable in changed | edit | javac:method.does.not.override.superclass, intellij:MethodDoesntOverride |
+| `unimplemented-abstract-method` | error | stable in changed | edit | javac:does.not.override.abstract, intellij:ClassNotImplementingAbstractMethods |
 
 ## complexity (5)
 
@@ -236,7 +236,7 @@ Maturity: 0 rules are `stable` (held to the project's precision promise), 318 ar
 
 | id | severity | maturity | tier | origin |
 |---|---|---|---|---|
-| `url-equals-hashcode` | warning | preview | checkpoint | sonar:S2112, spotbugs:DMI_BLOCKING_METHODS_ON_URL, spotbugs:DMI_COLLECTION_OF_URLS, errorprone:URLEqualsHashCode |
+| `url-equals-hashcode` *off* | warning | preview | checkpoint | sonar:S2112, spotbugs:DMI_BLOCKING_METHODS_ON_URL, spotbugs:DMI_COLLECTION_OF_URLS, errorprone:URLEqualsHashCode |
 | `random-used-once` | info | preview | checkpoint | sonar:S2119, spotbugs:DMI_RANDOM_USED_ONLY_ONCE |
 | `string-constructor` | info | preview | checkpoint | sonar:S2129, spotbugs:DM_STRING_CTOR, spotbugs:DM_STRING_VOID_CTOR, pmd:StringInstantiation |
 | `boxed-primitive-constructor` | warning | preview | checkpoint | sonar:S2129, spotbugs:DM_NUMBER_CTOR, spotbugs:DM_BOOLEAN_CTOR, pmd:PrimitiveWrapperInstantiation |

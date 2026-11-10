@@ -159,7 +159,7 @@ impl Rule for IdenticalBranches {
         match n.kind() {
             "ternary_expression" => {
                 let (Some(a), Some(b)) = (n.field("consequence"), n.field("alternative")) else { return };
-                if normalized(a, cx.src) == normalized(b, cx.src) {
+                if normalized(a, cx.src) == normalized(b, cx.src) && !n.field("condition").is_some_and(|c| uses_pattern_vars(&[c], a, cx.src)) {
                     cx.report(n, "Both branches of the conditional expression are identical");
                 }
             }
@@ -167,12 +167,14 @@ impl Rule for IdenticalBranches {
                 if is_else_if(n) {
                     return;
                 }
-                let (_, branches, has_else) = if_chain(n);
+                let (conds, branches, has_else) = if_chain(n);
                 if branches.len() < 2 {
                     return;
                 }
                 let texts: Vec<String> = branches.iter().map(|b| branch_text(*b, cx.src)).collect();
-                if has_else && texts.iter().all(|t| *t == texts[0]) {
+                // conditions binding pattern variables: the branches may read
+                // different variables of the same name
+                if has_else && texts.iter().all(|t| *t == texts[0]) && !branches.iter().any(|b| uses_pattern_vars(&conds, *b, cx.src)) {
                     cx.report(n.child(0).unwrap_or(n), "All branches of this if/else are identical; the condition has no effect");
                     return;
                 }
@@ -182,7 +184,14 @@ impl Rule for IdenticalBranches {
                     if trivial {
                         continue;
                     }
-                    if let Some(j) = (0..i).find(|&j| texts[j] == texts[i]) {
+                    // only the branch just before: with other conditions in
+                    // between, the order of the tests matters and the two
+                    // cannot simply be merged
+                    let j = i - 1;
+                    // conditions binding pattern variables (`x instanceof A a
+                    // && a.isEmpty()`) cannot be joined with `||`
+                    let binds = |k: usize| conds.get(k).is_some_and(|c| binds_pattern(*c));
+                    if texts[j] == texts[i] && !binds(i) && !binds(j) {
                         let line = line_of(branches[j]) + 1;
                         cx.report_with_severity(branches[i], Severity::Info, format!("This branch has the same code as the branch on line {line}"));
                     }
@@ -192,9 +201,16 @@ impl Rule for IdenticalBranches {
                 let Some(body) = n.field("body") else { return };
                 let groups = body.kids();
                 let mut bodies: Vec<(Node, String)> = Vec::new();
+                let mut patterns = false;
                 for g in &groups {
                     let stmts: Vec<Node> = g.kids().into_iter().filter(|k| k.kind() != "switch_label").collect();
                     if stmts.is_empty() {
+                        continue;
+                    }
+                    // a case with a type or record pattern (and a guard) cannot
+                    // share its label with another one
+                    if g.kids().iter().filter(|k| k.kind() == "switch_label").any(|l| binds_pattern(*l)) {
+                        patterns = true;
                         continue;
                     }
                     let text: String = stmts.iter().map(|s| normalized(*s, cx.src)).collect::<Vec<_>>().join(" ");
@@ -202,7 +218,7 @@ impl Rule for IdenticalBranches {
                     bodies.push((*g, text.clone()));
                     let _ = stmt_count;
                 }
-                if bodies.len() >= 2 && bodies.iter().all(|(_, t)| *t == bodies[0].1) && cx.text(body).contains("default") {
+                if !patterns && bodies.len() >= 2 && bodies.iter().all(|(_, t)| *t == bodies[0].1) && cx.text(body).contains("default") {
                     cx.report(n.child(0).unwrap_or(n), "All cases of this switch execute the same code");
                     return;
                 }
@@ -219,6 +235,29 @@ impl Rule for IdenticalBranches {
             _ => {}
         }
     }
+}
+
+/// Does a condition or case label declare pattern variables (`x instanceof
+/// Foo f`, `case Foo f ->`, `case Point(int x, int y)`), or carry a guard?
+fn binds_pattern(n: Node) -> bool {
+    n.descendants().any(|d| matches!(d.kind(), "type_pattern" | "record_pattern" | "guard") || d.kind() == "instanceof_expression" && d.field("name").is_some())
+}
+
+/// The names of the pattern variables a condition declares.
+fn pattern_names<'t>(n: Node<'t>, src: &'t str) -> Vec<&'t str> {
+    n.descendants()
+        .filter_map(|d| match d.kind() {
+            "type_pattern" | "record_pattern_component" => d.kids().into_iter().rev().find(|k| k.kind() == "identifier").map(|k| k.text(src)),
+            "instanceof_expression" => d.field("name").map(|k| k.text(src)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Does a branch read a variable the conditions bind by pattern?
+fn uses_pattern_vars<'t>(conds: &[Node<'t>], branch: Node<'t>, src: &'t str) -> bool {
+    let names: Vec<&str> = conds.iter().flat_map(|c| pattern_names(*c, src)).collect();
+    !names.is_empty() && branch.descendants().any(|d| d.kind() == "identifier" && names.contains(&d.text(src)))
 }
 
 declare_rule!(IdenticalConditions {
@@ -654,7 +693,7 @@ declare_rule!(InfiniteLoop {
     maturity: Preview,
     sources: ["sonar:S2189", "spotbugs:IL_INFINITE_LOOP"],
     kinds: ["while_statement", "for_statement", "do_statement"],
-    description: "A `while (true)`/`for (;;)` loop with no break, return, throw or exit never terminates; the code after it is unreachable and the thread hangs. So does a `while`/`do` loop whose condition reads only local variables that nothing in the loop changes.",
+    description: "A `while`/`do` loop whose condition reads only local variables that nothing in the loop changes never terminates once entered, and the thread hangs. (An explicit `while (true)`/`for (;;)` is taken as meant to run forever and not reported.)",
 });
 
 impl Rule for InfiniteLoop {
@@ -666,20 +705,11 @@ impl Rule for InfiniteLoop {
         };
         if !always {
             self.stuck_condition(n, cx);
-            return;
         }
-        let Some(body) = n.field("body") else { return };
-        // loops inside try/catch are commonly ended by an exception (server accept loops)
-        if n.ancestors().take_while(|a| !matches!(a.kind(), "method_declaration" | "lambda_expression")).any(|a| matches!(a.kind(), "try_statement" | "try_with_resources_statement") && !a.kids_of_kind("catch_clause").is_empty()) {
-            return;
-        }
-        if !loop_has_exit(body, cx.src) {
-            // methods that are meant to run forever (thread loops) usually catch InterruptedException
-            if cx.text(body).contains("InterruptedException") || cx.text(body).contains("isInterrupted") {
-                return;
-            }
-            cx.report(n.child(0).unwrap_or(n), "This loop has no break, return or throw; it never terminates");
-        }
+        // An explicit `while (true)` / `for (;;)` says the loop is meant to
+        // run forever: a worker taking from a queue, a server loop, a
+        // benchmark or stress `main`. Only a loop whose condition looks like
+        // it ends but cannot (above) is a mistake.
     }
 }
 
@@ -849,10 +879,33 @@ impl Rule for SwitchFallthrough {
         if has_marker(gap) || has_marker(&tail[tail_start..]) {
             return;
         }
+        // the case leaves the switch under some condition (`if (done)
+        // return x;`, `if (..) break;`) and goes on otherwise: its author
+        // chose where it ends, and the rest falls through on purpose
+        if stmts.iter().any(|st| conditional_exit(*st, n)) {
+            return;
+        }
         if let Some(label) = next.kid_of_kind("switch_label") {
             cx.report(label, "Previous case falls through into this one; add `break` or a `// fall through` comment");
         }
     }
+}
+
+/// Does `st` hold an `if` with a branch that leaves the case `group`:
+/// `return`, `throw`, `continue`, or a `break` of the switch itself (not of a
+/// loop or switch nested inside)?
+fn conditional_exit(st: Node, group: Node) -> bool {
+    st.descendants().filter(|d| d.kind() == "if_statement").any(|ifs| {
+        ifs.descendants().any(|j| match j.kind() {
+            "return_statement" | "throw_statement" => !j.ancestors().take_while(|a| *a != group).any(|a| matches!(a.kind(), "lambda_expression" | "class_body")),
+            "continue_statement" => !j.ancestors().take_while(|a| *a != group).any(|a| matches!(a.kind(), "while_statement" | "do_statement" | "for_statement" | "enhanced_for_statement" | "lambda_expression" | "class_body")),
+            "break_statement" => {
+                j.named_child_count() == 0
+                    && !j.ancestors().take_while(|a| *a != group).any(|a| matches!(a.kind(), "switch_expression" | "while_statement" | "do_statement" | "for_statement" | "enhanced_for_statement" | "lambda_expression" | "class_body"))
+            }
+            _ => false,
+        })
+    })
 }
 
 declare_rule!(SwitchMissingDefault {
@@ -1273,6 +1326,25 @@ impl Rule for ForLoopWrongVariable {
         }
         // the body advances the tested variable (`for (r = 3; r > 0; attempts++) { r--; }`)
         if n.field("body").is_some_and(|b| assigned_names(b, cx.src).iter().any(|c| cond_vars.contains(c))) {
+            return;
+        }
+        // the tested counter is an object whose methods, called in the body,
+        // advance it (an iterator loop keeping a separate index: `it.hasNext();
+        // i++` with `it.next()` in the body)
+        let advanced_by_call = |c: &str| {
+            n.field("body").into_iter().flat_map(|b| b.descendants()).any(|d| {
+                d.kind() == "method_invocation"
+                    && d.field("object").is_some_and(|o| o.unparen().kind() == "identifier" && o.unparen().text(cx.src) == c)
+                    // queries that do not move it
+                    && !cx.fm.call_name(d).is_some_and(|m| {
+                        // `hasNext`, and Scanner's `hasNextInt`, `hasNextLine`, ...
+                        matches!(m, "hasNext" | "hasNextLine" | "hasNextInt")
+                            || m.starts_with("hasNext") && d.field("object").is_some_and(|o| cx.type_of(o).class_name() == Some("java.util.Scanner"))
+                            || matches!(m, "hasPrevious" | "nextIndex" | "previousIndex" | "hasMoreElements" | "hasMoreTokens" | "countTokens" | "isEmpty" | "size" | "toString" | "hashCode" | "equals")
+                    })
+            })
+        };
+        if counters.iter().any(|c| cond_vars.contains(c) && advanced_by_call(c)) {
             return;
         }
         // the condition must test the declared counter for this to be clearly wrong

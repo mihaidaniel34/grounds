@@ -13,6 +13,13 @@ thread_local! {
     /// (class, field) constant initializers being evaluated on this thread
     static CONSTANTS_IN_PROGRESS: std::cell::RefCell<Vec<(Name, Name)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
+
+/// Longest qualified type name resolved, in segments. Resolution tries every
+/// split into package and nested classes, which is quadratic in the length:
+/// a file cut off in `@a.x.x.x...` (a million segments) never finished. No
+/// name in the corpus has 21.
+pub(crate) const MAX_NAME_SEGMENTS: usize = 256;
+
 use dashmap::DashMap;
 use grounds_classfile::ClassContainer;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -51,6 +58,9 @@ pub struct Classpath {
     /// Whether the JDK home has `lib/ct.sym`, which only a full JDK has: a
     /// runtime image cut down by jlink lacks modules, and their packages.
     jdk_full: bool,
+    /// Directory entries too large to be directories of classes
+    /// (`grounds_classfile::DIR_LIMIT`); nothing was read from them.
+    pub oversized: Vec<std::path::PathBuf>,
 }
 
 impl std::fmt::Debug for Classpath {
@@ -61,18 +71,29 @@ impl std::fmt::Debug for Classpath {
 
 impl Classpath {
     pub fn empty() -> Classpath {
-        Classpath { containers: Vec::new(), names: FxHashMap::default(), packages: FxHashSet::default(), cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false }
+        Classpath { containers: Vec::new(), names: FxHashMap::default(), packages: FxHashSet::default(), cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false, oversized: Vec::new() }
     }
 
     /// Build from containers in priority order (first definition wins).
     pub fn from_containers(containers: Vec<ClassContainer>) -> Classpath {
-        let lists: Vec<Vec<String>> = {
+        Self::from_containers_within(containers, grounds_classfile::DIR_LIMIT)
+    }
+
+    fn from_containers_within(containers: Vec<ClassContainer>, dir_limit: usize) -> Classpath {
+        let lists: Vec<Option<Vec<String>>> = {
             use rayon::prelude::*;
-            containers.par_iter().map(|c| c.class_names()).collect()
+            containers.par_iter().map(|c| c.class_names_within(dir_limit)).collect()
         };
         let mut names = FxHashMap::default();
         let mut packages = FxHashSet::default();
+        let mut oversized: Vec<(u32, std::path::PathBuf)> = Vec::new();
         for (i, list) in lists.into_iter().enumerate() {
+            let Some(list) = list else {
+                if let ClassContainer::Dir(d) = &containers[i] {
+                    oversized.push((i as u32, d.clone()));
+                }
+                continue;
+            };
             for n in list {
                 let b = binary::internal_to_binary(&n);
                 if let Some(pos) = b.rfind('.') {
@@ -89,10 +110,14 @@ impl Classpath {
                         }
                     }
                 }
-                names.entry(Arc::from(b.as_str())).or_insert(i as u32);
+                // a directory that was not listed still comes first for a
+                // class it holds: a later entry's copy is not the one in use
+                let from = oversized.iter().find(|(_, d)| d.join(format!("{n}.class")).is_file()).map_or(i as u32, |(j, _)| *j);
+                names.entry(Arc::from(b.as_str())).or_insert(from);
             }
         }
-        Classpath { containers, names, packages, cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false }
+        let oversized = oversized.into_iter().map(|(_, d)| d).collect();
+        Classpath { containers, names, packages, cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false, oversized }
     }
 
     /// JDK classes for a release (see `ClassContainer::open_jdk`), followed by the given jars/dirs.
@@ -209,8 +234,42 @@ pub struct Scope<'a> {
     pub enclosing: Vec<Name>,
     /// Type variables in scope.
     pub type_vars: Vec<Name>,
-    /// Local classes visible here: simple name -> binary name.
-    pub local_types: Vec<(Name, Name)>,
+    /// Local classes visible here: simple name, binary name, and the number
+    /// of `enclosing` classes declared inside the block that declares it (the
+    /// local class shadows the member types of `enclosing[level]` and outer
+    /// ones, and is shadowed by those of the classes nested in its block).
+    pub local_types: Vec<(Name, Name, usize)>,
+    /// The local and anonymous classes among `enclosing`, which the index
+    /// does not hold.
+    pub local_classes: Vec<LocalClassScope>,
+    /// A name that a supertype which is not resolved may declare as a member
+    /// type is unknown, unless an enclosing class, a single-type import or
+    /// java.lang provides it. Set for names in code; declarations lowered for
+    /// the whole project keep the package's or an on-demand import's class
+    /// (the wiring model counts on their types).
+    pub unknown_if_inherited: bool,
+}
+
+/// What a local or anonymous class brings into scope in its body.
+#[derive(Clone, Debug, Default)]
+pub struct LocalClassScope {
+    pub name: Name,
+    /// Member types declared in it (and in local supertypes): simple name ->
+    /// binary name.
+    pub members: Vec<(Name, Name)>,
+    /// Supertypes the index holds, whose member types it inherits.
+    pub supers: Vec<Name>,
+    /// A supertype is not resolved: any name may be an inherited member type.
+    pub unknown_super: bool,
+}
+
+/// The result of a member type lookup.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MemberType {
+    Found(Name),
+    NotFound,
+    /// Not found, but a supertype is not resolved and may declare it.
+    Unknown,
 }
 
 pub struct Index {
@@ -229,6 +288,9 @@ pub struct Index {
     resolved_at: AtomicU64,
     // the groups resolve_ordered last used; None: the next fill resolves everything
     plan: parking_lot::Mutex<Option<Plan>>,
+    // see `language_extended`: the generation it was computed at, the module
+    // directories, and whether the whole project is affected
+    extended: parking_lot::Mutex<Option<(u64, Arc<(FxHashSet<String>, bool)>)>>,
 }
 
 // file groups in dependency order, and the files edited since without a declaration change
@@ -307,7 +369,7 @@ impl Drop for Resolving<'_> {
 
 impl Index {
     pub fn new(classpath: Arc<Classpath>) -> Index {
-        Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), copies: FxHashMap::default(), generation: 0, resolved_at: AtomicU64::new(u64::MAX), plan: parking_lot::Mutex::new(None) }
+        Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), copies: FxHashMap::default(), generation: 0, resolved_at: AtomicU64::new(u64::MAX), plan: parking_lot::Mutex::new(None), extended: parking_lot::Mutex::new(None) }
     }
 
     pub fn set_file(&mut self, path: Arc<str>, stub: Arc<FileStub>) {
@@ -452,6 +514,39 @@ impl Index {
         Some((stub, raw, pick))
     }
 
+    /// Whether the file at `path` is compiled with a javac plugin that
+    /// changes the language, so members, access and types may be other than
+    /// the Java the model reads. Manifold (`-Xplugin:Manifold`) adds extension
+    /// methods, `@Jailbreak` access to private members, properties, `auto`
+    /// types, structural interfaces and delegation; code using them is valid
+    /// only with the plugin. Its evidence in the sources: a file of the module
+    /// imports a package of its runtime API (`manifold.*.rt.api`). Extension
+    /// classes (`manifold.ext.rt.api.Extension`) add methods to classes used
+    /// in any module, so one of those makes the whole project extended.
+    pub fn language_extended(&self, path: &str) -> bool {
+        let mut cached = self.extended.lock();
+        let sets = match &*cached {
+            Some((g, sets)) if *g == self.generation => sets.clone(),
+            _ => {
+                let mut modules = FxHashSet::default();
+                let mut everywhere = false;
+                for (p, stub) in &self.files {
+                    for imp in stub.imports.iter() {
+                        let api = imp.path.strip_prefix("manifold.").is_some_and(|rest| rest.starts_with("rt.api") || rest.contains(".rt.api"));
+                        if api {
+                            modules.insert(module_dir(p).to_string());
+                            everywhere |= imp.path.starts_with("manifold.ext.rt.api") && (&*imp.path == "manifold.ext.rt.api.Extension" || imp.on_demand);
+                        }
+                    }
+                }
+                let sets = Arc::new((modules, everywhere));
+                *cached = Some((self.generation, sets.clone()));
+                sets
+            }
+        };
+        sets.1 || sets.0.contains(module_dir(path))
+    }
+
     pub fn is_source_class(&self, name: &str) -> bool {
         self.classes.contains_key(name)
     }
@@ -582,7 +677,7 @@ impl Index {
                 None => None,
             };
         }
-        Scope { package: &stub.package, imports: &stub.imports, enclosing, type_vars, local_types: Vec::new() }
+        Scope { package: &stub.package, imports: &stub.imports, enclosing, type_vars, local_types: Vec::new(), local_classes: Vec::new(), unknown_if_inherited: false }
     }
 
     pub fn scope_for_class<'a>(&'a self, name: &str) -> Option<Scope<'a>> {
@@ -600,7 +695,12 @@ impl Index {
     /// Lower a raw class with an explicit scope (also used for local classes).
     pub fn lower_raw_class(&self, raw: &RawClass, scope: &Scope, origin: Origin) -> ClassInfo {
         // Header types must not consult this class's inherited members.
-        let header_scope = Scope { enclosing: scope.enclosing.iter().skip(1).cloned().collect(), ..scope.clone() };
+        let header_scope = Scope {
+            enclosing: scope.enclosing.iter().skip(1).cloned().collect(),
+            // the levels count enclosing classes, one fewer here
+            local_types: scope.local_types.iter().map(|(s, b, l)| (s.clone(), b.clone(), l.saturating_sub(1))).collect(),
+            ..scope.clone()
+        };
         let mut header_scope = header_scope;
         header_scope.type_vars = scope.type_vars.clone();
         let tps = raw
@@ -852,6 +952,9 @@ impl Index {
 
     /// Resolve a (possibly qualified) type name to a binary class name.
     pub fn resolve_type_name(&self, segs: &[&str], scope: &Scope) -> Option<Name> {
+        if segs.len() > MAX_NAME_SEGMENTS {
+            return None;
+        }
         let first = *segs.first()?;
         if let Some(n) = self.resolve_simple_type(first, scope) {
             let mut cur = n;
@@ -873,6 +976,9 @@ impl Index {
             return Some(Arc::from(dotted));
         }
         let segs: Vec<&str> = dotted.split('.').collect();
+        if segs.len() > MAX_NAME_SEGMENTS {
+            return None;
+        }
         for i in (1..segs.len()).rev() {
             let pkg = segs[..i].join(".");
             let top = format!("{}.{}", pkg, segs[i]);
@@ -908,6 +1014,15 @@ impl Index {
 
     /// Member type `simple` of class `owner`, including inherited member types.
     pub fn member_type(&self, owner: &str, simple: &str) -> Option<Name> {
+        match self.member_type_in(owner, simple) {
+            MemberType::Found(n) => Some(n),
+            _ => None,
+        }
+    }
+
+    /// Member type `simple` of class `owner`, declared or inherited (JLS
+    /// 8.5), and whether an unresolved supertype leaves it unknown.
+    pub fn member_type_in(&self, owner: &str, simple: &str) -> MemberType {
         // Resolving a supertype resolves names, which can come back here for
         // the same lookup (classes nested in and extending each other): a
         // re-entrant lookup is "not found" instead of unbounded recursion.
@@ -922,7 +1037,7 @@ impl Index {
             }
         });
         if !entered {
-            return None;
+            return MemberType::NotFound;
         }
         struct Pop;
         impl Drop for Pop {
@@ -937,64 +1052,102 @@ impl Index {
         self.member_type_rec(owner, simple, &mut seen, 0)
     }
 
-    fn member_type_rec(&self, owner: &str, simple: &str, seen: &mut FxHashSet<Name>, depth: u32) -> Option<Name> {
-        if depth > 20 || !seen.insert(Arc::from(owner)) {
-            return None;
+    fn member_type_rec(&self, owner: &str, simple: &str, seen: &mut FxHashSet<Name>, depth: u32) -> MemberType {
+        if depth > 20 {
+            return MemberType::Unknown;
+        }
+        if !seen.insert(Arc::from(owner)) {
+            return MemberType::NotFound;
         }
         let direct = format!("{owner}${simple}");
         if self.class_exists(&direct) {
-            return Some(Arc::from(direct.as_str()));
+            // private member types are not inherited (JLS 8.2, 8.5)
+            let private = depth > 0 && self.raw_class(&direct).map(|(_, r)| r.flags).or_else(|| self.class(&direct).map(|c| c.flags)).is_some_and(|f| f.is_private());
+            if !private {
+                return MemberType::Found(Arc::from(direct.as_str()));
+            }
         }
         let mut sups: Vec<Name> = Vec::new();
+        let mut unknown = false;
+        let mut push = |t: &Ty| match t {
+            Ty::Class { name, .. } => sups.push(name.clone()),
+            _ => unknown = true,
+        };
         match self.class(owner) {
             Some(c) => {
-                if let Some(Ty::Class { name, .. }) = &c.superclass {
-                    sups.push(name.clone());
+                if let Some(t) = &c.superclass {
+                    push(t);
                 }
                 for i in &c.interfaces {
-                    if let Ty::Class { name, .. } = i {
-                        sups.push(name.clone());
-                    }
+                    push(i);
                 }
             }
             None => {
                 // the class is being lowered right now: resolve its header from the stub
-                let (stub, raw) = self.raw_class(owner)?;
+                let Some((stub, raw)) = self.raw_class(owner) else { return MemberType::Unknown };
                 let mut scope = self.scope_for_raw(stub, raw);
                 scope.enclosing.remove(0);
                 for ts in raw.superclass.iter().chain(raw.interfaces.iter()) {
-                    if let Ty::Class { name, .. } = self.resolve_type(ts, &scope) {
-                        sups.push(name);
-                    }
+                    push(&self.resolve_type(ts, &scope));
                 }
             }
         }
         for s in sups {
-            if let Some(n) = self.member_type_rec(&s, simple, seen, depth + 1) {
-                return Some(n);
+            match self.member_type_rec(&s, simple, seen, depth + 1) {
+                MemberType::Found(n) => return MemberType::Found(n),
+                MemberType::Unknown => unknown = true,
+                MemberType::NotFound => {}
             }
         }
-        None
+        if unknown {
+            MemberType::Unknown
+        } else {
+            MemberType::NotFound
+        }
     }
 
+    /// The type a simple name denotes where `scope` applies (JLS 6.4.1, 6.5.5):
+    /// local classes, then the member types of each enclosing class, its own
+    /// and inherited ones (JLS 8.5), and the class's own name one level out;
+    /// then single-type imports, the package, on-demand imports, `java.lang`.
+    /// None when not found, or when a supertype that is not resolved may
+    /// declare the name (unknown).
     pub fn resolve_simple_type(&self, simple: &str, scope: &Scope) -> Option<Name> {
-        for (s, b) in &scope.local_types {
-            if &**s == simple {
-                return Some(b.clone());
+        let local = |level: &dyn Fn(usize) -> bool| scope.local_types.iter().find(|(s, _, l)| &**s == simple && level(*l)).map(|(_, b, _)| b.clone());
+        // a member type may be inherited from a supertype that is not resolved
+        let mut uncertain = false;
+        for (i, e) in scope.enclosing.iter().enumerate() {
+            if let Some(b) = local(&|l| l == i) {
+                return Some(b);
             }
-        }
-        // enclosing classes and their (inherited) member types
-        for e in &scope.enclosing {
+            // a local or anonymous class: from what it declares and inherits
+            if let Some(lc) = scope.local_classes.iter().find(|l| l.name == *e) {
+                if let Some((_, b)) = lc.members.iter().find(|(s, _)| &**s == simple) {
+                    return Some(b.clone());
+                }
+                for sup in &lc.supers {
+                    match self.member_type_in(sup, simple) {
+                        MemberType::Found(n) => return Some(n),
+                        MemberType::Unknown => uncertain = true,
+                        MemberType::NotFound => {}
+                    }
+                }
+                uncertain |= lc.unknown_super;
+                continue;
+            }
+            match self.member_type_in(e, simple) {
+                MemberType::Found(n) => return Some(n),
+                MemberType::Unknown => uncertain = true,
+                MemberType::NotFound => {}
+            }
+            // the class's own name is in scope one level out: a member type of
+            // that name it inherits comes first
             if simple_name_of(e) == simple && !e.contains("$$") {
                 return Some(e.clone());
             }
-            let direct = format!("{e}${simple}");
-            if self.class_exists(&direct) {
-                return Some(Arc::from(direct.as_str()));
-            }
-            if let Some(n) = self.member_type(e, simple) {
-                return Some(n);
-            }
+        }
+        if let Some(b) = local(&|l| l >= scope.enclosing.len()) {
+            return Some(b);
         }
         // single-type imports
         for imp in scope.imports.single_named(simple) {
@@ -1016,8 +1169,20 @@ impl Index {
             // when its jar is missing: unknown, never a same-named class
             return None;
         }
+        // an enclosing class inherits from a class that is not resolved: the
+        // name may be a member type it inherits, which would shadow the
+        // package and on-demand imports
         // same package
         let same = if scope.package.is_empty() { simple.to_string() } else { format!("{}.{}", scope.package, simple) };
+        if uncertain && scope.unknown_if_inherited {
+            // java.lang is kept unless the package or an on-demand import has
+            // the name too, which would shadow it
+            if self.class_exists(&same) || self.resolve_on_demand(simple, scope).is_some() {
+                return None;
+            }
+            let jl = format!("java.lang.{simple}");
+            return self.class_exists(&jl).then(|| Arc::from(jl.as_str()));
+        }
         if self.class_exists(&same) {
             // a same-package class from another module (a test fixture in a
             // module this one does not depend on) loses to an on-demand
@@ -1044,10 +1209,12 @@ impl Index {
     }
 
     fn resolve_on_demand(&self, simple: &str, scope: &Scope) -> Option<Name> {
+        // the file the scope belongs to, for what its module can see
+        let here = scope.enclosing.last().and_then(|e| self.source_file_of(e));
         let lookup = |imp: &Import| -> Option<Name> {
             if self.package_exists(&imp.path) && !imp.is_static {
                 let c = format!("{}.{}", imp.path, simple);
-                if self.class_exists(&c) {
+                if self.class_exists(&c) && self.importable(&c, &imp.path, scope.package, here.map(|h| &**h)) {
                     return Some(Arc::from(c.as_str()));
                 }
             }
@@ -1066,6 +1233,26 @@ impl Index {
             }
         }
         found
+    }
+
+    /// Whether an on-demand import of `pkg` imports the top-level class `c`
+    /// into a file of package `from` (at path `here`): only accessible types
+    /// are imported (JLS 7.5.2, 6.6.1), so not a class that is not public in
+    /// another package. A class of a test source set (`test`, `integrationTest`,
+    /// `testFixtures`...) is not visible from main sources, nor from another
+    /// module.
+    fn importable(&self, c: &str, pkg: &str, from: &str, here: Option<&str>) -> bool {
+        if pkg != from {
+            let flags = self.raw_class(c).map(|(_, r)| r.flags).or_else(|| self.classpath.class(c).map(|k| k.flags));
+            if flags.is_some_and(|f| !f.is_public()) {
+                return false;
+            }
+        }
+        let is_test = crate::sources::is_test_path;
+        match (self.source_file_of(c), here) {
+            (Some(f), Some(h)) if is_test(f) => is_test(h) && module_dir(f) == module_dir(h),
+            _ => true,
+        }
     }
 
     /// All source classes whose direct supertypes include `name`.
@@ -1208,5 +1395,28 @@ mod resolving_tests {
         assert_eq!(module_dir("/r/src/mdo/java/C.java"), "/r");
         assert_eq!(module_dir("/r/a/src/C.java"), "/r/a");
         assert_eq!(module_dir("C.java"), "");
+    }
+}
+
+#[cfg(test)]
+mod oversized_tests {
+    use super::*;
+    #[test]
+    fn a_directory_too_large_to_list_still_comes_before_later_entries() {
+        // `entries = ["cp", "old"]` with `cp` over the limit: its classes are not
+        // listed, but `old`'s copy of a class `cp` holds is not the one in use
+        let dir = std::env::temp_dir().join(format!("grounds-index-oversized-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for f in ["cp/lib/Lib.class", "cp/lib/OnlyHere.class", "cp/a.txt", "cp/b.txt", "old/lib/Lib.class", "old/lib/Other.class"] {
+            std::fs::create_dir_all(dir.join(f).parent().unwrap()).unwrap();
+            std::fs::write(dir.join(f), b"").unwrap();
+        }
+        let containers = vec![ClassContainer::open_dir(&dir.join("cp")), ClassContainer::open_dir(&dir.join("old"))];
+        let cp = Classpath::from_containers_within(containers, 4);
+        assert_eq!(cp.oversized, [dir.join("cp")]);
+        assert_eq!(cp.names.get("lib.Lib"), Some(&0), "the unlisted directory's copy");
+        assert_eq!(cp.names.get("lib.Other"), Some(&1));
+        assert!(!cp.contains("lib.OnlyHere"), "unknown, not missing: nothing lists it");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

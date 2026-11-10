@@ -22,6 +22,11 @@ fn closed_class<'t>(cx: &Ctx<'_, 't>, name: &str) -> Option<std::sync::Arc<Class
     if cx.fm.stub.classes.iter().any(|k| k.annotations.iter().any(|a| lombok::processor_annotation(a, &cx.fm.stub.imports).as_deref() == Some("lombok.experimental.ExtensionMethod"))) {
         return None;
     }
+    // a javac plugin that changes the language (Manifold) compiles this file:
+    // members, access and types are not the ones the model reads
+    if cx.fm.index.language_extended(&cx.fm.path) {
+        return None;
+    }
     // a file that does not parse as Java (a template, a file mid-edit) is no
     // ground for a claim that code does not compile
     if cx.fm.file.has_errors() {
@@ -220,30 +225,33 @@ impl Rule for UnresolvedMethod {
                     return;
                 }
                 if let Some(m) = private_hit {
-                    cx.report(n.field("name").unwrap_or(n), format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)));
+                    // the claim: every overload that fits is private, not the one shown
+                    cx.report_claim(n.field("name").unwrap_or(n), format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)), format!("`{name}` with {nargs} argument(s) is private in `{}` and its enclosing classes", ci.name));
                     return;
                 }
                 let hint = similar_names(&ci, cx.fm, name, Some(nargs)).map(|s| format!("; did you mean `{s}`?")).unwrap_or_default();
-                cx.report(n.field("name").unwrap_or(n), format!("Method `{name}` is not defined in `{}` or its enclosing classes{hint}", ci.simple_name()));
+                cx.report_claim(n.field("name").unwrap_or(n), format!("Method `{name}` is not defined in `{}` or its enclosing classes{hint}", ci.simple_name()), format!("Method `{name}` is not defined in `{}` or its enclosing classes", ci.name));
                 return;
             }
         };
         let ms = cx.fm.methods_named(&cls.this_type(), name);
         if ms.is_empty() {
             let hint = similar_names(&cls, cx.fm, name, Some(nargs)).map(|s| format!("; did you mean `{s}`?")).unwrap_or_default();
-            cx.report(n.field("name").unwrap_or(n), format!("`{}` has no method `{name}`{hint}", cls.simple_name()));
+            cx.report_claim(n.field("name").unwrap_or(n), format!("`{}` has no method `{name}`{hint}", cls.simple_name()), format!("`{}` has no method `{name}`", cls.name));
             return;
         }
         if !ms.iter().any(|m| m.method.accepts_arity(nargs)) {
-            cx.report(n.field("name").unwrap_or(n), format!("No `{name}` in `{}` takes {nargs} argument(s); available: {}", cls.simple_name(), signatures(&ms)));
+            cx.report_claim(n.field("name").unwrap_or(n), format!("No `{name}` in `{}` takes {nargs} argument(s); available: {}", cls.simple_name(), signatures(&ms)), format!("No `{name}` in `{}` takes {nargs} argument(s)", cls.name));
             return;
         }
-        if let Some(arg_list) = definitely_incompatible(cx, n, &ms) {
-            cx.report(n.field("name").unwrap_or(n), format!("No `{name}` in `{}` accepts ({arg_list}); available: {}", cls.simple_name(), signatures(&ms)));
+        if let Some(arg_tys) = definitely_incompatible(cx, n, &ms) {
+            let shown = arg_tys.iter().map(|t| t.display_simple()).collect::<Vec<_>>().join(", ");
+            let qualified = arg_tys.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ");
+            cx.report_claim(n.field("name").unwrap_or(n), format!("No `{name}` in `{}` accepts ({shown}); available: {}", cls.simple_name(), signatures(&ms)), format!("No `{name}` in `{}` accepts ({qualified})", cls.name));
             return;
         }
         if let Some(m) = private_elsewhere(cx, n, &cls, name, &ms, Some(nargs)) {
-            cx.report(n.field("name").unwrap_or(n), format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)));
+            cx.report_claim(n.field("name").unwrap_or(n), format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)), format!("`{name}` with {nargs} argument(s) is private in `{}`", cls.name));
             return;
         }
         // calling an instance method through the type name
@@ -251,7 +259,7 @@ impl Rule for UnresolvedMethod {
             // `Outer.method()` inside an inner class reaches the outer instance legally
             let inside = cx.fm.enclosing_class_name(n).is_some_and(|e| e.starts_with(&*cls.name));
             if !inside {
-                cx.report(n.field("name").unwrap_or(n), format!("`{}.{name}()` is an instance method and cannot be called on the type", cls.simple_name()));
+                cx.report_claim(n.field("name").unwrap_or(n), format!("`{}.{name}()` is an instance method and cannot be called on the type", cls.simple_name()), format!("`{}.{name}()` is an instance method and cannot be called on the type", cls.name));
             }
         }
     }
@@ -299,9 +307,9 @@ fn check_method_reference<'t>(n: Node<'t>, cx: &mut Ctx<'_, 't>) {
     let ms = cx.fm.methods_named(&cls.this_type(), mname);
     if ms.is_empty() {
         let hint = similar_names(&cls, cx.fm, mname, None).map(|s| format!("; did you mean `{s}`?")).unwrap_or_default();
-        cx.report(name, format!("`{}` has no method `{mname}`{hint}", cls.simple_name()));
+        cx.report_claim(name, format!("`{}` has no method `{mname}`{hint}", cls.simple_name()), format!("`{}` has no method `{mname}`", cls.name));
     } else if let Some(m) = private_elsewhere(cx, n, &cls, mname, &ms, None) {
-        cx.report(name, format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)));
+        cx.report_claim(name, format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)), format!("`{mname}` is private in `{}`", cls.name));
     }
 }
 
@@ -427,8 +435,10 @@ declare_rule!(IncompatibleAssignment {
 impl Rule for IncompatibleAssignment {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
-        // a file that does not parse is no ground for a compile-break claim
-        if cx.fm.file.has_errors() {
+        // a file that does not parse is no ground for a compile-break claim,
+        // nor one a language-changing javac plugin compiles (Manifold's
+        // structural interfaces make unrelated classes assignable)
+        if cx.fm.file.has_errors() || cx.fm.index.language_extended(&cx.fm.path) {
             return;
         }
         // (declared type, value)
@@ -527,7 +537,7 @@ fn fully_known(cx: &Ctx<'_, '_>, t: &Ty) -> bool {
 
 /// If every overload with a matching arity has a parameter that definitely
 /// cannot accept the corresponding argument, return the argument types.
-fn definitely_incompatible<'t>(cx: &Ctx<'_, 't>, call: Node<'t>, ms: &[MethodRef]) -> Option<String> {
+fn definitely_incompatible<'t>(cx: &Ctx<'_, 't>, call: Node<'t>, ms: &[MethodRef]) -> Option<Vec<Ty>> {
     let args = cx.fm.args_of(call);
     let arg_tys: Vec<Ty> = args.iter().map(|a| cx.type_of(*a)).collect();
     // lambdas, method refs, unknown or generic argument types: not decidable
@@ -556,7 +566,7 @@ fn definitely_incompatible<'t>(cx: &Ctx<'_, 't>, call: Node<'t>, ms: &[MethodRef
     if !any {
         return None;
     }
-    Some(arg_tys.iter().map(|t| t.display_simple()).collect::<Vec<_>>().join(", "))
+    Some(arg_tys)
 }
 
 /// The argument type may be passed for the parameter type: not provably wrong.
@@ -606,7 +616,8 @@ impl Rule for UnresolvedConstructor {
             return;
         }
         let Some(t) = n.field("type") else { return };
-        let ty = cx.fm.resolve_type_node(t);
+        // `outer.new Inner()` names a member type of the qualifier's type
+        let ty = cx.fm.created_class(n);
         let Some(tn) = ty.class_name() else { return };
         let Some(cls) = closed_class(cx, tn) else { return };
         if cls.is_interface() || cls.is_enum() {
@@ -618,7 +629,7 @@ impl Rule for UnresolvedConstructor {
             return;
         }
         let avail: Vec<String> = ctors.iter().take(4).map(|c| format!("{}({})", cls.simple_name(), c.params.iter().map(|p| p.ty.display_simple()).collect::<Vec<_>>().join(", "))).collect();
-        cx.report(t, format!("No constructor of `{}` takes {nargs} argument(s); available: {}", cls.simple_name(), avail.join(", ")));
+        cx.report_claim(t, format!("No constructor of `{}` takes {nargs} argument(s); available: {}", cls.simple_name(), avail.join(", ")), format!("No constructor of `{}` takes {nargs} argument(s)", cls.name));
     }
 }
 
@@ -668,7 +679,7 @@ impl Rule for UnresolvedField {
             }
         };
         let Some(cls) = cls else { return };
-        cx.report(f, format!("`{}` has no field `{fname}`", cls.simple_name()));
+        cx.report_claim(f, format!("`{}` has no field `{fname}`", cls.simple_name()), format!("`{}` has no field `{fname}`", cls.name));
     }
 }
 
@@ -727,7 +738,8 @@ impl Rule for OverrideWithoutSuper {
                             _ => false,
                         };
                         skew || !fully_known(cx, &at) || !fully_known(cx, &b.ty)
-                    }))
+                    })
+                        || same_erasure(&m, &cls, x, &map))
             });
         }
         if !found && cls.is_interface() {
@@ -735,10 +747,50 @@ impl Rule for OverrideWithoutSuper {
         }
         if !found {
             if let Some(nm) = n.field("name") {
-                cx.report(nm, format!("`{}` is marked @Override but overrides no supertype method", m.signature_string()));
+                cx.report_claim(nm, format!("`{}` is marked @Override but overrides no supertype method", m.signature_string()), format!("`{}` is marked @Override but overrides no supertype method", Ctx::method_id(&cls.name, &m)));
             }
         }
     }
+}
+
+/// Whether `m`, declared in `cls`, has the erased parameter types of `sup`
+/// as a member of the supertype (`map` substitutes its type arguments): a
+/// method overrides one whose signature's erasure is its own (JLS 8.4.2,
+/// 8.4.8.1), as `get(Object[])` does `get(A)` of `Ops<T[]>`, or `save(Book)`
+/// does `<S extends E> S save(S)` with `E` = `Book`. Type variables erase to
+/// their first bound (JLS 4.6). False when a type is not known.
+fn same_erasure(m: &MethodInfo, cls: &ClassInfo, sup: &MethodInfo, map: &[(Name, Ty)]) -> bool {
+    use grounds_index::hierarchy::apply_subst;
+    fn erase(t: &Ty, vars: &[TypeParam], depth: u32) -> Ty {
+        match t {
+            Ty::TypeVar(v) => match vars.iter().find(|p| p.name == *v) {
+                Some(p) if depth < 8 => p.bounds.first().map(|b| erase(b, vars, depth + 1)).unwrap_or_else(Ty::object),
+                _ => Ty::Unknown,
+            },
+            Ty::Array(e) => match erase(e, vars, depth) {
+                Ty::Unknown => Ty::Unknown,
+                e => Ty::Array(Box::new(e)),
+            },
+            t => t.erasure(),
+        }
+    }
+    // the supertype's arguments are in terms of `cls`'s type variables; the
+    // supertype method's own type variables keep their (substituted) bounds
+    let sup_vars: Vec<TypeParam> = sup
+        .type_params
+        .iter()
+        .map(|p| TypeParam { name: p.name.clone(), bounds: p.bounds.iter().map(|b| apply_subst(b, map)).collect() })
+        .chain(cls.type_params.iter().cloned())
+        .collect();
+    // a type variable of the supertype method substituted by `map` would be wrong
+    let shadow: Vec<(Name, Ty)> = map.iter().filter(|(k, _)| !sup.type_params.iter().any(|p| p.name == *k)).cloned().collect();
+    sup.params.len() == m.params.len()
+        && sup.params.iter().zip(&m.params).all(|(a, b)| {
+            // the overrider's own signature against the erased one: `m(T)`
+            // with `T extends Date` does not override `m(Date)` (a clash)
+            let x = erase(&apply_subst(&a.ty, &shadow), &sup_vars, 0);
+            !x.has_unknown() && x == b.ty
+        })
 }
 
 declare_rule!(UnimplementedAbstractMethod {
@@ -770,6 +822,7 @@ impl Rule for UnimplementedAbstractMethod {
             return;
         }
         let mut missing: Vec<String> = Vec::new();
+        let mut missing_ids: Vec<String> = Vec::new();
         for m in cx.fm.all_methods(&cls.this_type()) {
             if !m.method.flags.is_abstract() || m.method.flags.is_static() {
                 continue;
@@ -785,12 +838,21 @@ impl Rule for UnimplementedAbstractMethod {
             let implemented = implements(cx, &cls, &m.method.name, m.method.params.len());
             if !implemented {
                 missing.push(format!("`{}.{}`", simple_name_of(&m.owner), m.method.signature_string()));
+                // the requirement is the signature: which of several supertypes
+                // declaring it was kept depends on the order they are listed in
+                let id = Ctx::method_id(&m.owner, &m.method);
+                missing_ids.push(id[m.owner.len() + 1..].to_string());
             }
         }
         if !missing.is_empty() {
             if let Some(nm) = n.field("name") {
                 let more = if missing.len() > 3 { format!(" and {} more", missing.len() - 3) } else { String::new() };
-                cx.report(nm, format!("`{}` does not implement {}{more}", cls.simple_name(), missing.iter().take(3).cloned().collect::<Vec<_>>().join(", ")));
+                // the claim is every missing method, whatever the message shows
+                // two supertypes may require one signature (`<T> f(T)` and
+                // `f(Object)` erase alike): each requirement once
+                missing_ids.sort();
+                missing_ids.dedup();
+                cx.report_claim(nm, format!("`{}` does not implement {}{more}", cls.simple_name(), missing.iter().take(3).cloned().collect::<Vec<_>>().join(", ")), format!("`{}` does not implement {}", cls.name, missing_ids.join(", ")));
             }
         }
     }

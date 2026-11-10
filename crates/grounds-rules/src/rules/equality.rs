@@ -611,6 +611,14 @@ impl Rule for CompareToSpecificValue {
         for (call, k) in [(l, r), (r, l)] {
             if let Some(v) = cx.fm.int_value(k) {
                 if v != 0 && is_comparison_call(call, cx) {
+                    // BigDecimal.compareTo and BigInteger.compareTo are
+                    // documented to return exactly -1, 0 or 1
+                    let exact = matches!(v, 1 | -1)
+                        && call.unparen().kind() == "method_invocation"
+                        && cx.fm.select_method(call.unparen()).is_some_and(|m| &*m.method.name == "compareTo" && matches!(&*m.owner, "java.math.BigDecimal" | "java.math.BigInteger"));
+                    if exact {
+                        return;
+                    }
                     cx.report(n, format!("`{}` only guarantees the sign; comparing with {v} is unreliable", cx.fm.call_name(call.unparen()).unwrap_or("compareTo")));
                     return;
                 }
@@ -625,6 +633,10 @@ declare_rule!(NegatedCompareTo {
     category: Bug,
     severity: Warning,
     maturity: Preview,
+    // off by default: the comparators it meets (String, Double.compare,
+    // project types) never return Integer.MIN_VALUE, and the hold-out
+    // projects showed no case where one could
+    enabled: false,
     sources: ["spotbugs:RV_NEGATING_RESULT_OF_COMPARETO"],
     kinds: ["unary_expression"],
     description: "`compareTo` may return `Integer.MIN_VALUE`, whose negation is itself, so `-a.compareTo(b)` does not reliably reverse the order. Swap the operands instead: `b.compareTo(a)`.",
@@ -908,6 +920,10 @@ declare_rule!(UrlEqualsHashCode {
     category: Performance,
     severity: Warning,
     maturity: Preview,
+    // off by default: the URLs compared in practice come from class loaders
+    // and code sources (file: and jar: URLs, no host, no DNS lookup), which
+    // the rule cannot tell from remote ones
+    enabled: false,
     sources: ["sonar:S2112", "spotbugs:DMI_BLOCKING_METHODS_ON_URL", "spotbugs:DMI_COLLECTION_OF_URLS", "errorprone:URLEqualsHashCode"],
     kinds: ["method_invocation", "object_creation_expression"],
     description: "`java.net.URL.equals()` and `hashCode()` resolve host names over the network, are slow, and give different answers depending on DNS. Use `java.net.URI` instead, also as Map/Set keys.",

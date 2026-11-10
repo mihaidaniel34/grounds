@@ -10,7 +10,7 @@ use grounds_syntax::ParsedFile;
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 #[derive(Debug, Default, Clone)]
 pub struct LoadStats {
@@ -47,6 +47,12 @@ pub struct Project {
     pub classpath_warnings: Vec<crate::classpath::Warning>,
     /// The jars and class directories the classpath was built from.
     pub classpath_entries: Vec<PathBuf>,
+    /// What each source file was when its stub was made, for telling later
+    /// that it changed (taken over by a `Session`).
+    pub stamps: rustc_hash::FxHashMap<PathBuf, FileStamp>,
+    /// When loading began. A file written after this may have been read
+    /// before or after the write.
+    pub load_began: std::time::SystemTime,
 }
 
 /// Class names registered through Spring's META-INF files in any module, and
@@ -56,7 +62,7 @@ fn spring_registrations(ws: &Workspace) -> (Vec<String>, Vec<String>) {
     let (mut out, mut auto) = (Vec::new(), Vec::new());
     for m in &ws.modules {
         let meta = m.dir.join("src/main/resources/META-INF");
-        if let Ok(t) = std::fs::read_to_string(meta.join("spring.factories")) {
+        if let Ok(t) = crate::fsutil::read_text(meta.join("spring.factories")) {
             // key=a.B,\ c.D  (values may continue over lines)
             for (k, v) in t.replace("\r\n", "\n").replace("\\\n", "").lines().filter_map(|l| l.split_once('=').map(|(k, v)| (k.trim().to_string(), v.to_string()))) {
                 let classes: Vec<String> = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
@@ -68,7 +74,7 @@ fn spring_registrations(ws: &Workspace) -> (Vec<String>, Vec<String>) {
         }
         if let Ok(rd) = std::fs::read_dir(meta.join("spring")) {
             for e in rd.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "imports")) {
-                if let Ok(t) = std::fs::read_to_string(e.path()) {
+                if let Ok(t) = crate::fsutil::read_text(e.path()) {
                     let classes: Vec<String> = t.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from).collect();
                     if e.file_name() == "org.springframework.boot.autoconfigure.AutoConfiguration.imports" {
                         auto.extend(classes.iter().cloned());
@@ -101,7 +107,7 @@ impl LombokConfigs {
             .build();
         for e in walker.flatten() {
             if e.file_name() == "lombok.config" {
-                if let (Some(dir), Ok(text)) = (e.path().parent(), std::fs::read_to_string(e.path())) {
+                if let (Some(dir), Ok(text)) = (e.path().parent(), crate::fsutil::read_text(e.path())) {
                     let mut entries = Vec::new();
                     for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
                         if let Some(key) = line.strip_prefix("clear ") {
@@ -201,13 +207,147 @@ pub fn path_key(p: &Path) -> Arc<str> {
     Arc::from(p.to_string_lossy().as_ref())
 }
 
+/// How long a file's time stays in doubt. A time names a tick of the file
+/// system's clock (seconds, on some), and a write later in the same tick
+/// leaves the time as it was: a file read during the tick of its own time
+/// may be written again without showing it. The tick is over once the time is
+/// this old by our clock, or once it has been seen unchanged for this long
+/// (which holds whatever the file system's clock says, a time in the future
+/// included).
+pub const MARGIN: Duration = Duration::from_secs(2);
+
+/// Whether a write after `look` could still leave a file's time at `time`.
+pub fn recent(time: SystemTime, look: SystemTime) -> bool {
+    time >= look.checked_sub(MARGIN).unwrap_or(SystemTime::UNIX_EPOCH)
+}
+
+/// A file as it was read: its modification time and size, taken before its
+/// content was read, and a hash of that content (of the names in it, for a
+/// directory).
+///
+/// Taken in that order, a write after the read changes the time or the size,
+/// except a write in the same tick of the file system's clock, which can
+/// keep both. So, as git does for its index, a time that is recent when it is
+/// taken is not trusted alone: while the stamp is `racy`, every look at the
+/// file compares its content with the hash too, until the time is older than
+/// `MARGIN` or has been seen unchanged for that long. That is the files
+/// written in the last seconds, not the project.
+#[derive(Clone, Copy, Debug)]
+pub struct FileStamp {
+    pub mtime: SystemTime,
+    pub size: u64,
+    /// `None` when the content could not be read: then time and size decide.
+    pub hash: Option<u64>,
+    /// When this time was first seen (right after it was read).
+    pub seen: Instant,
+    pub racy: bool,
+    /// A source file whose text could not be read (no permission, not
+    /// UTF-8, gone between the look at its time and the read): nothing was
+    /// read to vouch for, so every sync tries again until a read succeeds.
+    pub unread: bool,
+}
+
+/// The hash a stamp keeps: of the bytes of a file, of the sorted names in a
+/// directory. A source file's is `content_hash` of its text.
+fn content_of(path: &Path, dir: bool) -> (Option<u64>, Option<Vec<u8>>) {
+    if dir {
+        let Ok(entries) = std::fs::read_dir(path) else { return (None, None) };
+        let mut names: Vec<_> = entries.flatten().map(|e| e.file_name()).collect();
+        names.sort();
+        let mut h = xxhash_rust::xxh3::Xxh3::new();
+        for n in &names {
+            h.update(n.as_encoded_bytes());
+            h.update(b"\0");
+        }
+        return (Some(h.digest()), None);
+    }
+    // (not a pipe or a device: one listed as a jar would block, or never end)
+    match crate::fsutil::read_bytes(path) {
+        Ok(bytes) => (Some(xxhash_rust::xxh3::xxh3_64(&bytes)), Some(bytes)),
+        Err(_) => (None, None),
+    }
+}
+
+impl FileStamp {
+    /// Time and size, then, if `always` or the time is recent, the content.
+    fn take(path: &Path, always: bool) -> (Option<FileStamp>, Option<Vec<u8>>) {
+        let clock = SystemTime::now();
+        let Ok(meta) = std::fs::metadata(path) else { return (None, None) };
+        let Ok(mtime) = meta.modified() else { return (None, None) };
+        let seen = Instant::now();
+        let racy = recent(mtime, clock);
+        let (hash, bytes) = if always || racy { content_of(path, meta.is_dir()) } else { (None, None) };
+        (Some(FileStamp { mtime, size: meta.len(), hash, seen, racy: racy && hash.is_some(), unread: false }), bytes)
+    }
+
+    /// The stamp of a source file and its text (if it is UTF-8), the stamp
+    /// first. No stamp if the file is gone.
+    pub fn read(path: &Path) -> (Option<FileStamp>, Option<String>) {
+        let (stamp, bytes) = Self::take(path, true);
+        let text = bytes.and_then(|b| String::from_utf8(b).ok());
+        (stamp.map(|s| FileStamp { unread: text.is_none(), ..s }), text)
+    }
+
+    /// The stamp of a file or directory, with a hash of its content when its
+    /// time is recent or `with_hash`. (Not of every jar on a classpath.)
+    pub fn of(path: &Path, with_hash: bool) -> Option<FileStamp> {
+        Self::take(path, with_hash).0
+    }
+
+    /// The same time and size, and the same content where both have a hash.
+    /// (A stamp without one was taken of a time that was already old: no
+    /// write since can have kept it.)
+    pub fn same(&self, other: &FileStamp) -> bool {
+        (self.mtime, self.size) == (other.mtime, other.size) && (self.hash.is_none() || other.hash.is_none() || self.hash == other.hash)
+    }
+
+    /// This stamp, taken again of a file stamped `old` before: a time already
+    /// seen then has been seen since then, and its margin counts from there.
+    pub fn after(mut self, old: Option<&FileStamp>) -> FileStamp {
+        if let Some(old) = old.filter(|o| o.mtime == self.mtime) {
+            self.seen = self.seen.min(old.seen);
+            self.racy &= self.seen.elapsed() < MARGIN;
+        }
+        self
+    }
+
+    /// Whether the file may differ from what this stamp was taken of
+    /// (`clock`: the time before this look). A racy stamp whose content is
+    /// found unchanged stays, and stops being racy once its margin is over.
+    pub fn changed(&mut self, path: &Path, clock: SystemTime) -> bool {
+        if self.unread {
+            return true;
+        }
+        let Ok(meta) = std::fs::metadata(path) else { return true };
+        let Ok(mtime) = meta.modified() else { return true };
+        if mtime != self.mtime || meta.len() != self.size {
+            return true;
+        }
+        if !self.racy {
+            return false;
+        }
+        if content_of(path, meta.is_dir()).0 != self.hash {
+            return true;
+        }
+        self.racy = recent(mtime, clock) && self.seen.elapsed() < MARGIN;
+        false
+    }
+}
+
 impl Project {
     pub fn load(root: &Path) -> anyhow::Result<Project> {
+        // before grounds.toml is read: it is one of the files that may be
+        // written while the load runs
+        let began = std::time::SystemTime::now();
         let config = Config::load(root)?;
-        Self::load_with(root, config)
+        Self::load_from(root, config, began)
     }
 
     pub fn load_with(root: &Path, config: Config) -> anyhow::Result<Project> {
+        Self::load_from(root, config, std::time::SystemTime::now())
+    }
+
+    fn load_from(root: &Path, config: Config, load_began: std::time::SystemTime) -> anyhow::Result<Project> {
         let mut stats = LoadStats::default();
         let t = Instant::now();
         let source_sets = SourceSets::load(root);
@@ -236,20 +376,34 @@ impl Project {
         let t = Instant::now();
         let lombok = LombokConfigs::discover(&workspace.root);
         let cache = StubCache::load(&workspace.root);
-        let results: Vec<(PathBuf, u64, Arc<FileStub>, bool)> = workspace
+        // (with the stamp of each file, taken before it is read)
+        let read: Vec<(PathBuf, Option<FileStamp>, Option<(u64, Arc<FileStub>, bool)>)> = workspace
             .files
             .par_iter()
-            .filter_map(|f| {
-                let text = std::fs::read_to_string(&f.path).ok()?;
-                let h = content_hash(&text) ^ lombok.key_for(&f.path);
-                let key = f.path.to_string_lossy();
-                if let Some(s) = cache.get(&key, h) {
-                    return Some((f.path.clone(), h, s, true));
-                }
-                let pf = ParsedFile::parse(text);
-                Some((f.path.clone(), h, Arc::new(extract_with(&pf, &lombok.for_file(&f.path))), false))
+            .map(|f| {
+                let (stamp, text) = FileStamp::read(&f.path);
+                let stub = text.map(|text| {
+                    let h = stamp.and_then(|s| s.hash).unwrap_or_else(|| content_hash(&text)) ^ lombok.key_for(&f.path);
+                    let key = f.path.to_string_lossy();
+                    if let Some(s) = cache.get(&key, h) {
+                        return (h, s, true);
+                    }
+                    let pf = ParsedFile::parse(text);
+                    (h, Arc::new(extract_with(&pf, &lombok.for_file(&f.path))), false)
+                });
+                (f.path.clone(), stamp, stub)
             })
             .collect();
+        let mut stamps = rustc_hash::FxHashMap::default();
+        let mut results: Vec<(PathBuf, u64, Arc<FileStub>, bool)> = Vec::with_capacity(read.len());
+        for (p, stamp, stub) in read {
+            if let Some(st) = stamp {
+                stamps.insert(p.clone(), st);
+            }
+            if let Some((h, s, cached)) = stub {
+                results.push((p, h, s, cached));
+            }
+        }
         stats.t_stubs = t.elapsed();
 
         let t = Instant::now();
@@ -280,7 +434,7 @@ impl Project {
         di.lombok_copies_qualifiers = lombok_copies_qualifiers(&workspace.root);
         di.bean_overriding_allowed = bean_overriding_allowed(&workspace);
         let classpath_warnings = crate::classpath::warnings(&workspace, &config, &index);
-        Ok(Project { config, workspace, index, stats, di, source_sets, lombok, registered, auto_registered, classpath_warnings, classpath_entries: entries })
+        Ok(Project { config, workspace, index, stats, di, source_sets, lombok, registered, auto_registered, classpath_warnings, classpath_entries: entries, stamps, load_began })
     }
 
     pub fn source_kind(&self, path: &Path) -> SourceKind {
@@ -295,7 +449,7 @@ impl Project {
         }
         let key = path_key(path);
         let old = self.index.file(&key).map(|s| s.signature_hash);
-        match std::fs::read_to_string(path) {
+        match crate::fsutil::read_text(path) {
             Ok(text) => {
                 let pf = ParsedFile::parse(text);
                 let stub = Arc::new(self.extract(path, &pf));
@@ -339,7 +493,7 @@ fn bean_overriding_allowed(ws: &Workspace) -> bool {
             let name = e.file_name().to_string_lossy().to_string();
             let config = name.starts_with("application") && (name.ends_with(".properties") || name.ends_with(".yml") || name.ends_with(".yaml"));
             config
-                && std::fs::read_to_string(e.path()).is_ok_and(|t| {
+                && crate::fsutil::read_text(e.path()).is_ok_and(|t| {
                     t.lines().any(|l| {
                         let l = l.trim().to_ascii_lowercase();
                         // `spring.main.allow-bean-definition-overriding=true` or
@@ -356,7 +510,7 @@ fn lombok_copies_qualifiers(root: &Path) -> bool {
     let mut depth = 0;
     while let Some(d) = stack.pop() {
         let cfg = d.join("lombok.config");
-        if let Ok(t) = std::fs::read_to_string(&cfg) {
+        if let Ok(t) = crate::fsutil::read_text(&cfg) {
             if t.lines().any(|l| l.contains("copyableAnnotations") && (l.contains("Qualifier") || l.contains("Value"))) {
                 return true;
             }
