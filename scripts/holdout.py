@@ -21,7 +21,7 @@ being one.
             source context around each finding.
 
   python3 -I scripts/holdout.py [--dir ~/grounds-holdout] [--out target/holdout]
-      [--only a,b] [--grounds target/release/grounds] [--timeout 1800]
+      [--only a,b] [--after 'second set, 2026-11'] [--grounds target/release/grounds] [--timeout 1800]
   python3 -I scripts/holdout.py --sample 8 --seed 1 [--min-severity warning]
 
 Without --sample it runs; with --sample it only samples the last run.
@@ -43,15 +43,26 @@ SEVERITIES = {"info": 0, "warning": 1, "error": 2}
 CONTEXT = 12
 
 
-def projects(path, only):
+def projects(path, only, after=None):
+    """The projects of one set. Sets are separated by comment lines: without
+    `after` the first set (before any comment line), with it the projects
+    between the line '# <after>' and the next comment line."""
     out = []
+    inside = after is None
+    found = after is None
     with open(path) as fh:
         for line in fh:
-            if not line.strip() or line.startswith("#"):
+            if line.startswith("#"):
+                inside = after is not None and line[1:].strip() == after
+                found = found or inside
+                continue
+            if not inside or not line.strip():
                 continue
             name, url, commit = line.rstrip("\n").split("\t")[:3]
             if not only or name in only:
                 out.append((name, url, commit))
+    if not found:
+        raise SystemExit(f"{path}: no line '# {after}'")
     return out
 
 
@@ -107,7 +118,7 @@ def run(a):
     os.makedirs(a.dir, exist_ok=True)
     os.makedirs(a.out, exist_ok=True)
     summary = []
-    for name, url, commit in projects(a.projects, a.only):
+    for name, url, commit in projects(a.projects, a.only, a.after):
         d = os.path.join(a.dir, name)
         print(f"{name}: fetch {commit[:12]}", flush=True)
         fetch(d, url, commit)
@@ -167,7 +178,7 @@ def sample(a):
     sev = severities(a.grounds)
     take_all = set(r for r in a.all.split(",") if r)
     by_rule = {}
-    names = [p[0] for p in projects(a.projects, a.only)]
+    names = [p[0] for p in projects(a.projects, a.only, a.after)]
     for name in names:
         path = os.path.join(a.out, f"{name}.json")
         if not os.path.exists(path):
@@ -218,6 +229,8 @@ def main():
     ap.add_argument("--out", default=os.path.join(REPO, "target", "holdout"))
     ap.add_argument("--grounds", default=os.path.join(REPO, "target", "release", "grounds"))
     ap.add_argument("--only", type=lambda s: set(s.split(",")), default=None)
+    ap.add_argument("--after", default=None, metavar="COMMENT",
+                    help="the set after the line '# COMMENT' (e.g. 'second set, 2026-11'); default: the first set")
     ap.add_argument("--timeout", type=int, default=1800)
     ap.add_argument("--sample", type=int, default=None, help="up to N findings per rule")
     ap.add_argument("--seed", default="1")
