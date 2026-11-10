@@ -1796,10 +1796,8 @@ impl<'t> FileModel<'t> {
 
     fn select_constructor(&self, call: Node<'t>) -> Option<Rc<ResolvedCall>> {
         let class_ty = if call.kind() == "object_creation_expression" {
-            let t = call.field("type")?;
-            let raw = self.resolve_type_node(t);
             // anonymous class: constructor of the super class
-            raw
+            self.created_class(call)
         } else {
             let c = self.enclosing_class(call)?;
             match call.field("constructor").map(|k| k.kind()) {
@@ -2470,10 +2468,38 @@ impl<'t> FileModel<'t> {
         }
         let ms = self.methods_named(&recv_ty, name);
         let n = sam.params.len();
-        let pick = ms
+        let by_arity: Vec<&MethodRef> = ms
             .iter()
-            .find(|m| if is_type { (m.is_static() && m.method.params.len() == n) || (!m.is_static() && m.method.params.len() + 1 == n) } else { m.method.params.len() == n })
-            .or_else(|| ms.first());
+            .filter(|m| if is_type { (m.is_static() && m.method.params.len() == n) || (!m.is_static() && m.method.params.len() + 1 == n) } else { m.method.params.len() == n })
+            .collect();
+        // overloads of that arity: the ones whose parameters take the
+        // function type's (JLS 15.13.1); unknown unless they agree on one
+        let pick = match by_arity.as_slice() {
+            [] if ms.len() == 1 => ms.first(),
+            [] => None,
+            [one] => Some(*one),
+            several => {
+                let fits = |m: &MethodRef| -> Tri {
+                    // an unbound receiver takes the first parameter
+                    let skip = usize::from(is_type && !m.is_static());
+                    sam.params[skip..].iter().zip(&m.method.params).fold(Tri::Yes, |acc, (s, p)| {
+                        let st = s.ty.upper_bound();
+                        acc.and(if st.mentions_type_var() || p.ty.mentions_type_var() { Tri::Unknown } else { self.is_assignable(&st, &p.ty) })
+                    })
+                };
+                let verdicts: Vec<Tri> = several.iter().map(|m| fits(m)).collect();
+                let yes: Vec<&MethodRef> = several.iter().zip(&verdicts).filter(|(_, v)| v.is_yes()).map(|(m, _)| *m).collect();
+                let maybe = verdicts.iter().filter(|v| !v.is_no()).count();
+                match yes.as_slice() {
+                    [one] if maybe == 1 => Some(*one),
+                    _ => {
+                        let rest: Vec<&MethodRef> = several.iter().zip(&verdicts).filter(|(_, v)| !v.is_no()).map(|(m, _)| *m).collect();
+                        // all that may apply return the same type
+                        rest.first().filter(|f| rest.iter().all(|m| m.method.ret == f.method.ret)).copied()
+                    }
+                }
+            }
+        };
         match pick {
             Some(m) if !m.method.ret.mentions_type_var() => m.method.ret.clone(),
             Some(m) if is_type && !m.is_static() && n >= 1 => {
@@ -2496,6 +2522,28 @@ impl<'t> FileModel<'t> {
 
     /// Type of a `new` expression, inferring diamond type arguments from the
     /// target type.
+    /// The class an instance creation names. In a qualified one,
+    /// `outer.new Inner()`, the name is a member type of the qualifier's type
+    /// (JLS 15.9.1), whatever the name means in scope.
+    pub fn created_class(&self, n: Node<'t>) -> Ty {
+        let Some(tn) = n.field("type") else { return Ty::Unknown };
+        let qualifier = n.kids().into_iter().find(|k| k.end_byte() <= tn.start_byte() && !matches!(k.kind(), "type_arguments" | "annotation" | "marker_annotation"));
+        let Some(q) = qualifier else { return self.resolve_type_node(tn) };
+        let (simple, args) = match tn.kind() {
+            "type_identifier" => (tn, None),
+            "generic_type" => match (tn.named_child(0), tn.kid_of_kind("type_arguments")) {
+                (Some(s), ta) if s.kind() == "type_identifier" => (s, ta),
+                _ => return Ty::Unknown,
+            },
+            _ => return Ty::Unknown,
+        };
+        let Some(outer) = self.type_of(q).class_name().map(str::to_string) else { return Ty::Unknown };
+        let simple = simple.text(self.src);
+        let Some(member) = self.index.member_type(&outer, simple).or_else(|| self.class(&format!("{outer}${simple}")).map(|c| c.name.clone())) else { return Ty::Unknown };
+        let args = args.map(|ta| ta.kids().into_iter().map(|a| self.resolve_type_node(a)).collect()).unwrap_or_default();
+        Ty::Class { name: member, args }
+    }
+
     pub fn creation_type(&self, n: Node<'t>) -> Ty {
         if n.kind() != "object_creation_expression" {
             return Ty::Unknown;
@@ -2507,7 +2555,7 @@ impl<'t> FileModel<'t> {
             }
         }
         let Some(tn) = n.field("type") else { return Ty::Unknown };
-        let t = self.resolve_type_node(tn);
+        let t = self.created_class(n);
         let is_diamond = tn.kind() == "generic_type" && tn.kid_of_kind("type_arguments").is_some_and(|ta| ta.kids().is_empty());
         if !is_diamond {
             return t;

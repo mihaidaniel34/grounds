@@ -1294,3 +1294,11 @@ fn pattern_variables_are_scoped_by_their_condition() {
         }";
     assert_eq!(types_of(src), vec!["U", "U", "java.lang.String", "java.lang.String", "U"]);
 }
+
+#[test]
+fn qualified_creation_names_a_member_of_the_qualifier_type() {
+    let src = "
+        class Engine { class Builder { Builder(int x) { } } }
+        class T { static class Builder { } Object f(Engine e) { return /*T*/ e.new Builder(1); } Object g() { return /*T*/ new Builder(); } }";
+    assert_eq!(types_of(src), vec!["Engine.Builder", "T.Builder"]);
+}

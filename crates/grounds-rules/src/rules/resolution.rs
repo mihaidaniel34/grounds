@@ -611,7 +611,8 @@ impl Rule for UnresolvedConstructor {
             return;
         }
         let Some(t) = n.field("type") else { return };
-        let ty = cx.fm.resolve_type_node(t);
+        // `outer.new Inner()` names a member type of the qualifier's type
+        let ty = cx.fm.created_class(n);
         let Some(tn) = ty.class_name() else { return };
         let Some(cls) = closed_class(cx, tn) else { return };
         if cls.is_interface() || cls.is_enum() {

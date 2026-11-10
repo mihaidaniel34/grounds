@@ -289,7 +289,7 @@ impl<'t> FileModel<'t> {
         // the supertypes, resolved where the class header is (outside its body)
         let supers: Vec<Ty> = if raw.flags.has(Flags::ANON) {
             match self.parent_of(*node) {
-                Some(oce) if oce.kind() == "object_creation_expression" => oce.field("type").map(|t| self.resolve_type_node(t)).into_iter().collect(),
+                Some(oce) if oce.kind() == "object_creation_expression" => vec![self.created_class(oce)],
                 Some(ec) if ec.kind() == "enum_constant" => self.enclosing_class_name(ec).map(|e| Ty::class(&e)).into_iter().collect(),
                 _ => vec![Ty::Unknown],
             }
@@ -648,7 +648,7 @@ impl<'t> ClassLookup for FileModel<'t> {
                 if let Some(oce) = self.parent_of(*node) {
                     if oce.kind() == "object_creation_expression" {
                         if let Some(t) = oce.field("type") {
-                            let mut st = self.resolve_type_node(t);
+                            let mut st = self.created_class(oce);
                             // `new TypeReference<>() {}`: inferred arguments, not a raw type
                             let diamond = t.kind() == "generic_type" && t.kid_of_kind("type_arguments").is_some_and(|ta| ta.kids().is_empty());
                             if let (true, Ty::Class { name, args }) = (diamond, &mut st) {
