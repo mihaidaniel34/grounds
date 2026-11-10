@@ -128,3 +128,21 @@ fn a_default_package_class_is_seen_only_from_its_own_directory() {
     );
     assert_eq!(findings(&dir), vec!["examples/Interpreter/ASTEnd.java:1 unimplemented-abstract-method".to_string(), "examples/Interpreter/ASTStart.java:3 unresolved-method".to_string()]);
 }
+
+#[test]
+fn a_class_of_a_variant_source_set_is_seen_only_from_that_set() {
+    let dir = project(
+        "variant-set",
+        &[
+            // amaze-file-manager: the F-Droid flavor's stand-in for a proprietary SDK
+            ("app/src/fdroid/java/com/cloud/services/Dropbox.java", "package com.cloud.services;\n\npublic class Dropbox {\n    public Dropbox(Object ctx, String a, String b, String c, String d) { }\n}\n"),
+            ("app/src/play/java/app/Loader.java", "package app;\n\nimport com.cloud.services.Dropbox;\n\nclass Loader {\n    Object load(Object ctx) { return new Dropbox(ctx, \"key\", \"secret\"); }\n}\n"),
+            // jmonkeyengine: stubs that let a library build without AndroidX
+            ("lib/src/androidx-stubs/java/androidx/fragment/app/Fragment.java", "package androidx.fragment.app;\n\npublic class Fragment {\n}\n"),
+            ("examples/src/main/java/demo/JmeFragment.java", "package demo;\n\nimport androidx.fragment.app.Fragment;\n\npublic class JmeFragment extends Fragment {\n    Object args() { return getArguments(); }\n}\n"),
+            // within the set it is the class
+            ("app/src/fdroid/java/app/FdroidLoader.java", "package app;\n\nimport com.cloud.services.Dropbox;\n\nclass FdroidLoader {\n    Object load(Object ctx) { return new Dropbox(ctx, \"key\", \"secret\"); }\n}\n"),
+        ],
+    );
+    assert_eq!(findings(&dir), vec!["app/src/fdroid/java/app/FdroidLoader.java:6 unresolved-constructor".to_string()]);
+}

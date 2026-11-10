@@ -265,6 +265,9 @@ pub struct Index {
     defs: FxHashMap<Name, u32>,
     /// The files declaring each duplicated class name (`defs` > 1).
     copies: FxHashMap<Name, Vec<Arc<str>>>,
+    /// Number of files in a variant source set (see `in_variant_set`)
+    /// declaring each class name.
+    variant_defs: FxHashMap<Name, u32>,
     pub generation: u64,
     // the generation resolve_ordered last filled the cache at
     resolved_at: AtomicU64,
@@ -348,7 +351,7 @@ impl Drop for Resolving<'_> {
 
 impl Index {
     pub fn new(classpath: Arc<Classpath>) -> Index {
-        Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), copies: FxHashMap::default(), generation: 0, resolved_at: AtomicU64::new(u64::MAX), plan: parking_lot::Mutex::new(None) }
+        Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), copies: FxHashMap::default(), variant_defs: FxHashMap::default(), generation: 0, resolved_at: AtomicU64::new(u64::MAX), plan: parking_lot::Mutex::new(None) }
     }
 
     pub fn set_file(&mut self, path: Arc<str>, stub: Arc<FileStub>) {
@@ -378,6 +381,9 @@ impl Index {
                 }
             }
             *self.defs.entry(c.name.clone()).or_insert(0) += 1;
+            if in_variant_set(&path) {
+                *self.variant_defs.entry(c.name.clone()).or_insert(0) += 1;
+            }
         }
         let mut p: &str = &stub.package;
         loop {
@@ -417,6 +423,14 @@ impl Index {
     fn remove_file_inner(&mut self, path: &str) {
         if let Some(old) = self.files.remove(path) {
             for c in &old.classes {
+                if in_variant_set(path) {
+                    if let Some(v) = self.variant_defs.get_mut(&c.name) {
+                        *v -= 1;
+                        if *v == 0 {
+                            self.variant_defs.remove(&c.name);
+                        }
+                    }
+                }
                 if let Some(d) = self.defs.get_mut(&c.name) {
                     *d -= 1;
                     let left = *d;
@@ -930,7 +944,7 @@ impl Index {
             return None;
         }
         let dotted = segs.join(".");
-        self.binary_name_for_dotted(&dotted)
+        self.binary_name_for_dotted(&dotted).filter(|n| self.variant_visible(n, scope))
     }
 
     /// `java.util.Map.Entry` -> `java.util.Map$Entry`
@@ -1093,6 +1107,37 @@ impl Index {
     }
 
     pub fn resolve_simple_type(&self, simple: &str, scope: &Scope) -> Option<Name> {
+        self.resolve_simple_type_anywhere(simple, scope).filter(|n| self.variant_visible(n, scope))
+    }
+
+    /// Whether code in `scope` sees the class `name`. A class declared only
+    /// in variant source sets (see `in_variant_set`: an Android flavor, a set
+    /// of stubs for a library some builds lack) is seen only from those sets:
+    /// elsewhere the build may compile against something else under that name.
+    fn variant_visible(&self, name: &str, scope: &Scope) -> bool {
+        if self.variant_defs.is_empty() {
+            return true;
+        }
+        let top = |n: &str| -> String { n.rfind('.').map_or_else(|| n.split('$').next().unwrap_or(n).to_string(), |i| n[i..].find('$').map_or(n.to_string(), |j| n[..i + j].to_string())) };
+        let name = top(name);
+        let Some(&variants) = self.variant_defs.get(name.as_str()) else { return true };
+        let files = |n: &str| -> Vec<&Arc<str>> {
+            match self.copies.get(n) {
+                Some(files) => files.iter().collect(),
+                None => self.source_file_of(n).into_iter().collect(),
+            }
+        };
+        let there = files(&name);
+        // a copy in main or test code: the ordinary rules apply
+        if there.len() as u32 > variants {
+            return true;
+        }
+        let sets: Vec<(&str, &str)> = there.iter().filter_map(|f| source_root(f)).collect();
+        let here: Vec<&Arc<str>> = scope.enclosing.last().map(|e| files(&top(e))).unwrap_or_default();
+        !here.is_empty() && here.iter().all(|f| source_root(f).is_some_and(|r| sets.contains(&r)))
+    }
+
+    fn resolve_simple_type_anywhere(&self, simple: &str, scope: &Scope) -> Option<Name> {
         for (s, b) in &scope.local_types {
             if &**s == simple {
                 return Some(b.clone());
@@ -1260,6 +1305,13 @@ pub fn module_dir(path: &str) -> &str {
         Some(&i) => &path[..i],
         None => "",
     }
+}
+
+/// A file in a source set that is neither main code nor tests
+/// (`app/src/fdroid/java`, `src/androidx-stubs/java`): an Android flavor or
+/// a set that some builds use instead of a library, or not at all.
+pub fn in_variant_set(path: &str) -> bool {
+    source_root(path).is_some_and(|(_, set)| set != "main" && !crate::sources::is_test_set(set))
 }
 
 /// The module directory and source set of a file under a source root of a
