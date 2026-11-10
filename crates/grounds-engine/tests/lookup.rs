@@ -211,3 +211,22 @@ fn emulations_of_jdk_classes_are_not_judged() {
     );
     assert_eq!(findings(&dir), vec!["src/main/java/app/Use.java:4 unresolved-method".to_string()]);
 }
+
+#[test]
+fn a_default_package_name_declared_in_another_directory_is_unknown() {
+    if !has_jdk() {
+        return;
+    }
+    // compiled together, the default-package Closeable wins over java.io.*;
+    // compiled apart, java.io.Closeable does: which one is not known
+    let dir = project(
+        "default-package-unknown",
+        &[
+            ("a/Closeable.java", "interface Closeable {}\n"),
+            ("b/Use.java", "import java.io.*;\n\nclass Use implements Closeable {\n}\n"),
+            // a name only one directory declares stays judged within it
+            ("a/Impl.java", "class Impl implements Runnable {\n}\n"),
+        ],
+    );
+    assert_eq!(findings(&dir), vec!["a/Impl.java:1 unimplemented-abstract-method".to_string()]);
+}

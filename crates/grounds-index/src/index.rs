@@ -1380,17 +1380,12 @@ impl Index {
         }
         // same package
         let same = if scope.package.is_empty() { simple.to_string() } else { format!("{}.{}", scope.package, simple) };
-        // the default package of another directory is not compiled with this
-        // file (test inputs compiled one directory at a time): its class is
-        // no candidate, and a name found nowhere else is unknown
-        let elsewhere = scope.package.is_empty() && self.classes.contains_key(simple) && {
-            match self.default_package_visible(simple, scope) {
-                Some(visible) => !visible,
-                None => return None,
-            }
-        };
-        if elsewhere {
-            return self.resolve_on_demand(simple, scope).or_else(|| Some(Arc::from(format!("java.lang.{simple}").as_str())).filter(|jl| self.class_exists(jl)));
+        // the default package of another directory: compiled with this file
+        // or not (test inputs are compiled one directory at a time), so its
+        // class and whatever an import or java.lang provides are both
+        // possible, and the name is unknown
+        if scope.package.is_empty() && self.classes.contains_key(simple) && self.default_package_visible(simple, scope) != Some(true) {
+            return None;
         }
         if self.class_exists(&same) {
             // a same-package class from another module (a test fixture in a
