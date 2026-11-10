@@ -138,8 +138,12 @@ pub enum Resolution {
 /// nobody a member: what they hold is unknown.
 #[derive(Clone, Debug, Default)]
 pub struct AppContext {
-    /// The class the context is started from (registered before scanning).
+    /// The first of `roots`.
     pub root: Name,
+    /// The classes the context is started from (registered before scanning).
+    pub roots: Vec<Name>,
+    /// Classes registered explicitly: the roots and what members `@Import`.
+    pub registered: rustc_hash::FxHashSet<Name>,
     /// Main-source classes certainly registered in it.
     pub members: rustc_hash::FxHashSet<Name>,
     /// Test-source components of the root's module its scans pick up when
@@ -449,6 +453,16 @@ fn scan_packages(c: &ClassInfo, a: &AnnotationInfo) -> Vec<String> {
     if explicit.is_empty() && classes.is_empty() { vec![c.package().to_string()] } else { explicit.into_iter().chain(classes).collect() }
 }
 
+/// A source file's text from disk (index paths are file paths); a file too
+/// large to be a launcher is not read.
+fn read_source(path: &str) -> Option<String> {
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > 2_000_000 {
+        return None;
+    }
+    std::fs::read(path).ok().map(|b| String::from_utf8_lossy(&b).into_owned())
+}
+
 /// Annotations known not to register what they annotate as a bean, by
 /// package (every annotation in it) or by name. Stereotypes and bean
 /// annotations are checked before this list, so a package listed here
@@ -511,6 +525,8 @@ fn first_string(a: &AnnotationInfo, keys: &[&str]) -> Option<String> {
 
 struct Builder<'a> {
     index: &'a Index,
+    /// the text of a source file, for the files that start a context
+    read: &'a dyn Fn(&str) -> Option<String>,
     /// source classes whose unresolved annotations the file's imports
     /// qualify (see `qualified_class`)
     qualified: FxHashMap<Name, Arc<ClassInfo>>,
@@ -1725,31 +1741,33 @@ impl<'a> Builder<'a> {
         self.unseen_registrations(&names, &imported_anywhere);
     }
 
-    /// The classes Spring application contexts are started from, in main
-    /// sources: a `@SpringBootApplication`, `@SpringBootConfiguration` or
-    /// `@ComponentScan` class with a `main` method, and the configuration
-    /// classes named in a file whose `main` starts a context from classes
-    /// (`SpringApplication.run(App.class)`, `new
-    /// AnnotationConfigApplicationContext(Config.class)`) or in a servlet
-    /// initializer (`sources(App.class)`, `getRootConfigClasses()`). An
-    /// application class nothing starts (a sample, a class only tests
-    /// start) is no root, nor is a context read from XML.
-    fn context_roots(&mut self, names: &[Name]) -> Vec<Name> {
-        const STARTERS: &[&str] = &[
-            "SpringApplication", "SpringApplicationBuilder", "AnnotationConfigApplicationContext", "AnnotationConfigWebApplicationContext",
-            "AnnotationConfigServletWebServerApplicationContext", "AnnotationConfigReactiveWebServerApplicationContext", "GenericApplicationContext",
-        ];
+    /// The groups of classes Spring application contexts are started from,
+    /// in main sources: the class literals handed to one startup call
+    /// (`SpringApplication.run(App.class)`, `new SpringApplication(A.class,
+    /// B.class)`, `new SpringApplicationBuilder(A.class).sources(B.class)`,
+    /// `new AnnotationConfigApplicationContext(Config.class)` or `register`
+    /// on the variable holding one), a servlet initializer's
+    /// `getRootConfigClasses()` / `sources(...)`, and a
+    /// `@SpringBootApplication`, `@SpringBootConfiguration` or
+    /// `@ComponentScan` class with a `main` method when its file starts
+    /// nothing the model can read. An application class nothing starts (a
+    /// sample, a class only tests start) is no root, nor is a context read
+    /// from XML.
+    fn context_roots(&mut self, names: &[Name]) -> Vec<Vec<Name>> {
         const INITIALIZERS: &[&str] = &["org.springframework.boot.web.servlet.support.SpringBootServletInitializer", "org.springframework.web.WebApplicationInitializer"];
         // (without the jars: the base classes Spring offers, by name)
         const INITIALIZER_BASES: &[&str] = &[
             "SpringBootServletInitializer", "WebApplicationInitializer", "AbstractAnnotationConfigDispatcherServletInitializer", "AbstractDispatcherServletInitializer",
             "AbstractContextLoaderInitializer",
         ];
-        let mut roots: Vec<Name> = Vec::new();
+        let mut groups: Vec<Vec<Name>> = Vec::new();
+        // files whose startup calls were read: (path, found any)
+        let mut read_files: FxHashMap<Arc<str>, bool> = FxHashMap::default();
+        let mut direct: Vec<(Name, Arc<str>)> = Vec::new();
         for n in names {
             let Some(c) = self.class(n) else { continue };
-            let Some(f) = c.source_file() else { continue };
-            if is_test_path(f) || is_framework_class(n) || c.is_interface() {
+            let Some(f) = c.source_file().map(Arc::<str>::from) else { continue };
+            if is_test_path(&f) || is_framework_class(n) || c.is_interface() {
                 continue;
             }
             let main = has_main(&c);
@@ -1757,38 +1775,133 @@ impl<'a> Builder<'a> {
                 a.is("org.springframework.boot.autoconfigure.SpringBootApplication") || a.is("org.springframework.boot.SpringBootConfiguration") || a.is("org.springframework.context.annotation.ComponentScan")
             });
             if main && app_annotation {
-                roots.push(n.clone());
+                direct.push((n.clone(), f.clone()));
             }
-            let Some(stub) = self.index.file(f).cloned() else { continue };
-            let mentions = |x: &str| stub.referenced_names.binary_search_by(|r| (**r).cmp(x)).is_ok();
-            let starts = main && STARTERS.iter().any(|s| mentions(s));
+            let Some(stub) = self.index.file(&f).cloned() else { continue };
+            // (any main: a launcher may get its builder elsewhere,
+            // `MainSupport.createApplicationBuilder().sources(A.class)`)
+            let starts = main;
             let initializer = INITIALIZERS.iter().any(|i| self.index.is_subclass(n, i).is_yes())
                 || self.index.raw_class(n).is_some_and(|(_, r)| r.superclass.iter().chain(&r.interfaces).any(|t| t.last_name().is_some_and(|l| INITIALIZER_BASES.contains(&l))));
             if !(starts || initializer) {
                 continue;
             }
             if initializer && self.configuration_like(&c) {
-                roots.push(n.clone());
+                groups.push(vec![n.clone()]);
             }
-            // the configuration classes the file names
-            let Some(raw) = stub.classes.first() else { continue };
-            let scope = self.index.scope_for_raw(&stub, raw);
-            for r in &stub.referenced_names {
-                let Some(q) = self.index.resolve_simple_type(r, &scope) else { continue };
-                if !self.index.is_source_class(&q) || self.index.source_file_of(&q).is_some_and(|f| is_test_path(f)) {
-                    continue;
+            if read_files.contains_key(&f) {
+                continue;
+            }
+            let found = match self.startup_groups(&f, &stub) {
+                Some(g) => {
+                    let any = !g.is_empty();
+                    groups.extend(g);
+                    any
                 }
-                // (a component declared in the starting file itself is the
-                // class it starts from: `new AnnotationConfigApplicationContext(Main.class)`)
-                let own_file = self.index.source_file_of(&q).is_some_and(|qf| **qf == *f);
-                if self.class(&q).is_some_and(|rc| !rc.is_interface() && (self.configuration_like(&rc) || (own_file && rc.annotations.iter().any(|a| self.stereotype(a, 0) == Some(Framework::Spring))))) {
-                    roots.push(q);
-                }
+                None => false,
+            };
+            read_files.insert(f, found);
+        }
+        // a main next to the application annotation, in a file that starts
+        // nothing the model can read (an empty main, a launcher it cannot see)
+        for (n, f) in direct {
+            if !read_files.get(&f).copied().unwrap_or(false) {
+                groups.push(vec![n]);
             }
         }
-        roots.sort();
-        roots.dedup();
-        roots
+        for g in &mut groups {
+            g.sort();
+            g.dedup();
+        }
+        groups.sort();
+        groups.dedup();
+        groups
+    }
+
+    /// The class literals the startup calls of a file hand to Spring, one
+    /// group per context (None: the file could not be read).
+    fn startup_groups(&self, path: &str, stub: &FileStub) -> Option<Vec<Vec<Name>>> {
+        use grounds_syntax::{NodeExt, ParsedFile};
+        const CREATED: &[&str] = &[
+            "SpringApplication", "SpringApplicationBuilder", "AnnotationConfigApplicationContext", "AnnotationConfigWebApplicationContext",
+            "AnnotationConfigServletWebServerApplicationContext", "AnnotationConfigReactiveWebServerApplicationContext", "GenericApplicationContext",
+        ];
+        let text = (self.read)(path)?;
+        let pf = ParsedFile::parse(text);
+        let src: &str = &pf.text;
+        let raw = stub.classes.first()?;
+        let scope = self.index.scope_for_raw(stub, raw);
+        let literal = |n: grounds_syntax::Node| -> Option<Name> {
+            let t = n.kids().into_iter().find(|k| k.is_named())?;
+            let written: String = t.text(src).split('<').next().unwrap_or("").chars().filter(|c| !c.is_whitespace()).collect();
+            let segs: Vec<&str> = written.split('.').collect();
+            let q = self.index.resolve_type_name(&segs, &scope)?;
+            (self.index.is_source_class(&q) && !self.index.source_file_of(&q).is_some_and(|f| is_test_path(f))).then_some(q)
+        };
+        // the class literals among a call's arguments
+        let args = |call: grounds_syntax::Node| -> Vec<Name> {
+            call.field("arguments").map(|a| a.descendants().filter(|d| d.kind() == "class_literal").filter_map(literal).collect()).unwrap_or_default()
+        };
+        let mut groups: Vec<Vec<Name>> = Vec::new();
+        let mut by_node: FxHashMap<usize, usize> = FxHashMap::default();
+        let mut by_var: FxHashMap<String, usize> = FxHashMap::default();
+        let root = pf.root();
+        // contexts created with `new`, and the variables holding them
+        for n in root.descendants().filter(|n| n.kind() == "object_creation_expression") {
+            let ty = n.field("type").map(|t| t.text(src).split('<').next().unwrap_or("").rsplit('.').next().unwrap_or("").trim().to_string()).unwrap_or_default();
+            if !CREATED.contains(&ty.as_str()) {
+                continue;
+            }
+            groups.push(args(n));
+            let g = groups.len() - 1;
+            by_node.insert(n.id(), g);
+            if let Some(name) = n.parent().filter(|p| p.kind() == "variable_declarator").and_then(|p| p.field("name")) {
+                by_var.insert(name.text(src).to_string(), g);
+            }
+            if let Some(left) = n.parent().filter(|p| p.kind() == "assignment_expression").and_then(|p| p.field("left")) {
+                by_var.insert(left.text(src).to_string(), g);
+            }
+        }
+        for n in root.descendants().filter(|n| n.kind() == "method_invocation") {
+            let name = n.field("name").map(|x| x.text(src)).unwrap_or("");
+            let object = n.field("object");
+            match name {
+                // SpringApplication.run(A.class, args)
+                "run" if object.is_some_and(|o| o.kind() != "object_creation_expression" && o.kind() != "method_invocation" && o.text(src).rsplit('.').next() == Some("SpringApplication")) => {
+                    groups.push(args(n));
+                }
+                // more sources for a context: on the creation chain or the variable holding it
+                "sources" | "register" => {
+                    let mut o = object;
+                    while let Some(x) = o.filter(|x| x.kind() == "method_invocation") {
+                        o = x.field("object");
+                    }
+                    let target = o.and_then(|o| by_node.get(&o.id()).copied().or_else(|| by_var.get(o.text(src)).copied()));
+                    match target {
+                        Some(g) => {
+                            let more = args(n);
+                            groups[g].extend(more);
+                        }
+                        // `application.sources(App.class)` in an initializer's
+                        // configure, a builder made elsewhere; `register` is
+                        // too common a name (Jersey, Guice) to be Spring's alone
+                        None if name == "sources" => groups.push(args(n)),
+                        None => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        // AbstractAnnotationConfigDispatcherServletInitializer: the classes a
+        // config method returns
+        for m in root.descendants().filter(|n| n.kind() == "method_declaration") {
+            let name = m.field("name").map(|x| x.text(src)).unwrap_or("");
+            if matches!(name, "getRootConfigClasses" | "getServletConfigClasses") {
+                groups.push(m.descendants().filter(|d| d.kind() == "class_literal").filter_map(literal).collect());
+            }
+        }
+        groups.retain(|g| !g.is_empty());
+        Some(groups)
     }
 
     /// Is the class a configuration a context is started from: a
@@ -1810,7 +1923,11 @@ impl<'a> Builder<'a> {
             return Vec::new();
         }
         let mut scans: Vec<AnnotationInfo> = Vec::new();
-        for a in &c.annotations {
+        // (and the scans project annotations carry: `@EnableServices`
+        // meta-annotated `@ComponentScan("services")`)
+        let mut stack: Vec<(AnnotationInfo, u32)> = c.annotations.iter().map(|a| (a.clone(), 0)).collect();
+        let mut seen: rustc_hash::FxHashSet<Name> = rustc_hash::FxHashSet::default();
+        while let Some((a, depth)) = stack.pop() {
             if a.is("org.springframework.boot.autoconfigure.SpringBootApplication") || a.is("org.springframework.context.annotation.ComponentScan") {
                 scans.push(a.clone());
             } else if a.simple_name() == "ComponentScans" {
@@ -1818,6 +1935,13 @@ impl<'a> Builder<'a> {
                     if let AnnotationValue::Annotation(x) = v {
                         scans.push((**x).clone());
                     }
+                }
+            } else if depth < 4 && a.resolved && !a.name.starts_with("java.") && seen.insert(a.name.clone()) {
+                if let Some(ac) = self.class(&a.name).filter(|ac| ac.is_source() && ac.kind == ClassKind::Annotation) {
+                    if self.conditional_meta(&ac.annotations) {
+                        continue;
+                    }
+                    stack.extend(ac.annotations.iter().filter(|m| m.name != a.name).map(|m| (m.clone(), depth + 1)));
                 }
             }
         }
@@ -1833,8 +1957,8 @@ impl<'a> Builder<'a> {
     }
 
     fn app_contexts(&mut self, names: &[Name]) -> Vec<AppContext> {
-        let roots = self.context_roots(names);
-        if roots.is_empty() {
+        let groups = self.context_roots(names);
+        if groups.is_empty() {
             return Vec::new();
         }
         // module dependencies the sources show: a main-source file naming,
@@ -1882,9 +2006,11 @@ impl<'a> Builder<'a> {
             }
         }
         let mut out = Vec::new();
-        for root in roots {
-            let Some(rf) = self.index.source_file_of(&root).cloned() else { continue };
-            let root_module = module_of(&rf).to_string();
+        for roots in groups {
+            let root_modules: Vec<String> = roots.iter().filter_map(|r| self.index.source_file_of(r)).map(|f| module_of(f).to_string()).collect();
+            if root_modules.is_empty() {
+                continue;
+            }
             let mut visible: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
             // a module and the modules it depends on are on the classpath
             let reach = |visible: &mut rustc_hash::FxHashSet<String>, from: &str| {
@@ -1895,11 +2021,15 @@ impl<'a> Builder<'a> {
                     }
                 }
             };
-            reach(&mut visible, &root_module);
-            let mut ctx = AppContext { root: root.clone(), ..Default::default() };
-            ctx.members.insert(root.clone());
+            for m in &root_modules {
+                reach(&mut visible, m);
+            }
+            let mut ctx = AppContext { root: roots[0].clone(), ..Default::default() };
+            ctx.roots = roots.clone();
+            ctx.members.extend(roots.iter().cloned());
+            ctx.registered.extend(roots.iter().cloned());
             let mut scans: Vec<(String, bool)> = Vec::new();
-            let mut work = vec![root.clone()];
+            let mut work = roots.clone();
             loop {
                 while let Some(n) = work.pop() {
                     let Some(c) = self.class(&n) else { continue };
@@ -1910,6 +2040,7 @@ impl<'a> Builder<'a> {
                             if let AnnotationValue::Class(t) = v {
                                 if let Some(t) = t.class_name().filter(|t| self.index.is_source_class(t)) {
                                     let t: Name = Arc::from(t);
+                                    ctx.registered.insert(t.clone());
                                     if ctx.members.insert(t.clone()) {
                                         // (an imported class's module is on the classpath too)
                                         if let Some(f) = self.index.source_file_of(&t).filter(|f| !is_test_path(f)) {
@@ -1928,7 +2059,7 @@ impl<'a> Builder<'a> {
                 let mut grew = false;
                 for module in &visible {
                     for (k, pkg, test, auto) in components.get(module).map(|v| v.as_slice()).unwrap_or(&[]) {
-                        if (*test && *module != root_module) || ctx.members.contains(k) || ctx.test_members.contains(k) {
+                        if (*test && !root_modules.contains(module)) || ctx.members.contains(k) || ctx.test_members.contains(k) {
                             continue;
                         }
                         if !scans.iter().any(|(r, boot)| !(*boot && *auto) && package_covered(r, pkg)) {
@@ -2021,7 +2152,14 @@ impl DiModel {
     /// META-INF/spring/*.imports (auto-configurations and similar);
     /// `auto_registered`: the auto-configurations among them.
     pub fn build_with(index: &Index, registered: &[String], auto_registered: &[String]) -> DiModel {
+        Self::build_with_sources(index, registered, auto_registered, &read_source)
+    }
+
+    /// `build_with`, reading the text of the files that start a context
+    /// through `read` (by index path) instead of from disk.
+    pub fn build_with_sources(index: &Index, registered: &[String], auto_registered: &[String], read: &dyn Fn(&str) -> Option<String>) -> DiModel {
         let mut b = Builder {
+            read,
             index,
             qualified: FxHashMap::default(),
             model: DiModel::default(),
@@ -2457,22 +2595,28 @@ impl DiModel {
             // the root is registered before the scan, and the scanner skips
             // a candidate whose name an explicitly registered bean already
             // has (ClassPathBeanDefinitionScanner.isCompatible): no clash
-            let root = self.component_classes.get(&ctx.root).copied().filter(|&r| {
+            let roots: Vec<usize> = ctx.roots.iter().filter_map(|r| self.component_classes.get(r).copied()).filter(|&r| {
                 let b = &self.beans[r];
                 b.source == BeanSource::Component && b.framework == Framework::Spring && !b.conditional && !b.is_test
-            });
-            if let Some(r) = root {
-                seen.insert(&self.beans[r].name, r);
+            }).collect();
+            for &r in &roots {
+                match seen.get(self.beans[r].name.as_str()) {
+                    Some(&j) => out.push((j.min(r), j.max(r))),
+                    None => {
+                        seen.insert(&self.beans[r].name, r);
+                    }
+                }
             }
             let mut held: Vec<usize> = ctx.members.iter().filter_map(|c| by_class.get(&**c)).flatten().copied().collect();
             held.sort_unstable();
             for i in held {
                 let b = &self.beans[i];
-                if Some(i) == root {
+                if roots.contains(&i) {
                     continue;
                 }
                 match seen.get(b.name.as_str()) {
-                    Some(&j) if Some(j) == root && b.source == BeanSource::Component => {}
+                    // (only a namesake found by scanning: an imported class is registered explicitly too)
+                    Some(&j) if roots.contains(&j) && b.source == BeanSource::Component && !ctx.registered.contains(&b.declaring_class) => {}
                     Some(&j) => out.push((j.min(i), j.max(i))),
                     None => {
                         seen.insert(&b.name, i);
@@ -2510,7 +2654,8 @@ mod tests {
             let pf = ParsedFile::parse(*s);
             idx.set_file(Arc::from(*p), Arc::new(extract(&pf)));
         }
-        let m = DiModel::build_with(&idx, registered, auto_registered);
+        let texts: FxHashMap<String, String> = files.iter().map(|(p, s)| (p.to_string(), s.to_string())).collect();
+        let m = DiModel::build_with_sources(&idx, registered, auto_registered, &|p| texts.get(p).cloned());
         (idx, m)
     }
 
@@ -3867,5 +4012,81 @@ mod tests {
         let edge = |from: &str, to: &str| m.ctor_edges.iter().any(|(a, b, _)| &**a == from && &**b == to);
         assert!(edge("app.DefaultPort", "app.A"));
         assert!(!edge("app.A", "app.DefaultPort"), "{:?}", m.ctor_edges);
+    }
+
+    #[test]
+    fn a_context_is_what_its_startup_call_is_handed() {
+        let configs = [
+            ("src/main/java/app/A.java", "package app; import org.springframework.context.annotation.*; @Configuration public class A { @Bean Object job() { return null; } }"),
+            ("src/main/java/app/B.java", "package app; import org.springframework.context.annotation.*; @Configuration public class B { @Bean Object job() { return null; } }"),
+            ("src/main/java/app/Combined.java", "package app; @org.springframework.context.annotation.Configuration @org.springframework.context.annotation.Import({A.class, B.class}) public class Combined {}"),
+        ];
+        let with = |main: &'static str| {
+            let mut v = vec![("src/main/java/launch/Main.java", main)];
+            v.extend_from_slice(&configs);
+            model(&v)
+        };
+        // S1: a configuration the file merely names (a log line) is no root
+        let (_, m) = with("package launch; import app.*; import org.springframework.boot.SpringApplication;
+             public class Main { public static void main(String[] args) { SpringApplication.run(A.class, args); System.out.println(Combined.class.getName()); } }");
+        assert!(conflicts(&m).is_empty(), "{:?}", conflicts(&m));
+        // S3: all sources of one startup call form one context
+        let (_, m) = with("package launch; import app.*; import org.springframework.boot.SpringApplication;
+             public class Main { public static void main(String[] args) { new SpringApplication(A.class, B.class).run(args); } }");
+        assert_eq!(conflicts(&m), vec!["A.job B.job"]);
+        let (_, m) = with("package launch; import org.springframework.boot.builder.SpringApplicationBuilder;
+             public class Main { public static void main(String[] args) { new SpringApplicationBuilder(app.A.class).sources(app.B.class).run(args); } }");
+        assert_eq!(conflicts(&m), vec!["A.job B.job"]);
+        // S2: a class literal qualified in the call, not imported
+        let boot = [
+            ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication public class App {}"),
+            ("src/main/java/app/Uses.java", "package app; interface Missing {} @org.springframework.stereotype.Service class Uses { Uses(Missing m) {} }"),
+            ("src/main/java/launch/Main.java", "package launch; public class Main { public static void main(String[] args) { org.springframework.boot.SpringApplication.run(app.App.class, args); } }"),
+        ];
+        let (idx, m) = model(&boot);
+        assert_eq!(point_resolution(&idx, &m, "m"), Resolution::NotFound);
+        // a builder made elsewhere, in a file that names no Spring type
+        let (_, m) = with("package launch; import app.*;
+             public class Main { public static void main(String[] args) { Support.builder().sources(A.class, B.class).build(args).run(args); } }");
+        assert_eq!(conflicts(&m), vec!["A.job B.job"]);
+        // a context built step by step: register on the variable it is held in
+        let (_, m) = with("package launch; import app.*; import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+             public class Main { public static void main(String[] args) { var ctx = new AnnotationConfigApplicationContext(); ctx.register(A.class); ctx.register(B.class); ctx.refresh(); } }");
+        assert_eq!(conflicts(&m), vec!["A.job B.job"]);
+        // a servlet initializer's root configuration classes
+        let init = [
+            ("src/main/java/web/Init.java", "package web; public class Init extends org.springframework.web.servlet.support.AbstractAnnotationConfigDispatcherServletInitializer {
+                 protected Class<?>[] getRootConfigClasses() { return new Class<?>[] { app.A.class, app.B.class }; }
+                 protected Class<?>[] getServletConfigClasses() { return null; } }"),
+        ];
+        let mut v = vec![init[0]];
+        v.extend_from_slice(&configs);
+        let (_, m) = model(&v);
+        assert_eq!(conflicts(&m), vec!["A.job B.job"]);
+    }
+
+    #[test]
+    fn a_scan_carried_by_a_project_annotation_is_a_scan() {
+        // S4: @EnableServices carries @ComponentScan("services")
+        let files = [
+            ("src/main/java/app/EnableServices.java", "package app; @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME)
+             @org.springframework.context.annotation.ComponentScan(\"services\") public @interface EnableServices {}"),
+            ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication @EnableServices public class App { public static void main(String[] args) {} }"),
+            ("src/main/java/services/Svc.java", "package services; interface Missing {} @org.springframework.stereotype.Service class Svc { Svc(Missing m) {} }"),
+        ];
+        let (idx, m) = model(&files);
+        assert_eq!(point_resolution(&idx, &m, "m"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn only_a_scanned_namesake_of_the_root_is_skipped() {
+        // S5: an imported configuration named like the root clashes
+        let files = [
+            ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication @org.springframework.context.annotation.Import(other.Config.class)
+             public class App { public static void main(String[] args) {} }"),
+            ("src/main/java/other/Config.java", "package other; @org.springframework.context.annotation.Configuration(\"app\") public class Config {}"),
+        ];
+        let (_, m) = model(&files);
+        assert_eq!(conflicts(&m), vec!["App Config"]);
     }
 }
