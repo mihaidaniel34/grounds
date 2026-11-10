@@ -1226,3 +1226,22 @@ fn a_char_conditional_selects_the_char_overload() {
     );
     assert_eq!(c, vec!["B.separator(char)", "B.width(byte)"]);
 }
+
+#[test]
+fn member_types_of_anonymous_and_local_classes() {
+    // inherited member types shadow the enclosing class's (JLS 6.4.1, 8.5),
+    // and a local class keeps the member classes it declares
+    let src = "
+        abstract class Call { static class Listener { } }
+        class Resolver { static class Listener { } static class Part { } }
+        class T extends Resolver {
+            void f() {
+                new Call() { Listener l; Object g() { return /*T*/ l; } };
+                class Loc extends Call { class Part { } Listener l; Part p; Object g() { return /*T*/ l; } Object h() { return /*T*/ p; } }
+                class Sub extends Loc { Object k() { return /*T*/ new Part(); } }
+                Listener outer = null;
+                Object o = /*T*/ outer;
+            }
+        }";
+    assert_eq!(types_of(src), vec!["Call.Listener", "Call.Listener", "T.2Loc.Part", "T.2Loc.Part", "Resolver.Listener"]);
+}

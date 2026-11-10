@@ -315,6 +315,19 @@ fn simple_in(idx: &Index, class: &str, simple: &str) -> Option<String> {
 }
 
 #[test]
+fn a_private_member_type_of_a_superclass_is_not_inherited() {
+    // JLS 8.2, 8.5: `Value` in r.T is the imported one, not q.Base's private class
+    let idx = index_of(&[
+        ("q/Base.java", "package q; public class Base { private static class Value { } protected static class Kept { } }"),
+        ("lib/Value.java", "package lib; public class Value { }"),
+        ("r/T.java", "package r; import lib.Value; import q.Base; class T extends Base { }"),
+    ]);
+    assert_eq!(simple_in(&idx, "r.T", "Value").as_deref(), Some("lib.Value"));
+    assert_eq!(simple_in(&idx, "r.T", "Kept").as_deref(), Some("q.Base$Kept"));
+    assert_eq!(simple_in(&idx, "q.Base", "Value").as_deref(), Some("q.Base$Value"));
+}
+
+#[test]
 fn an_on_demand_import_imports_only_accessible_classes() {
     // JLS 7.5.2: a.Node is package-private, so b sees no `Node` from `a.*`
     let idx = index_of(&[
@@ -342,4 +355,34 @@ fn a_test_class_is_not_imported_into_main_sources_or_another_module() {
     assert_eq!(simple_in(&idx, "b.MainTest", "Node").as_deref(), Some("a.Node"));
     assert_eq!(simple_in(&idx, "c.OtherTest", "Node"), None);
     assert_eq!(simple_in(&idx, "b.Main", "Graph").as_deref(), Some("a.Graph"));
+}
+
+#[test]
+fn an_unresolved_supertype_may_declare_any_member_type() {
+    // lib.DataSource is not on the classpath: `Attribute` may be its member type
+    let idx = index_of(&[
+        ("p/Attribute.java", "package p; enum Attribute { NAME }"),
+        ("p/Ds.java", "package p; import lib.DataSource; import java.util.List; class Ds implements DataSource { static class Inner { } }"),
+        ("p/Plain.java", "package p; class Plain { }"),
+        ("p/Sub.java", "package p; class Sub extends Ds { }"),
+    ]);
+    assert_eq!(simple_in(&idx, "p.Ds", "Attribute"), None);
+    assert_eq!(simple_in(&idx, "p.Sub", "Attribute"), None, "through a project superclass too");
+    // what is known stays known: member types, single-type imports, java.lang
+    assert_eq!(simple_in(&idx, "p.Ds", "Inner").as_deref(), Some("p.Ds$Inner"));
+    assert_eq!(simple_in(&idx, "p.Ds", "List").as_deref(), Some("java.util.List"));
+    assert_eq!(simple_in(&idx, "p.Ds", "String").as_deref(), Some("java.lang.String"));
+    assert_eq!(simple_in(&idx, "p.Plain", "Attribute").as_deref(), Some("p.Attribute"));
+}
+
+#[test]
+fn an_inherited_member_type_comes_before_the_class_own_name() {
+    let idx = index_of(&[
+        ("P.java", "public class P { public static class Q extends P { public static class B { } } }"),
+        ("S.java", "public class S extends P { public static class Q extends P { public static class B extends Q.B { } } }"),
+    ]);
+    assert_eq!(simple_in(&idx, "S$Q", "Q").as_deref(), Some("P$Q"));
+    let b = idx.class("S$Q$B").unwrap();
+    assert_eq!(b.superclass.as_ref().unwrap().to_string(), "P.Q.B");
+    assert_eq!(simple_in(&idx, "S", "S").as_deref(), Some("S"));
 }

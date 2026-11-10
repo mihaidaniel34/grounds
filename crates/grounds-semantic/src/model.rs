@@ -67,6 +67,8 @@ pub struct FileModel<'t> {
     /// local types: (simple name, binary name, byte range of the declaring block)
     local_simple: Vec<(Name, Name, (usize, usize))>,
     local_lowered: RefCell<FxHashMap<Name, Option<Arc<ClassInfo>>>>,
+    /// see `local_class_scope`; None while it is being computed
+    local_scopes: RefCell<FxHashMap<Name, Option<LocalClassScope>>>,
     pub(crate) types: RefCell<FxHashMap<usize, Ty>>,
     pub(crate) calls: RefCell<FxHashMap<usize, Option<Rc<ResolvedCall>>>>,
     /// method invocation types without target typing (see `arg_type`)
@@ -110,6 +112,7 @@ impl<'t> FileModel<'t> {
             local_raw: FxHashMap::default(),
             local_simple: Vec::new(),
             local_lowered: RefCell::new(FxHashMap::default()),
+            local_scopes: RefCell::new(FxHashMap::default()),
             types: RefCell::new(FxHashMap::default()),
             calls: RefCell::new(FxHashMap::default()),
             standalone: RefCell::new(FxHashMap::default()),
@@ -150,12 +153,22 @@ impl<'t> FileModel<'t> {
                     let nm: Name = Arc::from(format!("{}${}{}", o, c, simple).as_str());
                     let lombok = m.stub.lombok.clone().unwrap_or_default();
                     let raws = stubs::extract_class_node(n, src, pkg, Some(&o), &m.stub.imports, &lombok);
-                    // extract_class_node names it Outer$Simple; rename the root
-                    for mut r in raws {
-                        if r.decl_range == (n.start_byte() as u32, n.end_byte() as u32) {
-                            r.name = nm.clone();
-                            m.local_raw.insert(nm.clone(), (r, n));
+                    // extract_class_node names it Outer$Simple: rename it, and
+                    // the classes nested in it, under its binary name
+                    let old = format!("{o}${simple}");
+                    let rename = |x: &Name| -> Name {
+                        match x.strip_prefix(old.as_str()) {
+                            Some(rest) if rest.is_empty() || rest.starts_with('$') => Arc::from(format!("{nm}{rest}").as_str()),
+                            _ => x.clone(),
                         }
+                    };
+                    for mut r in raws {
+                        r.name = rename(&r.name);
+                        r.outer = r.outer.as_ref().map(rename);
+                        r.inners = r.inners.iter().map(rename).collect();
+                        let node = if r.name == nm { Some(n) } else { declaration_at(n, r.decl_range) };
+                        // a class Lombok generates has no node: it sits in the local class
+                        m.local_raw.insert(r.name.clone(), (r, node.unwrap_or(n)));
                     }
                     // visible in the block that declares it
                     let scope = n.parent().map(|p| (p.start_byte(), p.end_byte())).unwrap_or((0, usize::MAX));
@@ -182,10 +195,15 @@ impl<'t> FileModel<'t> {
                 *c += 1;
                 let simple = format!("{c}");
                 let nm: Name = Arc::from(format!("{o}${simple}").as_str());
-                let mut raws = stubs::extract_anonymous(n, src, pkg, &o, &simple);
-                if let Some(mut r) = raws.drain(..).next() {
-                    r.flags.set(Flags::ANON);
-                    m.local_raw.insert(nm.clone(), (r, n));
+                let raws = stubs::extract_anonymous(n, src, pkg, &o, &simple);
+                for mut r in raws {
+                    if r.name == nm {
+                        r.flags.set(Flags::ANON);
+                        m.local_raw.insert(nm.clone(), (r, n));
+                    } else if let Some(d) = declaration_at(n, r.decl_range) {
+                        // a member class of the anonymous class
+                        m.local_raw.insert(r.name.clone(), (r, d));
+                    }
                 }
                 m.class_names.insert(n.id(), nm.clone());
                 for k in n.kids() {
@@ -202,6 +220,55 @@ impl<'t> FileModel<'t> {
         for k in root.kids() {
             visit(self, k, None, false, &pkg, src, &mut anon_counter);
         }
+    }
+
+    /// What the local or anonymous class `name` brings into scope in its body:
+    /// its member types and the supertypes it inherits member types from.
+    /// None for a class the index holds, or while the class's own header is
+    /// being resolved.
+    fn local_class_scope(&self, name: &Name) -> Option<LocalClassScope> {
+        let (raw, node) = self.local_raw.get(name)?;
+        if let Some(s) = self.local_scopes.borrow().get(name) {
+            return s.clone();
+        }
+        self.local_scopes.borrow_mut().insert(name.clone(), None);
+        let mut lc = LocalClassScope { name: name.clone(), ..Default::default() };
+        let prefix = format!("{name}$");
+        for k in self.local_raw.keys() {
+            if let Some(simple) = k.strip_prefix(prefix.as_str()).filter(|s| !s.contains('$')) {
+                lc.members.push((Arc::from(simple), k.clone()));
+            }
+        }
+        lc.members.sort();
+        // the supertypes, resolved where the class header is (outside its body)
+        let supers: Vec<Ty> = if raw.flags.has(Flags::ANON) {
+            match self.parent_of(*node) {
+                Some(oce) if oce.kind() == "object_creation_expression" => oce.field("type").map(|t| self.resolve_type_node(t)).into_iter().collect(),
+                Some(ec) if ec.kind() == "enum_constant" => self.enclosing_class_name(ec).map(|e| Ty::class(&e)).into_iter().collect(),
+                _ => vec![Ty::Unknown],
+            }
+        } else {
+            let mut scope = self.parent_of(*node).map(|p| self.scope_at(p)).unwrap_or_default();
+            scope.type_vars.extend(raw.type_params.iter().map(|t| t.name.clone()));
+            raw.superclass.iter().chain(raw.interfaces.iter()).map(|t| self.index.resolve_type(t, &scope)).collect()
+        };
+        for t in supers {
+            match t {
+                Ty::Class { name: s, .. } => match self.local_class_scope(&s) {
+                    // a local supertype: what it declares and inherits
+                    Some(sl) => {
+                        lc.members.extend(sl.members.iter().filter(|(m, _)| !lc.members.iter().any(|(x, _)| x == m)).cloned().collect::<Vec<_>>());
+                        lc.supers.extend(sl.supers);
+                        lc.unknown_super |= sl.unknown_super;
+                    }
+                    None if self.local_raw.contains_key(&s) => lc.unknown_super = true,
+                    None => lc.supers.push(s),
+                },
+                _ => lc.unknown_super = true,
+            }
+        }
+        self.local_scopes.borrow_mut().insert(name.clone(), Some(lc.clone()));
+        Some(lc)
     }
 
     pub fn text(&self, n: Node) -> &'t str {
@@ -306,10 +373,13 @@ impl<'t> FileModel<'t> {
     /// Name-resolution scope at a node.
     pub fn scope_at(&self, n: Node<'t>) -> Scope<'_> {
         let mut enclosing = Vec::new();
+        // the byte ranges of the enclosing classes, for the local classes' levels
+        let mut ranges: Vec<(usize, usize)> = Vec::new();
         let mut type_vars = Vec::new();
         for a in std::iter::once(n).chain(self.ancestors_of(n)) {
             if let Some(name) = self.class_names.get(&a.id()) {
                 enclosing.push(name.clone());
+                ranges.push((a.start_byte(), a.end_byte()));
             }
             if let Some(tp) = a.field("type_parameters") {
                 for p in tp.kids_of_kind("type_parameter") {
@@ -322,8 +392,11 @@ impl<'t> FileModel<'t> {
         // local types whose declaring block contains `n`, innermost first
         let mut locals: Vec<&(Name, Name, (usize, usize))> = self.local_simple.iter().filter(|(_, _, (a, b))| *a <= n.start_byte() && n.end_byte() <= *b).collect();
         locals.sort_by_key(|(_, _, (a, b))| b - a);
-        let local_types = locals.into_iter().map(|(s, b, _)| (s.clone(), b.clone())).collect();
-        Scope { package: &self.stub.package, imports: &self.stub.imports, enclosing, type_vars, local_types }
+        // a local class is shadowed by the member types of the classes declared
+        // inside the block that declares it (JLS 6.4.1)
+        let local_types = locals.into_iter().map(|(s, b, (a, e))| (s.clone(), b.clone(), ranges.iter().filter(|(x, y)| a <= x && y <= e).count())).collect();
+        let local_classes = enclosing.iter().filter_map(|e| self.local_class_scope(e)).collect();
+        Scope { package: &self.stub.package, imports: &self.stub.imports, enclosing, type_vars, local_types, local_classes }
     }
 
     /// Resolve a type syntax node in the scope where it appears.
@@ -473,6 +546,11 @@ impl<'t> FileModel<'t> {
             (r, false)
         }
     }
+}
+
+/// The type declaration in `root` (or `root` itself) at `range`.
+fn declaration_at(root: Node<'_>, range: (u32, u32)) -> Option<Node<'_>> {
+    root.descendants().find(|d| grounds_syntax::is_type_declaration(d.kind()) && (d.start_byte() as u32, d.end_byte() as u32) == range)
 }
 
 /// The "don't know" value of a memoized query.
