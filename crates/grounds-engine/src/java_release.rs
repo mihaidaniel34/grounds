@@ -133,7 +133,7 @@ pub(crate) fn without_blocks(text: &str, name: &str) -> String {
 }
 
 /// The bodies of `name { ... }` blocks in a script.
-fn blocks<'a>(text: &'a str, name: &str) -> Vec<&'a str> {
+pub(crate) fn blocks<'a>(text: &'a str, name: &str) -> Vec<&'a str> {
     let mut out = Vec::new();
     let mut from = 0;
     while let Some(i) = text[from..].find(name) {

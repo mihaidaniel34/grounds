@@ -407,6 +407,7 @@ pub fn modules_built_against_own_release(ws: &Workspace) -> Vec<PathBuf> {
     }
     // a module's declarations: its own script, and `project(':path') { ... }` blocks anywhere
     let mut declarations: Vec<(PathBuf, String)> = Vec::new();
+    let gradle_dirs: Vec<PathBuf> = seen_dirs.iter().map(|d| d.to_path_buf()).collect();
     for (dir, text) in &scripts {
         let mut own_text = String::new();
         let mut last = 0;
@@ -442,7 +443,18 @@ pub fn modules_built_against_own_release(ws: &Workspace) -> Vec<PathBuf> {
             from = end.max(start);
         }
         own_text.push_str(&text[last.min(text.len())..]);
-        // a script's `subprojects { }` and `allprojects { }` are about other modules
+        // a script's `subprojects { }` and `allprojects { }` declare for the
+        // modules below it (and itself, for `allprojects`): which of them a
+        // block really reaches is the build's business, so all of them
+        for (block, itself) in [("subprojects", false), ("allprojects", true)] {
+            for body in crate::java_release::blocks(&own_text, block) {
+                for m in &gradle_dirs {
+                    if m.starts_with(dir) && (itself || m != dir) {
+                        declarations.push((m.to_path_buf(), body.to_string()));
+                    }
+                }
+            }
+        }
         let own_text = crate::java_release::without_blocks(&crate::java_release::without_blocks(&own_text, "subprojects"), "allprojects");
         declarations.push((dir.clone(), own_text));
     }
@@ -547,9 +559,46 @@ mod tests {
         write("gr/lib/build.gradle", "\n");
         let ws = Workspace::discover(&dir, &[]);
         let found: Vec<String> = modules_built_against_own_release(&ws).iter().map(|d| d.strip_prefix(&ws.root).unwrap().to_string_lossy().to_string()).collect();
-        assert_eq!(found, vec!["compat"]);
+        // (the `gr` build's subprojects block reaches its subprojects)
+        assert_eq!(found, vec!["compat", "gr/app", "gr/lib"]);
         let ws = Workspace::discover(&dir.join("gr"), &[]);
         assert!(!modules_built_against_own_release(&ws).contains(&ws.root));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_shared_block_applies_its_dependencies_to_the_modules_it_targets() {
+        let dir = std::env::temp_dir().join(format!("grounds-own-release-4-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let write = |rel: &str, text: &str| {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        let found = |root: &Path| -> Vec<String> {
+            let ws = Workspace::discover(root, &[]);
+            let mut v: Vec<String> = modules_built_against_own_release(&ws).iter().map(|d| d.strip_prefix(&ws.root).unwrap().to_string_lossy().to_string()).collect();
+            v.sort();
+            v
+        };
+        // subprojects { }: every module below the root, not the root
+        write("sub/settings.gradle", "include 'core', 'app'\n");
+        write("sub/build.gradle", "allprojects { group = 'org.example' }\nsubprojects {\n  dependencies { implementation 'org.example:core:0.1' }\n}\n");
+        write("sub/app/build.gradle", "\n");
+        write("sub/core/build.gradle", "\n");
+        assert_eq!(found(&dir.join("sub")), vec!["app", "core"]);
+        // allprojects { }: the root too
+        write("all/settings.gradle", "include 'core', 'app'\n");
+        write("all/build.gradle", "allprojects {\n  group = 'org.example'\n  dependencies { api 'org.example:core:0.1' }\n}\n");
+        write("all/app/build.gradle", "\n");
+        write("all/core/build.gradle", "\n");
+        assert_eq!(found(&dir.join("all")), vec!["", "app", "core"]);
+        // a project dependency in a shared block is the sources: nothing
+        write("proj/settings.gradle", "include 'core', 'app'\n");
+        write("proj/build.gradle", "allprojects { group = 'org.example' }\nsubprojects {\n  dependencies { implementation project(':core') }\n}\n");
+        write("proj/app/build.gradle", "\n");
+        write("proj/core/build.gradle", "\n");
+        assert!(found(&dir.join("proj")).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 
