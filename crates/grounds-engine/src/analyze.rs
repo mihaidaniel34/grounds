@@ -11,8 +11,8 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-/// Serialized by hand (below) to add the rule's `maturity`, which is not
-/// stored on the finding.
+/// Serialized by hand (below): `legacy_fingerprint`, `start` and `end` stay
+/// out, and `fix` only when present.
 #[derive(Clone, Debug)]
 pub struct Finding {
     pub path: String,
@@ -24,6 +24,12 @@ pub struct Finding {
     pub severity: Severity,
     pub category: &'static str,
     pub message: String,
+    /// Whether the project's stable promise covers this finding. The rule's
+    /// own maturity, except that `grounds changed` makes the findings it
+    /// holds to the promise stable: compile-break and wiring findings new
+    /// with the change, and the places in other files the change broke
+    /// (`RuleMeta::maturity_in`).
+    pub maturity: Maturity,
     /// Stable identity across unrelated edits (line shifts).
     pub fingerprint: String,
     /// The fingerprint 0.0.5 and earlier computed, when it differs (member
@@ -35,14 +41,6 @@ pub struct Finding {
     /// Byte range, for fix application (not serialized).
     pub start: u32,
     pub end: u32,
-}
-
-/// Maturity of the rule that reported a finding. Findings that only `grounds
-/// changed --base` makes (`removed-class-still-used`, `breaks-other-files`)
-/// have no catalog entry; they are built from the cross-file rules and are
-/// as proven as those: preview, for now.
-pub fn maturity_of(rule: &str) -> Maturity {
-    grounds_rules::meta_of(rule).map_or(Maturity::Preview, |m| m.maturity)
 }
 
 impl Serialize for Finding {
@@ -57,7 +55,7 @@ impl Serialize for Finding {
         st.serialize_field("rule", &self.rule)?;
         st.serialize_field("severity", &self.severity)?;
         st.serialize_field("category", &self.category)?;
-        st.serialize_field("maturity", &maturity_of(self.rule))?;
+        st.serialize_field("maturity", &self.maturity)?;
         st.serialize_field("message", &self.message)?;
         st.serialize_field("fingerprint", &self.fingerprint)?;
         match &self.fix {
@@ -68,10 +66,18 @@ impl Serialize for Finding {
     }
 }
 
+/// The rules the project configuration selects for a whole-project check
+/// (`grounds check`); see [`selected_rules_for`].
+pub fn selected_rules(project: &Project) -> Vec<Box<dyn grounds_rules::Rule>> {
+    selected_rules_for(project, false)
+}
+
 /// The rules the project configuration selects (`[rules] enable/disable`
 /// by id, category or source id; preview rules only with `preview = true` or
-/// when named by id or source id in `enable`).
-pub fn selected_rules(project: &Project) -> Vec<Box<dyn grounds_rules::Rule>> {
+/// when named by id or source id in `enable`). Maturity is that of the mode:
+/// with `changed` (`grounds changed` and the hooks), the compile-break and
+/// wiring rules are stable and run with `preview = false` too.
+pub fn selected_rules_for(project: &Project, changed: bool) -> Vec<Box<dyn grounds_rules::Rule>> {
     let cfg = &project.config.rules;
     all_rules()
         .into_iter()
@@ -80,7 +86,7 @@ pub fn selected_rules(project: &Project) -> Vec<Box<dyn grounds_rules::Rule>> {
             let named = |list: &[String]| list.iter().any(|x| x == m.id || x == m.category.as_str() || m.sources.iter().any(|s| s == x));
             // named by itself (its id or one of its source ids), not only through its category
             let named_alone = |list: &[String]| list.iter().any(|x| x == m.id || m.sources.iter().any(|s| s == x));
-            let maturity_ok = cfg.preview || m.maturity == Maturity::Stable;
+            let maturity_ok = cfg.preview || m.maturity_in(changed) == Maturity::Stable;
             if !cfg.enable.is_empty() {
                 return named(&cfg.enable) && (maturity_ok || named_alone(&cfg.enable));
             }
@@ -89,9 +95,16 @@ pub fn selected_rules(project: &Project) -> Vec<Box<dyn grounds_rules::Rule>> {
         .collect()
 }
 
+/// The rule set and options of a whole-project check (`grounds check`).
 pub fn build_ruleset(project: &Project) -> (RuleSet, RuleOptions) {
+    build_ruleset_for(project, false)
+}
+
+/// The rule set and options for a whole-project check, or for `grounds
+/// changed` (`changed`); see [`selected_rules_for`].
+pub fn build_ruleset_for(project: &Project, changed: bool) -> (RuleSet, RuleOptions) {
     let cfg = &project.config.rules;
-    let rules = selected_rules(project);
+    let rules = selected_rules_for(project, changed);
     let mut options = RuleOptions::default();
     // jar versions are exact only with a dumped classpath and no cache guessing
     if !project.config.classpath.scan_caches && !project.config.classpath.files.is_empty() {
@@ -172,7 +185,9 @@ fn to_finding(project: &Project, pf: &ParsedFile, fm: &FileModel, rel: &str, d: 
     };
     let legacy_fp = format!("{:016x}", xxhash_rust::xxh3::xxh3_64(format!("{legacy_base}|{ln}").as_bytes()));
     let legacy_fingerprint = (legacy_fp != fp).then_some(legacy_fp);
-    let category = grounds_rules::meta_of(d.rule).map(|m| m.category.as_str()).unwrap_or("bug");
+    let meta = grounds_rules::meta_of(d.rule);
+    let category = meta.map(|m| m.category.as_str()).unwrap_or("bug");
+    let maturity = meta.map_or(Maturity::Preview, |m| m.maturity);
     Finding {
         path: rel.to_string(),
         line: s.line,
@@ -183,6 +198,7 @@ fn to_finding(project: &Project, pf: &ParsedFile, fm: &FileModel, rel: &str, d: 
         severity: severity_override(project, d.rule, d.severity),
         category,
         message: d.message,
+        maturity,
         fingerprint: fp,
         legacy_fingerprint,
         fix: d.fix,

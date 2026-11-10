@@ -101,3 +101,71 @@ fn json_findings_carry_the_maturity() {
     assert_eq!(keys, ["category", "col", "end_col", "end_line", "fingerprint", "fix", "line", "maturity", "message", "path", "rule", "severity"]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn git(dir: &std::path::Path, args: &[&str]) {
+    let ok = std::process::Command::new("git").arg("-C").arg(dir).args(args).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t").env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t").status().unwrap().success();
+    assert!(ok, "git {args:?}");
+}
+
+#[test]
+fn the_break_rules_are_stable_in_changed_and_preview_in_check() {
+    use grounds_engine::analyze::selected_rules_for;
+    let dir = project("modes", Some("[rules]\npreview = false\n"));
+    let p = Project::load(&dir).unwrap();
+    // `grounds check`: no rule is stable, so none runs
+    assert!(selected_rules_for(&p, false).is_empty());
+    // `grounds changed`: exactly the compile-break and wiring rules
+    let mut changed: Vec<_> = selected_rules_for(&p, true).iter().map(|r| r.meta().id).collect();
+    changed.sort();
+    let mut expected: Vec<_> = grounds_rules::STABLE_IN_CHANGED.iter().copied().filter(|id| grounds_rules::meta_of(id).unwrap().default_enabled).collect();
+    expected.sort();
+    assert_eq!(changed, expected);
+    // the rules `changed --base` runs over unchanged files are among them
+    assert!(grounds_engine::session::CROSS_FILE_RULES.iter().all(|id| grounds_rules::STABLE_IN_CHANGED.contains(id)));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// With `preview = false`, `grounds changed` still reports what a change
+/// breaks (and only that), as stable, while `grounds check` does not run the
+/// rules at all; with the default, `check` reports the same finding as preview.
+#[test]
+fn preview_false_keeps_the_breaks_in_changed_only() {
+    use grounds_engine::session::{CheckOptions, Mode, Session};
+    for preview in [false, true] {
+        let dir = project(&format!("switch-{preview}"), Some(&format!("[rules]\npreview = {preview}\n")));
+        git(&dir, &["init", "-q"]);
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-qm", "init"]);
+        // a new break and a preview rule's finding on changed lines
+        std::fs::write(dir.join("src/main/java/app/A.java"), "package app;\nclass A {\n    boolean m(String s) { return s == \"y\"; }\n    void n(A a) { a.nothing(); }\n}\n").unwrap();
+
+        let mut s = Session::open(&dir).unwrap();
+        let r = s.check(&CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: grounds_rules::Severity::Info, base: None });
+        let got: Vec<(&str, Maturity)> = r.findings.iter().map(|f| (f.rule, f.maturity)).collect();
+        if preview {
+            assert_eq!(got, [("unresolved-method", Maturity::Stable), ("string-reference-equality", Maturity::Preview)]);
+        } else {
+            assert_eq!(got, [("unresolved-method", Maturity::Stable)]);
+        }
+
+        let p = Project::load(&dir).unwrap();
+        let found = rules_found(&p);
+        if preview {
+            // `check` reports the break too, as preview
+            let (set, options) = build_ruleset(&p);
+            let files: Vec<_> = p.workspace.files.iter().map(|f| f.path.clone()).collect();
+            let all = analyze_files(&p, &set, &options, &files);
+            let f = all.iter().find(|f| f.rule == "unresolved-method").unwrap();
+            assert_eq!(f.maturity, Maturity::Preview);
+            let v: serde_json::Value = serde_json::from_str(&grounds_engine::report::json(&all)).unwrap();
+            assert!(v.as_array().unwrap().iter().all(|f| f["maturity"] == "preview"));
+            let sarif: serde_json::Value = serde_json::from_str(&grounds_engine::report::sarif(&all, &dir, &[])).unwrap();
+            for d in sarif["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap() {
+                assert_eq!(d["properties"]["maturity"], "preview", "{d}");
+            }
+        } else {
+            assert!(found.is_empty(), "{found:?}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

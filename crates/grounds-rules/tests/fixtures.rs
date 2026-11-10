@@ -163,6 +163,26 @@ fn every_rule_has_a_fixture_and_valid_metadata() {
 /// this list makes that a deliberate change.
 const STABLE: &[&str] = &[];
 
+/// The rules stable in `grounds changed` only, where their findings are
+/// reported when new with the change: the compile-break and wiring rules.
+/// A replay of 514 commits of the 40 hold-out projects
+/// (docs/holdout/2026-11-replay.md) got no break report from them, against
+/// 246 false ones from a whole-project run of the same projects. Like
+/// `STABLE`, this list changes only with such evidence.
+const STABLE_IN_CHANGED: &[&str] = &[
+    "ambiguous-bean",
+    "bean-name-conflict",
+    "bean-not-found",
+    "circular-constructor-dependency",
+    "missing-jdk-import",
+    "override-matches-nothing",
+    "qualifier-not-found",
+    "unimplemented-abstract-method",
+    "unresolved-constructor",
+    "unresolved-field",
+    "unresolved-method",
+];
+
 #[test]
 fn stable_rules_are_exactly_the_intended_set() {
     use grounds_rules::Maturity;
@@ -172,4 +192,17 @@ fn stable_rules_are_exactly_the_intended_set() {
     assert_eq!(stable, STABLE, "the set of stable rules changed; update STABLE (and the README) only with evidence");
     let preview = all_rules().iter().filter(|r| r.meta().maturity == Maturity::Preview).count();
     assert_eq!(preview + STABLE.len(), all_rules().len());
+
+    // stable in `grounds changed`, preview in `grounds check`
+    let mut in_changed: Vec<_> = all_rules().iter().map(|r| r.meta()).filter(|m| m.maturity == Maturity::Preview && m.stable_in_changed()).map(|m| m.id).collect();
+    in_changed.sort();
+    assert_eq!(in_changed, STABLE_IN_CHANGED, "the set of rules stable in `grounds changed` changed; update STABLE_IN_CHANGED (and the README) only with evidence");
+    for m in all_rules().iter().map(|r| r.meta()) {
+        let (check, changed) = (m.maturity_in(false), m.maturity_in(true));
+        assert_eq!(check, m.maturity, "{}", m.id);
+        assert_eq!(changed == Maturity::Stable, STABLE.contains(&m.id) || STABLE_IN_CHANGED.contains(&m.id), "{}", m.id);
+    }
+    // every id names a rule
+    let ids: Vec<_> = all_rules().iter().map(|r| r.meta().id).collect();
+    assert!(grounds_rules::STABLE_IN_CHANGED.iter().all(|id| ids.contains(id)), "{:?}", grounds_rules::STABLE_IN_CHANGED);
 }

@@ -472,3 +472,128 @@ fn a_changed_build_file_reloads_the_project() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A project whose committed code already has a compile-break claim the
+/// model cannot back (`l.gap()`, which stands for a call to a member that a
+/// framework feature the model lacks generates): the claim exists before and
+/// after a change, so `grounds changed` must not report it, even on a line
+/// the change touches, while what the change does break is reported.
+fn gap_project(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let repo = std::env::temp_dir().join(format!("grounds-gap-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&repo);
+    std::fs::create_dir_all(&repo).unwrap();
+    let dir = repo.join("app");
+    write(&dir, "settings.gradle", "rootProject.name = 'demo'\n");
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, "src/main/java/demo/Lib.java", "package demo;\npublic class Lib {\n    public void real() {}\n    public void other() {}\n}\n");
+    write(&dir, "src/main/java/demo/Use.java", "package demo;\nclass Use {\n    void a(Lib l) { l.gap(); }\n    void b(Lib l) { l.real(); }\n}\n");
+    write(&dir, "src/main/java/demo/Other.java", "package demo;\nclass Other {\n    void c(Lib l) { l.gap(); }\n    void d(Lib l) { l.real(); }\n}\n");
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "init"]);
+    (repo, dir)
+}
+
+fn claims(r: &grounds_engine::session::Report) -> Vec<(String, u32, String)> {
+    let mut v: Vec<(String, u32, String)> = r.findings.iter().filter(|f| f.rule == "unresolved-method").map(|f| (f.path.rsplit('/').next().unwrap().to_string(), f.line, f.message.clone())).collect();
+    v.sort();
+    v
+}
+
+fn json(r: &grounds_engine::session::Report) -> String {
+    serde_json::to_string_pretty(r).unwrap()
+}
+
+#[test]
+fn a_pre_existing_break_claim_on_a_changed_line_is_not_reported() {
+    let (repo, dir) = gap_project("per-turn");
+    let use_java = "src/main/java/demo/Use.java";
+    let opts = |base: Option<String>| CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base };
+    // a whole-project run reports the gap: that is what `check` is told
+    let mut warm = Session::open(&dir).unwrap();
+    let all = warm.check(&CheckOptions { all_lines: true, files: vec![dir.join(use_java)], ..opts(None) });
+    assert_eq!(claims(&all).len(), 1, "{:?}", all.findings);
+    assert_eq!(all.findings.iter().find(|f| f.rule == "unresolved-method").unwrap().maturity, grounds_rules::Maturity::Preview, "on an unchanged line it is not the promise");
+
+    // 1. the change edits the very line of the gap, harmlessly: not reported
+    write(&dir, use_java, "package demo;\nclass Use {\n    void a(Lib l) { l.gap(); /* touched */ }\n    void b(Lib l) { l.real(); }\n}\n");
+    let r = warm.check(&opts(None));
+    assert_eq!(claims(&r), vec![], "{:?}", r.findings);
+    assert_eq!(r.outside_changed_lines, 0);
+    // the post-edit hook, with the file named
+    let edit = warm.check(&CheckOptions { mode: Mode::Edit, files: vec![dir.join(use_java)], ..opts(None) });
+    assert_eq!(claims(&edit), vec![]);
+
+    // 2. a new break on a changed line next to it: reported, as stable
+    write(&dir, use_java, "package demo;\nclass Use {\n    void a(Lib l) { l.gap(); /* touched */ }\n    void b(Lib l) { l.missing(); }\n}\n");
+    let r = warm.check(&opts(None));
+    assert_eq!(claims(&r), vec![("Use.java".to_string(), 4, "`Lib` has no method `missing`".to_string())], "{:?}", r.findings);
+    let v: serde_json::Value = serde_json::from_str(&json(&r)).unwrap();
+    let f = v["findings"].as_array().unwrap().iter().find(|f| f["rule"] == "unresolved-method").unwrap();
+    assert_eq!(f["maturity"], "stable");
+    assert_eq!(r.findings.iter().find(|f| f.rule == "unresolved-method").unwrap().maturity, grounds_rules::Maturity::Stable);
+    let fresh = Session::open(&dir).unwrap().check(&opts(None));
+    assert_eq!(json(&fresh), json(&r), "a fresh session (no daemon) answers as the warm one");
+
+    // 3. the gap's line moved to the end of the class and edited: not reported
+    write(&dir, use_java, "package demo;\nclass Use {\n    void b(Lib l) { l.real(); }\n\n    void a(Lib l) {\n        l.gap();\n    }\n}\n");
+    let r = warm.check(&opts(None));
+    assert_eq!(claims(&r), vec![], "{:?}", r.findings);
+    assert_eq!(json(&Session::open(&dir).unwrap().check(&opts(None))), json(&r));
+
+    // 4. a new file: everything in it is new, except a claim the project
+    // before the change already got (the same call in untouched code)
+    write(&dir, use_java, "package demo;\nclass Use {\n    void a(Lib l) { l.gap(); }\n    void b(Lib l) { l.real(); }\n}\n");
+    write(&dir, "src/main/java/demo/Fresh.java", "package demo;\nclass Fresh {\n    void e(Lib l) { l.nowhere(); }\n    void f(Lib l) { l.gap(); }\n}\n");
+    let r = warm.check(&opts(None));
+    assert_eq!(claims(&r), vec![("Fresh.java".to_string(), 3, "`Lib` has no method `nowhere`".to_string())], "{:?}", r.findings);
+    assert_eq!(json(&Session::open(&dir).unwrap().check(&opts(None))), json(&r));
+
+    // 5. the same in CI mode, against the merge base, once committed
+    git(&repo, &["checkout", "-qb", "feature"]);
+    write(&dir, use_java, "package demo;\nclass Use {\n    void a(Lib l) { l.gap(); /* touched */ }\n    void b(Lib l) { l.missing(); }\n}\n");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "feature"]);
+    let mb = grounds_engine::git::merge_base(&dir, "main").unwrap();
+    let r = warm.check(&opts(Some(mb.clone())));
+    assert_eq!(
+        claims(&r),
+        vec![("Fresh.java".to_string(), 3, "`Lib` has no method `nowhere`".to_string()), ("Use.java".to_string(), 4, "`Lib` has no method `missing`".to_string())],
+        "{:?}",
+        r.findings
+    );
+    assert!(r.pending.is_empty(), "{:?}", r.pending);
+    assert_eq!(json(&Session::open(&dir).unwrap().check(&opts(Some(mb)))), json(&r));
+    // against HEAD the branch is clean
+    assert!(warm.check(&opts(None)).findings.is_empty());
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+#[test]
+fn per_turn_breaks_in_other_files_are_only_those_the_change_made() {
+    let (repo, dir) = gap_project("pending");
+    let opts = CheckOptions { mode: Mode::Edit, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None };
+    let mut warm = Session::open(&dir).unwrap();
+    assert!(warm.check(&opts).pending.is_empty());
+    // renaming `real` breaks its callers in Use and Other; their `l.gap()`
+    // calls were already claimed broken before and are not the change's
+    write(&dir, "src/main/java/demo/Lib.java", "package demo;\npublic class Lib {\n    public void real2() {}\n    public void other() {}\n}\n");
+    let r = warm.check(&opts);
+    let mut pending: Vec<(&str, u32)> = r.pending.iter().map(|f| (f.path.rsplit('/').next().unwrap(), f.line)).collect();
+    pending.sort();
+    assert_eq!(pending, vec![("Other.java", 4), ("Use.java", 4)], "{:?}", r.pending);
+    assert!(r.pending.iter().all(|f| f.maturity == grounds_rules::Maturity::Stable));
+    assert_eq!(r.breaks.len(), 1);
+    let v: serde_json::Value = serde_json::from_str(&json(&r)).unwrap();
+    assert_eq!(v["pending"][0]["maturity"], "stable");
+    assert_eq!(v["breaks"][0]["finding"]["maturity"], "stable");
+    let sarif: serde_json::Value = serde_json::from_str(&grounds_engine::report::sarif_report(&r, &dir, &[])).unwrap();
+    for x in sarif["runs"][0]["results"].as_array().unwrap() {
+        assert_eq!(x["properties"]["maturity"], "stable", "{x}");
+    }
+    for d in sarif["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap() {
+        assert_eq!(d["properties"]["maturity"], "stable", "{d}");
+    }
+    assert_eq!(json(&Session::open(&dir).unwrap().check(&opts)), json(&r));
+    let _ = std::fs::remove_dir_all(&repo);
+}

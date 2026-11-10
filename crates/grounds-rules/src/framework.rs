@@ -130,6 +130,58 @@ pub struct RuleMeta {
     pub default_enabled: bool,
 }
 
+/// The rules that say code would not compile or an application would not
+/// start, whose findings `grounds changed` holds to the stable promise: there
+/// it reports only what is new with the change (a finding on a changed line
+/// that the version before the change does not have, a place in another file
+/// that the change broke), and a gap in the model is there before and after
+/// the change alike. Run over a whole project (`grounds check`) the same rules
+/// are preview: each unseen project has framework features the model lacks
+/// (docs/holdout). A rule joins this list only with that evidence; the
+/// `stable_rules_are_exactly_the_intended_set` test makes it deliberate.
+pub const STABLE_IN_CHANGED: &[&str] = &[
+    "ambiguous-bean",
+    "bean-name-conflict",
+    "bean-not-found",
+    "circular-constructor-dependency",
+    "missing-jdk-import",
+    "override-matches-nothing",
+    "qualifier-not-found",
+    "unimplemented-abstract-method",
+    "unresolved-constructor",
+    "unresolved-field",
+    "unresolved-method",
+];
+
+impl RuleMeta {
+    /// Whether `grounds changed` holds this rule's findings to the stable
+    /// promise (see [`STABLE_IN_CHANGED`]).
+    pub fn stable_in_changed(&self) -> bool {
+        self.maturity == Maturity::Stable || STABLE_IN_CHANGED.contains(&self.id)
+    }
+
+    /// The maturity of this rule's findings in `grounds changed`
+    /// (`changed`) or in a whole-project `grounds check`.
+    pub fn maturity_in(&self, changed: bool) -> Maturity {
+        if changed && self.stable_in_changed() {
+            Maturity::Stable
+        } else {
+            self.maturity
+        }
+    }
+
+    /// How `grounds rules`, `grounds explain` and docs/RULES.md name the
+    /// maturity: `stable`, `preview`, or `stable in changed` (preview in
+    /// `grounds check`).
+    pub fn maturity_label(&self) -> &'static str {
+        match self.maturity {
+            Maturity::Stable => "stable",
+            Maturity::Preview if self.stable_in_changed() => "stable in changed",
+            Maturity::Preview => "preview",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Edit {
     pub start: u32,

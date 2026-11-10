@@ -333,21 +333,31 @@ fn main() -> anyhow::Result<()> {
                 println!("# Rule catalog\n\n{} rules. `grounds explain <id>` prints the full description.\n", cat.len());
                 println!("Tier `edit` rules run after every edit; all rules run at checkpoints. Rules marked *off* are disabled by default (enable in `grounds.toml`).\n");
                 let stable = cat.iter().filter(|m| m.maturity == grounds_rules::Maturity::Stable).count();
-                println!("Maturity: {stable} rules are `stable` (held to the project's precision promise), {} are `preview` (still being measured). Preview rules run by default for now; `preview = false` under `[rules]` in `grounds.toml` turns them off, except those named by id in `enable` or `--rules`. See the README.\n", cat.len() - stable);
+                let in_changed = cat.iter().filter(|m| m.maturity_label() == "stable in changed").count();
+                println!("Maturity: {stable} rules are `stable` (held to the project's precision promise). {in_changed} are `stable in changed`: the compile-break and wiring rules, whose findings `grounds changed` reports only when they are new with the change (on a changed line, or a place in another file the change broke); those findings are stable, while the same rules run over a whole project with `grounds check` are preview. The other {} are `preview` (still being measured). Preview rules run by default for now; `preview = false` under `[rules]` in `grounds.toml` turns them off, except those named by id in `enable` or `--rules`, and keeps the `stable in changed` rules in `grounds changed` only. See the README.\n", cat.len() - stable - in_changed);
                 for (c, ms) in by {
                     println!("## {c} ({})\n\n| id | severity | maturity | tier | origin |\n|---|---|---|---|---|", ms.len());
                     for m in ms {
                         let tier = match m.tier { grounds_rules::Tier::Edit => "edit", _ => "checkpoint" };
                         let off = if m.default_enabled { "" } else { " *off*" };
-                        println!("| `{}`{off} | {} | {} | {tier} | {} |", m.id, m.severity.as_str(), m.maturity.as_str(), m.sources.join(", "));
+                        println!("| `{}`{off} | {} | {} | {tier} | {} |", m.id, m.severity.as_str(), m.maturity_label(), m.sources.join(", "));
                     }
                     println!();
                 }
             } else if json {
-                println!("{}", serde_json::to_string_pretty(&cat).unwrap());
+                // `maturity` is the rule's in `grounds check`; `maturity_in_changed` in `grounds changed`
+                let v: Vec<serde_json::Value> = cat
+                    .iter()
+                    .map(|m| {
+                        let mut v = serde_json::to_value(m).unwrap();
+                        v["maturity_in_changed"] = serde_json::json!(m.maturity_in(true).as_str());
+                        v
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&v).unwrap());
             } else {
                 for m in cat {
-                    println!("{:<40} {:<8} {:<13} {:<8} {}", m.id, m.severity.as_str(), m.category.as_str(), m.maturity.as_str(), m.name);
+                    println!("{:<40} {:<8} {:<13} {:<17} {}", m.id, m.severity.as_str(), m.category.as_str(), m.maturity_label(), m.name);
                 }
                 println!("{} rules", cat.len());
             }
@@ -356,6 +366,7 @@ fn main() -> anyhow::Result<()> {
             Some(m) => {
                 let maturity = match m.maturity {
                     grounds_rules::Maturity::Stable => "stable: covered by the project's precision promise",
+                    grounds_rules::Maturity::Preview if m.stable_in_changed() => "stable in changed: `grounds changed` reports this rule's findings only when they are new with the change (on a changed line, or a place in another file the change broke), and those are covered by the project's precision promise; over a whole project (`grounds check`) the rule is preview: precision still being measured, and `preview = false` under [rules] in grounds.toml turns it off there unless it is named in `enable` or `--rules`",
                     grounds_rules::Maturity::Preview => "preview: precision still being measured; runs by default, `preview = false` under [rules] in grounds.toml turns it off unless it is named in `enable` or `--rules`",
                 };
                 println!("{} ({}, {})\n\n{}\n\nsources: {}\nmaturity: {maturity}", m.name, m.severity.as_str(), m.category.as_str(), m.description, m.sources.join(", "));

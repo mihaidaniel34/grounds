@@ -4,7 +4,7 @@
 
 Tier `edit` rules run after every edit; all rules run at checkpoints. Rules marked *off* are disabled by default (enable in `grounds.toml`).
 
-Maturity: 0 rules are `stable` (held to the project's precision promise), 318 are `preview` (still being measured). Preview rules run by default for now; `preview = false` under `[rules]` in `grounds.toml` turns them off, except those named by id in `enable` or `--rules`. See the README.
+Maturity: 0 rules are `stable` (held to the project's precision promise). 11 are `stable in changed`: the compile-break and wiring rules, whose findings `grounds changed` reports only when they are new with the change (on a changed line, or a place in another file the change broke); those findings are stable, while the same rules run over a whole project with `grounds check` are preview. The other 307 are `preview` (still being measured). Preview rules run by default for now; `preview = false` under `[rules]` in `grounds.toml` turns them off, except those named by id in `enable` or `--rules`, and keeps the `stable in changed` rules in `grounds changed` only. See the README.
 
 ## bad-practice (38)
 
@@ -160,14 +160,14 @@ Maturity: 0 rules are `stable` (held to the project's precision promise), 318 ar
 | `invalid-date-value` | error | preview | edit | sonar:S2110, spotbugs:DMI_BAD_MONTH |
 | `instant-unsupported-unit` | error | preview | edit | errorprone:JavaInstantGetSecondsGetNano, errorprone:JavaTimeDefaultTimeZone |
 | `invalid-time-zone-id` | warning | preview | checkpoint | errorprone:InvalidTimeZoneID, errorprone:InvalidZoneId |
-| `unresolved-method` | error | preview | edit | javac:cant.resolve.location.args, intellij:UnresolvedReference |
-| `unresolved-constructor` | error | preview | edit | javac:cant.apply.symbol, intellij:UnresolvedReference |
-| `unresolved-field` | error | preview | edit | javac:cant.resolve.location, intellij:UnresolvedReference |
+| `unresolved-method` | error | stable in changed | edit | javac:cant.resolve.location.args, intellij:UnresolvedReference |
+| `unresolved-constructor` | error | stable in changed | edit | javac:cant.apply.symbol, intellij:UnresolvedReference |
+| `unresolved-field` | error | stable in changed | edit | javac:cant.resolve.location, intellij:UnresolvedReference |
 | `unresolved-static-import` | error | preview | edit | javac:cant.resolve.location, intellij:UnresolvedReference |
-| `missing-jdk-import` | warning | preview | edit | javac:doesnt.exist, javac:cant.resolve.location |
+| `missing-jdk-import` | warning | stable in changed | edit | javac:doesnt.exist, javac:cant.resolve.location |
 | `incompatible-assignment` | error | preview | edit | javac:prob.found.req, intellij:IncompatibleTypes |
-| `override-matches-nothing` | error | preview | edit | javac:method.does.not.override.superclass, intellij:MethodDoesntOverride |
-| `unimplemented-abstract-method` | error | preview | edit | javac:does.not.override.abstract, intellij:ClassNotImplementingAbstractMethods |
+| `override-matches-nothing` | error | stable in changed | edit | javac:method.does.not.override.superclass, intellij:MethodDoesntOverride |
+| `unimplemented-abstract-method` | error | stable in changed | edit | javac:does.not.override.abstract, intellij:ClassNotImplementingAbstractMethods |
 
 ## complexity (5)
 
@@ -211,9 +211,9 @@ Maturity: 0 rules are `stable` (held to the project's precision promise), 318 ar
 
 | id | severity | maturity | tier | origin |
 |---|---|---|---|---|
-| `bean-not-found` | error | preview | edit | intellij:SpringJavaInjectionPointsAutowiringInspection, spring:NoSuchBeanDefinitionException |
-| `ambiguous-bean` | error | preview | edit | intellij:SpringJavaInjectionPointsAutowiringInspection, spring:NoUniqueBeanDefinitionException |
-| `qualifier-not-found` | error | preview | edit | intellij:SpringQualifierInjectionInspection, spring:NoSuchBeanDefinitionException |
+| `bean-not-found` | error | stable in changed | edit | intellij:SpringJavaInjectionPointsAutowiringInspection, spring:NoSuchBeanDefinitionException |
+| `ambiguous-bean` | error | stable in changed | edit | intellij:SpringJavaInjectionPointsAutowiringInspection, spring:NoUniqueBeanDefinitionException |
+| `qualifier-not-found` | error | stable in changed | edit | intellij:SpringQualifierInjectionInspection, spring:NoSuchBeanDefinitionException |
 | `lombok-constructor-drops-qualifier` | warning | preview | edit | lombok:copyableAnnotations, intellij:SpringJavaInjectionPointsAutowiringInspection |
 | `field-injection` | info | preview | checkpoint | sonar:S6813, intellij:SpringJavaAutowiredFieldsWarningInspection |
 | `inject-static-field` | error | preview | edit | intellij:SpringJavaStaticMembersAutowiringInspection, sonar:S3749 |
@@ -226,9 +226,9 @@ Maturity: 0 rules are `stable` (held to the project's precision promise), 318 ar
 | `component-on-abstract-type` | warning | preview | checkpoint | intellij:SpringJavaComponentInspection |
 | `bean-method-call-in-lite-mode` | warning | preview | checkpoint | intellij:SpringConfigurationProxyMethods, sonar:S6838 |
 | `path-variable-mismatch` | error | preview | edit | sonar:S6856, intellij:MVCPathVariableInspection |
-| `circular-constructor-dependency` | error | preview | checkpoint | spring:BeanCurrentlyInCreationException, intellij:SpringJavaInjectionPointsAutowiringInspection |
+| `circular-constructor-dependency` | error | stable in changed | checkpoint | spring:BeanCurrentlyInCreationException, intellij:SpringJavaInjectionPointsAutowiringInspection |
 | `invalid-value-placeholder` | error | preview | edit | intellij:SpringPlaceholdersInspection, sonar:S6857 |
-| `bean-name-conflict` | error | preview | checkpoint | spring:ConflictingBeanDefinitionException, intellij:SpringJavaBeanNameConflict |
+| `bean-name-conflict` | error | stable in changed | checkpoint | spring:ConflictingBeanDefinitionException, intellij:SpringJavaBeanNameConflict |
 | `final-configuration-class` | error | preview | edit | intellij:SpringFacetCodeInspection, spring:BeanDefinitionParsingException |
 | `injection-in-non-bean` | warning | preview | checkpoint | intellij:SpringJavaAutowiredMembersInspection, sonar:S3749 |
 

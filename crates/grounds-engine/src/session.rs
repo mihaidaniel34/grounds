@@ -3,13 +3,13 @@
 //! and impacted tests. The CLI runs these in-process; the daemon keeps a
 //! `Session` warm and runs them per request.
 
-use crate::analyze::{analyze_text, build_ruleset, Finding};
+use crate::analyze::{analyze_text, build_ruleset_for, Finding};
 use crate::git;
 use crate::project::{path_key, Project};
 use crate::workspace::{classify, SourceKind};
 use grounds_index::{simple_name_of, ClassLookup, FileStub, Name};
 use grounds_rules::framework::RuleOptions;
-use grounds_rules::{RuleSet, Severity, Tier};
+use grounds_rules::{Maturity, RuleSet, Severity, Tier};
 use grounds_syntax::{NodeExt, ParsedFile};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -143,6 +143,38 @@ pub const CROSS_FILE_RULES: &[&str] = &[
     "circular-constructor-dependency",
 ];
 
+/// Whether `rule` is a compile-break or wiring rule, whose findings
+/// `grounds changed` reports only when new with the change and then as
+/// stable (`grounds_rules::STABLE_IN_CHANGED`).
+pub fn stable_in_changed(rule: &str) -> bool {
+    grounds_rules::STABLE_IN_CHANGED.contains(&rule)
+}
+
+/// What a compile-break or wiring finding claims, independent of where it
+/// is: the rule and the message, which names the types and members involved
+/// but no position, without the "did you mean" hint (it changes with
+/// unrelated members added nearby). The fingerprint is no use here: it hashes
+/// the text of the line, which an edit to that line changes.
+fn claim_key(f: &Finding) -> (&'static str, String) {
+    let m = f.message.split("; did you mean").next().unwrap_or(&f.message);
+    (f.rule, m.to_string())
+}
+
+/// The identifiers a message quotes in `backticks`, before any `;` (the
+/// hint or list of candidates that follows).
+fn quoted_names(message: &str) -> Vec<String> {
+    let head = message.split(';').next().unwrap_or(message);
+    let mut v: Vec<String> = head
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .flat_map(|q| q.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).filter(|w| !w.is_empty() && !w.chars().next().is_some_and(|c| c.is_ascii_digit())).map(str::to_string).collect::<Vec<_>>())
+        .collect();
+    v.sort();
+    v.dedup();
+    v
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Mode {
     /// After an edit: high-confidence rules, changed lines only.
@@ -172,10 +204,12 @@ impl Session {
     }
 
     pub fn from_project(project: Project) -> Session {
-        let (all_rules, options) = build_ruleset(&project);
+        // the rules `grounds changed` runs: there the compile-break and wiring
+        // rules are stable, so `preview = false` keeps them
+        let (all_rules, options) = build_ruleset_for(&project, true);
         // same configuration as full checks, narrowed to edit-tier rules
-        let edit_rules = RuleSet::new(crate::analyze::selected_rules(&project).into_iter().filter(|r| r.meta().tier == Tier::Edit).collect());
-        let resolution_rules = RuleSet::new(crate::analyze::selected_rules(&project).into_iter().filter(|r| r.meta().id.starts_with("unresolved-")).collect());
+        let edit_rules = RuleSet::new(crate::analyze::selected_rules_for(&project, true).into_iter().filter(|r| r.meta().tier == Tier::Edit).collect());
+        let resolution_rules = RuleSet::new(crate::analyze::selected_rules_for(&project, true).into_iter().filter(|r| r.meta().id.starts_with("unresolved-")).collect());
         let config = config_files(&project);
         let mut s = Session { project, all_rules, edit_rules, resolution_rules, options, mtimes: FxHashMap::default(), config, warned: false };
         for f in &s.project.workspace.files {
@@ -372,18 +406,44 @@ impl Session {
         };
         let mut findings = self.analyze(rules, &files);
         let mut report = Report { files_checked: files.len(), ..Default::default() };
+        let repo = git::is_repo(self.root());
+        // keyed by resolved path: git reports `/private/var/..` for a root
+        // reached through the `/var` symlink
+        let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        let ranges = repo.then(|| git::changed_lines_since(self.root(), &files, rev).into_iter().map(|(p, r)| (canon(&p), r)).collect::<FxHashMap<_, _>>());
+        let root = self.root().to_path_buf();
+        let on_changed_line = |f: &Finding| match ranges.as_ref().and_then(|r| r.get(&canon(&root.join(&f.path)))) {
+            Some(r) => git::in_ranges(f.line, r),
+            None => true,
+        };
+
+        // A compile-break or wiring finding on a changed line is a claim about
+        // the change only if the project before the change did not get the
+        // same claim: a gap in the model is there before and after alike.
+        // Those that are new are stable; on unchanged lines (`--all-lines`)
+        // they stay what they are in a whole-project check.
+        if repo {
+            let claims: Vec<usize> = (0..findings.len()).filter(|&i| stable_in_changed(findings[i].rule) && on_changed_line(&findings[i])).collect();
+            let mut drop: FxHashSet<usize> = FxHashSet::default();
+            if !claims.is_empty() {
+                let touched = self.touched(opts, &files, &deleted, rev);
+                let before = self.claims_before(&findings, &claims, &files, &touched, rev);
+                drop = claims.iter().copied().filter(|&i| before.contains(&claim_key(&findings[i]))).collect();
+            }
+            for &i in &claims {
+                findings[i].maturity = Maturity::Stable;
+            }
+            let mut i = 0;
+            findings.retain(|_| {
+                i += 1;
+                !drop.contains(&(i - 1))
+            });
+        }
 
         // changed-lines filter
-        if !opts.all_lines && git::is_repo(self.root()) {
-            // keyed by resolved path: git reports `/private/var/..` for a root
-            // reached through the `/var` symlink
-            let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
-            let ranges: FxHashMap<PathBuf, Option<Vec<(u32, u32)>>> = git::changed_lines_since(self.root(), &files, rev).into_iter().map(|(p, r)| (canon(&p), r)).collect();
+        if !opts.all_lines && ranges.is_some() {
             let before = findings.len();
-            findings.retain(|f| match ranges.get(&canon(&self.root().join(&f.path))) {
-                Some(r) => git::in_ranges(f.line, r),
-                None => true,
-            });
+            findings.retain(|f| on_changed_line(f));
             report.outside_changed_lines = before - findings.len();
         }
         let baseline = if opts.use_baseline { Baseline::load(self.root()) } else { Baseline::default() };
@@ -396,18 +456,31 @@ impl Session {
         report.findings = findings;
 
         // callers broken by API changes in these files
-        if git::is_repo(self.root()) {
+        if repo {
             let (changed_apis, names) = self.api_changes(&files, rev);
             report.changed_apis = changed_apis;
             let mut pending = if opts.base.is_some() {
                 // CI: every unchanged file, against both versions of the changed ones
                 self.cross_file_breaks(&files, &deleted, rev)
             } else {
-                // per turn: quick, only unresolved references to changed names
+                // per turn: quick, only unresolved references to changed names,
+                // and of those only the ones the change introduced
                 let exclude: FxHashSet<PathBuf> = files.iter().cloned().collect();
                 let deps = self.dependents(&names, &exclude);
-                if deps.is_empty() { Vec::new() } else { self.analyze(&self.resolution_rules, &deps) }
+                let now = if deps.is_empty() { Vec::new() } else { self.analyze(&self.resolution_rules, &deps) };
+                if now.is_empty() {
+                    now
+                } else {
+                    // (files deleted since HEAD are no longer in the index, so
+                    // no dependent is analyzed against a stub of another version)
+                    let touched = self.touched(opts, &files, &deleted, rev);
+                    let before: FxHashSet<(String, u32)> = self.at_base(&touched, rev, |s| s.analyze(&s.resolution_rules, &deps)).into_iter().map(|f| (f.fingerprint, f.col)).collect();
+                    now.into_iter().filter(|f| !before.contains(&(f.fingerprint.clone(), f.col))).collect()
+                }
             };
+            for f in &mut pending {
+                f.maturity = Maturity::Stable;
+            }
             pending.retain(|f| !f.in_baseline(&base));
             pending.sort_by(|a, b| (&a.path, a.line).cmp(&(&b.path, b.line)));
             report.pending = pending;
@@ -416,20 +489,60 @@ impl Session {
         report
     }
 
-    /// Findings of the cross-file rules in files outside `changed`/`deleted`
-    /// that the change introduced: analyzed with the current version of the
-    /// changed files and again with their version at `rev`, keeping what is
-    /// new. The unchanged files' text is the same both times, so fingerprints
-    /// match exactly.
-    fn cross_file_breaks(&mut self, changed: &[PathBuf], deleted: &[PathBuf], rev: &str) -> Vec<Finding> {
-        let rules = RuleSet::new(crate::analyze::selected_rules(&self.project).into_iter().filter(|r| CROSS_FILE_RULES.contains(&r.meta().id)).collect());
-        let touched: Vec<PathBuf> = changed.iter().chain(deleted).cloned().collect();
-        let skip: FxHashSet<&PathBuf> = touched.iter().collect();
-        let others: Vec<PathBuf> = crate::analyze::all_source_files(&self.project).into_iter().filter(|f| !skip.contains(f)).collect();
-        if touched.is_empty() || others.is_empty() {
-            return Vec::new();
+    /// The files whose version at `rev` makes up the project before the
+    /// change: the changed and deleted files, and per turn (no explicit
+    /// files) also the files deleted since HEAD. With explicit files (the
+    /// post-edit hook) only those: the change judged is the edit to them.
+    fn touched(&self, opts: &CheckOptions, files: &[PathBuf], deleted: &[PathBuf], rev: &str) -> Vec<PathBuf> {
+        let mut out: Vec<PathBuf> = files.iter().chain(deleted).cloned().collect();
+        if opts.base.is_none() && opts.files.is_empty() {
+            let root = self.root().canonicalize().unwrap_or_else(|_| self.root().to_path_buf());
+            out.extend(git::changed_files_since(self.root(), rev).1.into_iter().filter(|f| f.extension().is_some_and(|x| x == "java") && (f.starts_with(&root) || f.starts_with(self.root()))));
         }
-        let now = self.analyze(&rules, &others);
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    /// The compile-break and wiring claims the project made before the
+    /// change that match `findings[claims]`: in the version at `rev` of the
+    /// files they are in, and in files the change did not touch that mention
+    /// every name the claim quotes. A claim the model already made about code
+    /// before the change (which compiled) is one it cannot back: the same
+    /// gap, whether the line holding it was edited, moved or newly written.
+    fn claims_before(&mut self, findings: &[Finding], claims: &[usize], files: &[PathBuf], touched: &[PathBuf], rev: &str) -> FxHashSet<(&'static str, String)> {
+        let rules = RuleSet::new(crate::analyze::selected_rules_for(&self.project, true).into_iter().filter(|r| stable_in_changed(r.meta().id)).collect());
+        // a finding's path is relative to the root, as `analyze_text` makes it
+        let paths: FxHashSet<&str> = claims.iter().map(|&i| findings[i].path.as_str()).collect();
+        let in_files: Vec<PathBuf> = files.iter().filter(|f| paths.contains(f.strip_prefix(self.root()).unwrap_or(f).to_string_lossy().as_ref())).cloned().collect();
+        let skip: FxHashSet<&PathBuf> = touched.iter().collect();
+        let mut elsewhere: FxHashSet<PathBuf> = FxHashSet::default();
+        for &i in claims {
+            let names = quoted_names(&findings[i].message);
+            if names.is_empty() {
+                continue;
+            }
+            for (p, stub) in self.project.index.files() {
+                let pb = PathBuf::from(&**p);
+                if !skip.contains(&pb) && classify(&pb) != SourceKind::Generated && names.iter().all(|n| stub.referenced_names.binary_search_by(|x| (**x).cmp(n.as_str())).is_ok()) {
+                    elsewhere.insert(pb);
+                }
+            }
+        }
+        let mut elsewhere: Vec<PathBuf> = elsewhere.into_iter().collect();
+        elsewhere.sort();
+        let old: Vec<(PathBuf, String)> = in_files.iter().filter_map(|f| git::version_at(self.root(), rev, f).map(|t| (f.clone(), t))).collect();
+        let found = self.at_base(touched, rev, |s| {
+            let mut v: Vec<Finding> = old.par_iter().flat_map_iter(|(f, t)| analyze_text(&s.project, &rules, &s.options, f, t)).collect();
+            v.extend(s.analyze(&rules, &elsewhere));
+            v
+        });
+        found.iter().map(claim_key).collect()
+    }
+
+    /// Run `f` on the project as it was at `rev` for the `touched` files
+    /// (their version there, or none), then put their current version back.
+    fn at_base<R>(&mut self, touched: &[PathBuf], rev: &str, f: impl FnOnce(&Session) -> R) -> R {
         let install = |s: &mut Session, f: &PathBuf, text: Option<String>| {
             let key = path_key(f);
             match text {
@@ -440,23 +553,41 @@ impl Session {
                 None => s.project.index.remove_file(&key),
             }
         };
-        let mut base_classes: Vec<Name> = Vec::new();
-        for f in &touched {
-            let old = git::version_at(self.root(), rev, f);
-            install(self, f, old);
-            if let Some(stub) = self.project.index.file(&path_key(f)) {
-                base_classes.extend(stub.classes.iter().map(|c| c.name.clone()));
-            }
+        for p in touched {
+            let old = git::version_at(self.root(), rev, p);
+            install(self, p, old);
         }
         self.project.rebuild_di();
-        // the fingerprint names the line, not the call on it: `a.foo(); a.bar();`
-        // breaking foo while fixing bar keeps the fingerprint, not the column
-        let before: FxHashSet<(String, u32)> = self.analyze(&rules, &others).into_iter().map(|f| (f.fingerprint, f.col)).collect();
-        for f in &touched {
-            let cur = std::fs::read_to_string(f).ok();
-            install(self, f, cur);
+        let out = f(self);
+        for p in touched {
+            let cur = std::fs::read_to_string(p).ok();
+            install(self, p, cur);
         }
         self.project.rebuild_di();
+        out
+    }
+
+    /// Findings of the cross-file rules in files outside `changed`/`deleted`
+    /// that the change introduced: analyzed with the current version of the
+    /// changed files and again with their version at `rev`, keeping what is
+    /// new. The unchanged files' text is the same both times, so fingerprints
+    /// match exactly.
+    fn cross_file_breaks(&mut self, changed: &[PathBuf], deleted: &[PathBuf], rev: &str) -> Vec<Finding> {
+        let rules = RuleSet::new(crate::analyze::selected_rules_for(&self.project, true).into_iter().filter(|r| CROSS_FILE_RULES.contains(&r.meta().id)).collect());
+        let touched: Vec<PathBuf> = changed.iter().chain(deleted).cloned().collect();
+        let skip: FxHashSet<&PathBuf> = touched.iter().collect();
+        let others: Vec<PathBuf> = crate::analyze::all_source_files(&self.project).into_iter().filter(|f| !skip.contains(f)).collect();
+        if touched.is_empty() || others.is_empty() {
+            return Vec::new();
+        }
+        let now = self.analyze(&rules, &others);
+        let (before, base_classes) = self.at_base(&touched, rev, |s| {
+            let classes: Vec<Name> = touched.iter().filter_map(|f| s.project.index.file(&path_key(f))).flat_map(|stub| stub.classes.iter().map(|c| c.name.clone())).collect();
+            // the fingerprint names the line, not the call on it: `a.foo(); a.bar();`
+            // breaking foo while fixing bar keeps the fingerprint, not the column
+            let before: FxHashSet<(String, u32)> = s.analyze(&rules, &others).into_iter().map(|f| (f.fingerprint, f.col)).collect();
+            (before, classes)
+        });
         let mut found: Vec<Finding> = now.into_iter().filter(|f| !before.contains(&(f.fingerprint.clone(), f.col))).collect();
         // classes the change deleted or renamed: references to them are unknown
         // types, which the rules leave alone (a missing jar looks the same)
@@ -602,6 +733,7 @@ impl Session {
                 severity: Severity::Error,
                 category: "bug",
                 message: format!("`{dotted}` was removed or renamed by this change but is still used here"),
+                maturity: Maturity::Stable,
                 fingerprint,
                 legacy_fingerprint: None,
                 fix: None,
@@ -714,7 +846,7 @@ impl Session {
                 let severity = broken.iter().map(|&i| pending[i].severity).min().unwrap_or(Severity::Error);
                 let message = format!("This change breaks {} place(s) in other files: {}{more}", broken.len(), shown.join(", "));
                 let fingerprint = format!("{:016x}", xxhash_rust::xxh3::xxh3_64(format!("breaks-other-files|{path}|{}", broken.iter().map(|&i| pending[i].fingerprint.as_str()).collect::<Vec<_>>().join(",")).as_bytes()));
-                let finding = Finding { path, line, col: 1, end_line: line, end_col: 1, rule: "breaks-other-files", severity, category: "bug", message, fingerprint, legacy_fingerprint: None, fix: None, start: 0, end: 0 };
+                let finding = Finding { path, line, col: 1, end_line: line, end_col: 1, rule: "breaks-other-files", severity, category: "bug", message, maturity: Maturity::Stable, fingerprint, legacy_fingerprint: None, fix: None, start: 0, end: 0 };
                 Break { finding, broken }
             })
             .collect()
