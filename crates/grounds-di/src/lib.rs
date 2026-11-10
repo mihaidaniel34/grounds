@@ -492,6 +492,9 @@ fn first_string(a: &AnnotationInfo, keys: &[&str]) -> Option<String> {
 
 struct Builder<'a> {
     index: &'a Index,
+    /// source classes whose unresolved annotations the file's imports
+    /// qualify (see `qualified_class`)
+    qualified: FxHashMap<Name, Arc<ClassInfo>>,
     model: DiModel,
     /// memo: annotation name -> is stereotype / qualifier
     stereo: FxHashMap<Name, Option<Framework>>,
@@ -521,7 +524,50 @@ struct Builder<'a> {
     auto_registered: rustc_hash::FxHashSet<String>,
 }
 
+/// An unresolved annotation written with a simple name that a
+/// single-type import of the file names: it is that import's (whose jar is
+/// missing), not any framework's of the same simple name.
+fn qualify_annotations(anns: &mut [AnnotationInfo], imports: &grounds_index::stubs::Imports) -> bool {
+    let mut changed = false;
+    for a in anns {
+        if a.resolved || a.name.contains('.') {
+            continue;
+        }
+        if let Some(i) = imports.iter().find(|i| !i.is_static && !i.on_demand && i.is_named(&a.name)) {
+            a.name = i.path.clone();
+            changed = true;
+        }
+    }
+    changed
+}
+
 impl<'a> Builder<'a> {
+    /// The class as the index has it, with the unresolved annotations of a
+    /// source class qualified by its file's imports.
+    fn class(&self, n: &str) -> Option<Arc<ClassInfo>> {
+        self.qualified.get(n).cloned().or_else(|| self.index.class(n))
+    }
+
+    fn qualify_sources(&mut self) {
+        for n in self.index.source_class_names() {
+            let (Some(c), Some((stub, _))) = (self.index.class(n), self.index.raw_class(n)) else { continue };
+            let mut q = (*c).clone();
+            let mut changed = qualify_annotations(&mut q.annotations, &stub.imports);
+            for m in &mut q.methods {
+                changed |= qualify_annotations(&mut m.annotations, &stub.imports);
+                for p in &mut m.params {
+                    changed |= qualify_annotations(&mut p.annotations, &stub.imports);
+                }
+            }
+            for f in &mut q.fields {
+                changed |= qualify_annotations(&mut f.annotations, &stub.imports);
+            }
+            if changed {
+                self.qualified.insert(n.clone(), Arc::new(q));
+            }
+        }
+    }
+
     /// Is the annotation (or one of its meta-annotations) a bean-defining one?
     fn stereotype(&mut self, ann: &AnnotationInfo, depth: u32) -> Option<Framework> {
         if let Some(r) = self.stereo.get(&ann.name) {
@@ -542,7 +588,7 @@ impl<'a> Builder<'a> {
             if depth > 4 || !ann.resolved || n.starts_with("java.") {
                 return None;
             }
-            let c = self.index.class(n)?;
+            let c = self.class(n)?;
             if !c.is_interface() {
                 return None;
             }
@@ -589,7 +635,7 @@ impl<'a> Builder<'a> {
         let r = depth <= 4
             && ann.resolved
             && !n.starts_with("java.")
-            && self.index.class(n).filter(|c| c.kind == ClassKind::Annotation).is_some_and(|c| {
+            && self.class(n).filter(|c| c.kind == ClassKind::Annotation).is_some_and(|c| {
                 c.annotations.iter().any(|m| &*m.name != n && (m.is("jakarta.inject.Scope") || m.is("javax.inject.Scope") || self.factory_annotation(m, depth + 1)))
             });
         self.factory_ann.insert(ann.name.clone(), r);
@@ -605,7 +651,7 @@ impl<'a> Builder<'a> {
             return *r;
         }
         let r = ann.resolved
-            && self.index.class(&ann.name).is_some_and(|c| c.annotations.iter().any(|m| m.is("jakarta.inject.Qualifier") || m.is("javax.inject.Qualifier") || m.is("org.springframework.beans.factory.annotation.Qualifier")));
+            && self.class(&ann.name).is_some_and(|c| c.annotations.iter().any(|m| m.is("jakarta.inject.Qualifier") || m.is("javax.inject.Qualifier") || m.is("org.springframework.beans.factory.annotation.Qualifier")));
         self.qualifier_ann.insert(ann.name.clone(), r);
         r
     }
@@ -690,7 +736,7 @@ impl<'a> Builder<'a> {
             return true;
         }
         // a project annotation: what its own annotations are
-        if let Some(c) = self.index.class(&q).filter(|c| c.is_source() && c.kind == ClassKind::Annotation) {
+        if let Some(c) = self.class(&q).filter(|c| c.is_source() && c.kind == ClassKind::Annotation) {
             if depth > 4 {
                 return true;
             }
@@ -717,7 +763,7 @@ impl<'a> Builder<'a> {
             }
         }
         for n in names {
-            let Some(c) = self.index.class(n) else { continue };
+            let Some(c) = self.class(n) else { continue };
             let is_test = c.source_file().is_some_and(is_test_path);
             let stub = self.index.raw_class(n).map(|(st, _)| st.clone());
             let skip = c.flags.has(Flags::ANON) || c.kind == ClassKind::Annotation || c.kind == ClassKind::Enum || c.is_inner() || is_framework_class(n);
@@ -746,7 +792,7 @@ impl<'a> Builder<'a> {
         // classify (a plain class's leftover @Bean method registers nothing)
         let mut producers: Vec<(Name, bool)> = Vec::new();
         for n in names {
-            let Some(c) = self.index.class(n) else { continue };
+            let Some(c) = self.class(n) else { continue };
             // in the scope the class is (or may be) registered in: a main
             // class registered only by a test's scan produces for tests only
             let is_test = if self.model.component_classes.contains_key(n) {
@@ -784,6 +830,7 @@ impl<'a> Builder<'a> {
     }
 
     fn scan(&mut self) {
+        self.qualify_sources();
         let names: Vec<Name> = self.index.source_class_names().cloned().collect();
         // frameworks in use and scan roots
         let mut roots = Vec::new();
@@ -817,7 +864,7 @@ impl<'a> Builder<'a> {
             }
         }
         for n in &names {
-            let Some(c) = self.index.class(n) else { continue };
+            let Some(c) = self.class(n) else { continue };
             for a in &c.annotations {
                 if a.is("org.springframework.boot.autoconfigure.SpringBootApplication") || a.is("org.springframework.context.annotation.ComponentScan") {
                     let declared = scan_packages(&c, a);
@@ -829,7 +876,7 @@ impl<'a> Builder<'a> {
             }
         }
         for n in &names {
-            let Some(c) = self.index.class(n) else { continue };
+            let Some(c) = self.class(n) else { continue };
             if c.annotations.iter().any(|a| a.is("org.springframework.boot.autoconfigure.AutoConfiguration") || (!a.resolved && a.simple_name() == "AutoConfiguration"))
                 || self.auto_registered.contains(&**n)
                 || self.auto_registered.contains(&n.replace('$', "."))
@@ -850,7 +897,7 @@ impl<'a> Builder<'a> {
         // (package pattern, declared in test sources: registers test beans)
         let mut mapper_pkgs: Vec<(String, bool)> = Vec::new();
         for n in &names {
-            let Some(c) = self.index.class(n) else { continue };
+            let Some(c) = self.class(n) else { continue };
             let in_tests = c.source_file().is_some_and(is_test_path);
             let mut unexpanded = false;
             for a in c.annotations.iter().filter(|a| a.simple_name() == "MapperScan") {
@@ -945,7 +992,7 @@ impl<'a> Builder<'a> {
         // class that is never registered has no effect
         let mut work: Vec<Name> = Vec::new();
         for n in &names {
-            let Some(c) = self.index.class(n) else { continue };
+            let Some(c) = self.class(n) else { continue };
             if !in_scan(c.package()) {
                 continue;
             }
@@ -955,7 +1002,7 @@ impl<'a> Builder<'a> {
             }
         }
         while let Some(n) = work.pop() {
-            let Some(c) = self.index.class(&n) else { continue };
+            let Some(c) = self.class(&n) else { continue };
             for a in &c.annotations {
                 if !matches!(a.simple_name(), "Import" | "EnableConfigurationProperties") {
                     continue;
@@ -977,7 +1024,7 @@ impl<'a> Builder<'a> {
         // registered some other way)
         let mut imported_anywhere: Vec<Name> = Vec::new();
         for n in &names {
-            let Some(c) = self.index.class(n) else { continue };
+            let Some(c) = self.class(n) else { continue };
             for a in c.annotations.iter().filter(|a| matches!(a.simple_name(), "Import" | "EnableConfigurationProperties")) {
                 for v in a.arg("value").map(|v| v.values()).unwrap_or_default() {
                     if let AnnotationValue::Class(t) = v {
@@ -1027,7 +1074,7 @@ impl<'a> Builder<'a> {
         let outside_scan = |c: &ClassInfo| !in_scan(c.package()) && !imported.contains(&c.name);
 
         for n in &names {
-            let Some(c) = self.index.class(n) else { continue };
+            let Some(c) = self.class(n) else { continue };
             let file = c.source_file().map(Arc::from);
             let is_test = file.as_deref().is_some_and(is_test_path);
             // repositories and clients are interfaces
@@ -1225,7 +1272,7 @@ impl<'a> Builder<'a> {
             let mut hops = 0;
             while let Some(st) = sup.take() {
                 hops += 1;
-                let Some(sc) = st.class_name().and_then(|sn| self.index.class(sn)).filter(|sc| sc.is_source()) else { break };
+                let Some(sc) = st.class_name().and_then(|sn| self.class(sn)).filter(|sc| sc.is_source()) else { break };
                 // a base that is a bean itself registers its own @Bean methods
                 let base_anns = sc.annotations.clone();
                 if base_anns.iter().any(|a| self.stereotype(a, 0).is_some()) {
@@ -1352,7 +1399,7 @@ impl<'a> Builder<'a> {
         // test's context
         const MOCKS: &[&str] = &["MockitoBean", "MockitoSpyBean", "MockBean", "SpyBean"];
         for n in &names {
-            let Some(c) = self.index.class(n) else { continue };
+            let Some(c) = self.class(n) else { continue };
             let file = c.source_file().map(Arc::from);
             let mut mocks: Vec<(String, Ty)> = c.fields.iter().filter(|f| f.annotations.iter().any(|a| MOCKS.contains(&a.simple_name()))).map(|f| (f.name.to_string(), f.ty.clone())).collect();
             for a in c.annotations.iter().filter(|a| MOCKS.contains(&a.simple_name())) {
@@ -1404,7 +1451,7 @@ impl<'a> Builder<'a> {
         // (replaced class, module of the replacement, certain)
         let mut replaced: Vec<(Name, String, bool)> = Vec::new();
         for n in &names {
-            let Some(c) = self.index.class(n) else { continue };
+            let Some(c) = self.class(n) else { continue };
             let file = c.source_file().unwrap_or("");
             let module = module_of(file).to_string();
             let class_conditional = self.conditional_meta(&c.annotations);
@@ -1470,7 +1517,7 @@ impl<'a> Builder<'a> {
         ];
         let mut roots: Vec<Name> = Vec::new();
         for n in names {
-            let Some(c) = self.index.class(n) else { continue };
+            let Some(c) = self.class(n) else { continue };
             let Some(f) = c.source_file() else { continue };
             if is_test_path(f) || is_framework_class(n) || c.is_interface() {
                 continue;
@@ -1501,7 +1548,7 @@ impl<'a> Builder<'a> {
                 if !self.index.is_source_class(&q) || self.index.source_file_of(&q).is_some_and(|f| is_test_path(f)) {
                     continue;
                 }
-                if self.index.class(&q).is_some_and(|rc| !rc.is_interface() && self.configuration_like(&rc)) {
+                if self.class(&q).is_some_and(|rc| !rc.is_interface() && self.configuration_like(&rc)) {
                     roots.push(q);
                 }
             }
@@ -1601,7 +1648,7 @@ impl<'a> Builder<'a> {
             let mut work = vec![root.clone()];
             loop {
                 while let Some(n) = work.pop() {
-                    let Some(c) = self.index.class(&n) else { continue };
+                    let Some(c) = self.class(&n) else { continue };
                     // @Import and @EnableConfigurationProperties name classes
                     // registered wherever they live
                     for a in c.annotations.iter().filter(|a| matches!(a.simple_name(), "Import" | "EnableConfigurationProperties")) {
@@ -1633,7 +1680,7 @@ impl<'a> Builder<'a> {
                     // what Spring's scanner registers: Spring stereotypes and
                     // JSR-330 @Named / @ManagedBean classes, and the
                     // repositories, clients and mappers of the scanned packages
-                    let Some(kc) = self.index.class(k) else { continue };
+                    let Some(kc) = self.class(k) else { continue };
                     let scanned_kind = b.framework == Framework::Spring || kc.annotations.iter().any(|a| matches!(a.simple_name(), "Named" | "ManagedBean"));
                     let auto_configuration = self.model.auto_configurations.contains(k);
                     if !scanned_kind || !scans.iter().any(|(r, boot)| !(*boot && auto_configuration) && package_covered(r, kc.package())) {
@@ -1732,6 +1779,7 @@ impl DiModel {
     pub fn build_with(index: &Index, registered: &[String], auto_registered: &[String]) -> DiModel {
         let mut b = Builder {
             index,
+            qualified: FxHashMap::default(),
             model: DiModel::default(),
             stereo: FxHashMap::default(),
             qualifier_ann: FxHashMap::default(),
@@ -3083,5 +3131,41 @@ mod tests {
         let bean = ("src/main/java/com/x/demo/Beans.java", "package com.x.demo; import org.springframework.context.annotation.*; @Configuration class Beans { @Bean Object demoApplication() { return null; } }");
         let (_, m) = model(&[demo, bean]);
         assert_eq!(conflicts(&m), vec!["Beans.demoApplication DemoApplication"]);
+    }
+
+    #[test]
+    fn an_unresolved_annotation_is_the_one_its_import_names() {
+        // no jar for JAX-RS or CDI: @Produces is JAX-RS's media type, not a producer
+        let resource = |import: &str| {
+            format!(
+                "package r; import jakarta.enterprise.context.ApplicationScoped; import jakarta.inject.Inject; {import}
+                 public class User {{}}
+                 @ApplicationScoped class UserResource {{
+                     @Produces public User echoUser(User echo) {{ return echo; }}
+                     @Produces public User user() {{ return new User(); }}
+                 }}
+                 @ApplicationScoped class Consumer {{ @Inject User user; }}"
+            )
+        };
+        let jaxrs = resource("import jakarta.ws.rs.Produces;");
+        let (idx, m) = model(&[("r/UserResource.java", &jaxrs)]);
+        assert!(m.beans.iter().all(|b| !matches!(b.source, BeanSource::FactoryMethod(_))));
+        assert!(!matches!(point_resolution(&idx, &m, "user"), Resolution::Ambiguous(_)));
+        // CDI's own, or a simple name the imports do not place: still producers
+        for import in ["import jakarta.enterprise.inject.Produces;", "import jakarta.enterprise.inject.*;"] {
+            let cdi = resource(import);
+            let (idx, m) = model(&[("r/UserResource.java", &cdi)]);
+            assert!(matches!(point_resolution(&idx, &m, "user"), Resolution::Ambiguous(v) if v.len() == 2), "{import}");
+        }
+        // HK2's @Service and @Inject are not Spring's or JSR-330's
+        let app = ("src/main/java/g/App.java", "package g; @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }");
+        let hk2 = ("src/main/java/g/Container.java", "package g; import org.jvnet.hk2.annotations.Service; import org.jvnet.hk2.annotations.Optional;
+             interface Listeners {} @Service class Container { @jakarta.inject.Inject Listeners listeners; }");
+        let (_, m) = model(&[app, hk2]);
+        assert!(m.bean_of_class("g.Container").is_none());
+        let spring = ("src/main/java/g/Container.java", "package g; import org.springframework.stereotype.Service;
+             interface Listeners {} @Service class Container { @jakarta.inject.Inject Listeners listeners; }");
+        let (idx, m) = model(&[app, spring]);
+        assert_eq!(point_resolution(&idx, &m, "listeners"), Resolution::NotFound);
     }
 }
