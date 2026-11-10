@@ -29,3 +29,13 @@ class MostSpecificRef {
     void test(List<String> xs) { xs.stream().map(MostSpecificRef::m).forEach(x -> x.ok()); }
     void wrong(List<String> xs) { xs.stream().map(MostSpecificRef::m).forEach(x -> x.nonexistent()); } // expect
 }
+
+class RefHelped { void ok() { } }
+interface RefImpl { private RefHelped help() { return null; } default void use() { help(); } }
+interface RefApi { RefHelped help(); }
+interface RefBoth extends RefImpl, RefApi { }
+
+class PrivateNotARefCandidate {
+    void test(List<RefBoth> xs) { xs.stream().map(RefBoth::help).forEach(x -> x.ok()); }
+    void wrong(List<RefBoth> xs) { xs.stream().map(RefBoth::help).forEach(x -> x.nonexistent()); } // expect
+}

@@ -2489,7 +2489,9 @@ impl<'t> FileModel<'t> {
         if recv_ty.is_unknown() {
             return Ty::Unknown;
         }
-        let ms = self.methods_named(&recv_ty, name);
+        // members only, as for a call: no private method of a supertype, no
+        // static method of a superinterface
+        let ms = self.members_of(&recv_ty, name, mref);
         let n = sam.params.len();
         let by_arity: Vec<&MethodRef> = ms
             .iter()
