@@ -437,6 +437,20 @@ fn checked_before_lambda<'t>(cx: &Ctx<'_, 't>, callable: Node<'t>, local: usize)
     present || (outer.kind() == "lambda_expression" && checked_before_lambda(cx, outer, local))
 }
 
+/// `get()` inside the action an Optional runs only when it holds a value:
+/// `o.ifPresent(v -> use(o.get()))`, the first lambda of `o.ifPresentOrElse`.
+fn in_if_present<'t>(cx: &Ctx<'_, 't>, get: Node<'t>, local: usize) -> bool {
+    if !grounds_flow::analyses::is_effectively_final(cx.fm, local) {
+        return false;
+    }
+    get.ancestors().filter(|a| a.kind() == "lambda_expression").any(|lambda| {
+        let Some(call) = lambda.parent().filter(|p| p.kind() == "argument_list").and_then(|a| a.parent()) else { return false };
+        matches!(cx.fm.call_name(call), Some("ifPresent" | "ifPresentOrElse"))
+            && cx.fm.args_of(call).first() == Some(&lambda)
+            && call.field("object").map(|o| o.unparen()).is_some_and(|o| o.kind() == "identifier" && cx.fm.binder.decl_index_of_ref(o) == Some(local))
+    })
+}
+
 /// `get()` on the parameter of a stream step right after a filter that
 /// keeps only present Optionals: `.filter(o -> o.isPresent()).map(o -> o.get())`,
 /// `.filter(Optional::isPresent)`.
@@ -481,7 +495,7 @@ impl Rule for OptionalGetWithoutCheck {
                     return;
                 }
                 if let Some(i) = oa.optional_local(e.field("object")) {
-                    if !f.contains(&i) && !checked_before_lambda(cx, c, i) && !filtered_present(cx, e) {
+                    if !f.contains(&i) && !checked_before_lambda(cx, c, i) && !filtered_present(cx, e) && !in_if_present(cx, e, i) {
                         found.push(e);
                     }
                 }
