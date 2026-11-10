@@ -329,7 +329,7 @@ impl GradleSettings {
             return Evidence::Unknown;
         }
         for (s, exact) in [(self.release, true), (self.toolchain, true), (self.compat, false)] {
-            match (s.literal, s.opaque || (exact && s.mixed)) {
+            match (s.literal, s.opaque || s.mixed) {
                 (_, true) => return Evidence::Unknown,
                 (Some(r), false) if exact => return Evidence::Exact(r),
                 (Some(r), false) => return Evidence::AtLeast(r),
@@ -542,6 +542,9 @@ struct Pom {
     parent: Option<PathBuf>,
     /// The major version of a Spring Boot parent (0 when unread).
     spring_boot_parent: Option<u32>,
+    /// A profile sets the release, source or target: what applies depends
+    /// on conditions grounds cannot evaluate (the JDK running Maven, a flag).
+    profile_sets_release: bool,
 }
 
 #[derive(Default)]
@@ -599,6 +602,16 @@ impl PomCache {
 
     /// The evidence of a pom with its parents in the repository.
     fn evidence(&mut self, path: &Path) -> Evidence {
+        // a profile of the pom or a parent in the repository may set it otherwise
+        let mut cur = Some(path.to_path_buf());
+        for _ in 0..10 {
+            let Some(p) = cur.take() else { break };
+            let Some(pom) = self.load(&p) else { break };
+            if pom.profile_sets_release {
+                return Evidence::Unknown;
+            }
+            cur = pom.parent.clone();
+        }
         let value = |c: &mut PomCache, param: &str, prop: &str| -> Option<Option<u32>> {
             let raw = c.compiler(path, param, 0).or_else(|| c.property(path, prop, 0))?;
             Some(c.resolve(path, &raw).and_then(|r| parse_version(&r)))
@@ -662,6 +675,7 @@ impl PomCache {
 fn parse_pom(text: &str, path: &Path) -> Pom {
     let text = strip_comments(text, "", "<!--", "-->");
     // profiles switch settings on conditions we cannot evaluate
+    let profile_sets_release = elements(&text, "profiles").iter().any(|p| ["maven.compiler.release", "maven.compiler.source", "maven.compiler.target", "<release>", "<source>", "<target>"].iter().any(|k| p.contains(k)) && (p.contains("maven.compiler") || p.contains("maven-compiler-plugin")));
     let mut main = text.clone();
     while let (Some(s), Some(e)) = (main.find("<profiles>"), main.find("</profiles>")) {
         if e < s {
@@ -708,7 +722,7 @@ fn parse_pom(text: &str, path: &Path) -> Pom {
         p.exists().then_some(p)
     });
     let spring_boot_parent = parent_block.filter(|p| element(p, "groupId") == Some("org.springframework.boot")).map(|p| element(p, "version").and_then(|v| v.split('.').next()?.parse().ok()).unwrap_or(0));
-    Pom { props, compiler, parent, spring_boot_parent }
+    Pom { props, compiler, parent, spring_boot_parent, profile_sets_release }
 }
 
 #[cfg(test)]
@@ -770,7 +784,7 @@ mod tests {
                    <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-compiler-plugin</artifactId>
                      <configuration><release>${java.version}</release></configuration></plugin>
                  </plugins></build>
-                 <profiles><profile><properties><maven.compiler.release>21</maven.compiler.release></properties></profile></profiles></project>",
+                 <profiles><profile><properties><skipTests>true</skipTests></properties></profile></profiles></project>",
             )],
         );
         assert_eq!(infer_dir(&dir), Some(11));
@@ -814,7 +828,16 @@ mod tests {
         assert_eq!(crate::config::Config::load(&dir).unwrap().java_release(&ws), 17);
         assert_eq!(crate::config::Config::default().java_release(&ws), 8);
         let empty = temp("default", &[("build.gradle", "")]);
-        assert_eq!(crate::config::Config::default().java_release(&Workspace::discover(&empty, &[])), crate::config::DEFAULT_JAVA_RELEASE);
+        // without any setting: the installed JDK's API, else the default; the
+        // installed release is given here so that the test does not depend on the machine
+        let ws = Workspace::discover(&empty, &[]);
+        assert_eq!(plan(&ws, None, &[], None).load, crate::config::DEFAULT_JAVA_RELEASE);
+        assert_eq!(plan(&ws, None, &[], Some(25)).load, 25);
+        // grounds.toml's release wins whatever JDK is installed, newer or older
+        let ws = Workspace::discover(&dir, &[]);
+        for installed in [None, Some(11), Some(25)] {
+            assert_eq!(plan(&ws, Some(17), &[], installed).load, 17, "{installed:?}");
+        }
     }
 
     fn evidence_of(dir: &Path) -> Vec<(String, Evidence)> {
@@ -847,6 +870,19 @@ mod tests {
             ],
         );
         assert_eq!(evidence_of(&dir), vec![(":".into(), Unknown), ("checker".into(), Unknown), ("multi".into(), Unknown), ("same".into(), Exact(17))]);
+        // different source levels for different compile tasks: no floor either
+        let dir = temp("mixed-compat", &[("build.gradle", "compileJava { sourceCompatibility = 11 }\ncompileTestJava { sourceCompatibility = 17 }\n")]);
+        assert_eq!(evidence_of(&dir), vec![(":".into(), Unknown)]);
+        // Maven: a profile that sets the release (activated by the JDK, a flag)
+        let dir = temp(
+            "profile",
+            &[
+                ("pom.xml", "<project><properties><maven.compiler.release>11</maven.compiler.release></properties><profiles><profile><id>jdk17</id><activation><jdk>[17,)</jdk></activation><properties><maven.compiler.release>17</maven.compiler.release></properties></profile></profiles><modules><module>a</module></modules></project>"),
+                ("a/pom.xml", "<project><parent><artifactId>root</artifactId></parent></project>"),
+                ("b/pom.xml", "<project><properties><maven.compiler.release>11</maven.compiler.release></properties><profiles><profile><id>docs</id><properties><skipTests>true</skipTests></properties></profile></profiles></project>"),
+            ],
+        );
+        assert_eq!(evidence_of(&dir), vec![(":".into(), Unknown), ("a".into(), Unknown), ("b".into(), Exact(11))]);
         // a toolchain decides the API unless a release is set; Kotlin's languageVersion is not Java's
         let dir = temp(
             "toolchain",

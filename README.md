@@ -422,7 +422,8 @@ When `java_release` is not set, grounds reads each module's build:
   that release or newer;
 - nothing, or something grounds cannot evaluate (a variable, a property it
   cannot resolve, a parent pom outside the repository, different values set
-  under conditions): unknown.
+  under conditions or for different compile tasks, a Maven profile that sets
+  the release): unknown.
 
 `${...}` is resolved through parent poms in the repository; Gradle modules
 inherit from the root's `subprojects`/`allprojects` and from convention
@@ -431,7 +432,8 @@ sealed class or a module import in a module said to compile for an older
 release means that is not what compiles it: its release is unknown. All
 modules share one JDK API: the exact release when every module states one,
 otherwise the installed JDK's (the newest at hand, so nothing the code may
-use is missing), or a release newer than that when some module needs it.
+use is missing; 21 when no JDK is found), or a release newer than that when
+some module needs it.
 Imports of JDK classes a release lacks are reported only in modules whose
 release is exact. `grounds index` prints the release whose API is loaded.
 

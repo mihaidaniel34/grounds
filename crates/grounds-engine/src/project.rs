@@ -206,7 +206,8 @@ impl LombokConfigs {
 /// their module's.
 fn code_needs(path: &Path, stub: &FileStub) -> Option<u32> {
     use grounds_index::{ClassKind, Flags};
-    if path.components().any(|c| c.as_os_str().to_str().and_then(|d| d.strip_prefix("java")).is_some_and(|v| !v.is_empty() && v.trim_start_matches('-').chars().all(|c| c.is_ascii_digit()))) {
+    let comps: Vec<_> = path.components().collect();
+    if comps.windows(3).any(|w| w[0].as_os_str() == "src" && w[2].as_os_str().to_str().and_then(|d| d.strip_prefix("java")).is_some_and(|v| !v.is_empty() && v.trim_start_matches('-').chars().all(|c| c.is_ascii_digit()))) {
         return None;
     }
     let mut need = None;

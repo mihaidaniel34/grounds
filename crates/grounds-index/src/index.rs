@@ -1521,7 +1521,8 @@ pub fn module_dir(path: &str) -> &str {
 
 /// Module directories ending in `/`, the innermost first.
 fn innermost_first<T>(modules: Vec<(String, T)>) -> Vec<(String, T)> {
-    let mut modules: Vec<(String, T)> = modules.into_iter().map(|(d, r)| (if d.ends_with('/') { d } else { format!("{d}/") }, r)).collect();
+    let sep = std::path::MAIN_SEPARATOR;
+    let mut modules: Vec<(String, T)> = modules.into_iter().map(|(d, r)| (if d.ends_with(['/', sep]) { d } else { format!("{d}{sep}") }, r)).collect();
     modules.sort_by_key(|(d, _)| std::cmp::Reverse(d.len()));
     modules
 }

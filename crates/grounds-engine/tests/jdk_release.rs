@@ -123,6 +123,7 @@ fn a_release_the_build_does_not_state_as_a_literal_leaves_the_newest_api() {
     let dir = fresh("release-expression");
     write(&dir, "settings.gradle", "include 'app', 'plugin-api'\n");
     write(&dir, "build.gradle", "ext.targetJavaVersion = 21\nsubprojects {\n  apply plugin: 'java'\n  tasks.withType(JavaCompile).configureEach {\n    options.release.set(targetJavaVersion as Integer)\n  }\n}\n");
+    write(&dir, "app/build.gradle", "\n");
     write(&dir, "app/src/main/java/app/Stages.java", "package app;\n\nimport java.util.ArrayList;\n\npublic class Stages extends ArrayList<String> {\n    String first() { return getFirst(); }\n    String none() { return noSuchMethod(); }\n}\n");
     write(&dir, "plugin-api/build.gradle", "compileJava {\n  options.release.set(11)\n}\n");
     write(&dir, "plugin-api/src/main/java/api/Plugin.java", "package api;\n\npublic interface Plugin { }\n");
