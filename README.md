@@ -42,11 +42,17 @@ leaves tests for the end of the task.
   dropping `@Qualifier`, constructor cycles, bean name clashes. It knows
   `@Primary`, profiles and conditions (treated as unknown), generics,
   factory methods, Spring Data repositories, Feign clients, MapStruct mappers
-  and Micronaut's `@EachBean`, `@Replaces` and bean naming. A Spring
-  library (no `@SpringBootApplication` in its main sources, nor a
-  `@ComponentScan` next to a `main` method; auto-configurations scanning
-  their own packages count as library code) is not judged: the
-  application using it wires its beans. JSR-330 injection points are not
+  and Micronaut's `@EachBean`, `@Replaces` and bean naming. Spring
+  wiring is judged per application context: one started from a class
+  grounds can name (a `@SpringBootApplication`, `@SpringBootConfiguration`
+  or `@ComponentScan` class with a `main` method, a class handed to
+  `SpringApplication.run` or `new AnnotationConfigApplicationContext`,
+  a servlet initializer's sources), holding what that class imports and
+  scans. Code in no such context (a library, a sample nothing starts, a
+  context only tests assemble; auto-configurations scanning their own
+  packages count as library code) is not judged: the application using
+  it wires its beans. Two beans clash or compete only when both are in
+  one context. JSR-330 injection points are not
   judged in a project that also wires through a container grounds does not
   model (Guice or Sisu modules, HK2 binders, Dagger, Maven 4 DI, Quarkus
   build-time beans): any type may be bound there.

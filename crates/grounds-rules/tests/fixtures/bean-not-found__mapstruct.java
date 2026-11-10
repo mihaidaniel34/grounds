@@ -37,4 +37,4 @@ import org.springframework.stereotype.Service;
 @Service class UsesAbstractParenDefault { UsesAbstractParenDefault(AbstractParenDefaultMapper m) {} } // expect
 @Service class UsesAbstractSpacedDefault { UsesAbstractSpacedDefault(AbstractSpacedDefaultMapper m) {} } // expect
 
-@org.springframework.boot.autoconfigure.SpringBootApplication class FixtureApp {}
+@org.springframework.boot.autoconfigure.SpringBootApplication class FixtureApp { public static void main(String[] args) {} }
