@@ -209,8 +209,18 @@ pub struct DiModel {
     /// may provide the type.
     unseen: Vec<(Name, bool)>,
     /// Spring XML bean definitions (@ImportResource, an XML application
-    /// context): any class may be a bean.
+    /// context) in main sources: any class may be a bean.
     pub xml_config: bool,
+    /// The same, found only in test sources: test points only.
+    pub xml_config_in_tests: bool,
+    /// simple names referenced by test files that register beans in code
+    /// (registerSingleton, registerBean): for test points only
+    pub dynamic_types_in_tests: rustc_hash::FxHashSet<String>,
+    /// Producers the model saw but could not turn into beans, as their
+    /// declared return type and whether they are in test sources: the
+    /// instance may be of any subtype (`Store store()` may return a
+    /// `RedisStore`), so they may provide subtypes of that type too.
+    unseen_producers: Vec<(Name, bool)>,
 }
 
 /// Imports that show wiring through a container or mechanism the model does
@@ -460,8 +470,17 @@ struct Builder<'a> {
     /// @MapperScan's annotationClass): they register what they annotate
     filter_annotations: rustc_hash::FxHashSet<String>,
     /// a @MapperScan the model could not expand (placeholders, @MapperScans,
-    /// a MapperScannerConfigurer set up in code)
+    /// a MapperScannerConfigurer set up in code), in main sources and only
+    /// in test sources
     unexpanded_mapper_scan: bool,
+    unexpanded_mapper_scan_in_tests: bool,
+    /// types named by ASSIGNABLE_TYPE include filters (registering their
+    /// subtypes), and whether the filter is in test sources
+    filter_types: Vec<(Name, bool)>,
+    /// an include filter the model cannot evaluate (REGEX, ASPECTJ, CUSTOM)
+    /// in main sources / only in test sources: any class may be registered
+    opaque_filter: bool,
+    opaque_filter_in_tests: bool,
     /// classes registered through META-INF files
     registered: rustc_hash::FxHashSet<String>,
     /// the auto-configurations among them
@@ -676,14 +695,22 @@ impl<'a> Builder<'a> {
             // a stereotype on a concrete class that is still no bean, for a
             // reason the model does not know
             let stereotyped = !c.is_abstract() && anns.iter().any(|a| self.stereotype(a, 0).is_some());
-            let mapper = c.is_interface() && self.unexpanded_mapper_scan && !is_test;
-            if unknown || stereotyped || mapper {
+            // (a scan the model cannot read, declared in test sources,
+            // registers for test points only)
+            let main_scan = !is_test && (if c.is_interface() { self.unexpanded_mapper_scan } else { self.opaque_filter });
+            let test_scan = if c.is_interface() { self.unexpanded_mapper_scan_in_tests } else { self.opaque_filter_in_tests };
+            let concrete = !c.is_interface() && !c.is_abstract();
+            let assignable: Vec<bool> = if concrete { self.filter_types.iter().filter(|(t, _)| self.index.is_subclass(n, t).is_yes()).map(|(_, t)| *t).collect() } else { Vec::new() };
+            if unknown || stereotyped || main_scan || (!is_test && assignable.iter().any(|t| !t)) {
                 unseen.push((n.clone(), is_test));
+            } else if (test_scan && (c.is_interface() || concrete)) || !assignable.is_empty() {
+                unseen.push((n.clone(), true));
             }
         }
         // producers: in a class that is or may be a bean, factory methods
         // that made no bean and methods with an annotation the model cannot
         // classify (a plain class's leftover @Bean method registers nothing)
+        let mut producers: Vec<(Name, bool)> = Vec::new();
         for n in names {
             let Some(c) = self.index.class(n) else { continue };
             let registered = self.model.component_classes.contains_key(n) || unseen.iter().any(|(u, _)| u == n);
@@ -699,13 +726,16 @@ impl<'a> Builder<'a> {
                 let Some(ret) = m.ret.class_name() else { continue };
                 let anns = m.annotations.clone();
                 if self.is_factory_method(m) || anns.iter().any(|a| self.unclassified(a, stub.as_deref(), true, 0)) {
-                    unseen.push((Arc::from(ret), is_test));
+                    producers.push((Arc::from(ret), is_test));
                 }
             }
         }
         unseen.sort();
         unseen.dedup();
+        producers.sort();
+        producers.dedup();
         self.model.unseen = unseen;
+        self.model.unseen_producers = producers;
     }
 
     fn add_bean(&mut self, b: Bean) -> usize {
@@ -810,40 +840,70 @@ impl<'a> Builder<'a> {
 
         let in_scan = |pkg: &str| roots.is_empty() || roots.iter().any(|r| package_covered(r, pkg));
         // MyBatis @MapperScan: every interface in these packages is a bean
-        let mut mapper_pkgs: Vec<String> = Vec::new();
+        // (package pattern, declared in test sources: registers test beans)
+        let mut mapper_pkgs: Vec<(String, bool)> = Vec::new();
         for n in &names {
             let Some(c) = self.index.class(n) else { continue };
+            let in_tests = c.source_file().is_some_and(is_test_path);
+            let mut unexpanded = false;
             for a in c.annotations.iter().filter(|a| a.simple_name() == "MapperScan") {
-                let before = mapper_pkgs.len();
-                mapper_pkgs.extend(split_packages(["value", "basePackages"].iter().flat_map(|k| a.arg(k).map(|v| v.strings()).unwrap_or_default()).collect()));
+                let mut pkgs: Vec<String> = split_packages(["value", "basePackages"].iter().flat_map(|k| a.arg(k).map(|v| v.strings()).unwrap_or_default()).collect());
                 if let Some(v) = a.arg("basePackageClasses") {
-                    mapper_pkgs.extend(v.values().into_iter().filter_map(|x| if let AnnotationValue::Class(t) = x { t.class_name().map(|c| package_of(c).to_string()) } else { None }));
+                    pkgs.extend(v.values().into_iter().filter_map(|x| if let AnnotationValue::Class(t) = x { t.class_name().map(|c| package_of(c).to_string()) } else { None }));
                 }
                 // without packages MyBatis scans the annotated class's package
-                if mapper_pkgs.len() == before {
+                if pkgs.is_empty() {
                     if ["value", "basePackages", "basePackageClasses"].iter().any(|k| a.arg(k).is_some()) {
-                        self.unexpanded_mapper_scan = true;
+                        unexpanded = true;
                     } else {
-                        mapper_pkgs.push(c.package().to_string());
+                        pkgs.push(c.package().to_string());
                     }
                 }
+                mapper_pkgs.extend(pkgs.into_iter().map(|p| (p, in_tests)));
                 if let Some(v) = a.arg("annotationClass") {
                     self.filter_annotations.extend(v.values().into_iter().filter_map(|x| if let AnnotationValue::Class(t) = x { t.class_name().map(str::to_string) } else { None }));
                 }
             }
             if c.annotations.iter().any(|a| a.simple_name() == "MapperScans") {
-                self.unexpanded_mapper_scan = true;
+                unexpanded = true;
             }
-            // include filters register what the annotations they name annotate
+            if unexpanded {
+                if in_tests { self.unexpanded_mapper_scan_in_tests = true } else { self.unexpanded_mapper_scan = true }
+            }
+            // include filters: ANNOTATION filters register what the
+            // annotations they name annotate, ASSIGNABLE_TYPE filters the
+            // subtypes of the types they name; others (REGEX, ASPECTJ,
+            // CUSTOM) may register any class
             for a in c.annotations.iter().filter(|a| matches!(a.simple_name(), "ComponentScan" | "SpringBootApplication" | "ComponentScans")) {
-                if a.args.iter().any(|(k, _)| &**k == "includeFilters") || a.simple_name() == "ComponentScans" {
-                    let mut stack: Vec<AnnotationValue> = a.args.iter().map(|(_, v)| v.clone()).collect();
-                    while let Some(v) = stack.pop() {
-                        match v {
-                            AnnotationValue::Class(t) => self.filter_annotations.extend(t.class_name().map(str::to_string)),
-                            AnnotationValue::Annotation(n) => stack.extend(n.args.iter().map(|(_, v)| v.clone())),
-                            AnnotationValue::Array(xs) => stack.extend(xs),
-                            _ => {}
+                let mut filters: Vec<AnnotationInfo> = Vec::new();
+                let mut stack: Vec<AnnotationValue> = a.args.iter().filter(|(k, _)| matches!(&**k, "includeFilters" | "value")).map(|(_, v)| v.clone()).collect();
+                if a.simple_name() != "ComponentScans" {
+                    stack = a.arg("includeFilters").cloned().into_iter().collect();
+                }
+                while let Some(v) = stack.pop() {
+                    match v {
+                        AnnotationValue::Annotation(n) if n.simple_name() == "Filter" => filters.push(*n),
+                        AnnotationValue::Annotation(n) => stack.extend(n.arg("includeFilters").cloned()),
+                        AnnotationValue::Array(xs) => stack.extend(xs),
+                        AnnotationValue::Expr(_) => {
+                            if in_tests { self.opaque_filter_in_tests = true } else { self.opaque_filter = true }
+                        }
+                        _ => {}
+                    }
+                }
+                for f in filters {
+                    let kind = match f.arg("type") {
+                        None => Some("ANNOTATION".to_string()),
+                        Some(AnnotationValue::Enum { constant, .. }) => Some(constant.to_string()),
+                        Some(AnnotationValue::Expr(e)) => Some(e.rsplit('.').next().unwrap_or("").trim().to_string()),
+                        Some(_) => None,
+                    };
+                    let classes: Vec<String> = ["classes", "value"].iter().flat_map(|k| f.arg(k).map(|v| v.values()).unwrap_or_default()).filter_map(|x| if let AnnotationValue::Class(t) = x { t.class_name().map(str::to_string) } else { None }).collect();
+                    match kind.as_deref() {
+                        Some("ANNOTATION") => self.filter_annotations.extend(classes),
+                        Some("ASSIGNABLE_TYPE") => self.filter_types.extend(classes.into_iter().map(|t| (Arc::from(t.as_str()), in_tests))),
+                        _ => {
+                            if in_tests { self.opaque_filter_in_tests = true } else { self.opaque_filter = true }
                         }
                     }
                 }
@@ -852,10 +912,16 @@ impl<'a> Builder<'a> {
         // a pattern with a placeholder, or one that covers no package of the
         // project (a syntax we misread, or mappers in another repository)
         let packages: rustc_hash::FxHashSet<&str> = names.iter().map(|n| package_of(n)).collect();
-        if mapper_pkgs.iter().any(|r| r.contains("${") || !packages.iter().any(|p| package_covered(r, p))) {
-            self.unexpanded_mapper_scan = true;
+        for (r, in_tests) in &mapper_pkgs {
+            if r.contains("${") || !packages.iter().any(|p| package_covered(r, p)) {
+                if *in_tests { self.unexpanded_mapper_scan_in_tests = true } else { self.unexpanded_mapper_scan = true }
+            }
         }
-        let in_mapper_scan = |pkg: &str| mapper_pkgs.iter().any(|r| package_covered(r, pkg));
+        // None: not covered; Some(true): only by scans in test sources
+        let in_mapper_scan = |pkg: &str| {
+            let covering: Vec<bool> = mapper_pkgs.iter().filter(|(r, _)| package_covered(r, pkg)).map(|(_, t)| *t).collect();
+            if covering.is_empty() { None } else { Some(covering.iter().all(|t| *t)) }
+        };
         for n in &names {
             let registers = ["org.springframework.beans.factory.support.BeanDefinitionRegistryPostProcessor", "org.springframework.context.annotation.ImportBeanDefinitionRegistrar"].iter().any(|i| self.index.is_subclass(n, i).is_yes())
                 || self.index.raw_class(n).is_some_and(|(_, r)| r.interfaces.iter().any(|t| t.last_name().is_some_and(|l| matches!(l, "BeanDefinitionRegistryPostProcessor" | "ImportBeanDefinitionRegistrar"))));
@@ -913,7 +979,7 @@ impl<'a> Builder<'a> {
                 }
             }
             if c.annotations.iter().any(|a| a.simple_name() == "ImportResource") {
-                self.model.xml_config = true;
+                if c.source_file().is_some_and(is_test_path) { self.model.xml_config_in_tests = true } else { self.model.xml_config = true }
             }
         }
         for (path, stub) in self.index.files() {
@@ -921,16 +987,19 @@ impl<'a> Builder<'a> {
                 continue;
             }
             let mentions = |n: &str| stub.referenced_names.binary_search_by(|r| (**r).cmp(n)).is_ok();
-            if ["ClassPathXmlApplicationContext", "GenericXmlApplicationContext", "FileSystemXmlApplicationContext", "XmlBeanDefinitionReader", "XmlWebApplicationContext"].iter().any(|n| mentions(n)) && !is_test_path(path) {
-                self.model.xml_config = true;
+            // (evidence in test sources counts for test points only)
+            let in_tests = is_test_path(path);
+            if ["ClassPathXmlApplicationContext", "GenericXmlApplicationContext", "FileSystemXmlApplicationContext", "XmlBeanDefinitionReader", "XmlWebApplicationContext"].iter().any(|n| mentions(n)) {
+                if in_tests { self.model.xml_config_in_tests = true } else { self.model.xml_config = true }
             }
             if mentions("MapperScannerConfigurer") {
-                self.unexpanded_mapper_scan = true;
+                if in_tests { self.unexpanded_mapper_scan_in_tests = true } else { self.unexpanded_mapper_scan = true }
             }
             // registered in code: registerSingleton(Foo.class, ...),
             // registerBean(...), registerBeanDefinition(...)
             if ["registerSingleton", "registerBean", "registerBeanDefinition"].iter().any(|n| mentions(n)) {
-                self.model.dynamic_types.extend(stub.referenced_names.iter().map(|r| r.to_string()));
+                let target = if in_tests { &mut self.model.dynamic_types_in_tests } else { &mut self.model.dynamic_types };
+                target.extend(stub.referenced_names.iter().map(|r| r.to_string()));
             }
         }
         // ImportSelectors and ImportBeanDefinitionRegistrars are not beans; the
@@ -996,8 +1065,12 @@ impl<'a> Builder<'a> {
                         _ => {}
                     }
                 }
-                if source.is_none() && in_mapper_scan(c.package()) {
-                    source = Some((BeanSource::Mapper, Framework::Spring));
+                let mut test_only = false;
+                if source.is_none() {
+                    if let Some(t) = in_mapper_scan(c.package()) {
+                        source = Some((BeanSource::Mapper, Framework::Spring));
+                        test_only = t;
+                    }
                 }
                 if let Some((src, fw)) = source {
                     let qualifiers = self.qualifiers_of(&c.annotations);
@@ -1014,7 +1087,7 @@ impl<'a> Builder<'a> {
                             || c.annotations.iter().any(|a| a.simple_name() == "FeignClient" && a.arg("primary").and_then(|v| v.as_bool()) != Some(false)),
                         conditional: self.conditional_meta(&c.annotations),
                         file: file.clone(),
-                        is_test,
+                        is_test: is_test || test_only,
                         autowire_candidate: true,
                         framework: fw,
                         dynamic_names: false,
@@ -1444,6 +1517,10 @@ impl DiModel {
             produced: Default::default(),
             filter_annotations: Default::default(),
             unexpanded_mapper_scan: false,
+            unexpanded_mapper_scan_in_tests: false,
+            filter_types: Vec::new(),
+            opaque_filter: false,
+            opaque_filter_in_tests: false,
             registered: registered.iter().cloned().collect(),
             auto_registered: auto_registered.iter().cloned().collect(),
         };
@@ -1616,7 +1693,7 @@ impl DiModel {
             }
             if cands.is_empty() {
                 if before.is_empty() {
-                    return if maybe > 0 || self.opaque_imports || p.lazy || !self.provable_type(lk, &p.ty) || self.dynamically_registered(&p.ty) || self.may_be_registered_unseen(lk, p, include_test) {
+                    return if maybe > 0 || self.opaque_imports || p.lazy || !self.provable_type(lk, &p.ty) || self.dynamically_registered(&p.ty, include_test) || self.may_be_registered_unseen(lk, p, include_test) {
                         Resolution::Unknown
                     } else if p.optional {
                         Resolution::Absent
@@ -1633,7 +1710,7 @@ impl DiModel {
                 }
                 // a library type may get named beans from its own
                 // auto-configuration (clients configured by properties)
-                if !self.provable_type(lk, &p.ty) || self.dynamically_registered(&p.ty) || p.lazy || self.may_be_registered_unseen(lk, p, include_test) {
+                if !self.provable_type(lk, &p.ty) || self.dynamically_registered(&p.ty, include_test) || p.lazy || self.may_be_registered_unseen(lk, p, include_test) {
                     return Resolution::Unknown;
                 }
                 return Resolution::QualifierNotFound { qualifier: q.clone(), candidates: before };
@@ -1680,7 +1757,7 @@ impl DiModel {
                     || !self.provable_type(lk, &p.ty)
                     || jit_possible()
                     || self.factory_may_return(lk, &p.ty)
-                    || self.dynamically_registered(&p.ty)
+                    || self.dynamically_registered(&p.ty, include_test)
                     || self.may_be_registered_unseen(lk, p, include_test)
                 {
                     Resolution::Unknown
@@ -1782,11 +1859,15 @@ impl DiModel {
     /// turn into a bean (see `unseen`), or Spring XML may define beans, the
     /// answer is unknown.
     fn may_be_registered_unseen(&self, lk: &dyn ClassLookup, p: &InjectionPoint, include_test: bool) -> bool {
-        if self.xml_config && p.framework == Framework::Spring {
+        if (self.xml_config || (include_test && self.xml_config_in_tests)) && p.framework == Framework::Spring {
             return true;
         }
         let Some(want) = p.ty.class_name() else { return true };
         self.unseen.iter().any(|(n, is_test)| (include_test || !is_test) && (&**n == want || lk.is_subclass(n, want).is_yes()))
+            // a producer declared to return a supertype may return a subtype
+            || self.unseen_producers.iter().any(|(n, is_test)| {
+                (include_test || !is_test) && (&**n == want || lk.is_subclass(n, want).is_yes() || (&**n != "java.lang.Object" && lk.is_subclass(want, n).is_yes()))
+            })
     }
 
     /// Constructor-injection dependency edges between component classes.
@@ -1807,8 +1888,8 @@ impl DiModel {
     }
 
     /// Beans sharing a name (Spring refuses to start without overriding enabled).
-    fn dynamically_registered(&self, ty: &Ty) -> bool {
-        ty.class_name().is_some_and(|c| self.dynamic_types.contains(simple_name_of(c)))
+    fn dynamically_registered(&self, ty: &Ty, include_test: bool) -> bool {
+        ty.class_name().is_some_and(|c| self.dynamic_types.contains(simple_name_of(c)) || (include_test && self.dynamic_types_in_tests.contains(simple_name_of(c))))
     }
 
     fn share_scan_root(&self, a: &Bean, b: &Bean) -> bool {
@@ -2554,5 +2635,47 @@ mod tests {
         ] {
             assert_eq!(resolution(&files), Resolution::Unknown, "{why}");
         }
+    }
+
+    #[test]
+    fn unseen_registrations_keep_to_their_source_set_and_kind() {
+        let app = ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication class App {}");
+        let port = ("src/main/java/app/Port.java", "package app; public interface Port {}");
+        let uses = ("src/main/java/app/Uses.java", "package app; import org.springframework.stereotype.*; @Service class Uses { Uses(Port port) {} }");
+        let test_uses = ("src/test/java/app/TestUses.java", "package app; import org.springframework.stereotype.*; @Service class TestUses { TestUses(Port testPort) {} }");
+        let resolve = |extra: &[(&'static str, &'static str)], name: &str| {
+            let mut files = vec![app, port, uses, test_uses];
+            files.extend_from_slice(extra);
+            let (idx, m) = model(&files);
+            point_resolution(&idx, &m, name)
+        };
+        // evidence found only in test sources leaves main points judged
+        for extra in [
+            ("src/test/java/app/Xml.java", "package app; @org.springframework.context.annotation.ImportResource(\"beans.xml\") class Xml {}"),
+            ("src/test/java/app/Mappers.java", "package app; class Mappers { org.mybatis.spring.mapper.MapperScannerConfigurer c; }"),
+            ("src/test/java/app/Registers.java", "package app; class Registers { void r(Object ctx) { registerSingleton(Port.class); } void registerSingleton(Object o) {} }"),
+        ] {
+            assert_eq!(resolve(&[extra], "port"), Resolution::NotFound, "{}", extra.1);
+            assert_eq!(resolve(&[extra], "testPort"), Resolution::Unknown, "{}", extra.1);
+        }
+        // a test's @MapperScan of its own package registers test mappers only
+        let scan = ("src/test/java/app/MapperTestConfig.java", "package app; @org.mybatis.spring.annotation.MapperScan class MapperTestConfig {}");
+        assert_eq!(resolve(&[scan], "port"), Resolution::NotFound);
+        assert!(matches!(resolve(&[scan], "testPort"), Resolution::Unique(_)));
+        // an ASSIGNABLE_TYPE include filter registers the subtypes of a type
+        let impl_ = ("src/main/java/app/PortImpl.java", "package app; class PortImpl implements Port {}");
+        let filter = ("src/main/java/app/Scan.java", "package app; import org.springframework.context.annotation.*;
+             @Configuration @ComponentScan(includeFilters = @ComponentScan.Filter(type = FilterType.ASSIGNABLE_TYPE, classes = Port.class)) class Scan {}");
+        assert_eq!(resolve(&[impl_], "port"), Resolution::NotFound);
+        assert_eq!(resolve(&[impl_, filter], "port"), Resolution::Unknown);
+        // a producer declared to return a supertype may return the injected subtype
+        let (idx, m) = model(&[
+            app,
+            ("src/main/java/app/A.java", "package app; import org.springframework.stereotype.*;
+             interface Store {} class RedisStore implements Store {}
+             @org.springframework.context.annotation.Configuration class Stores { @com.acme.Exported Store store() { return new RedisStore(); } }
+             @Service class UsesRedis { UsesRedis(RedisStore redis) {} }"),
+        ]);
+        assert_eq!(point_resolution(&idx, &m, "redis"), Resolution::Unknown);
     }
 }
