@@ -46,7 +46,10 @@ leaves tests for the end of the task.
   library (no `@SpringBootApplication` in its main sources, nor a
   `@ComponentScan` next to a `main` method; auto-configurations scanning
   their own packages count as library code) is not judged: the
-  application using it wires its beans.
+  application using it wires its beans. JSR-330 injection points are not
+  judged in a project that also wires through a container grounds does not
+  model (Guice or Sisu modules, HK2 binders, Dagger, Maven 4 DI, Quarkus
+  build-time beans): any type may be bound there.
 - **Lombok:** generated constructors (including `staticName`/`staticConstructor`
   factories), getters, setters, `@With`, `@Builder` on classes, constructors
   and methods (with `@Builder.Default`), `@SuperBuilder` across files,

@@ -185,7 +185,29 @@ pub struct DiModel {
     incomplete: Vec<usize>,
     /// classes with an @Inject constructor: just-in-time bindable in JSR-330 containers
     jit: Vec<Name>,
+    /// A JSR-330 container or binding mechanism whose rules the model does
+    /// not implement (Guice/Sisu modules, HK2 binders, Dagger, Maven 4 DI,
+    /// Quarkus build-time beans), found in main sources: any type may be
+    /// bound there, so no JSR-330 injection point is judged.
+    pub unmodeled_container: Option<&'static str>,
+    /// The same, found only in test sources: test injection points are not judged.
+    pub unmodeled_container_in_tests: Option<&'static str>,
 }
+
+/// Imports that show wiring through a container or mechanism the model does
+/// not implement, by package prefix. A Guice module, an HK2 binder or a
+/// Dagger component binds types in code; Sisu and Maven 4's own DI add
+/// index-based and bridged bindings; Quarkus extensions add synthetic beans
+/// at build time (config mappings, REST and AI clients, recorder beans).
+const UNMODELED_CONTAINERS: &[(&str, &str)] = &[
+    ("com.google.inject.", "Guice"),
+    ("org.eclipse.sisu.", "Sisu"),
+    ("org.apache.maven.api.di.", "Maven DI"),
+    ("org.glassfish.hk2.", "HK2"),
+    ("org.glassfish.jersey.internal.inject.", "HK2"),
+    ("dagger.", "Dagger"),
+    ("io.quarkus.", "Quarkus"),
+];
 
 const SPRING_STEREOTYPES: &[&str] = &[
     "org.springframework.stereotype.Component",
@@ -421,13 +443,20 @@ impl<'a> Builder<'a> {
         let mut boot_scans: Vec<(String, String, bool)> = Vec::new();
         let mut spring = false;
         let mut micronaut = false;
-        for (_, stub) in self.index.files() {
+        for (path, stub) in self.index.files() {
             // the frameworks' own sources (vendored, or test stubs) say nothing
             // about what the project uses
             if is_framework_class(&format!("{}.X", stub.package)) {
                 continue;
             }
             for imp in &stub.imports {
+                if let Some((_, name)) = UNMODELED_CONTAINERS.iter().find(|(prefix, _)| imp.path.starts_with(prefix)) {
+                    // (the smallest name, whatever order the files come in)
+                    let slot = if is_test_path(path) { &mut self.model.unmodeled_container_in_tests } else { &mut self.model.unmodeled_container };
+                    if slot.is_none_or(|s| *name < s) {
+                        *slot = Some(name);
+                    }
+                }
                 if imp.path.starts_with("org.springframework") {
                     spring = true;
                 }
@@ -1116,6 +1145,13 @@ impl DiModel {
         if p.ty.is_unknown() || p.ty.mentions_type_var() || self.duplicated.contains(&p.owner) {
             return Resolution::Unknown;
         }
+        // JSR-330 points in a project wired (also) by a container whose
+        // bindings we cannot see: Guice resolves cycles through proxies,
+        // Sisu picks the highest-ranked of several implementations, and
+        // any module, binder or build step may bind the type
+        if p.framework == Framework::Jakarta && (self.unmodeled_container.is_some() || (self.unmodeled_container_in_tests.is_some() && p.file.as_deref().is_some_and(is_test_path))) {
+            return Resolution::Unknown;
+        }
         // a library's beans are wired by the application using it
         if p.framework == Framework::Spring && !p.file.as_deref().is_some_and(is_test_path) && !self.in_application(p.file.as_deref(), &p.owner) {
             return Resolution::Unknown;
@@ -1677,4 +1713,86 @@ mod tests {
         )]);
         assert_eq!(resolution_of(&idx, &m, "app/A.java", "x"), Resolution::Unique(m.beans.iter().position(|b| b.name == "b").unwrap()));
     }
+
+    const JSR330: [(&str, &str); 3] = [
+        ("jakarta/inject/Inject.java", "package jakarta.inject; public @interface Inject {}"),
+        ("jakarta/inject/Scope.java", "package jakarta.inject; public @interface Scope {}"),
+        ("jakarta/inject/Singleton.java", "package jakarta.inject; @Scope public @interface Singleton {}"),
+    ];
+
+    /// JSR-330 classes with a missing binding, two implementations of one
+    /// interface and a constructor cycle through interfaces, plus `extra`.
+    fn jsr330_project(extra: &[(&'static str, &'static str)]) -> (Index, DiModel) {
+        let mut files: Vec<(&str, &str)> = JSR330.to_vec();
+        files.push((
+            "src/main/java/app/A.java",
+            "package app; import jakarta.inject.*;
+             interface Store {}
+             interface Engine {}
+             @Singleton class V8 implements Engine {}
+             @Singleton class V6 implements Engine {}
+             interface Ping {} interface Pong {}
+             @Singleton class PingImpl implements Ping { @Inject PingImpl(Pong pong) {} }
+             @Singleton class PongImpl implements Pong { @Inject PongImpl(Ping ping) {} }
+             @Singleton class Uses { @Inject Uses(Store store, Engine engine) {} }",
+        ));
+        files.push(("src/test/java/app/UsesTest.java", "package app; import jakarta.inject.*; @Singleton class InTest { @Inject InTest(Store testStore) {} }"));
+        files.extend_from_slice(extra);
+        model(&files)
+    }
+
+    fn point_resolution(idx: &Index, m: &DiModel, name: &str) -> Resolution {
+        let p = m.points.iter().find(|p| p.name == name).expect("injection point");
+        m.resolve(idx, p, p.file.as_deref().is_some_and(is_test_path))
+    }
+
+    #[test]
+    fn jsr330_wiring_is_judged_when_the_model_implements_the_container() {
+        let (idx, m) = jsr330_project(&[]);
+        assert_eq!(point_resolution(&idx, &m, "store"), Resolution::NotFound);
+        assert!(matches!(point_resolution(&idx, &m, "engine"), Resolution::Ambiguous(_)));
+        assert_eq!(point_resolution(&idx, &m, "testStore"), Resolution::NotFound);
+        assert_eq!(m.ctor_edges.len(), 2);
+    }
+
+    #[test]
+    fn a_container_the_model_does_not_implement_leaves_jsr330_wiring_unknown() {
+        // a Guice/Sisu module, an HK2 binder, a Dagger module, Maven 4 DI or
+        // a Quarkus build step may bind any type: nothing missing, no
+        // ambiguity (Sisu picks the highest-ranked implementation), no
+        // cycle (Guice proxies interfaces)
+        for evidence in [
+            "package app.wiring; import com.google.inject.AbstractModule; public class Wiring extends AbstractModule {}",
+            "package app.wiring; import org.eclipse.sisu.space.SpaceModule; public class Wiring {}",
+            "package app.wiring; import org.glassfish.hk2.utilities.binding.AbstractBinder; public class Wiring extends AbstractBinder {}",
+            "package app.wiring; import dagger.Module; @Module public class Wiring {}",
+            "package app.wiring; import org.apache.maven.api.di.Provides; public class Wiring {}",
+            "package app.wiring; import io.quarkus.runtime.annotations.Recorder; @Recorder public class Wiring {}",
+        ] {
+            let (idx, m) = jsr330_project(&[("src/main/java/app/wiring/Wiring.java", evidence)]);
+            assert!(m.unmodeled_container.is_some(), "{evidence}");
+            for name in ["store", "engine", "testStore", "pong", "ping"] {
+                assert_eq!(point_resolution(&idx, &m, name), Resolution::Unknown, "{name}: {evidence}");
+            }
+            assert!(m.ctor_edges.is_empty(), "{evidence}");
+        }
+        // a Guice module in the tests wires the tests only
+        let (idx, m) = jsr330_project(&[("src/test/java/app/TestWiring.java", "package app; import com.google.inject.AbstractModule; class TestWiring extends AbstractModule {}")]);
+        assert_eq!(point_resolution(&idx, &m, "store"), Resolution::NotFound);
+        assert_eq!(point_resolution(&idx, &m, "testStore"), Resolution::Unknown);
+    }
+
+    #[test]
+    fn spring_wiring_is_judged_beside_an_unmodeled_container() {
+        // a Guice module binds nothing into a Spring context
+        let (idx, m) = model(&[
+            ("src/main/java/app/A.java", "package app; import org.springframework.stereotype.*;
+             interface Missing {}
+             @Service class Uses { Uses(Missing missing) {} }
+             @org.springframework.boot.autoconfigure.SpringBootApplication class App {}"),
+            ("src/main/java/app/Wiring.java", "package app; import com.google.inject.AbstractModule; class Wiring extends AbstractModule {}"),
+        ]);
+        assert_eq!(point_resolution(&idx, &m, "missing"), Resolution::NotFound);
+    }
+
 }
