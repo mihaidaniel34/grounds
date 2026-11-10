@@ -341,10 +341,12 @@ pub fn modules_built_against_own_release(ws: &Workspace) -> Vec<PathBuf> {
                 Some(v) => vec![resolve(&mut cache, pom, v)],
                 None => {
                     let mut c = Vec::new();
+                    // inherited entries are interpolated in the consumer's
+                    // properties, as Maven's effective POM does
                     for decl in &chain {
                         for (mg, ma, mv) in &decl.managed {
-                            if ma == a && resolve(&mut cache, decl, mg) == g {
-                                c.push(resolve(&mut cache, decl, mv));
+                            if ma == a && resolve(&mut cache, pom, mg) == g {
+                                c.push(resolve(&mut cache, pom, mv));
                             }
                         }
                     }
@@ -643,6 +645,13 @@ mod tests {
         write("m/same/pom.xml", &child("same", "root", uses_core));
         write("m/old/pom.xml", &child("old", "root", &(managed("2") + uses_core)));
         assert_eq!(found(&dir.join("m")), vec!["old"]);
+        // an inherited managed version is read in the consumer's properties:
+        // the parent manages core at ${core.version} = 2, a child sets it to 3
+        write("p/pom.xml", &format!("<project><groupId>g</groupId><artifactId>root</artifactId><version>3</version><properties><core.version>2</core.version></properties>{}</project>", managed("${core.version}")));
+        write("p/core/pom.xml", &child("core", "root", ""));
+        write("p/current/pom.xml", &child("current", "root", &format!("<properties><core.version>3</core.version></properties>{uses_core}")));
+        write("p/old/pom.xml", &child("old", "root", uses_core));
+        assert_eq!(found(&dir.join("p")), vec!["old"]);
         // ${revision}: resolved before the reactor version is compared
         write("r/pom.xml", "<project><groupId>g</groupId><artifactId>root</artifactId><version>${revision}</version><properties><revision>3</revision><old>2</old></properties></project>");
         let dep = |a: &str, v: &str| format!("<dependencies><dependency><groupId>g</groupId><artifactId>{a}</artifactId><version>{v}</version></dependency></dependencies>");
