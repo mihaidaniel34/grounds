@@ -620,6 +620,12 @@ fn only_the_promised_rules_are_stable_in_pending_and_sarif_rules_take_the_weaker
         let want = if grounds_engine::session::stable_in_changed(f.rule) { grounds_rules::Maturity::Stable } else { grounds_rules::Maturity::Preview };
         assert_eq!(f.maturity, want, "{f:?}");
     }
+    // a break on a changed line is as mature as the weakest place under it
+    assert!(!r.breaks.is_empty());
+    for b in &r.breaks {
+        let all_stable = b.broken.iter().all(|&i| r.pending[i].maturity == grounds_rules::Maturity::Stable);
+        assert_eq!(b.finding.maturity == grounds_rules::Maturity::Stable, all_stable, "{b:?}");
+    }
 
     // `--all-lines`: the pre-existing gap on an unchanged line (preview) and a
     // new break on a changed line (stable) of the same rule
@@ -728,4 +734,36 @@ fn a_configuration_file_written_twice_at_the_same_time_is_read() {
     s.sync(&[]);
     assert_eq!(s.project.load_began, loaded);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The same place, a different claim: a changed return type turns "`Old` has
+/// no method `missing`" (there before the change) into "`New` has no method
+/// `missing`" on an unchanged line of another file. That is a new break.
+#[test]
+fn a_different_claim_at_the_same_place_is_a_new_break() {
+    let repo = std::env::temp_dir().join(format!("grounds-sameplace-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&repo);
+    let dir = repo.join("app");
+    write(&dir, "settings.gradle", "rootProject.name = 'demo'\n");
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, "src/main/java/demo/Old.java", "package demo;\npublic class Old {\n    public void present() {}\n}\n");
+    write(&dir, "src/main/java/demo/New.java", "package demo;\npublic class New {\n    public void present() {}\n}\n");
+    write(&dir, "src/main/java/demo/Lib.java", "package demo;\npublic class Lib {\n    public Old api() { return null; }\n    public void helper(int a) {}\n}\n");
+    write(&dir, "src/main/java/demo/Caller.java", "package demo;\nclass Caller {\n    void t(Lib l) { l.api().missing(); l.helper(1); }\n}\n");
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "init"]);
+    let mut s = Session::open(&dir).unwrap();
+    // `helper` widened (so Caller is a dependent per turn), `api` now returns `New`
+    write(&dir, "src/main/java/demo/Lib.java", "package demo;\npublic class Lib {\n    public New api() { return null; }\n    public void helper(long a) {}\n}\n");
+    let opts = |base: Option<String>| CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base };
+    let msgs = |r: &grounds_engine::session::Report| r.pending.iter().map(|f| f.message.clone()).collect::<Vec<_>>();
+    let r = s.check(&opts(None));
+    assert_eq!(msgs(&r), ["`New` has no method `missing`"], "per turn: {:?}", r.pending);
+    git(&repo, &["checkout", "-qb", "feature"]);
+    git(&repo, &["commit", "-qam", "api"]);
+    let mb = grounds_engine::git::merge_base(&dir, "main").unwrap();
+    let r = s.check(&opts(Some(mb)));
+    assert_eq!(msgs(&r), ["`New` has no method `missing`"], "--base: {:?}", r.pending);
+    let _ = std::fs::remove_dir_all(&repo);
 }

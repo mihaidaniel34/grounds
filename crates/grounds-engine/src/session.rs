@@ -189,6 +189,18 @@ fn claim_key(f: &Finding) -> (&'static str, String) {
     (f.rule, m.to_string())
 }
 
+/// A finding in a file the change did not touch, as the comparison with the
+/// project before the change sees it: the place and what is claimed there.
+/// The fingerprint names the line, not the call on it (`a.foo(); a.bar();`
+/// breaking foo while fixing bar keeps the fingerprint, not the column), and
+/// the same place can carry a different claim after the change (a changed
+/// return type: "`Old` has no method `x`" becomes "`New` has no method `x`").
+type PlaceClaim = (String, u32, (&'static str, String));
+
+fn place_claim(f: &Finding) -> PlaceClaim {
+    (f.fingerprint.clone(), f.col, claim_key(f))
+}
+
 /// The identifiers a message quotes in `backticks`, before any `;` (the
 /// hint or list of candidates that follows).
 fn quoted_names(message: &str) -> Vec<String> {
@@ -558,8 +570,8 @@ impl Session {
                     // (files deleted since HEAD are no longer in the index, so
                     // no dependent is analyzed against a stub of another version)
                     let touched = self.touched(opts, &files, &deleted, rev);
-                    let before: FxHashSet<(String, u32)> = self.at_base(&touched, rev, |s| s.analyze(&s.resolution_rules, &deps)).into_iter().map(|f| (f.fingerprint, f.col)).collect();
-                    now.into_iter().filter(|f| !before.contains(&(f.fingerprint.clone(), f.col))).collect()
+                    let before: FxHashSet<PlaceClaim> = self.at_base(&touched, rev, |s| s.analyze(&s.resolution_rules, &deps)).iter().map(place_claim).collect();
+                    now.into_iter().filter(|f| !before.contains(&place_claim(f))).collect()
                 }
             };
             // the promise covers the compile-break and wiring rules; the per-turn
@@ -628,30 +640,45 @@ impl Session {
     }
 
     /// Run `f` on the project as it was at `rev` for the `touched` files
-    /// (their version there, or none), then put their current version back.
+    /// (their version there, or none), then put the current stubs and bean
+    /// model back as they were, from memory, also when `f` panics: the daemon
+    /// survives a panic in a request, and no file's time would tell a later
+    /// sync that the index holds the base version.
     fn at_base<R>(&mut self, touched: &[PathBuf], rev: &str, f: impl FnOnce(&Session) -> R) -> R {
-        let install = |s: &mut Session, f: &PathBuf, text: Option<String>| {
-            let key = path_key(f);
-            match text {
-                Some(t) => {
-                    let stub = Arc::new(s.project.extract(f, &ParsedFile::parse(t)));
-                    s.project.index.set_file(key, stub);
+        let saved: Vec<(Arc<str>, Option<Arc<FileStub>>)> = touched.iter().map(|p| {
+            let key = path_key(p);
+            let stub = self.project.index.file(&key).cloned();
+            (key, stub)
+        }).collect();
+        let mut base_di = grounds_di::DiModel::default();
+        base_di.lombok_copies_qualifiers = self.project.di.lombok_copies_qualifiers;
+        base_di.bean_overriding_allowed = self.project.di.bean_overriding_allowed;
+        let di = std::mem::replace(&mut self.project.di, base_di);
+        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for p in touched {
+                let key = path_key(p);
+                match git::version_at(self.root(), rev, p) {
+                    Some(t) => {
+                        let stub = Arc::new(self.project.extract(p, &ParsedFile::parse(t)));
+                        self.project.index.set_file(key, stub);
+                    }
+                    None => self.project.index.remove_file(&key),
                 }
-                None => s.project.index.remove_file(&key),
             }
-        };
-        for p in touched {
-            let old = git::version_at(self.root(), rev, p);
-            install(self, p, old);
+            self.project.rebuild_di();
+            f(self)
+        }));
+        for (key, stub) in saved {
+            match stub {
+                Some(stub) => self.project.index.set_file(key, stub),
+                None => self.project.index.remove_file(&key),
+            }
         }
-        self.project.rebuild_di();
-        let out = f(self);
-        for p in touched {
-            let cur = std::fs::read_to_string(p).ok();
-            install(self, p, cur);
+        self.project.di = di;
+        match out {
+            Ok(r) => r,
+            Err(e) => std::panic::resume_unwind(e),
         }
-        self.project.rebuild_di();
-        out
     }
 
     /// Findings of the cross-file rules in files outside `changed`/`deleted`
@@ -670,12 +697,10 @@ impl Session {
         let now = self.analyze(&rules, &others);
         let (before, base_classes) = self.at_base(&touched, rev, |s| {
             let classes: Vec<Name> = touched.iter().filter_map(|f| s.project.index.file(&path_key(f))).flat_map(|stub| stub.classes.iter().map(|c| c.name.clone())).collect();
-            // the fingerprint names the line, not the call on it: `a.foo(); a.bar();`
-            // breaking foo while fixing bar keeps the fingerprint, not the column
-            let before: FxHashSet<(String, u32)> = s.analyze(&rules, &others).into_iter().map(|f| (f.fingerprint, f.col)).collect();
+            let before: FxHashSet<PlaceClaim> = s.analyze(&rules, &others).iter().map(place_claim).collect();
             (before, classes)
         });
-        let mut found: Vec<Finding> = now.into_iter().filter(|f| !before.contains(&(f.fingerprint.clone(), f.col))).collect();
+        let mut found: Vec<Finding> = now.into_iter().filter(|f| !before.contains(&place_claim(f))).collect();
         // classes the change deleted or renamed: references to them are unknown
         // types, which the rules leave alone (a missing jar looks the same)
         let removed: Vec<Name> = base_classes.into_iter().filter(|c| self.project.index.class(c).is_none()).collect();
@@ -933,7 +958,9 @@ impl Session {
                 let severity = broken.iter().map(|&i| pending[i].severity).min().unwrap_or(Severity::Error);
                 let message = format!("This change breaks {} place(s) in other files: {}{more}", broken.len(), shown.join(", "));
                 let fingerprint = format!("{:016x}", xxhash_rust::xxh3::xxh3_64(format!("breaks-other-files|{path}|{}", broken.iter().map(|&i| pending[i].fingerprint.as_str()).collect::<Vec<_>>().join(",")).as_bytes()));
-                let finding = Finding { path, line, col: 1, end_line: line, end_col: 1, rule: "breaks-other-files", severity, category: "bug", message, maturity: Maturity::Stable, fingerprint, legacy_fingerprint: None, fix: None, start: 0, end: 0 };
+                // as mature as the weakest place it stands for
+                let maturity = if broken.iter().all(|&i| pending[i].maturity == Maturity::Stable) { Maturity::Stable } else { Maturity::Preview };
+                let finding = Finding { path, line, col: 1, end_line: line, end_col: 1, rule: "breaks-other-files", severity, category: "bug", message, maturity, fingerprint, legacy_fingerprint: None, fix: None, start: 0, end: 0 };
                 Break { finding, broken }
             })
             .collect()
@@ -1073,4 +1100,54 @@ pub fn render(report: &Report, max: usize, style: crate::report::Style) -> Strin
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn git(dir: &Path, args: &[&str]) {
+        let ok = std::process::Command::new("git").arg("-C").arg(dir).args(args).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t").env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t").status().unwrap().success();
+        assert!(ok, "git {args:?}");
+    }
+
+    /// A panic while the project is in its base state (the daemon catches it
+    /// and goes on) must not leave the base version of the files behind: no
+    /// file's time changed, so no later sync would repair it.
+    #[test]
+    fn a_panic_in_the_base_state_leaves_the_session_as_it_was() {
+        let dir = std::env::temp_dir().join(format!("grounds-atbase-panic-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let w = |rel: &str, t: &str| {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, t).unwrap();
+            // older than the window in which `sync` reads a recent file again,
+            // which would repair the index by chance
+            let old = SystemTime::now() - std::time::Duration::from_secs(60);
+            std::fs::File::options().write(true).open(&p).unwrap().set_modified(old).unwrap();
+        };
+        w("build.gradle", "plugins { id 'java' }\n");
+        w("src/main/java/demo/Owner.java", "package demo;\npublic class Owner {\n    public void addPet(String p) {}\n}\n");
+        w("src/main/java/demo/Clinic.java", "package demo;\nclass Clinic {\n    void m(Owner o) { o.addPet(\"rex\"); }\n}\n");
+        git(&dir, &["init", "-q"]);
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-qm", "init"]);
+        w("src/main/java/demo/Owner.java", "package demo;\npublic class Owner {\n    public void registerPet(String p) {}\n}\n");
+        let owner = dir.join("src/main/java/demo/Owner.java").canonicalize().unwrap();
+        let opts = CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None };
+        let mut s = Session::open(&dir).unwrap();
+        let first = serde_json::to_string(&s.check(&opts)).unwrap();
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.at_base(&[owner.clone()], "HEAD", |_| -> () { panic!("in the base state") })));
+        std::panic::set_hook(hook);
+        assert!(r.is_err());
+        let after = serde_json::to_string(&s.check(&opts)).unwrap();
+        let fresh = serde_json::to_string(&Session::open(&dir).unwrap().check(&opts)).unwrap();
+        assert_eq!(after, fresh);
+        assert_eq!(after, first);
+        assert!(after.contains("Clinic.java"), "{after}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
