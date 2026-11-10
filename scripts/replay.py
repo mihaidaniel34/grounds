@@ -137,15 +137,20 @@ def main():
     # the main line, newest first, back to the parent of the Nth commit with Java changes
     line = git(d, "rev-list", "--first-parent", head).split()
     java = lambda parent, commit: git(d, "diff", "--name-only", parent, commit, "--", "*.java").split()
+    restore = lambda: git(d, "checkout", "-q", "--no-overwrite-ignore", *(["--detach", head] if back == head else [back]))
     steps_back = [i for i in range(len(line) - 1) if java(line[i + 1], line[i])][:a.commits]
     fit = len(steps_back)
     if a.budget is not None and steps_back:
         # what the newest step costs from scratch; the daemon's answer costs about as much
         i = steps_back[0]
-        git(d, *move, line[i])
-        t = time.monotonic()
-        changed(grounds, d, line[i + 1], False)
-        cost = 2 * (time.monotonic() - t)
+        try:
+            git(d, *move, line[i])
+            t = time.monotonic()
+            changed(grounds, d, line[i + 1], False)
+            cost = 2 * (time.monotonic() - t)
+        except BaseException:
+            restore()  # the walk below, which puts the checkout back, has not begun
+            raise
         # (with a fifth to spare: the first steps also load the project)
         fit = max(1, min(fit, int(0.8 * a.budget / cost))) if cost > 0 else fit
         if fit < len(steps_back):
@@ -199,7 +204,7 @@ def main():
             steps.append(step)
     finally:
         subprocess.run([grounds, "daemon", "--root", d, "--stop"], capture_output=True)
-        git(d, "checkout", "-q", "--no-overwrite-ignore", *(["--detach", head] if back == head else [back]))
+        restore()
     if stats["left"]:
         print(f"{project}: time budget of {a.budget:.0f} s used up, {stats['left']} commits with Java changes not asked about")
     print(f"{project}: {stats['commits']} commits replayed ({stats['skipped']} without Java changes), "
