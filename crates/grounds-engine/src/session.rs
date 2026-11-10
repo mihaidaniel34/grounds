@@ -211,7 +211,6 @@ impl Session {
         // with its old content. So a time that is recent as of the start of
         // the load is not trusted: a source file is read again at the next
         // sync, and for a configuration file the project is loaded again.
-        let seen = Instant::now();
         let began = project.load_began;
         let config = config_files(&project);
         let config_trust = if config.iter().any(|(_, m)| m.is_some_and(|m| recent(m, began))) { ConfigTrust::Unread } else { ConfigTrust::Sure };
@@ -219,7 +218,8 @@ impl Session {
         for f in &s.project.workspace.files {
             if let Ok(m) = std::fs::metadata(&f.path).and_then(|m| m.modified()) {
                 if recent(m, began) {
-                    s.pending.insert(f.path.clone(), seen);
+                    // seen now, not when the walk began: the margin counts from the look that found this time
+                    s.pending.insert(f.path.clone(), Instant::now());
                 }
                 s.mtimes.insert(f.path.clone(), m);
             }
@@ -312,6 +312,7 @@ impl Session {
                 // then seen as a change at the next sync, not missed
                 let (began, clock) = (Instant::now(), SystemTime::now());
                 let noted = std::fs::metadata(&p).and_then(|m| m.modified()).ok();
+                let looked = Instant::now();
                 if let Ok(text) = std::fs::read_to_string(&p) {
                     let pf = ParsedFile::parse(text);
                     let stub = Arc::new(self.project.extract(&p, &pf));
@@ -330,8 +331,9 @@ impl Session {
                 if let Some(m) = noted {
                     // a write that shares this time is caught by reading
                     // again, until the time is too old to be shared
-                    let seen = self.pending.get(&p).filter(|_| self.mtimes.get(&p) == Some(&m)).copied().unwrap_or(began);
-                    if recent(m, clock) && began.duration_since(seen) < MARGIN {
+                    // (a time new at this look has been seen for no time at all)
+                    let seen = self.pending.get(&p).filter(|_| self.mtimes.get(&p) == Some(&m)).copied().unwrap_or(looked);
+                    if recent(m, clock) && began.saturating_duration_since(seen) < MARGIN {
                         self.pending.insert(p.clone(), seen);
                     } else {
                         self.pending.remove(&p);

@@ -182,15 +182,15 @@ def main():
         deadline = time.monotonic() + TIMEOUT
         while True:
             left = deadline - time.monotonic()
+            if left <= 0:
+                raise RuntimeError(f"the daemon did not come up in {TIMEOUT:.0f} s")
             try:
-                status = subprocess.run([grounds, "daemon", "--root", d, "--status"], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=max(left, 0.1)).stdout
+                status = subprocess.run([grounds, "daemon", "--root", d, "--status"], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=left).stdout
             except subprocess.TimeoutExpired:
                 status = ""
             if status.startswith("running:") and time.monotonic() <= deadline:
                 break
-            if time.monotonic() > deadline:
-                raise RuntimeError(f"the daemon did not come up in {TIMEOUT:.0f} s")
-            time.sleep(0.2)
+            time.sleep(max(0.0, min(0.2, deadline - time.monotonic())))
         for parent, commit in zip(line, line[1:]):
             touched = java(parent, commit)
             git(d, *move, commit)
