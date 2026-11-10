@@ -22,12 +22,24 @@ use std::sync::Arc;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Startups {
-    /// One entry per context: the class names handed to its startup call,
-    /// as written (`App`, `app.App`, `Outer.Inner`).
-    pub calls: Vec<Vec<Name>>,
+    /// One entry per context the file certainly starts.
+    pub calls: Vec<StartCall>,
     /// A start (or what looks like one) the reader could not read with
     /// certainty: this file's applications have roots the model cannot name.
     pub uncertain: bool,
+}
+
+/// One context a file starts.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct StartCall {
+    /// The class names handed to the startup call, as written (`App`,
+    /// `app.App`, `Outer.Inner`): certainly among the context's roots.
+    pub sources: Vec<Name>,
+    /// The builder or context is also handed to code the reader cannot
+    /// follow, or given a call it does not know: that code may add sources
+    /// or change settings (bean overriding), so the sources are a lower
+    /// bound and the context's settings are unknown.
+    pub open: bool,
 }
 
 /// Spring's types that start a context, by simple name, with their packages.
@@ -120,7 +132,10 @@ fn all_literals(call: Node, src: &str) -> Option<Vec<Name>> {
 
 struct Group {
     sources: Vec<Name>,
+    /// which classes are roots, or which context they go to, is unknown
     uncertain: bool,
+    /// the sources are a lower bound (see `StartCall::open`)
+    open: bool,
 }
 
 struct Reader<'s> {
@@ -133,7 +148,7 @@ struct Reader<'s> {
 impl<'s> Reader<'s> {
     fn group(&mut self, sources: Option<Vec<Name>>) -> usize {
         let uncertain = sources.is_none();
-        self.groups.push(Group { sources: sources.unwrap_or_default(), uncertain });
+        self.groups.push(Group { sources: sources.unwrap_or_default(), uncertain, open: false });
         self.groups.len() - 1
     }
 
@@ -143,10 +158,14 @@ impl<'s> Reader<'s> {
         if ADDS_SOURCES.contains(&name) {
             match all_literals(call, self.src) {
                 Some(more) => self.groups[g].sources.extend(more),
-                None => self.groups[g].uncertain = true,
+                // more sources the reader cannot name
+                None => self.groups[g].open = true,
             }
-        } else if !NEUTRAL.contains(&name) {
+        } else if matches!(name, "child" | "parent" | "sibling") {
+            // which sources go to which context is not followed
             self.groups[g].uncertain = true;
+        } else if !NEUTRAL.contains(&name) {
+            self.groups[g].open = true;
         }
     }
 
@@ -175,7 +194,7 @@ impl<'s> Reader<'s> {
                 // passed elsewhere, assigned to a field, ...: what is done
                 // to it there is unknown
                 _ => {
-                    self.groups[g].uncertain = true;
+                    self.groups[g].open = true;
                     return;
                 }
             }
@@ -334,7 +353,7 @@ pub fn extract(root: Node, src: &str, imports: &Imports) -> Startups {
         if g.uncertain {
             out.uncertain = true;
         } else if !g.sources.is_empty() {
-            out.calls.push(g.sources);
+            out.calls.push(StartCall { sources: g.sources, open: g.open });
         }
     }
     out
@@ -353,7 +372,8 @@ mod tests {
 
     fn calls(src: &str) -> (Vec<Vec<String>>, bool) {
         let s = read(src);
-        (s.calls.iter().map(|c| c.iter().map(|n| n.to_string()).collect()).collect(), s.uncertain)
+        assert!(s.calls.iter().all(|c| !c.open), "{s:?}");
+        (s.calls.iter().map(|c| c.sources.iter().map(|n| n.to_string()).collect()).collect(), s.uncertain)
     }
 
     #[test]
@@ -404,18 +424,24 @@ mod tests {
             // S9: a child context
             ("child context", "package l; import org.springframework.boot.builder.SpringApplicationBuilder;
               public class Main { public static void main(String[] args) { new SpringApplicationBuilder(A.class).child(C.class).sources(B.class).run(args); } }"),
-            // overriding changes what clashes
-            ("overriding", "package l; import org.springframework.boot.SpringApplication;
-              public class Main { public static void main(String[] args) { SpringApplication app = new SpringApplication(A.class); app.setAllowBeanDefinitionOverriding(true); app.run(args); } }"),
-            // the builder handed elsewhere
-            ("escapes", "package l; import org.springframework.boot.builder.SpringApplicationBuilder;
-              public class Main { public static void main(String[] args) { var b = new SpringApplicationBuilder(A.class); Support.configure(b); b.run(args); } }"),
             // S11: a start in a method main does not call
             ("unreached", "package l; import org.springframework.boot.SpringApplication;
               public class Main { public static void main(String[] args) { } static void other() { SpringApplication.run(Combined.class); } }"),
         ] {
             let (c, u) = calls(s);
             assert!(c.is_empty() && u, "{why}: {c:?} {u}");
+        }
+        // a start whose builder meets code the reader cannot follow: its
+        // sources are a lower bound, its settings unknown
+        for s in [
+            "package l; import org.springframework.boot.SpringApplication;
+              public class Main { public static void main(String[] args) { SpringApplication app = new SpringApplication(A.class); app.setAllowBeanDefinitionOverriding(true); app.run(args); } }",
+            "package l; import org.springframework.boot.SpringApplication;
+              public class Main { public static void main(String[] args) { var app = new SpringApplication(A.class); Profiles.addDefaultProfile(app); app.run(args).getEnvironment(); } }",
+        ] {
+            let st = read(s);
+            assert_eq!(st.calls.len(), 1, "{s}");
+            assert!(st.calls[0].open && !st.uncertain && st.calls[0].sources.len() == 1, "{st:?}");
         }
         // a start in a method main calls is reached
         let s = "package l; import org.springframework.boot.SpringApplication;

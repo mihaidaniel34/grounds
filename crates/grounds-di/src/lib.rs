@@ -142,6 +142,10 @@ pub struct AppContext {
     pub root: Name,
     /// The classes the context is started from (registered before scanning).
     pub roots: Vec<Name>,
+    /// Code the model cannot follow may add sources to the context or change
+    /// its settings (bean overriding): what it holds is a lower bound, so
+    /// its members are judged, but no clash or ambiguity is concluded in it.
+    pub open: bool,
     /// Classes registered explicitly: the roots and what members `@Import`.
     pub registered: rustc_hash::FxHashSet<Name>,
     /// Main-source classes certainly registered in it.
@@ -1740,14 +1744,15 @@ impl<'a> Builder<'a> {
     /// nothing that depends on them is concluded. An application class
     /// nothing starts (a sample, a class only tests start) is no root, nor
     /// is a context read from XML.
-    fn context_roots(&mut self, names: &[Name]) -> Vec<Vec<Name>> {
+    fn context_roots(&mut self, names: &[Name]) -> Vec<(Vec<Name>, bool)> {
         const INITIALIZERS: &[&str] = &["org.springframework.boot.web.servlet.support.SpringBootServletInitializer", "org.springframework.web.WebApplicationInitializer"];
         // (without the jars: the base classes Spring offers, by name)
         const INITIALIZER_BASES: &[&str] = &[
             "SpringBootServletInitializer", "WebApplicationInitializer", "AbstractAnnotationConfigDispatcherServletInitializer", "AbstractDispatcherServletInitializer",
             "AbstractContextLoaderInitializer",
         ];
-        let mut groups: Vec<Vec<Name>> = Vec::new();
+        // (roots, open: the roots are a lower bound and the settings unknown)
+        let mut groups: Vec<(Vec<Name>, bool)> = Vec::new();
         // files that start something (certain or not)
         let mut starting: rustc_hash::FxHashSet<Arc<str>> = rustc_hash::FxHashSet::default();
         let files: Vec<(Arc<str>, Arc<FileStub>)> = self.index.files().map(|(p, s)| (p.clone(), s.clone())).collect();
@@ -1760,7 +1765,7 @@ impl<'a> Builder<'a> {
             let scope = self.index.scope_for_raw(stub, raw);
             'calls: for call in &stub.startups.calls {
                 let mut g = Vec::new();
-                for written in call {
+                for written in &call.sources {
                     let segs: Vec<&str> = written.split('.').collect();
                     // a class the model cannot see (a library's) makes the
                     // context's roots unknown
@@ -1769,7 +1774,7 @@ impl<'a> Builder<'a> {
                         None => continue 'calls,
                     }
                 }
-                groups.push(g);
+                groups.push((g, call.open));
             }
         }
         for n in names {
@@ -1783,15 +1788,15 @@ impl<'a> Builder<'a> {
             });
             // a main next to the application annotation, in a file that starts nothing
             if has_main(&c) && app_annotation && !starting.contains(&f) {
-                groups.push(vec![n.clone()]);
+                groups.push((vec![n.clone()], false));
             }
             let initializer = INITIALIZERS.iter().any(|i| self.index.is_subclass(n, i).is_yes())
                 || self.index.raw_class(n).is_some_and(|(_, r)| r.superclass.iter().chain(&r.interfaces).any(|t| t.last_name().is_some_and(|l| INITIALIZER_BASES.contains(&l))));
             if initializer && self.configuration_like(&c) {
-                groups.push(vec![n.clone()]);
+                groups.push((vec![n.clone()], false));
             }
         }
-        for g in &mut groups {
+        for (g, _) in &mut groups {
             g.sort();
             g.dedup();
         }
@@ -1906,7 +1911,7 @@ impl<'a> Builder<'a> {
             }
         }
         let mut out = Vec::new();
-        for roots in groups {
+        for (roots, open) in groups {
             let root_modules: Vec<String> = roots.iter().filter_map(|r| self.index.source_file_of(r)).map(|f| module_of(f).to_string()).collect();
             if root_modules.is_empty() {
                 continue;
@@ -1926,6 +1931,7 @@ impl<'a> Builder<'a> {
             }
             let mut ctx = AppContext { root: roots[0].clone(), ..Default::default() };
             ctx.roots = roots.clone();
+            ctx.open = open;
             ctx.members.extend(roots.iter().cloned());
             ctx.registered.extend(roots.iter().cloned());
             let mut scans: Vec<(String, bool)> = Vec::new();
@@ -2350,7 +2356,7 @@ impl DiModel {
                 // Spring: only beans of one context compete, and only in a
                 // context that also holds the injecting bean
                 if p.framework == Framework::Spring {
-                    let shared = self.contexts.iter().filter(|ctx| ctx.holds(&p.owner, include_test)).map(|ctx| unconditional.iter().copied().filter(|&i| self.context_holds(ctx, &self.beans[i], include_test)).collect::<Vec<usize>>()).find(|v| v.len() >= 2);
+                    let shared = self.contexts.iter().filter(|ctx| !ctx.open && ctx.holds(&p.owner, include_test)).map(|ctx| unconditional.iter().copied().filter(|&i| self.context_holds(ctx, &self.beans[i], include_test)).collect::<Vec<usize>>()).find(|v| v.len() >= 2);
                     return match shared {
                         Some(v) => Resolution::Ambiguous(v),
                         None => Resolution::Unknown,
@@ -2483,7 +2489,7 @@ impl DiModel {
             }
         }
         let mut out: Vec<(usize, usize)> = Vec::new();
-        for ctx in &self.contexts {
+        for ctx in self.contexts.iter().filter(|c| !c.open) {
             let mut seen: FxHashMap<&str, usize> = FxHashMap::default();
             // the root is registered before the scan, and the scanner skips
             // a candidate whose name an explicitly registered bean already
@@ -4026,5 +4032,31 @@ mod tests {
                  public static void main(String[] args) { SpringApplication.run(App.class, args); } }");
         let (idx, m) = model(&[plain, files[2]]);
         assert_eq!(point_resolution(&idx, &m, "m"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn an_open_start_holds_its_classes_but_concludes_no_clash() {
+        // the application handed to a library helper (JHipster's
+        // DefaultProfileUtil.addDefaultProfile(app)) may get more sources or
+        // overriding: its classes are judged, its clashes are not
+        let app = ("src/main/java/app/App.java", "package app; import org.springframework.boot.SpringApplication;
+             @org.springframework.boot.autoconfigure.SpringBootApplication public class App {
+                 public static void main(String[] args) { var a = new SpringApplication(App.class); Profiles.addDefault(a); a.run(args); } }");
+        let files = [
+            app,
+            ("src/main/java/app/Uses.java", "package app; interface Missing {} @org.springframework.stereotype.Service class Uses { Uses(Missing m) {} }"),
+            ("src/main/java/app/x/Same.java", "package app.x; @org.springframework.stereotype.Service public class Same {}"),
+            ("src/main/java/app/y/Same.java", "package app.y; @org.springframework.stereotype.Service public class Same {}"),
+        ];
+        let (idx, m) = model(&files);
+        assert_eq!(m.contexts.len(), 1);
+        assert!(m.contexts[0].open);
+        assert_eq!(point_resolution(&idx, &m, "m"), Resolution::NotFound);
+        assert!(m.name_conflicts().is_empty());
+        // the same application started plainly: the clash is certain
+        let plain = ("src/main/java/app/App.java", "package app; import org.springframework.boot.SpringApplication;
+             @org.springframework.boot.autoconfigure.SpringBootApplication public class App { public static void main(String[] args) { SpringApplication.run(App.class, args); } }");
+        let (_, m) = model(&[plain, files[1], files[2], files[3]]);
+        assert_eq!(m.name_conflicts().len(), 1);
     }
 }
