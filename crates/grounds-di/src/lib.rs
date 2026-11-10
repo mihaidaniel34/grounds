@@ -1043,27 +1043,47 @@ impl<'a> Builder<'a> {
                 });
             }
         }
-        // Micronaut @Replaces: the replaced bean no longer exists
-        let mut replaced: Vec<Name> = Vec::new();
+        // Micronaut @Replaces: the replaced bean no longer exists where the
+        // replacement does. That is certain only for an unconditional
+        // replacement in the main sources of the replaced bean's module; a
+        // conditional one (`@Requires(property = ...)`), one in another
+        // module (another application may not include it) or one in test
+        // sources (a @MockBean method replaces the bean in its own test
+        // only) leaves the replaced bean possibly present: it satisfies
+        // injections but makes nothing ambiguous.
+        // (replaced class, module of the replacement, certain)
+        let mut replaced: Vec<(Name, String, bool)> = Vec::new();
         for n in &names {
             let Some(c) = self.index.class(n) else { continue };
-            let anns: Vec<&AnnotationInfo> = c.annotations.iter().chain(c.methods.iter().flat_map(|m| m.annotations.iter())).collect();
-            for a in anns {
-                if a.simple_name() != "Replaces" {
-                    continue;
-                }
-                for k in ["value", "bean"] {
-                    if let Some(AnnotationValue::Class(t)) = a.arg(k) {
-                        if let Some(tn) = t.class_name() {
-                            replaced.push(Arc::from(tn));
+            let file = c.source_file().unwrap_or("");
+            let module = module_of(file).to_string();
+            let class_conditional = self.conditional_meta(&c.annotations);
+            let sites: Vec<(&[AnnotationInfo], bool)> =
+                std::iter::once((c.annotations.as_slice(), false)).chain(c.methods.iter().map(|m| (m.annotations.as_slice(), self.conditional_meta(&m.annotations)))).collect();
+            for (anns, site_conditional) in sites {
+                for a in anns.iter().filter(|a| a.simple_name() == "Replaces") {
+                    for k in ["value", "bean"] {
+                        if let Some(AnnotationValue::Class(t)) = a.arg(k) {
+                            if let Some(tn) = t.class_name() {
+                                let certain = !is_test_path(file) && !class_conditional && !site_conditional;
+                                replaced.push((Arc::from(tn), module.clone(), certain));
+                            }
                         }
                     }
                 }
             }
         }
         for b in &mut self.model.beans {
-            if b.source == BeanSource::Component && replaced.contains(&b.declaring_class) {
-                b.autowire_candidate = false;
+            if b.source != BeanSource::Component {
+                continue;
+            }
+            let module = b.file.as_deref().map(module_of).unwrap_or("");
+            for (_, m, certain) in replaced.iter().filter(|(r, _, _)| *r == b.declaring_class) {
+                if *certain && m == module {
+                    b.autowire_candidate = false;
+                } else {
+                    b.conditional = true;
+                }
             }
         }
         let mut by_class: FxHashMap<Name, Vec<usize>> = FxHashMap::default();
@@ -2092,5 +2112,46 @@ mod tests {
         assert_eq!(point_resolution(&idx, &m, "draft"), Resolution::NotFound);
         let index = point_resolution(&idx, &m, "index");
         assert!(matches!(index, Resolution::Unique(i) if !m.beans[i].conditional), "{index:?}");
+    }
+
+    #[test]
+    fn a_replacement_removes_a_bean_only_where_it_certainly_exists() {
+        // a default implementation nested in its interface is a bean; a
+        // test's @Replaces, a conditional replacement or one in another
+        // module leaves it in place; an unconditional one beside it removes it
+        let files = |extra: (&'static str, &'static str)| {
+            vec![
+                JSR330[0], JSR330[1], JSR330[2],
+                ("core/src/main/java/app/Handler.java", "package app; import jakarta.inject.Singleton; import io.micronaut.context.annotation.Secondary;
+                 public interface Handler { void handle();
+                   @Singleton @Secondary class NoopHandler implements Handler { public void handle() {} } }"),
+                ("core/src/main/java/app/Uses.java", "package app; import jakarta.inject.*; @Singleton class Uses { @Inject Uses(Handler handler, Handler.NoopHandler noop) {} }"),
+                ("core/src/test/java/app/UsesTest.java", "package app; import jakarta.inject.*; import io.micronaut.context.annotation.Replaces;
+                 class UsesTest { @Inject Handler testHandler;
+                   @Replaces(Handler.NoopHandler.class) Handler mockHandler() { return null; } }
+                 @Singleton class TestUses { @Inject TestUses(Handler.NoopHandler testNoop) {} }"),
+                extra,
+            ]
+        };
+        let (idx, m) = model(&files(("core/src/main/java/app/Other.java", "package app; class Other {}")));
+        let noop = m.beans.iter().position(|b| b.declaring_class.ends_with("Handler$NoopHandler")).expect("nested bean class");
+        assert_eq!(point_resolution(&idx, &m, "handler"), Resolution::Unique(noop));
+        assert_eq!(point_resolution(&idx, &m, "testNoop"), Resolution::Unique(noop));
+        for replacement in [
+            ("core/src/main/java/app/Remote.java", "package app; import jakarta.inject.Singleton; import io.micronaut.context.annotation.*;
+             @Singleton @Requires(property = \"mode\", value = \"remote\") @Replaces(Handler.NoopHandler.class) class RemoteHandler implements Handler { public void handle() {} }"),
+            ("worker/src/main/java/app/Remote.java", "package app; import jakarta.inject.Singleton; import io.micronaut.context.annotation.*;
+             @Singleton @Replaces(Handler.NoopHandler.class) class RemoteHandler implements Handler { public void handle() {} }"),
+        ] {
+            let (idx, m) = model(&files(replacement));
+            let noop = m.beans.iter().position(|b| b.declaring_class.ends_with("Handler$NoopHandler")).unwrap();
+            assert_eq!(point_resolution(&idx, &m, "noop"), Resolution::Unique(noop), "{}", replacement.0);
+            assert!(matches!(point_resolution(&idx, &m, "handler"), Resolution::Unique(_) | Resolution::Unknown), "{}", replacement.0);
+        }
+        let (idx, m) = model(&files(("core/src/main/java/app/Remote.java", "package app; import jakarta.inject.Singleton; import io.micronaut.context.annotation.*;
+             @Singleton @Replaces(Handler.NoopHandler.class) class RemoteHandler implements Handler { public void handle() {} }")));
+        let remote = m.beans.iter().position(|b| b.declaring_class.ends_with("RemoteHandler")).unwrap();
+        assert_eq!(point_resolution(&idx, &m, "handler"), Resolution::Unique(remote));
+        assert_eq!(point_resolution(&idx, &m, "noop"), Resolution::NotFound);
     }
 }
