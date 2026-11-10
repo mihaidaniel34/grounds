@@ -121,9 +121,12 @@ def run(a):
         try:
             p = subprocess.run([a.grounds, "check", "--root", d, "--format", "json"], capture_output=True,
                                text=True, timeout=a.timeout, stdin=subprocess.DEVNULL)
-            findings = json.loads(p.stdout or "[]")
-            if p.returncode not in (0, 1):
-                status = f"exit {p.returncode}"
+            if not p.stdout.strip():
+                findings, status = [], f"no output (exit {p.returncode})"
+            else:
+                findings = json.loads(p.stdout)
+                if p.returncode not in (0, 1):
+                    status = f"exit {p.returncode}"
             if p.stderr.strip():
                 with open(os.path.join(a.out, f"{name}.stderr"), "w") as fh:
                     fh.write(p.stderr)
