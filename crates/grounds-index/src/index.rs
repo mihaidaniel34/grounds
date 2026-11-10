@@ -268,6 +268,9 @@ pub struct Index {
     /// Number of files in a variant source set (see `in_variant_set`)
     /// declaring each class name.
     variant_defs: FxHashMap<Name, u32>,
+    /// Directories (ending in `/`) of modules that compile against a
+    /// published release of the project itself, not its sources.
+    release_modules: Vec<String>,
     pub generation: u64,
     // the generation resolve_ordered last filled the cache at
     resolved_at: AtomicU64,
@@ -351,7 +354,7 @@ impl Drop for Resolving<'_> {
 
 impl Index {
     pub fn new(classpath: Arc<Classpath>) -> Index {
-        Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), copies: FxHashMap::default(), variant_defs: FxHashMap::default(), generation: 0, resolved_at: AtomicU64::new(u64::MAX), plan: parking_lot::Mutex::new(None) }
+        Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), copies: FxHashMap::default(), variant_defs: FxHashMap::default(), release_modules: Vec::new(), generation: 0, resolved_at: AtomicU64::new(u64::MAX), plan: parking_lot::Mutex::new(None) }
     }
 
     pub fn set_file(&mut self, path: Arc<str>, stub: Arc<FileStub>) {
@@ -466,6 +469,20 @@ impl Index {
                 }
             }
         }
+    }
+
+    /// Mark the modules whose build compiles against a published release of
+    /// the project itself (kafka's `streams/upgrade-system-tests-22` against
+    /// `kafka-streams:2.2`): their code does not see the project's sources.
+    pub fn set_modules_built_against_release(&mut self, dirs: Vec<String>) {
+        self.release_modules = dirs.into_iter().map(|d| if d.ends_with('/') { d } else { format!("{d}/") }).collect();
+    }
+
+    /// For a file of a module that compiles against a published release of
+    /// the project, the module's directory: a project class declared outside
+    /// it may differ from the one the file compiles against.
+    pub fn built_against_release(&self, file: &str) -> Option<&str> {
+        self.release_modules.iter().find(|d| file.starts_with(d.as_str())).map(String::as_str)
     }
 
     pub fn file(&self, path: &str) -> Option<&Arc<FileStub>> {

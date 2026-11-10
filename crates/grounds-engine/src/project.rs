@@ -254,6 +254,7 @@ impl Project {
 
         let t = Instant::now();
         let mut index = Index::new(classpath);
+        index.set_modules_built_against_release(crate::workspace::modules_built_against_own_release(&workspace).iter().map(|d| d.to_string_lossy().to_string()).collect());
         let mut new_cache = StubCache::load(&workspace.root);
         new_cache.retain(|_| false);
         for (p, h, stub, was_cached) in results {

@@ -39,12 +39,20 @@ fn closed_class<'t>(cx: &Ctx<'_, 't>, name: &str) -> Option<std::sync::Arc<Class
     if supertypes.len() > 200 {
         return None;
     }
+    // a module built against a published release of the project sees that
+    // release's classes, not the sources of other modules
+    let release_module = cx.fm.index.built_against_release(&cx.fm.path);
     for t in supertypes {
         let Some(n) = t.class_name() else { return None };
         if !cx.fm.copy_is_certain(n) {
             return None;
         }
         let file = cx.fm.class(n).and_then(|k| k.source_file().map(|f| f.to_string()));
+        if let (Some(module), Some(f)) = (release_module, &file) {
+            if !f.starts_with(module) {
+                return None;
+            }
+        }
         if file.is_some_and(|f| cx.fm.index.file(&f).is_some_and(|s| s.has_syntax_errors)) {
             return None;
         }

@@ -170,3 +170,27 @@ fn files_git_tracks_are_read_whatever_gitignore_says() {
     git(&["commit", "-qm", "init"]);
     assert_eq!(findings(&dir), vec!["a/src/test/java/p/LogicTest.java:3 unresolved-method".to_string()]);
 }
+
+#[test]
+fn a_module_built_against_a_published_release_of_the_project_sees_no_sources_of_other_modules() {
+    let dir = project(
+        "old-release",
+        &[
+            ("settings.gradle", "include 'streams', 'streams:upgrade-tests-22', 'app'\n"),
+            ("gradle.properties", "group=org.example\nversion=4.0.0-SNAPSHOT\n"),
+            ("gradle/dependencies.gradle", "libs += [\n  streams_22: \"org.example:example-streams:$versions.streams_22\",\n]\n"),
+            (
+                "build.gradle",
+                "apply from: \"$rootDir/gradle/dependencies.gradle\"\nsubprojects { apply plugin: 'java' }\nproject(':streams') {\n  base { archivesName = \"example-streams\" }\n}\nproject(':streams:upgrade-tests-22') {\n  dependencies {\n    // the 2.2 release from Maven Central, not project(':streams')\n    testImplementation libs.streams_22\n  }\n}\nproject(':app') {\n  dependencies { implementation project(':streams') }\n}\n",
+            ),
+            ("streams/src/main/java/org/example/streams/TimeWindows.java", "package org.example.streams;\n\npublic final class TimeWindows {\n    // of(long) was removed in 4.0\n    public static TimeWindows ofSizeWithNoGrace(long size) { return new TimeWindows(); }\n}\n"),
+            ("streams/upgrade-tests-22/src/test/java/org/example/upgrade/SmokeTest.java", "package org.example.upgrade;\n\nimport org.example.streams.TimeWindows;\n\nclass SmokeTest {\n    Object w() { return TimeWindows.of(1000L); }\n    void own() { new SmokeTest().noSuchMethod(); }\n}\n"),
+            // a module built against the sources is judged against them
+            ("app/src/main/java/org/example/app/Windows.java", "package org.example.app;\n\nimport org.example.streams.TimeWindows;\n\nclass Windows {\n    Object w() { return TimeWindows.of(1000L); }\n}\n"),
+        ],
+    );
+    assert_eq!(
+        findings(&dir),
+        vec!["app/src/main/java/org/example/app/Windows.java:6 unresolved-method".to_string(), "streams/upgrade-tests-22/src/test/java/org/example/upgrade/SmokeTest.java:7 unresolved-method".to_string()]
+    );
+}

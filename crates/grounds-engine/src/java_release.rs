@@ -131,7 +131,7 @@ fn gradle_assignments(text: &str, key: &str) -> Option<u32> {
     best
 }
 
-fn strip_comments(text: &str, line: &str, open: &str, close: &str) -> String {
+pub(crate) fn strip_comments(text: &str, line: &str, open: &str, close: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     loop {
@@ -154,8 +154,61 @@ fn strip_comments(text: &str, line: &str, open: &str, close: &str) -> String {
     }
 }
 
+/// A Groovy, Kotlin or TOML script without its comments (`//` and `/* */`,
+/// or `#` with `hash`), leaving string literals alone: `'**/*.class'` and
+/// `"https://..."` open no comment.
+pub(crate) fn strip_script_comments(text: &str, hash: bool) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let mut quote: Option<char> = None;
+    while let Some(c) = chars.next() {
+        if let Some(q) = quote {
+            out.push(c);
+            if c == '\\' {
+                if let Some(n) = chars.next() {
+                    out.push(n);
+                }
+            } else if c == q || c == '\n' {
+                quote = None;
+            }
+            continue;
+        }
+        match (c, chars.peek()) {
+            ('"' | '\'', _) => {
+                quote = Some(c);
+                out.push(c);
+            }
+            ('/', Some('/')) if !hash => {
+                while chars.peek().is_some_and(|&n| n != '\n') {
+                    chars.next();
+                }
+            }
+            ('#', _) if hash => {
+                while chars.peek().is_some_and(|&n| n != '\n') {
+                    chars.next();
+                }
+            }
+            ('/', Some('*')) if !hash => {
+                chars.next();
+                let mut prev = ' ';
+                for n in chars.by_ref() {
+                    if prev == '*' && n == '/' {
+                        break;
+                    }
+                    if n == '\n' {
+                        out.push('\n');
+                    }
+                    prev = n;
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// The text of each `<tag>...</tag>` element (not nested in itself).
-fn elements<'a>(xml: &'a str, tag: &str) -> Vec<&'a str> {
+pub(crate) fn elements<'a>(xml: &'a str, tag: &str) -> Vec<&'a str> {
     let (open, close) = (format!("<{tag}>"), format!("</{tag}>"));
     let mut out = Vec::new();
     let mut from = 0;
@@ -168,7 +221,7 @@ fn elements<'a>(xml: &'a str, tag: &str) -> Vec<&'a str> {
     out
 }
 
-fn element<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
+pub(crate) fn element<'a>(xml: &'a str, tag: &str) -> Option<&'a str> {
     elements(xml, tag).into_iter().next().map(str::trim)
 }
 
