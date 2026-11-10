@@ -905,3 +905,50 @@ fn a_missing_bean_of_another_type_with_the_same_simple_name_is_reported() {
     assert_eq!(rules_of(&base_check(&dir)), vec![]);
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+/// S9: which of several private overloads is shown depends on declaration
+/// order; the claim (every fitting overload is private) does not.
+#[test]
+fn reordered_private_overloads_are_the_old_claim() {
+    let (repo, dir) = spring_project("private", &[("Lib.java", "package demo;\npublic class Lib {\n    private void f(int a) {}\n    private void f(long a) {}\n}\n"), ("Caller.java", "package demo;\nclass Caller {\n    void t(Lib x) { x.f(1); }\n}\n")]);
+    let mut s = Session::open(&dir).unwrap();
+    let all = s.check(&CheckOptions { mode: Mode::Checkpoint, files: vec![dir.join("src/main/java/demo/Caller.java")], all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None });
+    assert!(all.findings.iter().any(|f| f.rule == "unresolved-method" && f.message.contains("is private")), "{:?}", all.findings);
+    write(&dir, "src/main/java/demo/Lib.java", "package demo;\npublic class Lib {\n    private void f(long a) {}\n    private void f(int a) {}\n}\n");
+    assert_eq!(rules_of(&base_check(&dir)), vec![]);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// S10: the same requirement inherited from two interfaces, listed in the
+/// other order, is the old claim.
+#[test]
+fn a_requirement_from_reordered_interfaces_is_the_old_claim() {
+    let (repo, dir) = spring_project(
+        "twointerfaces",
+        &[("I.java", "package demo;\npublic interface I {\n    void f();\n}\n"), ("J.java", "package demo;\npublic interface J {\n    void f();\n}\n"), ("C.java", "package demo;\npublic class C implements I, J {}\n")],
+    );
+    let mut s = Session::open(&dir).unwrap();
+    let all = s.check(&CheckOptions { mode: Mode::Checkpoint, files: vec![dir.join("src/main/java/demo/C.java")], all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None });
+    assert!(all.findings.iter().any(|f| f.rule == "unimplemented-abstract-method"), "{:?}", all.findings);
+    write(&dir, "src/main/java/demo/C.java", "package demo;\npublic class C implements J, I {}\n");
+    assert_eq!(rules_of(&base_check(&dir)), vec![]);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// S11: a short cycle next to a long route to the same class is found
+/// whatever the order of the search.
+#[test]
+fn a_short_cycle_beside_a_long_route_is_found() {
+    let c = |n: &str, ps: &str| (format!("{n}.java"), format!("package demo;\n@org.springframework.stereotype.Component public class {n} {{ {n}({ps}) {{}} }}\n"));
+    let mut files = vec![c("S", "Z z, A a"), c("A", "R r"), c("R", "S s"), c("Z", "Z1 z"), c("Z6", "R r")];
+    for i in 1..6 {
+        files.push(c(&format!("Z{i}"), &format!("Z{} z", i + 1)));
+    }
+    let refs: Vec<(&str, &str)> = files.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let (repo, dir) = spring_project("longroute", &refs);
+    let mut s = Session::open(&dir).unwrap();
+    let all = s.check(&CheckOptions { mode: Mode::Checkpoint, files: vec![dir.join("src/main/java/demo/S.java")], all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None });
+    let cyc: Vec<&str> = all.findings.iter().filter(|f| f.rule == "circular-constructor-dependency").map(|f| f.message.as_str()).collect();
+    assert_eq!(cyc, ["Circular constructor dependency: S -> A -> R -> S"], "{:?}", all.findings);
+    let _ = std::fs::remove_dir_all(&repo);
+}

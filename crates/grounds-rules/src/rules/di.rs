@@ -812,28 +812,42 @@ impl Rule for CircularDependency {
             v.sort();
         }
         for (decl, name) in &classes {
-            // DFS from this class looking for a path back to it
+            // Breadth first from this class, up to 8 classes on a path, looking
+            // for an edge back to it: every class within the bound is reached
+            // whatever the order of parameters and declarations, the cycle found
+            // is a shortest one, and ties go to the first in name order
+            // (adjacency lists and each level are sorted).
             let start: &str = name;
-            let mut stack: Vec<(&str, Vec<&str>)> = vec![(start, vec![start])];
+            let mut parent: rustc_hash::FxHashMap<&str, &str> = Default::default();
             let mut seen = rustc_hash::FxHashSet::default();
+            seen.insert(start);
+            let mut level: Vec<&str> = vec![start];
             let mut found: Option<Vec<&str>> = None;
-            while let Some((cur, path)) = stack.pop() {
-                for (next, _) in adj.get(cur).map(|v| v.as_slice()).unwrap_or(&[]) {
-                    if *next == start {
-                        let mut p = path.clone();
-                        p.push(start);
-                        found = Some(p);
-                        break;
-                    }
-                    if seen.insert(*next) && path.len() < 8 {
-                        let mut p = path.clone();
-                        p.push(next);
-                        stack.push((next, p));
+            'search: for depth in 1..=8 {
+                let mut next: Vec<&str> = Vec::new();
+                for &cur in &level {
+                    for (nx, _) in adj.get(cur).map(|v| v.as_slice()).unwrap_or(&[]) {
+                        if *nx == start {
+                            let mut path = vec![cur];
+                            while let Some(&p) = parent.get(path[path.len() - 1]) {
+                                path.push(p);
+                            }
+                            path.reverse();
+                            path.push(start);
+                            found = Some(path);
+                            break 'search;
+                        }
+                        if depth < 8 && seen.insert(*nx) {
+                            parent.insert(nx, cur);
+                            next.push(nx);
+                        }
                     }
                 }
-                if found.is_some() {
+                next.sort_unstable();
+                if next.is_empty() {
                     break;
                 }
+                level = next;
             }
             if let Some(cycle) = found {
                 if let Some(nm) = decl.field("name") {

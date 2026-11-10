@@ -220,7 +220,8 @@ impl Rule for UnresolvedMethod {
                     return;
                 }
                 if let Some(m) = private_hit {
-                    cx.report_claim(n.field("name").unwrap_or(n), format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)), format!("`{}` is private", Ctx::method_id(&m.owner, &m.method)));
+                    // the claim: every overload that fits is private, not the one shown
+                    cx.report_claim(n.field("name").unwrap_or(n), format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)), format!("`{name}` with {nargs} argument(s) is private in `{}` and its enclosing classes", ci.name));
                     return;
                 }
                 let hint = similar_names(&ci, cx.fm, name, Some(nargs)).map(|s| format!("; did you mean `{s}`?")).unwrap_or_default();
@@ -238,12 +239,14 @@ impl Rule for UnresolvedMethod {
             cx.report_claim(n.field("name").unwrap_or(n), format!("No `{name}` in `{}` takes {nargs} argument(s); available: {}", cls.simple_name(), signatures(&ms)), format!("No `{name}` in `{}` takes {nargs} argument(s)", cls.name));
             return;
         }
-        if let Some(arg_list) = definitely_incompatible(cx, n, &ms) {
-            cx.report_claim(n.field("name").unwrap_or(n), format!("No `{name}` in `{}` accepts ({arg_list}); available: {}", cls.simple_name(), signatures(&ms)), format!("No `{name}` in `{}` accepts ({arg_list})", cls.name));
+        if let Some(arg_tys) = definitely_incompatible(cx, n, &ms) {
+            let shown = arg_tys.iter().map(|t| t.display_simple()).collect::<Vec<_>>().join(", ");
+            let qualified = arg_tys.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ");
+            cx.report_claim(n.field("name").unwrap_or(n), format!("No `{name}` in `{}` accepts ({shown}); available: {}", cls.simple_name(), signatures(&ms)), format!("No `{name}` in `{}` accepts ({qualified})", cls.name));
             return;
         }
         if let Some(m) = private_elsewhere(cx, n, &cls, name, &ms, Some(nargs)) {
-            cx.report_claim(n.field("name").unwrap_or(n), format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)), format!("`{}` is private", Ctx::method_id(&m.owner, &m.method)));
+            cx.report_claim(n.field("name").unwrap_or(n), format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)), format!("`{name}` with {nargs} argument(s) is private in `{}`", cls.name));
             return;
         }
         // calling an instance method through the type name
@@ -301,7 +304,7 @@ fn check_method_reference<'t>(n: Node<'t>, cx: &mut Ctx<'_, 't>) {
         let hint = similar_names(&cls, cx.fm, mname, None).map(|s| format!("; did you mean `{s}`?")).unwrap_or_default();
         cx.report_claim(name, format!("`{}` has no method `{mname}`{hint}", cls.simple_name()), format!("`{}` has no method `{mname}`", cls.name));
     } else if let Some(m) = private_elsewhere(cx, n, &cls, mname, &ms, None) {
-        cx.report_claim(name, format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)), format!("`{}` is private", Ctx::method_id(&m.owner, &m.method)));
+        cx.report_claim(name, format!("`{}` is private in `{}`", m.method.signature_string(), simple_name_of(&m.owner)), format!("`{mname}` is private in `{}`", cls.name));
     }
 }
 
@@ -527,7 +530,7 @@ fn fully_known(cx: &Ctx<'_, '_>, t: &Ty) -> bool {
 
 /// If every overload with a matching arity has a parameter that definitely
 /// cannot accept the corresponding argument, return the argument types.
-fn definitely_incompatible<'t>(cx: &Ctx<'_, 't>, call: Node<'t>, ms: &[MethodRef]) -> Option<String> {
+fn definitely_incompatible<'t>(cx: &Ctx<'_, 't>, call: Node<'t>, ms: &[MethodRef]) -> Option<Vec<Ty>> {
     let args = cx.fm.args_of(call);
     let arg_tys: Vec<Ty> = args.iter().map(|a| cx.type_of(*a)).collect();
     // lambdas, method refs, unknown or generic argument types: not decidable
@@ -556,7 +559,7 @@ fn definitely_incompatible<'t>(cx: &Ctx<'_, 't>, call: Node<'t>, ms: &[MethodRef
     if !any {
         return None;
     }
-    Some(arg_tys.iter().map(|t| t.display_simple()).collect::<Vec<_>>().join(", "))
+    Some(arg_tys)
 }
 
 /// The argument type may be passed for the parameter type: not provably wrong.
@@ -786,7 +789,10 @@ impl Rule for UnimplementedAbstractMethod {
             let implemented = implements(cx, &cls, &m.method.name, m.method.params.len());
             if !implemented {
                 missing.push(format!("`{}.{}`", simple_name_of(&m.owner), m.method.signature_string()));
-                missing_ids.push(Ctx::method_id(&m.owner, &m.method));
+                // the requirement is the signature: which of several supertypes
+                // declaring it was kept depends on the order they are listed in
+                let id = Ctx::method_id(&m.owner, &m.method);
+                missing_ids.push(id[m.owner.len() + 1..].to_string());
             }
         }
         if !missing.is_empty() {
