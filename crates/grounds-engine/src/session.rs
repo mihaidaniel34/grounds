@@ -25,8 +25,55 @@ pub struct Session {
     pub resolution_rules: RuleSet,
     pub options: RuleOptions,
     mtimes: FxHashMap<PathBuf, SystemTime>,
+    /// Build and configuration files the project was loaded from (and the
+    /// places one may appear), with their modification times.
+    config: Vec<(PathBuf, Option<SystemTime>)>,
     /// Classpath warnings already shown in this session.
     warned: bool,
+}
+
+/// What a project is loaded from besides its Java sources, with modification
+/// times: the files that decide its modules, classpath, settings and beans.
+/// - build files and `lombok.config` of the root and of every module;
+/// - `grounds.toml`, the classpath dumps, the source sets a dump recorded and
+///   every jar on the classpath (a snapshot jar is rebuilt in place);
+/// - per module, Spring's registration files and `application*` settings,
+///   and the directories they sit in, whose own times change when a file is
+///   added or removed.
+///
+/// Listed whether they exist or not, so that one appearing counts as a
+/// change. Not followed: class directories on the classpath (a build writes
+/// into them without touching the directory itself, and the project's own
+/// classes are read from source anyway), and a `lombok.config` created later
+/// in a package directory that had none.
+fn config_files(project: &Project) -> Vec<(PathBuf, Option<SystemTime>)> {
+    let ws = &project.workspace;
+    let cfg = &project.config;
+    let at_root = |p: &PathBuf| if p.is_absolute() { p.clone() } else { ws.root.join(p) };
+    let mut paths: Vec<PathBuf> = ["grounds.toml", ".grounds/config.toml", ".grounds/classpath.txt", ".grounds/source-sets.txt"].iter().map(|n| ws.root.join(n)).collect();
+    paths.extend(cfg.classpath.files.iter().chain(&cfg.classpath.entries).map(at_root));
+    // the jars in use, and those a dump lists that are not there (yet)
+    let listed = crate::classpath::classpath_files(ws, cfg).into_iter().flat_map(|f| crate::classpath::read_list(&f));
+    paths.extend(project.classpath_entries.iter().cloned().chain(listed).filter(|e| !e.is_dir()));
+    let mut dirs: Vec<&Path> = vec![&ws.root];
+    dirs.extend(ws.modules.iter().map(|m| m.dir.as_path()));
+    for d in dirs {
+        paths.extend(crate::classpath::BUILD_FILES.iter().chain(&["lombok.config"]).map(|n| d.join(n)));
+    }
+    paths.extend(project.lombok.files());
+    for m in &ws.modules {
+        let resources = m.dir.join("src/main/resources");
+        let meta = resources.join("META-INF");
+        let listed = |dir: &Path, keep: &dyn Fn(&str) -> bool| -> Vec<PathBuf> {
+            std::fs::read_dir(dir).into_iter().flatten().flatten().filter(|e| keep(&e.file_name().to_string_lossy())).map(|e| e.path()).collect()
+        };
+        paths.extend(listed(&resources, &|n| n.starts_with("application")));
+        paths.extend(listed(&meta.join("spring"), &|n| n.ends_with(".imports")));
+        paths.extend([meta.join("spring.factories"), meta.join("spring"), meta, resources]);
+    }
+    paths.sort();
+    paths.dedup();
+    paths.into_iter().map(|p| { let m = std::fs::metadata(&p).and_then(|m| m.modified()).ok(); (p, m) }).collect()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -129,7 +176,8 @@ impl Session {
         // same configuration as full checks, narrowed to edit-tier rules
         let edit_rules = RuleSet::new(crate::analyze::selected_rules(&project).into_iter().filter(|r| r.meta().tier == Tier::Edit).collect());
         let resolution_rules = RuleSet::new(crate::analyze::selected_rules(&project).into_iter().filter(|r| r.meta().id.starts_with("unresolved-")).collect());
-        let mut s = Session { project, all_rules, edit_rules, resolution_rules, options, mtimes: FxHashMap::default(), warned: false };
+        let config = config_files(&project);
+        let mut s = Session { project, all_rules, edit_rules, resolution_rules, options, mtimes: FxHashMap::default(), config, warned: false };
         for f in &s.project.workspace.files {
             if let Ok(m) = std::fs::metadata(&f.path).and_then(|m| m.modified()) {
                 s.mtimes.insert(f.path.clone(), m);
@@ -154,6 +202,18 @@ impl Session {
     /// Re-read files whose modification time changed (and the given extra
     /// files, which may be new). Returns files whose declarations changed.
     pub fn sync(&mut self, extra: &[PathBuf]) -> Vec<PathBuf> {
+        // A build, configuration or bean registration file changed, appeared
+        // or went: the modules, the classpath, the settings and the beans come
+        // from those, so the project is loaded again, as a new session would
+        // load it. (Without
+        // this a daemon kept the layout it started with: after a module was
+        // added or renamed its files counted as the root module's.)
+        if self.config.iter().any(|(p, old)| std::fs::metadata(p).and_then(|m| m.modified()).ok() != *old) {
+            let root = self.root().to_path_buf();
+            if let Ok(project) = Project::load(&root) {
+                *self = Session::from_project(project);
+            }
+        }
         let mut stale: Vec<PathBuf> = Vec::new();
         for (p, old) in &self.mtimes {
             match std::fs::metadata(p).and_then(|m| m.modified()) {

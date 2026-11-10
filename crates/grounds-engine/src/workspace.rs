@@ -44,6 +44,15 @@ const SKIP_DIRS: &[&str] = &["node_modules", ".git", ".gradle", ".idea", "out", 
 
 pub use grounds_index::sources::{in_test_module, is_test_path, is_test_set, register_project_root, set_extra_test_sets, source_set_of};
 
+/// A file under the resources of a source set (`src/<set>/resources/**`),
+/// `rel` relative to the project root. Such Java files are data that tests
+/// read or copy (a whole fixture project, a stub of a library class), not
+/// sources of the build: they are neither analyzed nor indexed.
+pub fn is_resource(rel: &Path) -> bool {
+    let comps: Vec<&std::ffi::OsStr> = rel.components().map(|c| c.as_os_str()).collect();
+    comps.windows(3).any(|w| w[0] == "src" && w[2] == "resources")
+}
+
 pub fn classify(path: &Path) -> SourceKind {
     let s = path.to_string_lossy();
     if s.contains("/build/generated") || s.contains("/target/generated-sources") || s.contains("/generated-sources/") {
@@ -143,7 +152,7 @@ impl Workspace {
                         continue;
                     }
                     if let Ok(rel) = p.strip_prefix(&root) {
-                        if excludes.iter().any(|g| g.matches_path(rel)) {
+                        if is_resource(rel) || excludes.iter().any(|g| g.matches_path(rel)) {
                             continue;
                         }
                     }

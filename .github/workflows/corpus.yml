@@ -2,8 +2,8 @@ name: corpus
 
 # The regression corpus (corpus/projects.tsv), one parallel job per project:
 # zero parse errors, zero findings from rules that claim the code would not
-# compile or start, the planted bugs still reported, and a findings snapshot
-# diffed against a baseline. Two setups per project:
+# compile or start, the same findings on one thread and on many, the planted
+# bugs still reported, and a findings snapshot diffed against a baseline. Two setups per project:
 # - check: a fresh checkout, no jars at all (baseline corpus/ci); most calls
 #   into libraries stay unknown, as for an agent in a repo never built;
 # - classpath: `grounds classpath` first (Maven/Gradle resolve the exact
@@ -20,6 +20,8 @@ on:
       - "crates/**"
       - "corpus/**"
       - "scripts/corpus.sh"
+      - "scripts/ci_mutations.py"
+      - "scripts/replay.py"
       - "Cargo.lock"
       - ".github/workflows/corpus.yml"
   workflow_dispatch:
@@ -76,12 +78,14 @@ jobs:
           name: binaries
           path: bin
       - run: chmod +x bin/grounds bin/examples/errors
+      # with the commits before it, for the replay below
       - name: fetch the pinned commit
         run: scripts/corpus.sh fetch
         env:
           CORPUS_ONLY: ${{ matrix.project }}
           CORPUS_DIR: ${{ runner.temp }}/corpus
           CORPUS_SHALLOW: "1"
+          CORPUS_DEPTH: "16"
       # the planted bugs need Spring's jars to be judged at all
       - if: hashFiles(format('corpus/planted/{0}.patch', matrix.project)) != ''
         uses: actions/cache@v4
@@ -106,12 +110,23 @@ jobs:
         run: python3 -I scripts/ci_mutations.py "$CORPUS_DIR/${{ matrix.project }}" --grounds bin/grounds --safe 8 --breaking 4 --out target/corpus/mutations.json
         env:
           CORPUS_DIR: ${{ runner.temp }}/corpus
+      # The project's last commits, one after the other (scripts/replay.py):
+      # a daemon that has followed them must answer `changed --base` as a
+      # run from scratch does, and a commit of the main line compiled, so
+      # neither may report a compile break. Not a gate yet: its first runs
+      # are being read.
+      - name: replay
+        continue-on-error: true
+        run: python3 -I scripts/replay.py "$CORPUS_DIR/${{ matrix.project }}" --grounds bin/grounds --commits 15 --out target/corpus/replay.json
+        env:
+          CORPUS_DIR: ${{ runner.temp }}/corpus
       - name: summary
         if: always()
         run: |
           {
             echo "### ${{ matrix.project }}: calls resolved $(cut -f2 target/corpus/current/stats.tsv 2>/dev/null)"
             [ -f target/corpus/mutations.json ] && python3 scripts/ci_mutations.py --summary target/corpus/mutations.json
+            [ -f target/corpus/replay.json ] && python3 scripts/replay.py --summary target/corpus/replay.json
             if [ -s target/corpus/snapshot.diff ]; then
               echo "<details><summary>snapshot diff</summary>"; echo; echo '```diff'; head -200 target/corpus/snapshot.diff; echo '```'; echo "</details>"
             else
@@ -126,8 +141,10 @@ jobs:
             target/corpus/current/*.txt
             target/corpus/current/stats.tsv
             target/corpus/snapshot.diff
+            target/corpus/threads-*.diff
             target/corpus/planted-*.diff
             target/corpus/mutations.json
+            target/corpus/replay.json
 
   # helidon on JDK 21: the release it infers (27) is newer than the JDK, which
   # used to report the JDK 20 API's missing members (getFirst, a Java 21 method)
@@ -169,6 +186,7 @@ jobs:
             target/corpus/current/*.txt
             target/corpus/current/stats.tsv
             target/corpus/snapshot.diff
+            target/corpus/threads-*.diff
 
   # helidon on JDK 27 (early access): the release it infers is 27, so with the JDK
   # at 27 grounds reads that release exactly from lib/modules, and the compile-break
@@ -223,6 +241,7 @@ jobs:
             target/corpus/current/*.txt
             target/corpus/current/stats.tsv
             target/corpus/snapshot.diff
+            target/corpus/threads-*.diff
 
   classpath:
     needs: build
@@ -302,6 +321,7 @@ jobs:
             target/corpus/current/*.txt
             target/corpus/current/stats.tsv
             target/corpus/snapshot.diff
+            target/corpus/threads-*.diff
 
   # pushes the results as a branch, corpus-baseline/<run id>, to open a PR from
   # (also uploaded as the corpus-baseline artifact)

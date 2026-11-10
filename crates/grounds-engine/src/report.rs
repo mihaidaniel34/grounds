@@ -179,7 +179,7 @@ impl SarifDoc {
                 "fullDescription": { "text": m.description },
                 "helpUri": format!("{HOME}/blob/master/docs/RULES.md"),
                 "defaultConfiguration": { "level": level(m.severity) },
-                "properties": { "category": m.category.as_str(), "sources": m.sources },
+                "properties": { "category": m.category.as_str(), "sources": m.sources, "maturity": m.maturity.as_str() },
             }),
             // findings only CI mode (`changed --base`) produces
             None => {
@@ -194,6 +194,7 @@ impl SarifDoc {
                     "fullDescription": { "text": text },
                     "helpUri": format!("{HOME}#ci"),
                     "defaultConfiguration": { "level": level(severity) },
+                    "properties": { "maturity": crate::analyze::maturity_of(id).as_str() },
                 })
             }
         };

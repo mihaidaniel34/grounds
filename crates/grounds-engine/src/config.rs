@@ -41,13 +41,17 @@ pub struct ClasspathConfig {
     pub warn: bool,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct RulesConfig {
     /// Rule ids or categories to disable.
     pub disable: Vec<String>,
     /// Only enable these rules/categories (empty = all default rules).
     pub enable: Vec<String>,
+    /// Run preview rules (those whose precision is still being measured).
+    /// A rule named by id in `enable` (or `--rules`) runs whatever this says.
+    /// Default true for now; a later release turns it to false.
+    pub preview: bool,
     /// Severity overrides: rule id -> "error" | "warning" | "info".
     pub severity: std::collections::BTreeMap<String, String>,
     /// Per-rule options.
@@ -66,6 +70,12 @@ pub struct ReportConfig {
 impl Default for ClasspathConfig {
     fn default() -> Self {
         ClasspathConfig { entries: Vec::new(), files: Vec::new(), scan_caches: true, build_outputs: true, warn: true }
+    }
+}
+
+impl Default for RulesConfig {
+    fn default() -> Self {
+        RulesConfig { disable: Vec::new(), enable: Vec::new(), preview: true, severity: Default::default(), options: Default::default() }
     }
 }
 
