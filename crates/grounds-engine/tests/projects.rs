@@ -335,3 +335,83 @@ fn a_resources_file_checked_by_name_is_not_analyzed() {
     let _ = std::fs::remove_dir_all(&dir);
     assert!(found.is_empty(), "{:?}", found.iter().map(|f| &f.message).collect::<Vec<_>>());
 }
+
+#[test]
+fn lombok_config_keys_that_rename_generated_members() {
+    // checked with javac and Lombok 1.18.36: the reported lines are javac's errors
+    let dir = project(
+        "lombok-config-names",
+        &[
+            ("lombok.config", "config.stopBubbling = true\nlombok.getter.noIsPrefix = true\nlombok.builder.className = Make*\nlombok.log.fieldName = LOGGER\nlombok.fieldNameConstants.innerTypeName = Names\nlombok.fieldNameConstants.uppercase = true\n"),
+            ("src/main/java/app/Flag.java", "package app;\nimport lombok.Builder;\nimport lombok.Getter;\nimport lombok.experimental.FieldNameConstants;\nimport lombok.extern.java.Log;\n@Log\n@Getter\n@Builder\n@FieldNameConstants\npublic class Flag {\n    private boolean active;\n    private String createdBy;\n    static void hello() { Flag.LOGGER.info(\"hi\"); }\n}\n"),
+            (
+                "src/main/java/app/Uses.java",
+                "package app;\nclass Uses {\n    boolean a(Flag f) { return f.getActive(); }\n    boolean b(Flag f) { return f.isActive(); }\n    Flag c() { Flag.MakeFlag m = Flag.builder().active(true); return m.build(); }\n    String d() { return Flag.Names.CREATED_BY + Flag.Names.ACTIVE; }\n    String e() { return Flag.Names.createdBy; }\n}\n",
+            ),
+        ],
+    );
+    let found = findings(&dir, COMPILE);
+    assert_eq!(found, ["src/main/java/app/Uses.java:4 unresolved-method", "src/main/java/app/Uses.java:7 unresolved-field"]);
+}
+
+#[test]
+fn an_unmodelled_lombok_config_key_leaves_lombok_classes_open() {
+    // lombok.singular.useGuava gives the builder Guava fields: the members of
+    // classes Lombok processes are not known; a plain class still is
+    let dir = project(
+        "lombok-config-unmodelled",
+        &[
+            ("lombok.config", "config.stopBubbling = true\nlombok.singular.useGuava = true\n"),
+            ("src/main/java/app/Plain.java", "package app;\npublic class Plain {\n    public int size() { return 0; }\n}\n"),
+            ("src/main/java/app/Bag.java", "package app;\nimport lombok.Builder;\nimport lombok.Singular;\nimport java.util.List;\n@Builder\npublic class Bag {\n    @Singular\n    private List<String> items;\n}\n"),
+            ("src/main/java/app/Uses.java", "package app;\nclass Uses {\n    Bag a() { return Bag.builder().item(\"x\").weight(2).build(); }\n    int b(Plain p) { return p.length(); }\n}\n"),
+        ],
+    );
+    let found = findings(&dir, COMPILE);
+    assert_eq!(found, ["src/main/java/app/Uses.java:4 unresolved-method"]);
+}
+
+#[test]
+fn lombok_builder_fields_and_field_name_constants_across_files() {
+    // a hand-written builder reading the fields Lombok adds to it, a
+    // @SuperBuilder hierarchy over two files, and @FieldNameConstants used
+    // from another class; the misspelt names are reported
+    let dir = project(
+        "lombok-builder-fields",
+        &[
+            (
+                "src/main/java/app/Job.java",
+                "package app;\nimport lombok.Builder;\nimport lombok.Getter;\nimport lombok.experimental.FieldNameConstants;\n@Getter\n@Builder(toBuilder = true)\n@FieldNameConstants\npublic class Job {\n    private String tenantId;\n    @Builder.Default\n    private int attempts = 0;\n\n    public static class JobBuilder {\n        public JobBuilder retry() {\n            this.attempts$value = this.attempts$value + 1;\n            this.attempts$set = true;\n            return this;\n        }\n        public String tenant() {\n            return this.tenantId + this.tenant;\n        }\n    }\n}\n",
+            ),
+            ("src/main/java/app/Base.java", "package app;\nimport lombok.experimental.SuperBuilder;\n@SuperBuilder\npublic class Base {\n    private String id;\n    public static abstract class BaseBuilder<C extends Base, B extends BaseBuilder<C, B>> {\n        public B idOf(Base other) {\n            this.id = other.id;\n            return self();\n        }\n    }\n}\n"),
+            ("src/main/java/app/Child.java", "package app;\nimport lombok.experimental.SuperBuilder;\n@SuperBuilder\npublic class Child extends Base {\n    private String name;\n    static String nameOf(ChildBuilder<?, ?> b) {\n        return b.name;\n    }\n}\n"),
+            (
+                "src/main/java/app/Query.java",
+                "package app;\nclass Query {\n    String where() { return Job.Fields.tenantId + \"=? and \" + Job.Fields.attempts + Job.Fields.tenant; }\n    Child child() { return Child.builder().id(\"1\").name(\"n\").build(); }\n}\n",
+            ),
+        ],
+    );
+    let found = findings(&dir, COMPILE);
+    assert_eq!(found, ["src/main/java/app/Job.java:20 unresolved-field", "src/main/java/app/Query.java:3 unresolved-field"]);
+}
+
+#[test]
+fn a_reset_lombok_config_key_and_an_imported_include_are_modelled() {
+    // a module's lombok.config sets useGuava back to its default, so Tag is
+    // modelled; `@Include` imported from FieldNameConstants counts. Checked
+    // with javac and Lombok 1.18.36: only Uses.java:4 is rejected
+    let dir = project(
+        "lombok-config-reset",
+        &[
+            ("lombok.config", "config.stopBubbling = true\nlombok.singular.useGuava = true\n"),
+            ("sub/lombok.config", "lombok.singular.useGuava = false\n"),
+            (
+                "sub/src/main/java/app/Tag.java",
+                "package app;\nimport lombok.Builder;\nimport lombok.Singular;\nimport lombok.experimental.FieldNameConstants;\nimport lombok.experimental.FieldNameConstants.Include;\nimport java.util.List;\n@Builder\n@FieldNameConstants(onlyExplicitlyIncluded = true)\npublic class Tag {\n    @Include\n    private String label;\n    @Singular\n    private List<String> aliases;\n}\n",
+            ),
+            ("sub/src/main/java/app/Uses.java", "package app;\nclass Uses {\n    String a() { return Tag.Fields.label; }\n    Tag b() { return Tag.builder().alias(\"x\").weight(2).build(); }\n}\n"),
+        ],
+    );
+    let found = findings(&dir, COMPILE);
+    assert_eq!(found, ["sub/src/main/java/app/Uses.java:4 unresolved-method"]);
+}

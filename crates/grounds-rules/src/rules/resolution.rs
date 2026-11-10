@@ -17,6 +17,11 @@ pub fn rules() -> Vec<Box<dyn Rule>> {
 /// A project class whose full hierarchy is known and that no processor other
 /// than our Lombok model adds members to.
 fn closed_class<'t>(cx: &Ctx<'_, 't>, name: &str) -> Option<std::sync::Arc<ClassInfo>> {
+    // @ExtensionMethod in this file makes static methods of other classes
+    // callable as instance methods of any receiver
+    if cx.fm.stub.classes.iter().any(|k| k.annotations.iter().any(|a| lombok::processor_annotation(a, &cx.fm.stub.imports).as_deref() == Some("lombok.experimental.ExtensionMethod"))) {
+        return None;
+    }
     // a file that does not parse as Java (a template, a file mid-edit) is no
     // ground for a claim that code does not compile
     if cx.fm.file.has_errors() {
@@ -43,12 +48,17 @@ fn closed_class<'t>(cx: &Ctx<'_, 't>, name: &str) -> Option<std::sync::Arc<Class
         if file.is_some_and(|f| cx.fm.index.file(&f).is_some_and(|s| s.has_syntax_errors)) {
             return None;
         }
-    }
-    // Lombok @Delegate / @ExtensionMethod add members we do not model
-    let file = c.source_file()?;
-    let stub = cx.fm.index.file(file)?;
-    if stub.referenced_names.iter().any(|n| matches!(&**n, "Delegate" | "ExtensionMethod" | "Accessors")) {
-        return None;
+        // Lombok adds members the model does not reproduce to this class or
+        // one enclosing it (`@Delegate`, `@Accessors`, a lombok.config key it
+        // does not know...): what looks missing may exist. The annotations
+        // that are modelled fully are listed in lombok::IMPLEMENTED.
+        let mut k = cx.fm.class(n);
+        while let Some(kc) = k {
+            if kc.flags.has(Flags::MEMBERS_UNKNOWN) {
+                return None;
+            }
+            k = kc.outer.as_ref().and_then(|o| cx.fm.class(o));
+        }
     }
     // library supertypes are read from guessed jar versions (the newest in the
     // Gradle/Maven caches) unless the classpath was dumped exactly: a method
