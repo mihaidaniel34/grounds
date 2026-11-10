@@ -869,10 +869,32 @@ impl Rule for SwitchFallthrough {
         if has_marker(gap) || has_marker(&tail[tail_start..]) {
             return;
         }
+        // the case leaves the switch under some condition (`if (done)
+        // return x;`, `if (..) break;`) and goes on otherwise: its author
+        // chose where it ends, and the rest falls through on purpose
+        if stmts.iter().any(|st| conditional_exit(*st, n)) {
+            return;
+        }
         if let Some(label) = next.kid_of_kind("switch_label") {
             cx.report(label, "Previous case falls through into this one; add `break` or a `// fall through` comment");
         }
     }
+}
+
+/// Does `st` hold an `if` with a branch that leaves the case `group`:
+/// `return`, `throw`, `continue`, or a `break` of the switch itself (not of a
+/// loop or switch nested inside)?
+fn conditional_exit(st: Node, group: Node) -> bool {
+    st.descendants().filter(|d| d.kind() == "if_statement").any(|ifs| {
+        ifs.descendants().any(|j| match j.kind() {
+            "return_statement" | "throw_statement" | "continue_statement" => !j.ancestors().take_while(|a| *a != group).any(|a| matches!(a.kind(), "lambda_expression" | "class_body")),
+            "break_statement" => {
+                j.named_child_count() == 0
+                    && !j.ancestors().take_while(|a| *a != group).any(|a| matches!(a.kind(), "switch_expression" | "while_statement" | "do_statement" | "for_statement" | "enhanced_for_statement" | "lambda_expression" | "class_body"))
+            }
+            _ => false,
+        })
+    })
 }
 
 declare_rule!(SwitchMissingDefault {
