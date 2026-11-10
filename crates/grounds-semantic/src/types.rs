@@ -31,6 +31,34 @@ pub fn binary_promotion(a: Prim, b: Prim) -> Prim {
     }
 }
 
+/// The type of a numeric conditional expression (JLS 15.25.2) whose
+/// operands have the (unboxed) types `x` and `y`; `cx`/`cy` is the value of
+/// an operand that is a constant expression of type int. The boxed and
+/// unboxed forms of a type give that primitive type.
+pub fn numeric_conditional(x: Prim, y: Prim, cx: Option<i64>, cy: Option<i64>) -> Prim {
+    if x == y {
+        return x;
+    }
+    // byte or Byte with short or Short
+    if matches!((x, y), (Prim::Byte, Prim::Short) | (Prim::Short, Prim::Byte)) {
+        return Prim::Short;
+    }
+    // T in {byte, short, char} (or its box) with an int constant representable in T
+    let fits = |t: Prim, v: i64| match t {
+        Prim::Byte => (-128..=127).contains(&v),
+        Prim::Short => (-32768..=32767).contains(&v),
+        Prim::Char => (0..=0xFFFF).contains(&v),
+        _ => false,
+    };
+    if y == Prim::Int && cy.is_some_and(|v| fits(x, v)) {
+        return x;
+    }
+    if x == Prim::Int && cx.is_some_and(|v| fits(y, v)) {
+        return y;
+    }
+    binary_promotion(x, y)
+}
+
 pub fn unary_promotion(a: Prim) -> Prim {
     match a {
         Prim::Byte | Prim::Short | Prim::Char => Prim::Int,
@@ -166,7 +194,16 @@ impl<'t> FileModel<'t> {
             "ternary_expression" => {
                 let a = n.field("consequence").map(|x| self.type_of(x)).unwrap_or(Ty::Unknown);
                 let b = n.field("alternative").map(|x| self.type_of(x)).unwrap_or(Ty::Unknown);
-                self.conditional_type(&a, &b)
+                // the value of an operand that is a constant expression of type int
+                let int_constant = |x: Option<Node<'t>>, t: &Ty| match (x, t) {
+                    (Some(x), Ty::Prim(Prim::Int)) => match self.constant_value(x) {
+                        Some(Constant::Int(v)) => Some(v),
+                        _ => None,
+                    },
+                    _ => None,
+                };
+                let (ca, cb) = (int_constant(n.field("consequence"), &a), int_constant(n.field("alternative"), &b));
+                self.conditional_type_of(&a, &b, ca, cb)
             }
             "lambda_expression" | "method_reference" => self.expected_type(n),
             "switch_expression" => self.switch_expression_type(n),
@@ -200,6 +237,12 @@ impl<'t> FileModel<'t> {
 
     /// JLS 15.25, simplified.
     pub fn conditional_type(&self, a: &Ty, b: &Ty) -> Ty {
+        self.conditional_type_of(a, b, None, None)
+    }
+
+    /// JLS 15.25, with the value of each operand that is a constant
+    /// expression of type int (`ca`, `cb`), for the numeric table of 15.25.2.
+    pub fn conditional_type_of(&self, a: &Ty, b: &Ty, ca: Option<i64>, cb: Option<i64>) -> Ty {
         if a == b {
             return a.clone();
         }
@@ -212,10 +255,7 @@ impl<'t> FileModel<'t> {
                 }
                 if let (Some(x), Some(y)) = (a.unboxed(), b.unboxed()) {
                     if x.is_numeric() && y.is_numeric() && (a.is_prim() || b.is_prim() || x != y) {
-                        if x == y {
-                            return Ty::Prim(x);
-                        }
-                        return Ty::Prim(binary_promotion(x, y));
+                        return Ty::Prim(numeric_conditional(x, y, ca, cb));
                     }
                 }
                 if self.is_assignable(a, b).is_yes() {

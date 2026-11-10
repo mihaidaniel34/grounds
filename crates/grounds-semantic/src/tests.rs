@@ -1228,3 +1228,48 @@ fn nested_generic_identity_calls_stay_linear() {
     }
 }
 
+#[test]
+fn numeric_conditional_types_follow_jls_15_25() {
+    // JLS 15.25.2: an int constant that fits narrows to the other operand's
+    // byte, short or char type (boxed or not); byte with short is short;
+    // otherwise binary numeric promotion
+    let t = types_of(
+        "class T { static final int K = 7; static final int BIG = 70000;
+           void m(boolean c, String s, byte b, short sh, char ch, Byte bb, Short sb, Character cc, Integer ii, long l, int i) {
+             Object a1 = /*T*/ (c ? 0 : s.charAt(0));
+             Object a2 = /*T*/ (c ? s.charAt(0) : 65535);
+             Object a3 = /*T*/ (c ? s.charAt(0) : 65536);
+             Object a4 = /*T*/ (c ? s.charAt(0) : -1);
+             Object a5 = /*T*/ (c ? b : 127);
+             Object a6 = /*T*/ (c ? b : 128);
+             Object a7 = /*T*/ (c ? sh : K);
+             Object a8 = /*T*/ (c ? sh : BIG);
+             Object a9 = /*T*/ (c ? b : sh);
+             Object b1 = /*T*/ (c ? bb : sb);
+             Object b2 = /*T*/ (c ? cc : 1);
+             Object b3 = /*T*/ (c ? bb : 1);
+             Object b4 = /*T*/ (c ? ch : i);
+             Object b5 = /*T*/ (c ? ch : b);
+             Object b6 = /*T*/ (c ? ch : (short) 1);
+             Object b7 = /*T*/ (c ? ii : l);
+             Object b8 = /*T*/ (c ? ii : 1);
+             Object b9 = /*T*/ (c ? 1L : ch);
+             Object c1 = /*T*/ (c ? (char) 1 : 'x');
+             Object c2 = /*T*/ (c ? 1 + 1 : ch);
+           } }",
+    );
+    assert_eq!(
+        t,
+        vec!["char", "char", "int", "int", "byte", "int", "short", "int", "short", "short", "char", "byte", "int", "int", "int", "long", "int", "long", "char", "char"]
+    );
+}
+
+#[test]
+fn a_char_conditional_selects_the_char_overload() {
+    // `s.isEmpty() ? 0 : s.charAt(0)` is a char: only separator(char) applies
+    let c = calls_of(
+        "class B { B separator(char c) { return this; } B width(byte w) { return this; }
+           void m(String s, byte w) { /*C*/ separator(s.isEmpty() ? 0 : s.charAt(0)); /*C*/ width(s.isEmpty() ? 8 : w); } }",
+    );
+    assert_eq!(c, vec!["B.separator(char)", "B.width(byte)"]);
+}

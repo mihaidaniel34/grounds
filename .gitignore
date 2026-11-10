@@ -36,6 +36,7 @@
 # projects the rules were not tuned on, and what was measured on them
 !/corpus/holdout.tsv
 !/docs/holdout/*
+!/docs/smoke/*
 !/corpus/planted/*.patch
 !/corpus/planted/*.expected
 !/corpus/ci/*.txt

@@ -10,12 +10,6 @@ use crate::stubs::fold_binary;
 thread_local! {
     /// (class, simple name) member-type lookups in progress on this thread
     static MEMBER_LOOKUPS: std::cell::RefCell<Vec<(Name, Name)>> = const { std::cell::RefCell::new(Vec::new()) };
-    /// Constant evaluation on this thread: (nesting across classes, steps
-    /// left). A constant defined by another class's constant is evaluated
-    /// from that class's stub, with a fresh expression depth, so neither a
-    /// cycle (`A.X = B.Y`, `B.Y = A.X`) nor a chain doubling at each class
-    /// (`K2.V = K1.V * K1.V`) is bounded by the depth alone.
-    static CONST_EVAL: Cell<(u32, u32)> = const { Cell::new((0, 0)) };
     /// (class, field) constant initializers being evaluated on this thread
     static CONSTANTS_IN_PROGRESS: std::cell::RefCell<Vec<(Name, Name)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
@@ -26,38 +20,6 @@ thread_local! {
 /// name in the corpus has 21.
 const MAX_NAME_SEGMENTS: usize = 256;
 
-/// Nested constant evaluations allowed at once on a thread (all classes).
-const CONST_EVAL_NESTING: u32 = 160;
-/// Evaluation steps for one outermost constant, including those of the
-/// constants it refers to. Real constants take a few dozen.
-const CONST_EVAL_STEPS: u32 = 20_000;
-
-/// One step of constant evaluation, released on drop; `None` when the
-/// nesting or the step budget is exhausted.
-struct ConstEvalStep;
-
-impl ConstEvalStep {
-    fn enter() -> Option<ConstEvalStep> {
-        CONST_EVAL.with(|c| {
-            let (nesting, steps) = c.get();
-            let steps = if nesting == 0 { CONST_EVAL_STEPS } else { steps };
-            if nesting >= CONST_EVAL_NESTING || steps == 0 {
-                return None;
-            }
-            c.set((nesting + 1, steps - 1));
-            Some(ConstEvalStep)
-        })
-    }
-}
-
-impl Drop for ConstEvalStep {
-    fn drop(&mut self) {
-        CONST_EVAL.with(|c| {
-            let (nesting, steps) = c.get();
-            c.set((nesting.saturating_sub(1), steps));
-        });
-    }
-}
 use dashmap::DashMap;
 use grounds_classfile::ClassContainer;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -727,7 +689,6 @@ impl Index {
         if depth > 32 {
             return None;
         }
-        let _step = ConstEvalStep::enter()?;
         match e {
             ConstExpr::Lit(c) => Some(c.clone()),
             ConstExpr::Name(n) => {

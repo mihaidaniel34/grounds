@@ -274,3 +274,46 @@ fn string_constants_stop_at_the_class_file_limit() {
     let half = Constant::Str(Arc::from("x".repeat(MAX_CONSTANT_STRING / 2 + 1).as_str()));
     assert_eq!(fold_binary("+", &half, &half), None);
 }
+
+#[test]
+fn lombok_auto_singular_names() {
+    use crate::lombok::auto_singularize;
+    // the answers of Lombok 1.18.36's Singulars.autoSingularize, run on these names
+    let cases = [
+        ("items", Some("item")), ("statuses", Some("status")), ("addresses", Some("address")), ("boxes", Some("box")), ("matches", Some("match")),
+        ("categories", Some("category")), ("children", Some("child")), ("indices", Some("index")), ("heroes", Some("hero")), ("wolves", Some("wolf")),
+        ("leaves", Some("leaf")), ("userIds", Some("userId")), ("menuItems", Some("menuItem")), ("Men", Some("Man")), ("chairmen", None),
+        ("species", None), ("news", None), ("status", None), ("data", None), ("classes", Some("class")), ("analyses", Some("analysis")),
+        ("headers", Some("header")), ("bases", Some("base")), ("caches", Some("cach")),
+    ];
+    for (plural, singular) in cases {
+        assert_eq!(auto_singularize(plural).as_deref(), singular, "{plural}");
+    }
+}
+
+#[test]
+fn lombok_classes_with_unmodelled_annotations_are_marked_open() {
+    let idx = index_of(&[
+        (
+            "A.java",
+            "package p; import lombok.*; import lombok.experimental.*; import java.util.List;
+             @Data @Builder @FieldNameConstants class Known { @Singular private List<String> tags; @Builder.Default private int n = 1; }
+             class Delegating { @Delegate private List<String> items; }
+             @Accessors(prefix = \"m\") class Prefixed { @Getter private String mName; }
+             class Lazy { @Getter(lazy = true) private final String v = \"\"; }
+             @Builder class Guava { @Singular private com.google.common.collect.ImmutableList<String> xs; }
+             @Builder class NoSingular { @Singular private List<String> data; }
+             @lombok.experimental.WithBy class Qualified { int a; }
+             @Unknown class Plain { }",
+        ),
+        // a single-type import decides: this `Delegate` is not Lombok's
+        ("B.java", "package q; import other.Delegate; class Mine { @Delegate String s; }"),
+    ]);
+    let open = |n: &str| idx.class(n).unwrap_or_else(|| panic!("{n}")).flags.has(Flags::MEMBERS_UNKNOWN);
+    for n in ["p.Known", "p.Known$KnownBuilder", "p.Known$Fields", "p.Plain", "q.Mine"] {
+        assert!(!open(n), "{n} open");
+    }
+    for n in ["p.Delegating", "p.Prefixed", "p.Lazy", "p.Guava", "p.NoSingular", "p.Qualified"] {
+        assert!(open(n), "{n} not open");
+    }
+}
