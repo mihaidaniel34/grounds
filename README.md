@@ -496,16 +496,19 @@ The evidence, all on projects the rules were never tuned on
   difference between the daemon and a fresh run.
 - **Changed lines:** the replay above did not compare findings on changed
   lines with the parent, so a commit editing the line of one of those 246
-  findings would have been told about it. Now that they are compared: on
-  mall4j a commit adding a comment to the line of a false `bean-not-found`
-  (`AreaServiceImpl.java:36`), and on maven one renaming a parameter on the
-  line of a false `override-matches-nothing` (`AbstractSession.java:371`),
-  were each reported before, with `--base` and per turn, and are not now; a
-  call to a missing method added to that maven line is still reported. A
-  replay of 213 commits on 16 projects (6 corpus, 10 hold-out, among them
-  maven, pig, mall4j and kestra) with this comparison: no compile-break or
-  wiring finding on a changed line, no place reported broken in another
-  file, and no difference between the daemon and a fresh run.
+  findings would have been told about it. Now they are compared. On maven a
+  commit renaming a parameter on the line of a false
+  `override-matches-nothing` (`AbstractSession.java:371`), and on mall4j one
+  adding a comment to the line of a false `bean-not-found`
+  (`AreaServiceImpl.java:36`, a finding #70 has since removed), were each
+  reported before, with `--base` and per turn, and are not now; a call to a
+  missing method added to that maven line is still reported. A replay of 222
+  commits on 16 projects (6 corpus, 10 hold-out, among them maven, pig,
+  mall4j and kestra) with this comparison: no compile-break or wiring finding
+  on a changed line and no place reported broken in another file. The daemon
+  and a fresh run differed once, in the count of findings outside the
+  changed lines at the first commit of pig's walk; two reruns did not repeat
+  it.
 
 What is not promised:
 
