@@ -22,7 +22,9 @@ pub fn enabled() -> bool {
 pub fn log(line: impl FnOnce() -> String) {
     let Some(p) = target() else { return };
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
-    let text = format!("{}.{:09} pid {} {}\n", now.as_secs(), now.subsec_nanos(), std::process::id(), line());
+    // one record per line, whatever the paths in it
+    let line = line().replace('\n', "\\n").replace('\r', "\\r");
+    let text = format!("{}.{:09} pid {} {line}\n", now.as_secs(), now.subsec_nanos(), std::process::id());
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(p) {
         let _ = f.write_all(text.as_bytes());
     }

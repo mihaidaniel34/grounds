@@ -531,6 +531,9 @@ fn a_rewrite_that_keeps_time_and_size_is_seen() {
     // content decides.
     let rel = "src/main/java/demo/Api.java";
     let dir = one_class_project("racy", "package demo;\npublic class Api {\n    @Deprecated(since = \"1\") public void m() {}\n}\n");
+    // a time in the future stays racy however slowly the test runs (one just
+    // written stops being racy three seconds later)
+    set_mtime(&dir, rel, std::time::SystemTime::now() + std::time::Duration::from_secs(600));
     let mut s = Session::open(&dir).unwrap();
     assert!(changed_apis(&mut s, &dir).is_empty());
     let (t, size) = (mtime(&dir, rel), std::fs::metadata(dir.join(rel)).unwrap().len());
