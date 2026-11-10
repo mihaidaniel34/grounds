@@ -611,6 +611,14 @@ impl Rule for CompareToSpecificValue {
         for (call, k) in [(l, r), (r, l)] {
             if let Some(v) = cx.fm.int_value(k) {
                 if v != 0 && is_comparison_call(call, cx) {
+                    // BigDecimal.compareTo and BigInteger.compareTo are
+                    // documented to return exactly -1, 0 or 1
+                    let exact = matches!(v, 1 | -1)
+                        && call.unparen().kind() == "method_invocation"
+                        && cx.fm.select_method(call.unparen()).is_some_and(|m| &*m.method.name == "compareTo" && matches!(&*m.owner, "java.math.BigDecimal" | "java.math.BigInteger"));
+                    if exact {
+                        return;
+                    }
                     cx.report(n, format!("`{}` only guarantees the sign; comparing with {v} is unreliable", cx.fm.call_name(call.unparen()).unwrap_or("compareTo")));
                     return;
                 }
