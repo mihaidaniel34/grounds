@@ -36,7 +36,11 @@ impl std::fmt::Debug for ClassContainer {
 /// the entry is something else (`/`, a home directory, a jar cache): listing
 /// it takes minutes and finds no packages. It is then not read at all, since
 /// the part listed before the limit would depend on the file system's order.
-pub const DIR_LIMIT: usize = 200_000;
+///
+/// The time to reach the limit is what a mistaken entry costs: on a CI runner
+/// `/` took about 100 µs an entry (20 s at 200,000, once over 40 s), so the
+/// limit is no higher than a real directory of classes needs.
+pub const DIR_LIMIT: usize = 100_000;
 
 /// Release character used by ct.sym directory names: 8, 9, A=10, B=11, ...
 pub fn ct_sym_release_char(release: u32) -> char {
