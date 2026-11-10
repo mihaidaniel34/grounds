@@ -893,7 +893,9 @@ def run_case(exe, i, case, a, tmp_root):
                 why = "check printed no JSON, or JSON that does not parse"
         if why:
             res["failures"].append(("check", why))
-        if a.daemon_every and daemon_roll < 1.0 / a.daemon_every and not res["failures"]:
+        # not cases with unreadable files or pipes: git cannot add them (as
+        # any user but root), and that is not what the daemon path tests
+        if a.daemon_every and daemon_roll < 1.0 / a.daemon_every and not res["failures"] and not spec.get("special"):
             fails, served = daemon_path(exe, d, spec, a, env)
             res["failures"] += fails
             res["daemon"] = served

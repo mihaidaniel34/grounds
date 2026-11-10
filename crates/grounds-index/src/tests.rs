@@ -265,3 +265,12 @@ fn constants_defined_by_each_other_across_classes_are_bounded() {
         .join()
         .unwrap();
 }
+
+#[test]
+fn string_constants_stop_at_the_class_file_limit() {
+    use crate::stubs::{fold_binary, MAX_CONSTANT_STRING};
+    let short = fold_binary("+", &Constant::Str(Arc::from("ab")), &Constant::Int(1));
+    assert_eq!(short, Some(Constant::Str(Arc::from("ab1"))));
+    let half = Constant::Str(Arc::from("x".repeat(MAX_CONSTANT_STRING / 2 + 1).as_str()));
+    assert_eq!(fold_binary("+", &half, &half), None);
+}

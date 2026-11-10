@@ -20,6 +20,12 @@ thread_local! {
     static CONSTANTS_IN_PROGRESS: std::cell::RefCell<Vec<(Name, Name)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
+/// Longest qualified type name resolved, in segments. Resolution tries every
+/// split into package and nested classes, which is quadratic in the length:
+/// a file cut off in `@a.x.x.x...` (a million segments) never finished. No
+/// name in the corpus has 21.
+const MAX_NAME_SEGMENTS: usize = 256;
+
 /// Nested constant evaluations allowed at once on a thread (all classes).
 const CONST_EVAL_NESTING: u32 = 160;
 /// Evaluation steps for one outermost constant, including those of the
@@ -892,6 +898,9 @@ impl Index {
 
     /// Resolve a (possibly qualified) type name to a binary class name.
     pub fn resolve_type_name(&self, segs: &[&str], scope: &Scope) -> Option<Name> {
+        if segs.len() > MAX_NAME_SEGMENTS {
+            return None;
+        }
         let first = *segs.first()?;
         if let Some(n) = self.resolve_simple_type(first, scope) {
             let mut cur = n;
@@ -913,6 +922,9 @@ impl Index {
             return Some(Arc::from(dotted));
         }
         let segs: Vec<&str> = dotted.split('.').collect();
+        if segs.len() > MAX_NAME_SEGMENTS {
+            return None;
+        }
         for i in (1..segs.len()).rev() {
             let pkg = segs[..i].join(".");
             let top = format!("{}.{}", pkg, segs[i]);

@@ -617,17 +617,26 @@ pub fn fold_unary(op: &str, v: Constant) -> Option<Constant> {
     }
 }
 
+/// Longest string constant folded, in bytes: a class file holds constant
+/// strings of up to 65,535 bytes, so longer ones are compile errors.
+pub const MAX_CONSTANT_STRING: usize = 1 << 20;
+
 /// Binary operator on constants, with Java's semantics: `int` arithmetic
 /// wraps at 32 bits, mixed operands promote to `long`/`double`, and a shift
 /// takes the type of its left operand and masks the distance to 5 or 6 bits.
 pub fn fold_binary(op: &str, l: &Constant, r: &Constant) -> Option<Constant> {
     use Constant::*;
     if op == "+" {
-        if let (Str(a), b) = (l, r) {
-            return Some(Str(Arc::from(format!("{}{}", a, const_to_string(b)).as_str())));
-        }
-        if let (a, Str(b)) = (l, r) {
-            return Some(Str(Arc::from(format!("{}{}", const_to_string(a), b).as_str())));
+        let s = match (l, r) {
+            (Str(a), b) => Some(format!("{}{}", a, const_to_string(b))),
+            (a, Str(b)) => Some(format!("{}{}", const_to_string(a), b)),
+            _ => None,
+        };
+        if let Some(s) = s {
+            // not a constant past the class file limit (javac: "constant
+            // string too long"); constants defined twice by the previous one
+            // over 50 classes (`K2.S = K1.S + K1.S`) reached 2^50 bytes
+            return (s.len() <= MAX_CONSTANT_STRING).then(|| Str(Arc::from(s.as_str())));
         }
     }
     let integral = |c: &Constant| matches!(c, Int(_) | Long(_) | Char(_));
@@ -805,21 +814,23 @@ pub fn type_syntax(n: Node, src: &str) -> TypeSyntax {
 }
 
 fn scoped_segments(n: Node, src: &str, segs: &mut Vec<(Name, Vec<TypeSyntax>)>) {
-    match n.kind() {
-        "type_identifier" | "identifier" => segs.push((Arc::from(n.text(src)), Vec::new())),
-        "generic_type" => {
-            if let TypeSyntax::Named(s) = type_syntax(n, src) {
-                segs.extend(s);
-            }
-        }
-        "scoped_type_identifier" | "scoped_identifier" => {
-            for k in n.kids() {
-                if !matches!(k.kind(), "annotation" | "marker_annotation") {
-                    scoped_segments(k, src, segs);
+    // a loop, not recursion: a file cut mid-edit can leave a qualified name
+    // of a million segments (`throws x.x.x...`), which overflowed the stack
+    let mut stack = vec![n];
+    while let Some(n) = stack.pop() {
+        match n.kind() {
+            "type_identifier" | "identifier" => segs.push((Arc::from(n.text(src)), Vec::new())),
+            "generic_type" => {
+                if let TypeSyntax::Named(s) = type_syntax(n, src) {
+                    segs.extend(s);
                 }
             }
+            "scoped_type_identifier" | "scoped_identifier" => {
+                // children in source order: pushed reversed
+                stack.extend(n.kids().into_iter().filter(|k| !matches!(k.kind(), "annotation" | "marker_annotation")).rev());
+            }
+            _ => {}
         }
-        _ => {}
     }
 }
 

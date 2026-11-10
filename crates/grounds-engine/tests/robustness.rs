@@ -113,3 +113,24 @@ fn a_run_of_semicolons_left_in_an_error_node_is_checked_in_time() {
     assert_eq!(fs.len(), grounds_rules::runner::MAX_PER_RULE);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn string_constants_doubling_over_classes_and_huge_qualified_names_are_bounded() {
+    // `K{i}.V = K{i-1}.V + "x" + K{i-1}.V` doubles the string at each class
+    // (2^50 bytes over 50 classes), and a file cut off in `x.x.x...` makes a
+    // qualified name of a million segments, resolved in quadratic time
+    let mut files: Vec<(String, String)> = (0..60)
+        .map(|i| {
+            let init = if i == 0 { "\"a\"".to_string() } else { format!("K{p}.V + \"x\" + K{p}.V", p = i - 1) };
+            (format!("src/main/java/p/K{i}.java"), format!("package p;\npublic class K{i} {{ static final String V = {init}; }}\n"))
+        })
+        .collect();
+    let dots = "x.".repeat(300_000);
+    files.push(("src/main/java/p/T.java".into(), format!("package p;\n@{dots}A class T {{ void m() throws {dots}E {{ ;; }} }}\n")));
+    let refs: Vec<(&str, &str)> = files.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+    let dir = project("doubling", &refs);
+    let t = Instant::now();
+    let _ = check(&dir, &["stray-semicolon"]);
+    assert!(t.elapsed() < Duration::from_secs(30), "{:?}", t.elapsed());
+    let _ = std::fs::remove_dir_all(&dir);
+}
