@@ -1273,3 +1273,121 @@ fn a_char_conditional_selects_the_char_overload() {
     );
     assert_eq!(c, vec!["B.separator(char)", "B.width(byte)"]);
 }
+
+#[test]
+fn member_types_of_anonymous_and_local_classes() {
+    // inherited member types shadow the enclosing class's (JLS 6.4.1, 8.5),
+    // and a local class keeps the member classes it declares
+    let src = "
+        abstract class Call { static class Listener { } }
+        class Resolver { static class Listener { } static class Part { } }
+        class T extends Resolver {
+            void f() {
+                new Call() { Listener l; Object g() { return /*T*/ l; } };
+                class Loc extends Call { class Part { } Listener l; Part p; Object g() { return /*T*/ l; } Object h() { return /*T*/ p; } }
+                class Sub extends Loc { Object k() { return /*T*/ new Part(); } }
+                Listener outer = null;
+                Object o = /*T*/ outer;
+            }
+        }";
+    assert_eq!(types_of(src), vec!["Call.Listener", "Call.Listener", "T.2Loc.Part", "T.2Loc.Part", "Resolver.Listener"]);
+}
+
+#[test]
+fn only_accessible_members_are_candidates() {
+    let src = "
+        import java.util.*;
+        class Base { static class A { } private static A sites() { return null; } }
+        class Outer {
+            static class B { }
+            private static B sites() { return null; }
+            static class Inner extends Base { Object f() { return /*C*/sites(); } }
+        }
+        abstract class Tup extends AbstractList<Object> { static Tup of(Object... e) { return null; } }
+        class Engine { public Object make(Number n) { return null; } private String make(Integer i) { return null; } String own() { return /*C*/make(1); } }
+        class Use { Object f(Set<?> s) { return /*C*/Tup.of(s); } Object g(Engine e) { return /*C*/e.make(1); } }";
+    assert_eq!(calls_of(src), vec!["Outer.sites()", "Engine.make(java.lang.Integer)", "Tup.of(java.lang.Object[])", "Engine.make(java.lang.Number)"]);
+}
+
+#[test]
+fn an_inherited_field_shadows_an_outer_local() {
+    let src = "
+        class Plan { protected String live; private Integer hidden; }
+        class T {
+            Object f() {
+                Integer live = 1; Integer hidden = 2; Integer other = 3;
+                Object a = new Plan() { Object g() { return /*T*/ live; } Object h() { return /*T*/ hidden; } };
+                Object b = new lib.Missing() { Object g() { return /*T*/ live; } };
+                Object c = new Object() { Object g() { return /*T*/ other; } };
+                return /*T*/ live;
+            }
+        }";
+    // an unresolved supertype may declare `live`; the name stays the local
+    assert_eq!(types_of(src), vec!["java.lang.String", "java.lang.Integer", "java.lang.Integer", "java.lang.Integer", "java.lang.Integer"]);
+}
+
+#[test]
+fn pattern_variables_are_scoped_by_their_condition() {
+    let src = "
+        class U { int n; }
+        class T {
+            String v;
+            boolean check(Object x) { return true; }
+            void f(Object o) {
+                if (o instanceof U v && check(/*T*/ v)) { Object a = /*T*/ v; } else { Object b = /*T*/ v; }
+                Object c = /*T*/ v;
+                if (!(o instanceof U v)) { return; }
+                Object d = /*T*/ v;
+            }
+        }";
+    assert_eq!(types_of(src), vec!["U", "U", "java.lang.String", "java.lang.String", "U"]);
+}
+
+#[test]
+fn qualified_creation_names_a_member_of_the_qualifier_type() {
+    let src = "
+        class Engine { class Builder { Builder(int x) { } } }
+        class T { static class Builder { } Object f(Engine e) { return /*T*/ e.new Builder(1); } Object g() { return /*T*/ new Builder(); } }";
+    assert_eq!(types_of(src), vec!["Engine.Builder", "T.Builder"]);
+}
+
+#[test]
+fn a_class_header_does_not_see_the_class_members() {
+    // JLS 6.3: annotations and supertypes of `C` are outside its body, so
+    // what an unresolved supertype may declare does not hide `Marker`
+    let src = "package p; @interface Marker { } @Marker class C extends lib.Missing { void f() { } }";
+    let pf = ParsedFile::parse(src);
+    let mut idx = Index::new(jdk());
+    idx.set_file(Arc::from("p/C.java"), Arc::new(extract(&pf)));
+    let fm = FileModel::new(&pf, &idx, Arc::from("p/C.java"));
+    let decl = pf.root().descendants().find(|n| n.kind() == "class_declaration").unwrap();
+    let anns = fm.annotations_of(decl);
+    assert!(anns.iter().any(|a| a.is("p.Marker")), "{anns:?}");
+}
+
+#[test]
+fn a_package_private_field_of_another_package_does_not_shadow_a_local() {
+    // JLS 8.2, 8.3: a.Base's `x` is not inherited by an anonymous class in b
+    let files = [
+        ("a/Bad.java", "package a; public class Bad { }"),
+        ("a/Base.java", "package a; public class Base { Bad x; protected Bad y; }"),
+        ("b/T.java", "package b; class Good { } class T { void test() { Good x = null; Good y = null; new a.Base() { Object f() { return /*T*/ x; } Object g() { return /*T*/ y; } }; } }"),
+    ];
+    let mut idx = Index::new(jdk());
+    let parsed: Vec<_> = files.iter().map(|(p, s)| (*p, ParsedFile::parse(*s))).collect();
+    for (p, pf) in &parsed {
+        idx.set_file(Arc::from(*p), Arc::new(extract(pf)));
+    }
+    let (path, pf) = &parsed[2];
+    let fm = FileModel::new(pf, &idx, Arc::from(*path));
+    let src = files[2].1;
+    let tys: Vec<String> = src
+        .match_indices("/*T*/ ")
+        .map(|(i, m)| {
+            let at = i + m.len();
+            let n = pf.root().descendants().find(|n| n.start_byte() == at && n.kind() == "identifier").unwrap();
+            fm.type_of(n).to_string()
+        })
+        .collect();
+    assert_eq!(tys, vec!["b.Good", "a.Bad"]);
+}

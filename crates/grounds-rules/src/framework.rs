@@ -130,6 +130,57 @@ pub struct RuleMeta {
     pub default_enabled: bool,
 }
 
+/// The rules that say code would not compile, whose findings `grounds
+/// changed` holds to the stable promise: there it reports only what is new
+/// with the change (a finding on a changed line whose claim the project
+/// before the change did not get, a place in another file that the change
+/// broke), and a gap in the model is there before and after the change alike.
+/// Run over a whole project (`grounds check`) the same rules are preview:
+/// each unseen project has features the model lacks (docs/holdout). The
+/// wiring rules (`bean-not-found` and the rest) are compared the same way but
+/// are not here: which claim they make depends on the order of maps and
+/// annotations in the wiring model, so a claim before and after a change can
+/// differ with nothing changed. A rule joins this list only with that
+/// evidence; the `stable_rules_are_exactly_the_intended_set` test makes it
+/// deliberate.
+pub const STABLE_IN_CHANGED: &[&str] = &[
+    "missing-jdk-import",
+    "override-matches-nothing",
+    "unimplemented-abstract-method",
+    "unresolved-constructor",
+    "unresolved-field",
+    "unresolved-method",
+];
+
+impl RuleMeta {
+    /// Whether `grounds changed` holds this rule's findings to the stable
+    /// promise (see [`STABLE_IN_CHANGED`]).
+    pub fn stable_in_changed(&self) -> bool {
+        self.maturity == Maturity::Stable || STABLE_IN_CHANGED.contains(&self.id)
+    }
+
+    /// The maturity of this rule's findings in `grounds changed`
+    /// (`changed`) or in a whole-project `grounds check`.
+    pub fn maturity_in(&self, changed: bool) -> Maturity {
+        if changed && self.stable_in_changed() {
+            Maturity::Stable
+        } else {
+            self.maturity
+        }
+    }
+
+    /// How `grounds rules`, `grounds explain` and docs/RULES.md name the
+    /// maturity: `stable`, `preview`, or `stable in changed` (preview in
+    /// `grounds check`).
+    pub fn maturity_label(&self) -> &'static str {
+        match self.maturity {
+            Maturity::Stable => "stable",
+            Maturity::Preview if self.stable_in_changed() => "stable in changed",
+            Maturity::Preview => "preview",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Edit {
     pub start: u32,
@@ -159,6 +210,12 @@ pub struct Diagnostic {
     pub range: TextRange,
     pub message: String,
     pub fix: Option<Fix>,
+    /// What the finding asserts, when the message shows only part of it (a
+    /// list cut to a few entries) or in an order that is not part of the
+    /// claim. `grounds changed` compares claims to tell a finding that is new
+    /// with a change from one that was there before; without this the message,
+    /// less its hint and candidate list, is the claim.
+    pub claim: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -194,15 +251,27 @@ impl<'a, 't> Ctx<'a, 't> {
     }
 
     pub fn report_range(&mut self, range: TextRange, message: impl Into<String>) {
-        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range, message: message.into(), fix: None });
+        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range, message: message.into(), fix: None, claim: None });
     }
 
     pub fn report_fix(&mut self, node: Node<'t>, message: impl Into<String>, fix: Fix) {
-        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range: TextRange::of(node), message: message.into(), fix: Some(fix) });
+        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range: TextRange::of(node), message: message.into(), fix: Some(fix), claim: None });
     }
 
     pub fn report_with_severity(&mut self, node: Node<'t>, severity: Severity, message: impl Into<String>) {
-        self.out.push(Diagnostic { rule: self.rule.id, severity, range: TextRange::of(node), message: message.into(), fix: None });
+        self.out.push(Diagnostic { rule: self.rule.id, severity, range: TextRange::of(node), message: message.into(), fix: None, claim: None });
+    }
+
+    /// A method's identity for a claim: qualified owner and erased,
+    /// qualified parameter types (the message shows simple names).
+    pub fn method_id(owner: &str, m: &grounds_index::MethodInfo) -> String {
+        format!("{owner}.{}({})", m.name, m.params.iter().map(|p| p.ty.erasure().to_string()).collect::<Vec<_>>().join(","))
+    }
+
+    /// Report with the full claim behind a message that shows only part of
+    /// it, or names types by their simple names (see [`Diagnostic::claim`]).
+    pub fn report_claim(&mut self, node: Node<'t>, message: impl Into<String>, claim: String) {
+        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range: TextRange::of(node), message: message.into(), fix: None, claim: Some(claim) });
     }
 
     pub fn text(&self, n: Node<'t>) -> &'t str {

@@ -299,6 +299,9 @@ pub struct FileStub {
     /// edits keep this stable.
     pub signature_hash: u64,
     pub has_syntax_errors: bool,
+    /// The `lombok.config` settings the file was extracted with, when not
+    /// the defaults: local classes are extracted later, with the same.
+    pub lombok: Option<crate::lombok::LombokConfig>,
 }
 
 pub fn extract(file: &ParsedFile) -> FileStub {
@@ -359,6 +362,9 @@ pub fn extract_with(file: &ParsedFile, lombok: &crate::lombok::LombokConfig) -> 
     }
     stub.classes = ex.classes;
     crate::lombok::apply_all_with(&mut stub.classes, &stub.imports, lombok);
+    if *lombok != crate::lombok::LombokConfig::default() {
+        stub.lombok = Some(lombok.clone());
+    }
     // referenced names
     let mut names: Vec<Name> = Vec::new();
     let mut seen = rustc_hash::FxHashSet::default();
@@ -871,12 +877,21 @@ pub fn type_params(n: Option<Node>, src: &str) -> Vec<RawTypeParam> {
         .collect()
 }
 
+/// An explicit receiver parameter, `void m(@A Foo this)`. It only carries
+/// type annotations and is not a parameter (JLS 8.4). tree-sitter parses the
+/// annotated form as a `formal_parameter` named `this` (the unannotated one,
+/// and `Outer.this`, as a `receiver_parameter`).
+pub fn is_receiver_parameter(p: Node, src: &str) -> bool {
+    p.kind() == "receiver_parameter" || (p.kind() == "formal_parameter" && p.field("name").is_some_and(|n| n.text(src) == "this"))
+}
+
 pub fn formal_params(n: Option<Node>, src: &str) -> (Vec<RawParam>, bool) {
     let mut out = Vec::new();
     let mut varargs = false;
     let Some(n) = n else { return (out, false) };
     for p in n.kids() {
         match p.kind() {
+            "formal_parameter" if is_receiver_parameter(p, src) => {}
             "formal_parameter" => {
                 let mut ty = p.field("type").map(|t| type_syntax(t, src)).unwrap_or(TypeSyntax::Unknown);
                 if let Some(d) = p.field("dimensions") {
@@ -1412,7 +1427,7 @@ fn calls_other(body: Node, methods: &[RawMethod], src: &str) -> bool {
 
 /// `void check(boolean ok, ...) { if (!ok) throw ...; ... }`
 fn throws_on_false(m: Node, src: &str) -> bool {
-    let Some(first) = m.field("parameters").and_then(|p| p.kids().into_iter().find(|k| k.kind() == "formal_parameter")) else { return false };
+    let Some(first) = m.field("parameters").and_then(|p| p.kids().into_iter().find(|k| k.kind() == "formal_parameter" && !is_receiver_parameter(*k, src))) else { return false };
     if first.field("type").map(|t| t.text(src)) != Some("boolean") {
         return false;
     }
@@ -1441,13 +1456,14 @@ pub fn implicit_method(name: &str, flags: Flags, params: Vec<RawParam>, ret: Typ
     }
 }
 
-/// Extract a single (possibly local or anonymous-body) type declaration node.
-/// Used by the semantic layer for local classes.
-pub fn extract_class_node(node: Node, src: &str, pkg: &str, outer: Option<&Name>) -> Vec<RawClass> {
+/// Extract a single (possibly local or anonymous-body) type declaration node
+/// and the classes nested in it, with Lombok's members under the file's
+/// imports and `lombok.config`. Used by the semantic layer for local classes.
+pub fn extract_class_node(node: Node, src: &str, pkg: &str, outer: Option<&Name>, imports: &[Import], lombok: &crate::lombok::LombokConfig) -> Vec<RawClass> {
     let mut ex = Extractor { src, classes: Vec::new() };
     let o = outer.map(|o| (o, ClassKind::Class));
     ex.class(node, pkg, o, true);
-    crate::lombok::apply_all(&mut ex.classes, &[]);
+    crate::lombok::apply_all_with(&mut ex.classes, imports, lombok);
     ex.classes
 }
 

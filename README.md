@@ -5,10 +5,15 @@ coding agent makes. It reports bugs, compile breaks and Spring/Micronaut
 wiring mistakes in changed code in about 0.1–0.3 seconds, without Gradle,
 Maven or a JVM.
 
-**Status: experimental.** It has been tested on twenty-one open-source codebases
-(listed below) and nothing else. Expect false positives on code that looks different from
-those, and unsupported setups. Bug reports with a code snippet are the most
-useful thing you can send.
+**Status: experimental.** The rules were tuned on the open-source codebases
+listed below and measured on 40 more they had never seen. One thing is
+promised: what `grounds changed` reports as no longer compiling because of a
+change, which on 514 commits of those 40 projects reported nothing false (see
+[Stable and preview rules](#stable-and-preview-rules)). Everything else is
+preview: expect false positives on code that looks different from the
+corpus, most of all from `grounds check` over a whole project, and
+unsupported setups. Bug reports with a code snippet are the most useful thing
+you can send.
 
 ## Why
 
@@ -437,41 +442,144 @@ and uses the release before it, with the same silence about JDK subclasses.
 
 ### Stable and preview rules
 
-Every rule is either **stable** or **preview**; `grounds rules`,
-`grounds explain <id>` and [docs/RULES.md](docs/RULES.md) say which.
+**The promise: what `grounds changed` reports as no longer compiling because
+of a change is stable.** That is a place in another file that the change
+broke, or a compile-break finding on a changed line that is new with the
+change. Run over a whole project with `grounds check`, the same rules are
+preview, and so is every other rule, the wiring rules included.
 
-- **Stable** rules are covered by the project's promise about precision:
-  a false positive from a stable rule is a bug in grounds, to be fixed, and
-  stable rules are held to a false-positive rate measured on projects the
-  rules were not tuned on. That bar is still being measured; it will be
-  stated here, with its number, when it is.
-- **Preview** rules are still being proven. They are often right, but they
-  are not held to that promise yet. A rule becomes stable once a
-  measurement shows that it meets the bar.
+Stable means that a false report is a bug in grounds, to be fixed, and that
+the rate of false reports is measured on projects the rules were never tuned
+on. Preview means that the findings are often right but not held to that.
 
-**Today every rule is preview.** The rules that say the code would not
-compile or the application would not start were the first candidates: CI
-fails on any finding of theirs on the corpus. But on 20 projects they had
-never seen, most of what they reported was wrong
-([docs/holdout/2026-11.md](docs/holdout/2026-11.md)), so they stay preview
-until that is fixed and measured again.
+"No longer compiling" is what six rules claim: `unresolved-method`,
+`unresolved-constructor`, `unresolved-field`, `override-matches-nothing`,
+`unimplemented-abstract-method` and `missing-jdk-import`. `grounds rules`,
+`grounds explain <id>` and [docs/RULES.md](docs/RULES.md) list them as
+`stable in changed`. Add `removed-class-still-used`, which only
+`grounds changed --base` reports, and `breaks-other-files` when every place
+it lists is stable.
+
+The wiring rules, which claim that the application would not start
+(`bean-not-found`, `ambiguous-bean`, `qualifier-not-found`,
+`bean-name-conflict`, `circular-constructor-dependency`), are compared with
+the base in the same way, which only removes reports, but stay preview in
+`grounds changed` too. Which claim they make depends on the order of maps
+and annotations in the wiring model: which pair a name conflict reports, the
+first of several qualifier annotations, which cycle a search meets first. So
+a claim can differ before and after a change that does not touch it, and the
+comparison cannot tell such a claim from a new one. They can join the
+promise once the model makes those choices independent of order, and the
+comparison is measured for them. "New with the change" means:
+
+- **In other files:** grounds analyzes them against the current and the base
+  version of the changed files and keeps what is new. With `--base` that is
+  every file the change did not touch; per turn (the hooks, `grounds changed`
+  against HEAD) the files that mention a changed name.
+- **On changed lines:** grounds analyzes each changed file's base version, with
+  the other changed files at their base version too, and drops a finding when
+  the project before the change made the same claim in the file's base
+  version, or in an untouched file that mentions the names the claim quotes.
+  A claim is what the message asserts: the types, members, argument types,
+  the full set of missing methods or candidate beans (sorted), the members
+  of a cycle, with qualified names. What is presentation is left out: a
+  "did you mean" hint, the
+  `available:` overloads, constructors or beans, a list cut to a few
+  entries, the order of declarations. So a finding that was there before is
+  not reported when the change edits or moves its line. One decision goes
+  further, for limit (b) below: a missing or ambiguous bean is a fact about
+  the type, so when untouched code got "no bean of type `T`" (or the same
+  candidates for `T`) before the change, a new injection point of `T` is not
+  reported either. A new file has no base version: what is claimed in it is
+  new unless an untouched file got the same claim.
+
+The evidence, all on projects the rules were never tuned on
+([corpus/holdout.tsv](corpus/holdout.tsv)):
+
+- **Whole project (`grounds check`):** 313 compile-break and wiring findings
+  on 20 projects, 298 false; the 15 true ones are in files no build compiles
+  ([2026-11](docs/holdout/2026-11.md)). Then, after fixes made from those, 224
+  findings on 20 more projects, all 224 false
+  ([2026-11b](docs/holdout/2026-11b.md)). Each new set of projects brings
+  framework features the model lacks: Guice and Sisu bindings, Quarkus
+  producers, a MyBatis `@MapperScan` wildcard, Micronaut factory methods with
+  meta-annotations, Lombok members.
+- **After a change (`grounds changed --base <parent>`):** 514 main-line
+  commits of the same 40 projects, replayed: no compile-break or wiring
+  report, false or true, where a whole-project run of the same binary makes
+  246 such findings on those projects, 18 of them in files the replayed
+  commits edited ([2026-11-replay](docs/holdout/2026-11-replay.md)). A gap in
+  the model is there before and after the change alike, and cancels out.
+- **In CI:** every corpus run replays each corpus project's latest commits
+  with Java changes the same way (`scripts/replay.py`); the run that made the
+  replay a gate covered 321 commits on 25 projects with no break report and no
+  difference between the daemon and a fresh run.
+- **Changed lines:** the replay above did not compare findings on changed
+  lines with the parent, so a commit editing the line of one of those 246
+  findings would have been told about it. Now they are compared. On maven a
+  commit renaming a parameter on the line of a false
+  `override-matches-nothing` (`AbstractSession.java:371`), and on mall4j one
+  adding a comment to the line of a false `bean-not-found`
+  (`AreaServiceImpl.java:36`, a wiring finding, so preview; #70 has since
+  removed it), were each reported before, with `--base` and per turn, and are
+  not now; a call to a
+  missing method added to that maven line is still reported. A replay of 222
+  commits on 16 projects (6 corpus, 10 hold-out, among them maven, pig,
+  mall4j and kestra) with this comparison: no compile-break or wiring finding
+  on a changed line and no place reported broken in another file. The daemon
+  and a fresh run differed once, in the count of findings outside the
+  changed lines at the first commit of pig's walk; two reruns did not repeat
+  it.
+
+What is not promised:
+
+- **`grounds check` over a whole project.** The six rules are preview
+  there, for the numbers above.
+- **The wiring rules**, in either mode, for the reason above. In the replay
+  of 514 commits they reported nothing on changed lines either, but their
+  comparison is not reliable enough to promise.
+- **Every other rule**, in either mode. In the replay, the findings of the
+  other rules on changed lines were 22 true of 73 (warnings 20 of 68, errors
+  2 of 5).
+- **New code using a feature the model lacks.** The first use of it in a
+  project is reported, and the report is false: say a new Micronaut factory
+  method with a project meta-annotation and its first injection point, or a
+  first call to a Lombok member the model does not generate. Only a claim
+  the project already got before the change is recognized as the model's
+  gap. No replayed commit did this, which says it is rare in those 514
+  commits, not how rare it is.
+- **The per-turn mode is not replayed.** It uses the same comparison
+  (against HEAD), but the 514 commits and the CI replay ran `--base`.
+- **Outside a git repository, and on unchanged lines** (`--all-lines`), there
+  is no base to compare with: those findings are preview.
+
+Matching a claim by its message rather than its place has a cost in recall:
+a real break that says exactly what a false finding before the change said
+is not reported. A renamed file counts as a new file.
+
+The `maturity` field of each JSON finding (and a `maturity` property on each
+SARIF result and rule) says `stable` for what the promise covers and
+`preview` for everything else, so a tool can keep only the promise.
 
 Preview rules run by default for now, so the same findings are reported
-after an upgrade (JSON and SARIF only gain a `maturity` field).
-**A later release will turn them off by default.** To choose now, set
-`preview` under `[rules]` in `grounds.toml`:
+after an upgrade. **A later release will turn them off by default.** To
+choose now, set `preview` under `[rules]` in `grounds.toml`:
 
 ```toml
 [rules]
-preview = false   # only stable rules (true runs preview rules too)
+preview = false   # only what is stable (true runs preview rules too)
 ```
 
-A rule named by its id (or one of its source ids, such as `sonar:S2259`)
-in `enable` or in `check --rules` runs whatever its maturity, so
-`grounds check --rules null-dereference` works with `preview = false`.
+With `preview = false`, `grounds changed` and the hooks run only the six
+compile-break rules, so in a git repository they report only what a change
+broke so that it no longer compiles (with `--all-lines` or outside git,
+findings of those rules that cannot be compared with a base are reported as
+preview), and
+`grounds check` runs no rule, since none is stable over a whole project. A rule named by its id (or one of its source ids, such as
+`sonar:S2259`) in `enable` or in `check --rules` runs whatever its maturity,
+so `grounds check --rules null-dereference` works with `preview = false`.
 Naming a category (`enable = ["bug"]`) selects only its stable rules when
-`preview = false`. JSON findings carry a `maturity` field (`stable` or
-`preview`), and SARIF rules a `maturity` property.
+`preview = false`.
 
 ### Classpath
 
