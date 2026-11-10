@@ -312,6 +312,46 @@ fn names_default_constant(e: &str) -> bool {
     e.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '$' || c == '.') && e.rsplit('.').next() == Some("DEFAULT")
 }
 
+/// Does a scan of base package `pattern` cover package `pkg`? Spring (and
+/// MyBatis's @MapperScan, which uses Spring's scanner) looks for
+/// `<pattern as a path>/**/*.class` with Ant-style matching: `*` and `?`
+/// match within one segment, `**` matches any number of segments
+/// (`com.shop.**.dao` covers `com.shop.order.dao.impl`). A pattern with a
+/// placeholder left in it covers nothing we can name.
+pub fn package_covered(pattern: &str, pkg: &str) -> bool {
+    fn segment(p: &[u8], s: &[u8]) -> bool {
+        match p.split_first() {
+            None => s.is_empty(),
+            Some((b'*', rest)) => (0..=s.len()).any(|k| segment(rest, &s[k..])),
+            Some((b'?', rest)) => !s.is_empty() && segment(rest, &s[1..]),
+            Some((c, rest)) => s.first() == Some(c) && segment(rest, &s[1..]),
+        }
+    }
+    fn segments(p: &[&str], s: &[&str]) -> bool {
+        match p.split_first() {
+            None => s.is_empty(),
+            Some((&"**", rest)) => (0..=s.len()).any(|k| segments(rest, &s[k..])),
+            Some((x, rest)) => s.first().is_some_and(|y| segment(x.as_bytes(), y.as_bytes())) && segments(rest, &s[1..]),
+        }
+    }
+    if pattern.contains("${") {
+        return false;
+    }
+    if !pattern.contains(['*', '?']) {
+        return pattern.is_empty() || pkg == pattern || pkg.strip_prefix(pattern).is_some_and(|rest| rest.starts_with('.'));
+    }
+    let mut p: Vec<&str> = pattern.split('.').filter(|x| !x.is_empty()).collect();
+    p.push("**");
+    let s: Vec<&str> = pkg.split('.').filter(|x| !x.is_empty()).collect();
+    segments(&p, &s)
+}
+
+/// Base package values as Spring reads them: each may hold several
+/// packages separated by commas, semicolons or whitespace.
+fn split_packages(values: Vec<String>) -> Vec<String> {
+    values.iter().flat_map(|v| v.split([',', ';', ' ', '\t', '\n'])).map(str::trim).filter(|x| !x.is_empty()).map(str::to_string).collect()
+}
+
 fn first_string(a: &AnnotationInfo, keys: &[&str]) -> Option<String> {
     for k in keys {
         if let Some(v) = a.arg(k) {
@@ -524,7 +564,7 @@ impl<'a> Builder<'a> {
             let Some(c) = self.index.class(n) else { continue };
             for a in &c.annotations {
                 if a.is("org.springframework.boot.autoconfigure.SpringBootApplication") || a.is("org.springframework.context.annotation.ComponentScan") {
-                    let explicit: Vec<String> = ["scanBasePackages", "basePackages", "value"].iter().flat_map(|k| a.arg(k).map(|v| v.strings()).unwrap_or_default()).collect();
+                    let explicit: Vec<String> = split_packages(["scanBasePackages", "basePackages", "value"].iter().flat_map(|k| a.arg(k).map(|v| v.strings()).unwrap_or_default()).collect());
                     let classes: Vec<String> = ["scanBasePackageClasses", "basePackageClasses"]
                         .iter()
                         .flat_map(|k| a.arg(k).map(|v| v.values().into_iter().filter_map(|x| if let AnnotationValue::Class(t) = x { t.class_name().map(|c| package_of(c).to_string()) } else { None }).collect::<Vec<_>>()).unwrap_or_default())
@@ -579,19 +619,19 @@ impl<'a> Builder<'a> {
         self.model.scan_roots = roots.clone();
         self.model.scan_root_modules = root_conditions.iter().map(|(r, _, m)| (r.clone(), m.clone())).collect();
 
-        let in_scan = |pkg: &str| roots.is_empty() || roots.iter().any(|r| pkg == r || pkg.starts_with(&format!("{r}.")));
+        let in_scan = |pkg: &str| roots.is_empty() || roots.iter().any(|r| package_covered(r, pkg));
         // MyBatis @MapperScan: every interface in these packages is a bean
         let mut mapper_pkgs: Vec<String> = Vec::new();
         for n in &names {
             let Some(c) = self.index.class(n) else { continue };
             for a in c.annotations.iter().filter(|a| a.simple_name() == "MapperScan") {
-                mapper_pkgs.extend(["value", "basePackages"].iter().flat_map(|k| a.arg(k).map(|v| v.strings()).unwrap_or_default()));
+                mapper_pkgs.extend(split_packages(["value", "basePackages"].iter().flat_map(|k| a.arg(k).map(|v| v.strings()).unwrap_or_default()).collect()));
                 if let Some(v) = a.arg("basePackageClasses") {
                     mapper_pkgs.extend(v.values().into_iter().filter_map(|x| if let AnnotationValue::Class(t) = x { t.class_name().map(|c| package_of(c).to_string()) } else { None }));
                 }
             }
         }
-        let in_mapper_scan = |pkg: &str| mapper_pkgs.iter().any(|r| pkg == r || pkg.starts_with(&format!("{r}.")));
+        let in_mapper_scan = |pkg: &str| mapper_pkgs.iter().any(|r| package_covered(r, pkg));
         for n in &names {
             let registers = ["org.springframework.beans.factory.support.BeanDefinitionRegistryPostProcessor", "org.springframework.context.annotation.ImportBeanDefinitionRegistrar"].iter().any(|i| self.index.is_subclass(n, i).is_yes())
                 || self.index.raw_class(n).is_some_and(|(_, r)| r.interfaces.iter().any(|t| t.last_name().is_some_and(|l| matches!(l, "BeanDefinitionRegistryPostProcessor" | "ImportBeanDefinitionRegistrar"))));
@@ -811,7 +851,7 @@ impl<'a> Builder<'a> {
             // (an example app scanning `io.camunda`) only if this one has none
             let own_module = file.as_deref().map(module_of).unwrap_or("").to_string();
             let local = root_conditions.iter().any(|(_, _, m)| *m == own_module);
-            let covering: Vec<bool> = root_conditions.iter().filter(|(r, _, m)| (!local || *m == own_module) && (pkg == *r || pkg.starts_with(&format!("{r}.")))).map(|(_, c, _)| *c).collect();
+            let covering: Vec<bool> = root_conditions.iter().filter(|(r, _, m)| (!local || *m == own_module) && package_covered(r, &pkg)).map(|(_, c, _)| *c).collect();
             let scanned_conditionally = fw == Framework::Spring && !covering.is_empty() && covering.iter().all(|c| *c);
             let conditional = self.conditional_meta(&anns) || maybe_registered || scanned_conditionally;
             let i = self.add_bean(Bean {
@@ -1457,7 +1497,7 @@ impl DiModel {
         }
         let pkg = |x: &Bean| package_of(&x.declaring_class).to_string();
         let (pa, pb) = (pkg(a), pkg(b));
-        let covers = |r: &str, p: &str| p == r || p.starts_with(&format!("{r}."));
+        let covers = |r: &str, p: &str| package_covered(r, p);
         let module = a.file.as_deref().map(module_of).unwrap_or("");
         let local = self.scan_root_modules.iter().any(|(_, m)| m == module);
         self.scan_root_modules.iter().filter(|(_, m)| !local || m == module).any(|(r, _)| covers(r, &pa) && covers(r, &pb))
@@ -1470,7 +1510,7 @@ impl DiModel {
         }
         let pkg = package_of(class);
         let auto_configuration = self.auto_configurations.contains(class);
-        self.app_roots.iter().any(|(r, boot)| !(*boot && auto_configuration) && (r.is_empty() || pkg == r || pkg.strip_prefix(r.as_str()).is_some_and(|rest| rest.starts_with('.'))))
+        self.app_roots.iter().any(|(r, boot)| !(*boot && auto_configuration) && package_covered(r, pkg))
     }
 
     pub fn name_conflicts(&self) -> Vec<(usize, usize)> {
@@ -2026,5 +2066,31 @@ mod tests {
              @org.springframework.boot.autoconfigure.SpringBootApplication class App {}"),
         ]);
         assert!(matches!(point_resolution(&idx, &m, "pipe"), Resolution::Unique(_)));
+    }
+
+    #[test]
+    fn scan_packages_follow_ant_patterns() {
+        assert!(package_covered("app", "app") && package_covered("app", "app.x") && !package_covered("app", "apple"));
+        assert!(package_covered("app.**.dao", "app.dao") && package_covered("app.**.dao", "app.order.dao") && package_covered("app.**.dao", "app.a.b.dao.impl"));
+        assert!(!package_covered("app.**.dao", "app.order") && !package_covered("app.**.dao", "other.dao"));
+        assert!(package_covered("app.*.web", "app.shop.web") && !package_covered("app.*.web", "app.a.b.web") && !package_covered("app.*.web", "app.web"));
+        assert!(package_covered("app.mod*", "app.module.x") && !package_covered("app.mod*", "app.other"));
+        assert!(package_covered("", "any.thing") && !package_covered("${scan.root}", "app"));
+        // MyBatis registers every interface under a matching package; Spring
+        // scans components under one, and splits a value at commas
+        let (idx, m) = model(&[
+            ("src/main/java/app/order/dao/OrderDao.java", "package app.order.dao; public interface OrderDao {}"),
+            ("src/main/java/app/order/Draft.java", "package app.order; public interface Draft {}"),
+            ("src/main/java/app/shop/web/Index.java", "package app.shop.web; public interface Index {} @org.springframework.stereotype.Component class IndexPage implements Index {}"),
+            ("src/main/java/app/App.java", "package app; import org.springframework.stereotype.*; import app.order.dao.OrderDao; import app.order.Draft; import app.shop.web.Index;
+             @org.mybatis.spring.annotation.MapperScan(\"app.**.dao\")
+             @org.springframework.boot.autoconfigure.SpringBootApplication(scanBasePackages = \"app.config, app.*.web\") class App {}"),
+            ("src/main/java/app/config/Uses.java", "package app.config; import org.springframework.stereotype.*; import app.order.dao.OrderDao; import app.order.Draft; import app.shop.web.Index;
+             @Service class Uses { Uses(OrderDao orderDao, Draft draft, Index index) {} }"),
+        ]);
+        assert!(matches!(point_resolution(&idx, &m, "orderDao"), Resolution::Unique(_)));
+        assert_eq!(point_resolution(&idx, &m, "draft"), Resolution::NotFound);
+        let index = point_resolution(&idx, &m, "index");
+        assert!(matches!(index, Resolution::Unique(i) if !m.beans[i].conditional), "{index:?}");
     }
 }
