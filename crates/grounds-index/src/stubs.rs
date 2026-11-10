@@ -316,7 +316,16 @@ pub fn extract_with(file: &ParsedFile, lombok: &crate::lombok::LombokConfig) -> 
         match ch.kind() {
             "package_declaration" => {
                 if let Some(n) = ch.kids().into_iter().find(|k| matches!(k.kind(), "identifier" | "scoped_identifier")) {
-                    stub.package = Arc::from(strip_ws(n.text(src)).as_str());
+                    let name = strip_ws(n.text(src));
+                    // A file cut off in `package a.x.x.x...` (half a million
+                    // segments): the index keeps every prefix of a package
+                    // name, which is quadratic, and took minutes and all the
+                    // memory there was. Such a file declares nothing that can
+                    // be named: no stub, and it counts as unreadable.
+                    if name.split('.').nth(crate::index::MAX_NAME_SEGMENTS).is_some() {
+                        return FileStub { package: Arc::from(""), has_syntax_errors: true, ..Default::default() };
+                    }
+                    stub.package = Arc::from(name.as_str());
                 }
             }
             "import_declaration" => {
