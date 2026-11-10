@@ -435,7 +435,8 @@ Every rule is either **stable** or **preview**; `grounds rules`,
   are not held to that promise yet. A rule becomes stable once it is shown
   to meet the bar.
 
-Preview rules run by default for now, so nothing changes when you upgrade.
+Preview rules run by default for now, so the same findings are reported
+after an upgrade (JSON and SARIF only gain a `maturity` field).
 **A later release will turn them off by default.** To choose now, set
 `preview` under `[rules]` in `grounds.toml`:
 

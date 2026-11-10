@@ -4,7 +4,7 @@
 
 Tier `edit` rules run after every edit; all rules run at checkpoints. Rules marked *off* are disabled by default (enable in `grounds.toml`).
 
-Maturity: 11 rules are `stable` (held to the project's precision promise), 307 are `preview` (still being measured). Preview rules run by default for now; `preview = false` under `[rules]` in `grounds.toml` turns them off. See the README.
+Maturity: 11 rules are `stable` (held to the project's precision promise), 307 are `preview` (still being measured). Preview rules run by default for now; `preview = false` under `[rules]` in `grounds.toml` turns them off, except those named by id in `enable` or `--rules`. See the README.
 
 ## bad-practice (38)
 

@@ -328,7 +328,7 @@ fn main() -> anyhow::Result<()> {
                 println!("# Rule catalog\n\n{} rules. `grounds explain <id>` prints the full description.\n", cat.len());
                 println!("Tier `edit` rules run after every edit; all rules run at checkpoints. Rules marked *off* are disabled by default (enable in `grounds.toml`).\n");
                 let stable = cat.iter().filter(|m| m.maturity == grounds_rules::Maturity::Stable).count();
-                println!("Maturity: {stable} rules are `stable` (held to the project's precision promise), {} are `preview` (still being measured). Preview rules run by default for now; `preview = false` under `[rules]` in `grounds.toml` turns them off. See the README.\n", cat.len() - stable);
+                println!("Maturity: {stable} rules are `stable` (held to the project's precision promise), {} are `preview` (still being measured). Preview rules run by default for now; `preview = false` under `[rules]` in `grounds.toml` turns them off, except those named by id in `enable` or `--rules`. See the README.\n", cat.len() - stable);
                 for (c, ms) in by {
                     println!("## {c} ({})\n\n| id | severity | maturity | tier | origin |\n|---|---|---|---|---|", ms.len());
                     for m in ms {
