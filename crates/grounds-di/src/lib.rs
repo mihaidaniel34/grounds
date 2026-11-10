@@ -235,6 +235,7 @@ const MICRONAUT_BEAN_ANNOTATIONS: &[&str] = &[
     "io.micronaut.http.annotation.Controller",
     "io.micronaut.runtime.context.scope.ThreadLocal",
     "io.micronaut.runtime.context.scope.Refreshable",
+    "io.micronaut.runtime.http.scope.RequestScope",
     "io.micronaut.context.annotation.ConfigurationProperties",
     "io.micronaut.context.annotation.EachProperty",
 ];
@@ -354,6 +355,10 @@ impl<'a> Builder<'a> {
                 return None;
             }
             let metas = c.annotations.clone();
+            // a JSR-330 scope (Micronaut's own scopes are meta-annotated @Scope)
+            if metas.iter().any(|m| m.is("jakarta.inject.Scope") || m.is("javax.inject.Scope")) {
+                return Some(if n.starts_with("io.micronaut") { Framework::Micronaut } else { Framework::Jakarta });
+            }
             metas.iter().find_map(|m| if &*m.name == n { None } else { self.stereotype(m, depth + 1) })
         });
         self.stereo.insert(ann.name.clone(), r);
@@ -1793,6 +1798,25 @@ mod tests {
             ("src/main/java/app/Wiring.java", "package app; import com.google.inject.AbstractModule; class Wiring extends AbstractModule {}"),
         ]);
         assert_eq!(point_resolution(&idx, &m, "missing"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn micronaut_scopes_define_beans() {
+        // @RequestScope (from a jar that is not on the classpath) and a
+        // project scope meta-annotated @Scope make beans like @Singleton
+        let (idx, m) = model(&[
+            JSR330[0], JSR330[1], JSR330[2],
+            ("src/main/java/app/PerTenant.java", "package app; @jakarta.inject.Scope public @interface PerTenant {}"),
+            ("src/main/java/app/A.java", "package app; import jakarta.inject.*; import io.micronaut.runtime.http.scope.RequestScope;
+             abstract class Wrapper {}
+             @RequestScope class RequestWrapper extends Wrapper {}
+             interface Tenant {}
+             @PerTenant class CurrentTenant implements Tenant {}
+             @Singleton class Uses { @Inject Uses(Wrapper wrapper, Tenant tenant) {} }"),
+            ("src/main/java/app/Micronaut.java", "package app; import io.micronaut.runtime.Micronaut; class Application {}"),
+        ]);
+        assert!(matches!(point_resolution(&idx, &m, "wrapper"), Resolution::Unique(_)));
+        assert!(matches!(point_resolution(&idx, &m, "tenant"), Resolution::Unique(_)));
     }
 
 }
