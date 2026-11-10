@@ -533,6 +533,7 @@ impl Session {
         elsewhere.sort();
         let old: Vec<(PathBuf, String)> = in_files.iter().filter_map(|f| git::version_at(self.root(), rev, f).map(|t| (f.clone(), t))).collect();
         let found = self.at_base(touched, rev, |s| {
+            s.project.index.ensure_resolved();
             let mut v: Vec<Finding> = old.par_iter().flat_map_iter(|(f, t)| analyze_text(&s.project, &rules, &s.options, f, t)).collect();
             v.extend(s.analyze(&rules, &elsewhere));
             v
