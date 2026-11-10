@@ -1,7 +1,7 @@
 //! A long-lived analysis server keeping a warm [`Session`] per workspace,
 //! reached over a Unix socket with one JSON request/response per connection.
-//! Every request first re-syncs files whose mtime changed, so results always
-//! reflect what is on disk ("read your writes").
+//! Every request first re-syncs files that changed (`Session::sync`), so
+//! results always reflect what is on disk ("read your writes").
 
 use crate::session::{render, CheckOptions, Mode, Session};
 use grounds_rules::Severity;
@@ -166,7 +166,9 @@ pub fn serve(root: &Path, idle: Duration) -> anyhow::Result<()> {
     }
     let listener = UnixListener::bind(&sock)?;
     listener.set_nonblocking(true)?;
+    crate::trace::log(|| format!("daemon {}: listening", root.display()));
     let mut session = Session::open(root)?;
+    crate::trace::log(|| format!("daemon {}: loaded, serving", root.display()));
     let mut last = Instant::now();
     loop {
         match listener.accept() {
@@ -235,8 +237,10 @@ fn handle(session: &mut Session, stream: UnixStream) -> bool {
         }
     };
     let stop = matches!(req, Request::Shutdown);
+    crate::trace::log(|| format!("request {}", line.chars().take(300).collect::<String>()));
     let resp = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| execute(session, &req))).unwrap_or_else(|_| Response { code: 1, stderr: "internal error\n".into(), ..Default::default() });
     let _ = writeln!(&stream, "{}", serde_json::to_string(&resp).unwrap_or_default());
+    crate::trace::log(|| format!("answered, code {}", resp.code));
     stop
 }
 
@@ -289,6 +293,7 @@ pub fn run(root: &Path, req: &Request, start_daemon: bool) -> anyhow::Result<Res
         }
     }
     if start_daemon {
+        crate::trace::log(|| format!("client: no daemon for {}, starting one and answering in-process", root.display()));
         spawn_background(root);
     }
     let mut s = Session::open(root)?;

@@ -333,9 +333,12 @@ src/main/java/.../PetController.java:103:9: `Owner` has no method `addPet`
 ```
 
 The daemon keeps one warm index per project over a Unix socket, re-reads
-files whose modification time changed before every request, and exits
-after 30 minutes idle. It is started on demand and replaced automatically
-when the `grounds` binary changes.
+files that changed before every request (by modification time and size,
+and by content for a file written in the last seconds, whose time cannot
+tell), and exits after 30 minutes idle. It is started on demand and
+replaced automatically when the `grounds` binary changes. With
+`GROUNDS_DAEMON_LOG=<file>` in its environment it logs each request and
+the files it found changed.
 
 ### CI
 

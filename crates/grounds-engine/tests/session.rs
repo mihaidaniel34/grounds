@@ -736,6 +736,187 @@ fn a_configuration_file_written_twice_at_the_same_time_is_read() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+fn set_mtime(dir: &Path, rel: &str, t: std::time::SystemTime) {
+    std::fs::File::options().write(true).open(dir.join(rel)).unwrap().set_modified(t).unwrap();
+}
+
+fn mtime(dir: &Path, rel: &str) -> std::time::SystemTime {
+    std::fs::metadata(dir.join(rel)).unwrap().modified().unwrap()
+}
+
+/// A project with one class committed, for the tests of change detection
+/// below: `changed_apis` of a check against HEAD says whether the session
+/// saw the file's declarations change.
+fn one_class_project(name: &str, api: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("grounds-session-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, "src/main/java/demo/Api.java", api);
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+    dir
+}
+
+fn changed_apis(s: &mut Session, dir: &Path) -> Vec<String> {
+    let api = dir.join("src/main/java/demo/Api.java").canonicalize().unwrap();
+    let opts = CheckOptions { mode: Mode::Checkpoint, files: vec![api], all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None };
+    s.check(&opts).changed_apis
+}
+
+#[test]
+fn a_file_written_while_the_project_loads_keeps_no_time_of_the_new_version() {
+    // The replay's first step: a daemon started at a commit loads the project
+    // in the background while the next commit is checked out. It read the
+    // file before the checkout wrote it, and took the file's time after: the
+    // new version's time with the old version's stub, so no later look found
+    // the file changed.
+    let rel = "src/main/java/demo/Api.java";
+    let dir = one_class_project("load-race", "package demo;\npublic class Api {\n    public void old() {}\n}\n");
+    let now = std::time::SystemTime::now();
+    // times too old to be racy: this is about the order of time and read
+    set_mtime(&dir, rel, now - std::time::Duration::from_secs(7200));
+    let project = grounds_engine::Project::load(&dir).unwrap();
+    // the checkout, between the read of the sources and the end of the load
+    write(&dir, rel, "package demo;\npublic class Api {\n    public void renamed() {}\n}\n");
+    set_mtime(&dir, rel, now - std::time::Duration::from_secs(3600));
+    let mut s = Session::from_project(project);
+    assert_eq!(changed_apis(&mut s, &dir), [rel], "the session holds the stub of the version it read");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_rewrite_that_keeps_time_and_size_is_seen() {
+    // A file system keeps times only as fine as its clock ticks: a file
+    // rewritten in the tick it was read in keeps its time, and an edit of a
+    // string can keep its size. Its time was recent when it was read, so the
+    // content decides. (Each rewrite follows the look before it by
+    // milliseconds: a time seen unchanged for two seconds is trusted, as no
+    // tick is that long.)
+    let rel = "src/main/java/demo/Api.java";
+    let v1 = "package demo;\npublic class Api {\n    @Deprecated(since = \"1\") public void m() {}\n}\n";
+    let v2 = "package demo;\npublic class Api {\n    @Deprecated(since = \"2\") public void m() {}\n}\n";
+    let dir = one_class_project("racy", v1);
+    set_mtime(&dir, rel, std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
+    let mut s = Session::open(&dir).unwrap();
+    let t = std::time::SystemTime::now();
+    write(&dir, rel, v2);
+    set_mtime(&dir, rel, t);
+    assert_eq!(changed_apis(&mut s, &dir), [rel], "a new time");
+    write(&dir, rel, v1);
+    set_mtime(&dir, rel, t);
+    assert!(changed_apis(&mut s, &dir).is_empty(), "same time and size, content back to that of HEAD");
+    write(&dir, rel, v2);
+    set_mtime(&dir, rel, t);
+    assert_eq!(changed_apis(&mut s, &dir), [rel], "same time and size, other content again");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_build_file_written_while_the_project_loads_reloads_it() {
+    // as above, for the files the project's layout and settings come from
+    let dir = std::env::temp_dir().join(format!("grounds-session-load-race-build-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, "grounds.toml", "exclude = []\n");
+    write(&dir, "src/main/java/demo/App.java", "package demo;\npublic class App {}\n");
+    write(&dir, "src/main/java/gen/Gen.java", "package gen;\npublic class Gen {}\n");
+    let project = grounds_engine::Project::load(&dir).unwrap();
+    write(&dir, "grounds.toml", "exclude = [\"src/main/java/gen/**\"]\n");
+    let mut s = Session::from_project(project);
+    assert!(s.project.config.exclude.is_empty());
+    s.sync(&[]);
+    assert_eq!(s.project.config.exclude, ["src/main/java/gen/**"], "the settings written during the load are read");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn times_in_the_future_are_trusted_once_seen_for_the_margin() {
+    // A time in the future is always "recent" by the clock; seen unchanged for
+    // two seconds, it cannot be shared by a later write any more. Neither the
+    // source file nor the build file may be compared, or the project loaded,
+    // without end.
+    let dir = std::env::temp_dir().join(format!("grounds-session-future-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let future = std::time::SystemTime::now() + std::time::Duration::from_secs(3600);
+    write_at(&dir, "build.gradle", "plugins { id 'java' }\n", future);
+    write_at(&dir, "src/main/java/demo/Api.java", "package demo;\npublic class Api {}\n", future);
+    let mut s = Session::open(&dir).unwrap();
+    assert_eq!(s.in_doubt(), (2, true), "both compared by content, and which build file the load read is unknown");
+    s.sync(&[]);
+    let loaded = s.project.load_began;
+    assert_eq!(s.in_doubt(), (2, false), "loaded once more, the build file's content now known");
+    s.sync(&[]);
+    assert_eq!(s.project.load_began, loaded, "and not again");
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    s.sync(&[]);
+    assert_eq!(s.in_doubt(), (0, false), "seen unchanged for the margin: times alone decide");
+    assert_eq!(s.project.load_began, loaded);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_file_that_could_not_be_read_is_read_once_it_can_be() {
+    // A source file that cannot be read (no permission, not UTF-8, unlinked
+    // between the look at its time and the read) is not taken as read: when
+    // it can be read again with the same time and size, it is read, and the
+    // session holds what a fresh load holds.
+    let rel = "src/main/java/demo/Api.java";
+    let good = "package demo;\npublic class Api {\n    public void m() {}\n}\n";
+    let edit = "package demo;\npublic class Api {\n    public void n() {}\n}\n";
+    let dir = one_class_project("unreadable", good);
+    let t = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    set_mtime(&dir, rel, t);
+    // (an old build file: a reload would read everything again and hide what sync does)
+    set_mtime(&dir, "build.gradle", t);
+    let mut s = Session::open(&dir).unwrap();
+    let api = |s: &Session| s.project.index.source_class_names().find(|n| n.ends_with("Api")).map(|n| format!("{:?}", s.project.index.class(n)));
+    let fresh = |dir: &Path| { let s = Session::open(dir).unwrap(); api(&s) };
+    // the edit lands, but cannot be read: without permission where that
+    // stops us, else as bytes that are not UTF-8 (of the same size)
+    let u = std::time::SystemTime::now() - std::time::Duration::from_secs(1800);
+    write(&dir, rel, edit);
+    set_mtime(&dir, rel, u);
+    let path = dir.join(rel);
+    use std::os::unix::fs::PermissionsExt;
+    // (the time is set first: a file without permission cannot be opened to set it)
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let by_permission = std::fs::read(&path).is_err();
+    if !by_permission {
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let mut bytes = edit.as_bytes().to_vec();
+        bytes[0] = 0xff;
+        std::fs::write(&path, bytes).unwrap();
+        set_mtime(&dir, rel, u);
+    }
+    s.sync(&[]);
+    assert_eq!(api(&s), fresh(&dir), "an unreadable file: as a fresh load, no stub");
+    // readable again, with the same time and size
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+    write(&dir, rel, edit);
+    set_mtime(&dir, rel, u);
+    s.sync(&[]);
+    assert!(api(&s).is_some_and(|c| c.contains("\"n\"") || c.contains(" n")), "{:?}", api(&s));
+    assert_eq!(api(&s), fresh(&dir), "the file once it can be read again (by {})", if by_permission { "permission" } else { "UTF-8" });
+
+    // the same for a file that could not be read when the project was loaded
+    let mut bytes = good.as_bytes().to_vec();
+    bytes[0] = 0xff;
+    std::fs::write(&path, bytes).unwrap();
+    set_mtime(&dir, rel, t);
+    let mut s = Session::open(&dir).unwrap();
+    assert_eq!(api(&s), None);
+    write(&dir, rel, good);
+    set_mtime(&dir, rel, t);
+    s.sync(&[]);
+    assert!(api(&s).is_some(), "read once it can be");
+    assert_eq!(api(&s), fresh(&dir));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The same place, a different claim: a changed return type turns "`Old` has
 /// no method `missing`" (there before the change) into "`New` has no method
 /// `missing`" on an unchanged line of another file. That is a new break.
