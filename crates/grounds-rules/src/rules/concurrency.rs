@@ -473,6 +473,8 @@ declare_rule!(VolatileIncrement {
     name: "Non-atomic increment of a volatile field",
     category: Concurrency,
     severity: Warning,
+    // a test's counter is written by the one thread the test starts
+    scope: Main,
     sources: ["sonar:S3078", "spotbugs:VO_VOLATILE_INCREMENT"],
     kinds: ["update_expression", "assignment_expression"],
     description: "`volatile` guarantees visibility, not atomicity: `count++` is read-modify-write and concurrent increments get lost. Use `AtomicInteger`/`LongAdder` or synchronize.",
@@ -497,13 +499,27 @@ impl Rule for VolatileIncrement {
             let under_lock = cx.owning_callable(n).is_some_and(|m| {
                 let mut calls = Vec::new();
                 find_kind(m, "method_invocation", &mut calls);
-                let last_before = calls.iter().filter(|c| c.start_byte() < n.start_byte() && matches!(cx.fm.call_name(**c), Some("lock" | "unlock"))).max_by_key(|c| c.start_byte());
-                // an unconditional `lock();` statement of a block enclosing the update
-                last_before.is_some_and(|c| {
-                    cx.fm.call_name(*c) == Some("lock")
-                        && c.parent().filter(|p| p.kind() == "expression_statement").and_then(|st| st.parent()).is_some_and(|b| b.kind() == "block" && b.byte_range().contains(&n.start_byte()))
-                })
-                    && calls.iter().any(|c| c.start_byte() > n.start_byte() && cx.fm.call_name(*c) == Some("unlock"))
+                let last_before = calls.iter().filter(|c| c.start_byte() < n.start_byte() && matches!(cx.fm.call_name(**c), Some("lock" | "tryLock" | "unlock"))).max_by_key(|c| c.start_byte());
+                let after = |st: Node<'t>| st.parent().is_some_and(|b| b.kind() == "block" && b.byte_range().contains(&n.start_byte())) && st.end_byte() <= n.start_byte();
+                last_before.is_some_and(|c| match (cx.fm.call_name(*c), c.parent()) {
+                    // an unconditional `lock();` statement of a block enclosing the update
+                    (Some("lock"), Some(st)) if st.kind() == "expression_statement" => after(st),
+                    // `if (lock.tryLock()) { try { x++; } ... }`, or `if (!lock.tryLock()) return;` before it
+                    (Some("tryLock"), Some(p)) => {
+                        let negated = p.kind() == "unary_expression" && op(p) == "!";
+                        let cond = if negated { p } else { *c };
+                        let Some(stmt) = cond.parent().and_then(|g| g.parent()).filter(|g| g.kind() == "if_statement" && g.field("condition").is_some_and(|k| k.unparen() == cond)) else {
+                            return false;
+                        };
+                        let Some(then) = stmt.field("consequence") else { return false };
+                        if negated {
+                            !can_complete_normally(then, cx.src) && after(stmt)
+                        } else {
+                            then.byte_range().contains(&n.start_byte())
+                        }
+                    }
+                    _ => false,
+                }) && calls.iter().any(|c| c.start_byte() > n.start_byte() && cx.fm.call_name(*c) == Some("unlock"))
             });
             if f.field.flags.has(Flags::VOLATILE) && !in_synchronized(n) && !under_lock {
                 cx.report(n, format!("`{}` is volatile but this update is not atomic", f.field.name));
@@ -610,7 +626,16 @@ impl Rule for ThreadLocalNotRemoved {
             let text = cx.text(decl);
             let set = text.contains(&format!("{name}.set(")) || text.contains(&format!("{name}.get()"));
             let removed = text.contains(&format!("{name}.remove()"));
-            if set && !removed && text.contains(&format!("{name}.set(")) {
+            // `prev = X.get(); X.set(v); try { .. } finally { X.set(prev); }` restores what was there
+            let calls: Vec<Node<'t>> = decl.descendants().filter(|c| c.kind() == "method_invocation").collect();
+            let on_field = |c: &Node<'t>, names: &[&str]| is_call_named(*c, cx.src, names) && c.field("object").is_some_and(|o| cx.text(o).trim_start_matches("this.") == name);
+            let in_finally = |c: &Node<'t>, within: Node<'t>| c.ancestors().take_while(|a| *a != within).any(|a| a.kind() == "finally_clause");
+            let sets: Vec<_> = calls.iter().filter(|c| on_field(c, &["set"])).collect();
+            let restored = !sets.is_empty()
+                && sets.iter().all(|s| {
+                    cx.owning_callable(**s).is_some_and(|m| in_finally(s, m) || calls.iter().any(|c| on_field(c, &["set", "remove"]) && m.byte_range().contains(&c.start_byte()) && in_finally(c, m)))
+                });
+            if set && !removed && !restored && text.contains(&format!("{name}.set(")) {
                 cx.report(d, format!("ThreadLocal `{name}` is set but never removed"));
             }
         }

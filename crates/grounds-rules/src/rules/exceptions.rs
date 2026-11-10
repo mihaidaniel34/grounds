@@ -455,6 +455,29 @@ impl Rule for InterruptedSwallowed {
         if rethrows {
             return;
         }
+        // `interrupted = true;` here and `if (interrupted) Thread.currentThread().interrupt();`
+        // in a finally or after the loop: the flag is restored once the work is done
+        let mut assigns = Vec::new();
+        find_kind(body, "assignment_expression", &mut assigns);
+        let flags: Vec<&str> = assigns
+            .iter()
+            .filter(|a| op(**a) == "=" && a.field("right").is_some_and(|r| cx.text(r.unparen()) == "true"))
+            .filter_map(|a| a.field("left").filter(|l| l.kind() == "identifier").map(|l| cx.text(l)))
+            .collect();
+        if !flags.is_empty() {
+            if let Some(m) = cx.owning_callable(n) {
+                let mut ifs = Vec::new();
+                find_kind(m, "if_statement", &mut ifs);
+                let deferred = ifs.iter().any(|i| {
+                    i.start_byte() > n.end_byte()
+                        && i.field("condition").is_some_and(|c| c.descendants().any(|d| d.kind() == "identifier" && flags.contains(&cx.text(d))))
+                        && i.field("consequence").is_some_and(|c| cx.text(c).contains("interrupt()"))
+                });
+                if deferred {
+                    return;
+                }
+            }
+        }
         if let Some(p) = catch_param(n) {
             cx.report(p, "InterruptedException is swallowed; call `Thread.currentThread().interrupt()` or rethrow");
         }
