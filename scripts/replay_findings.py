@@ -187,7 +187,10 @@ def main():
                                                       "target", "release", "grounds"))
     ap.add_argument("--timeout", type=float, default=900.0)
     ap.add_argument("--out", required=True)
-    return run(ap.parse_args())
+    a = ap.parse_args()
+    if a.commits < 1:
+        ap.error("--commits must be at least 1")
+    return run(a)
 
 
 if __name__ == "__main__":
