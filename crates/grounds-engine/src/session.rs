@@ -5,7 +5,7 @@
 
 use crate::analyze::{analyze_text, build_ruleset, Finding};
 use crate::git;
-use crate::project::{path_key, FileStamp, Project};
+use crate::project::{path_key, recent, FileStamp, Project};
 use crate::workspace::{classify, SourceKind};
 use grounds_index::{simple_name_of, ClassLookup, FileStub, Name};
 use grounds_rules::framework::RuleOptions;
@@ -27,14 +27,19 @@ pub struct Session {
     /// The source files as their stubs in the index were made from.
     stamps: FxHashMap<PathBuf, FileStamp>,
     /// Build and configuration files the project was loaded from (and the
-    /// places one may appear), with their modification times.
-    config: Vec<(PathBuf, Option<SystemTime>)>,
+    /// places one may appear), as the load read them: `None` for one that
+    /// was not there.
+    config: Vec<(PathBuf, Option<FileStamp>)>,
+    /// Which version of a configuration file the load read is not known (its
+    /// time is that of a write during the load, or of one just before it,
+    /// with no stamp from before the load to compare): load again.
+    config_unread: bool,
     /// Classpath warnings already shown in this session.
     warned: bool,
 }
 
-/// What a project is loaded from besides its Java sources, with modification
-/// times: the files that decide its modules, classpath, settings and beans.
+/// What a project is loaded from besides its Java sources: the files that
+/// decide its modules, classpath, settings and beans.
 /// - build files and `lombok.config` of the root and of every module;
 /// - `grounds.toml`, the classpath dumps, the source sets a dump recorded and
 ///   every jar on the classpath (a snapshot jar is rebuilt in place);
@@ -47,7 +52,7 @@ pub struct Session {
 /// into them without touching the directory itself, and the project's own
 /// classes are read from source anyway), and a `lombok.config` created later
 /// in a package directory that had none.
-fn config_files(project: &Project) -> Vec<(PathBuf, Option<SystemTime>)> {
+fn config_files(project: &Project) -> Vec<PathBuf> {
     let ws = &project.workspace;
     let cfg = &project.config;
     let at_root = |p: &PathBuf| if p.is_absolute() { p.clone() } else { ws.root.join(p) };
@@ -74,13 +79,7 @@ fn config_files(project: &Project) -> Vec<(PathBuf, Option<SystemTime>)> {
     }
     paths.sort();
     paths.dedup();
-    // A file written after the load began may have been read before the
-    // write: its time is not recorded, so that the next look finds it
-    // "changed" and loads the project again. (A time in the future, which a
-    // write now cannot give, is kept: it would reload the project on every
-    // look.)
-    let (began, now) = (project.load_began, SystemTime::now());
-    paths.into_iter().map(|p| { let m = std::fs::metadata(&p).and_then(|m| m.modified()).ok().filter(|t| *t < began || *t > now); (p, m) }).collect()
+    paths
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -180,16 +179,49 @@ impl Session {
         Ok(Self::from_project(project))
     }
 
-    pub fn from_project(mut project: Project) -> Session {
+    pub fn from_project(project: Project) -> Session {
+        Self::from_load(project, None)
+    }
+
+    /// A session of a project just loaded; `before`: stamps of the
+    /// configuration files taken before the load began, if it was a reload.
+    fn from_load(mut project: Project, before: Option<&FxHashMap<PathBuf, Option<FileStamp>>>) -> Session {
         let (all_rules, options) = build_ruleset(&project);
         // same configuration as full checks, narrowed to edit-tier rules
         let edit_rules = RuleSet::new(crate::analyze::selected_rules(&project).into_iter().filter(|r| r.meta().tier == Tier::Edit).collect());
         let resolution_rules = RuleSet::new(crate::analyze::selected_rules(&project).into_iter().filter(|r| r.meta().id.starts_with("unresolved-")).collect());
-        let config = config_files(&project);
-        // taken as the files were read: a time looked up now could be that of
-        // a version written since (the stubs are of the one read)
+        // Source files: stamped as the load read them, each before its read.
         let stamps = std::mem::take(&mut project.stamps);
-        Session { project, all_rules, edit_rules, resolution_rules, options, stamps, config, warned: false }
+        // Configuration files are read all over the load and are only listed
+        // after it, so they are stamped now. One the same now as before the
+        // load (time, size and, for a recent time, content) is what the load
+        // read. One not stamped before (the first load, or one the load
+        // newly lists) whose time is recent as of the start of the load may
+        // have been written while the load ran: which version it read is not
+        // known, and the project is loaded again at the next sync, that time
+        // with a stamp from before.
+        let began = project.load_began;
+        let mut config_unread = false;
+        let config: Vec<(PathBuf, Option<FileStamp>)> = config_files(&project)
+            .into_iter()
+            .map(|p| {
+                let earlier = before.and_then(|b| b.get(&p));
+                let now = FileStamp::of(&p, earlier.is_some_and(|e| e.is_some_and(|e| e.hash.is_some())));
+                let read = match (earlier, &now) {
+                    (Some(Some(e)), Some(n)) => e.same(n),
+                    (Some(None), None) | (None, None) => true,
+                    (Some(_), _) => false,
+                    (None, Some(n)) => !recent(n.mtime, began),
+                };
+                if !read {
+                    crate::trace::log(|| format!("load: {} may have been written during the load", p.display()));
+                    config_unread = true;
+                }
+                let now = now.map(|n| n.after(earlier.and_then(|e| e.as_ref())));
+                (p, now)
+            })
+            .collect();
+        Session { project, all_rules, edit_rules, resolution_rules, options, stamps, config, config_unread, warned: false }
     }
 
     /// Classpath warnings, the first time they are asked for: agents and
@@ -205,6 +237,14 @@ impl Session {
         &self.project.workspace.root
     }
 
+    /// Files whose content is compared at every sync, their time being too
+    /// recent to trust (see `FileStamp`), and whether the project is to be
+    /// loaded again: what a sync costs beyond looking at times.
+    pub fn in_doubt(&self) -> (usize, bool) {
+        let racy = self.stamps.values().chain(self.config.iter().filter_map(|(_, s)| s.as_ref())).filter(|s| s.racy).count();
+        (racy, self.config_unread)
+    }
+
     /// Re-read files that changed since they were read (and the given extra
     /// files, which may be new): by time and size, and by content for those
     /// whose time was too recent to tell (see `FileStamp`). Returns files
@@ -218,23 +258,39 @@ impl Session {
         // added or renamed its files counted as the root module's.)
         let trace = crate::trace::enabled();
         let sig = |s: &Session, f: &Path| s.project.index.file(&path_key(f)).map(|s| format!("{:016x}", s.signature_hash)).unwrap_or_else(|| "-".into());
-        let before: Vec<String> = if trace { extra.iter().map(|e| sig(self, e)).collect() } else { Vec::new() };
-        if let Some((p, old)) = self.config.iter().find(|(p, old)| std::fs::metadata(p).and_then(|m| m.modified()).ok() != *old) {
-            crate::trace::log(|| format!("sync: reload, {} was {} now {}", p.display(), crate::trace::time(*old), crate::trace::time(std::fs::metadata(p).and_then(|m| m.modified()).ok())));
+        let sigs: Vec<String> = if trace { extra.iter().map(|e| sig(self, e)).collect() } else { Vec::new() };
+        let clock = SystemTime::now();
+        let reload = self.config_unread || self.config.iter_mut().any(|(p, stamp)| {
+            let changed = match stamp {
+                Some(stamp) => stamp.changed(p, clock),
+                None => FileStamp::of(p, false).is_some(),
+            };
+            if changed {
+                crate::trace::log(|| format!("sync: reload, {} changed", p.display()));
+            }
+            changed
+        });
+        if reload {
             let root = self.root().to_path_buf();
+            // stamped before the load begins, to tell afterwards whether the
+            // load read them as they are then
+            let before: FxHashMap<PathBuf, Option<FileStamp>> = self.config.iter().map(|(p, _)| (p.clone(), FileStamp::of(p, false))).collect();
             if let Ok(project) = Project::load(&root) {
-                *self = Session::from_project(project);
+                // warnings already shown are not shown again for the same state
+                let shown = self.warned.then(|| self.project.classpath_warnings.clone());
+                *self = Session::from_load(project, Some(&before));
+                self.warned = shown.is_some_and(|w| w == self.project.classpath_warnings);
             }
         }
         // (on all cores: after a checkout of the whole tree every file is racy
-        // and read once more)
-        let now = SystemTime::now();
+        // and its content is compared)
+        let clock = SystemTime::now();
         let mut stale: Vec<PathBuf> = self
             .stamps
             .par_iter_mut()
             .filter_map(|(p, stamp)| {
                 let was = *stamp;
-                if !stamp.changed(p, now) {
+                if !stamp.changed(p, clock) {
                     return None;
                 }
                 crate::trace::log(|| format!("sync: stale {} recorded {} size {}{} now {}", p.display(), crate::trace::time(Some(was.mtime)), was.size, if was.racy { " racy" } else { "" }, crate::trace::time(std::fs::metadata(p).and_then(|m| m.modified()).ok())));
@@ -259,6 +315,8 @@ impl Session {
             let key = path_key(&p);
             let old = self.project.index.file(&key).map(|s| s.signature_hash);
             if let Some(stamp) = stamp {
+                // a time seen at an earlier look keeps the margin it began then
+                let stamp = stamp.after(self.stamps.get(&p));
                 if let Some(text) = text {
                     let pf = ParsedFile::parse(text);
                     let stub = Arc::new(self.project.extract(&p, &pf));
@@ -287,7 +345,7 @@ impl Session {
         }
         self.project.index.ensure_resolved();
         if trace {
-            for (e, b) in extra.iter().zip(&before) {
+            for (e, b) in extra.iter().zip(&sigs) {
                 let now = std::fs::metadata(e).and_then(|m| m.modified()).ok();
                 let text = std::fs::read_to_string(e).ok().map(|t| format!("{:016x}", crate::cache::content_hash(&t))).unwrap_or_else(|| "-".into());
                 crate::trace::log(|| format!("sync: checked {} stub {} -> {} recorded {} now {} content {}", e.display(), b, sig(self, e), crate::trace::time(self.stamps.get(e).map(|s| s.mtime)), crate::trace::time(now), text));

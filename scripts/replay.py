@@ -173,7 +173,24 @@ def main():
     subprocess.run([grounds, "daemon", "--root", d, "--stop"], capture_output=True)
     try:
         git(d, *move, line[0])
-        changed(grounds, d, None, True)  # the daemon loads the project as of the first commit
+        # The first asking starts the daemon and is answered without it: the
+        # daemon loads in the background. Wait until it answers itself, so
+        # that the walk asks the daemon and no checkout lands in its load.
+        changed(grounds, d, None, True)
+        # (each asking gets what is left of the time: a daemon that has its
+        # socket and is still loading keeps the status command waiting)
+        deadline = time.monotonic() + TIMEOUT
+        while True:
+            left = deadline - time.monotonic()
+            if left <= 0:
+                raise RuntimeError(f"the daemon did not come up in {TIMEOUT:.0f} s")
+            try:
+                status = subprocess.run([grounds, "daemon", "--root", d, "--status"], capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=left).stdout
+            except subprocess.TimeoutExpired:
+                status = ""
+            if status.startswith("running:") and time.monotonic() <= deadline:
+                break
+            time.sleep(max(0.0, min(0.2, deadline - time.monotonic())))
         for parent, commit in zip(line, line[1:]):
             touched = java(parent, commit)
             git(d, *move, commit)

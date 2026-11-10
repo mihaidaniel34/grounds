@@ -52,14 +52,30 @@ leaves tests for the end of the task.
   build-time beans): any type may be bound there.
 - **Lombok:** generated constructors (including `staticName`/`staticConstructor`
   factories), getters, setters, `@With`, `@Builder` on classes, constructors
-  and methods (with `@Builder.Default`), `@SuperBuilder` across files,
-  `@UtilityClass`, and the `lombok.config` keys that change signatures
-  (fluent/chained accessors, prefixes, copyable annotations).
+  and methods (builder fields and setters, `@Builder.Default`, `@Singular`,
+  `setterPrefix`, generic builders, hand-written builder classes that Lombok
+  completes), `@SuperBuilder` across files, `@FieldNameConstants`,
+  `@UtilityClass`, `@StandardException`, and the `lombok.config` keys that
+  change names or signatures (fluent/chained accessors, prefixes, copyable
+  annotations, `getter.noIsPrefix`, `builder.className`, `log.fieldName`,
+  `fieldNameConstants.*`). A class that carries any other Lombok annotation
+  (`@Delegate`, `@Accessors`, ...), or extends or is nested in one, is open
+  to the compile-break rules: they say nothing about its members. So is a
+  class using a modelled annotation in a way the model does not cover
+  (`@Getter(lazy = true)`, `@Singular` on Guava collections, a
+  `lombok.config` key such as `singular.useGuava`). The modelled
+  annotations are listed as `IMPLEMENTED` in
+  `crates/grounds-index/src/lombok.rs`.
 
 "Bean not found" is only reported for injection points whose type is
 declared in the project. Beans created by library auto-configuration (a
 `DataSource`, an `ObjectMapper`) are not modeled, so for those types
-grounds stays silent instead of guessing.
+grounds stays silent instead of guessing. It also needs evidence that the
+model has seen how beans of the type would be registered: when a class
+implementing the type, or a method producing it, carries an annotation the
+model cannot classify (a stereotype from a missing jar, an annotation a
+library scans for), is named in an `@Import` it did not follow, or a mapper
+scan cannot be expanded, or Spring XML may define beans, it stays silent.
 
 ## Numbers
 

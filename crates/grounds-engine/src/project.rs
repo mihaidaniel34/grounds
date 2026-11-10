@@ -10,7 +10,7 @@ use grounds_syntax::ParsedFile;
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 #[derive(Debug, Default, Clone)]
 pub struct LoadStats {
@@ -50,7 +50,8 @@ pub struct Project {
     /// What each source file was when its stub was made, for telling later
     /// that it changed (taken over by a `Session`).
     pub stamps: rustc_hash::FxHashMap<PathBuf, FileStamp>,
-    /// When reading the configuration and build files began.
+    /// When loading began. A file written after this may have been read
+    /// before or after the write.
     pub load_began: std::time::SystemTime,
 }
 
@@ -141,6 +142,9 @@ impl LombokConfigs {
             dir = d.parent();
         }
         let mut cfg = LombokConfig::default();
+        // the unmodelled keys whose effective value is not their default: a
+        // nearer config setting one back to its default, or clearing it, counts
+        let mut unmodelled: Vec<&str> = Vec::new();
         for entries in chain.into_iter().rev() {
             for (k, op, v) in entries {
                 let truthy = v.eq_ignore_ascii_case("true");
@@ -155,10 +159,36 @@ impl LombokConfigs {
                     ("lombok.copyableannotations", "+=") => cfg.copyable.push(v.clone()),
                     ("lombok.copyableannotations", "-=") => cfg.copyable.retain(|p| p != v),
                     ("lombok.copyableannotations", "clear") => cfg.copyable.clear(),
+                    ("lombok.getter.noisprefix", "=") => cfg.no_is_prefix = truthy,
+                    ("lombok.getter.noisprefix", "clear") => cfg.no_is_prefix = false,
+                    ("lombok.builder.classname", "=") => cfg.builder_class_name = Some(v.clone()),
+                    ("lombok.builder.classname", "clear") => cfg.builder_class_name = None,
+                    ("lombok.log.fieldname", "=") => cfg.log_field_name = Some(v.clone()),
+                    ("lombok.log.fieldname", "clear") => cfg.log_field_name = None,
+                    ("lombok.fieldnameconstants.innertypename", "=") => cfg.field_name_constants_type = Some(v.clone()),
+                    ("lombok.fieldnameconstants.innertypename", "clear") => cfg.field_name_constants_type = None,
+                    ("lombok.fieldnameconstants.uppercase", "=") => cfg.field_name_constants_uppercase = truthy,
+                    ("lombok.fieldnameconstants.uppercase", "clear") => cfg.field_name_constants_uppercase = false,
+                    // keys that change members in ways not modelled, at a
+                    // value other than their default
+                    (k, "=") if grounds_index::lombok::UNMODELLED_KEYS.contains(&k) => {
+                        let default = match k {
+                            "lombok.accessors.capitalization" => v.eq_ignore_ascii_case("basic"),
+                            "lombok.accessors.javabeansspeccapitalization" | "lombok.singular.useguava" | "lombok.noargsconstructor.extraprivate" => v.eq_ignore_ascii_case("false"),
+                            "lombok.log.fieldisstatic" => truthy,
+                            _ => false,
+                        };
+                        unmodelled.retain(|u| *u != k);
+                        if !default {
+                            unmodelled.push(k);
+                        }
+                    }
+                    (k, "clear") => unmodelled.retain(|u| *u != k),
                     _ => {}
                 }
             }
         }
+        cfg.unmodelled = !unmodelled.is_empty();
         cfg
     }
 
@@ -177,53 +207,108 @@ pub fn path_key(p: &Path) -> Arc<str> {
     Arc::from(p.to_string_lossy().as_ref())
 }
 
-/// A file as it was read: its modification time and size, taken before the
-/// text was read, and a hash of that text.
+/// How long a file's time stays in doubt. A time names a tick of the file
+/// system's clock (seconds, on some), and a write later in the same tick
+/// leaves the time as it was: a file read during the tick of its own time
+/// may be written again without showing it. The tick is over once the time is
+/// this old by our clock, or once it has been seen unchanged for this long
+/// (which holds whatever the file system's clock says, a time in the future
+/// included).
+pub const MARGIN: Duration = Duration::from_secs(2);
+
+/// Whether a write after `look` could still leave a file's time at `time`.
+pub fn recent(time: SystemTime, look: SystemTime) -> bool {
+    time >= look.checked_sub(MARGIN).unwrap_or(SystemTime::UNIX_EPOCH)
+}
+
+/// A file as it was read: its modification time and size, taken before its
+/// content was read, and a hash of that content (of the names in it, for a
+/// directory).
 ///
-/// Time and size alone miss a change in two ways. Taken after the read, they
-/// can describe a version written in between (a project load reads every
-/// source first and is seconds long). And a file system keeps times only as
-/// fine as its clock ticks (milliseconds on ext4, two seconds on FAT), so a
-/// file rewritten in the tick it was read in keeps its time, and an edit can
-/// keep its size. As git does with its index, a time that was that recent
-/// when it was taken is not trusted: until a look at the file finds the time
-/// older than `RACY`, the file's text is hashed and compared on every look.
-/// That is the files written in the last seconds, not the project.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// Taken in that order, a write after the read changes the time or the size,
+/// except a write in the same tick of the file system's clock, which can
+/// keep both. So, as git does for its index, a time that is recent when it is
+/// taken is not trusted alone: while the stamp is `racy`, every look at the
+/// file compares its content with the hash too, until the time is older than
+/// `MARGIN` or has been seen unchanged for that long. That is the files
+/// written in the last seconds, not the project.
+#[derive(Clone, Copy, Debug)]
 pub struct FileStamp {
-    pub mtime: std::time::SystemTime,
+    pub mtime: SystemTime,
     pub size: u64,
-    /// `content_hash` of the text read (0 when it could not be read).
-    pub hash: u64,
-    /// The time was within `RACY` of the clock when it was taken.
+    /// `None` when the content could not be read: then time and size decide.
+    pub hash: Option<u64>,
+    /// When this time was first seen (right after it was read).
+    pub seen: Instant,
     pub racy: bool,
 }
 
-/// Longer than the coarsest timestamp a file system keeps (two seconds) and
-/// than the lag of the file system's clock behind the system clock.
-pub const RACY: Duration = Duration::from_secs(3);
-
-fn recent(mtime: std::time::SystemTime, now: std::time::SystemTime) -> bool {
-    now.duration_since(mtime).map_or(true, |age| age < RACY)
+/// The hash a stamp keeps: of the bytes of a file, of the sorted names in a
+/// directory. A source file's is `content_hash` of its text.
+fn content_of(path: &Path, dir: bool) -> (Option<u64>, Option<Vec<u8>>) {
+    if dir {
+        let Ok(entries) = std::fs::read_dir(path) else { return (None, None) };
+        let mut names: Vec<_> = entries.flatten().map(|e| e.file_name()).collect();
+        names.sort();
+        let mut h = xxhash_rust::xxh3::Xxh3::new();
+        for n in &names {
+            h.update(n.as_encoded_bytes());
+            h.update(b"\0");
+        }
+        return (Some(h.digest()), None);
+    }
+    match std::fs::read(path) {
+        Ok(bytes) => (Some(xxhash_rust::xxh3::xxh3_64(&bytes)), Some(bytes)),
+        Err(_) => (None, None),
+    }
 }
 
 impl FileStamp {
-    /// The stamp of a file and its text, the stamp taken first: a write after
-    /// it changes the time or is caught as racy. No stamp if the file is gone;
-    /// no text if it cannot be read as UTF-8 (then the stamp is time and size
-    /// only, as such a file is not analyzed).
-    pub fn read(path: &Path) -> (Option<FileStamp>, Option<String>) {
-        let now = std::time::SystemTime::now();
-        let Some((meta, mtime)) = std::fs::metadata(path).ok().and_then(|m| { let t = m.modified().ok()?; Some((m, t)) }) else { return (None, None) };
-        let text = std::fs::read_to_string(path).ok();
-        let hash = text.as_deref().map_or(0, content_hash);
-        (Some(FileStamp { mtime, size: meta.len(), hash, racy: text.is_some() && recent(mtime, now) }), text)
+    /// Time and size, then, if `always` or the time is recent, the content.
+    fn take(path: &Path, always: bool) -> (Option<FileStamp>, Option<Vec<u8>>) {
+        let clock = SystemTime::now();
+        let Ok(meta) = std::fs::metadata(path) else { return (None, None) };
+        let Ok(mtime) = meta.modified() else { return (None, None) };
+        let seen = Instant::now();
+        let racy = recent(mtime, clock);
+        let (hash, bytes) = if always || racy { content_of(path, meta.is_dir()) } else { (None, None) };
+        (Some(FileStamp { mtime, size: meta.len(), hash, seen, racy: racy && hash.is_some() }), bytes)
     }
 
-    /// Whether the file may differ from the text this stamp was taken with
-    /// (`now`: the clock before this look). A racy stamp whose text is found
-    /// unchanged is renewed, and stops being racy once its time is old.
-    pub fn changed(&mut self, path: &Path, now: std::time::SystemTime) -> bool {
+    /// The stamp of a source file and its text (if it is UTF-8), the stamp
+    /// first. No stamp if the file is gone.
+    pub fn read(path: &Path) -> (Option<FileStamp>, Option<String>) {
+        let (stamp, bytes) = Self::take(path, true);
+        (stamp, bytes.and_then(|b| String::from_utf8(b).ok()))
+    }
+
+    /// The stamp of a file or directory, with a hash of its content when its
+    /// time is recent or `with_hash`. (Not of every jar on a classpath.)
+    pub fn of(path: &Path, with_hash: bool) -> Option<FileStamp> {
+        Self::take(path, with_hash).0
+    }
+
+    /// The same time and size, and the same content where both have a hash.
+    /// (A stamp without one was taken of a time that was already old: no
+    /// write since can have kept it.)
+    pub fn same(&self, other: &FileStamp) -> bool {
+        (self.mtime, self.size) == (other.mtime, other.size) && (self.hash.is_none() || other.hash.is_none() || self.hash == other.hash)
+    }
+
+    /// This stamp, taken again of a file stamped `old` before: a time already
+    /// seen then has been seen since then, and its margin counts from there.
+    pub fn after(mut self, old: Option<&FileStamp>) -> FileStamp {
+        if let Some(old) = old.filter(|o| o.mtime == self.mtime) {
+            self.seen = self.seen.min(old.seen);
+            self.racy &= self.seen.elapsed() < MARGIN;
+        }
+        self
+    }
+
+    /// Whether the file may differ from what this stamp was taken of
+    /// (`clock`: the time before this look). A racy stamp whose content is
+    /// found unchanged stays, and stops being racy once its margin is over.
+    pub fn changed(&mut self, path: &Path, clock: SystemTime) -> bool {
         let Ok(meta) = std::fs::metadata(path) else { return true };
         let Ok(mtime) = meta.modified() else { return true };
         if mtime != self.mtime || meta.len() != self.size {
@@ -232,25 +317,28 @@ impl FileStamp {
         if !self.racy {
             return false;
         }
-        match std::fs::read(path) {
-            Ok(bytes) if xxhash_rust::xxh3::xxh3_64(&bytes) == self.hash => {
-                self.racy = recent(mtime, now);
-                false
-            }
-            _ => true,
+        if content_of(path, meta.is_dir()).0 != self.hash {
+            return true;
         }
+        self.racy = recent(mtime, clock) && self.seen.elapsed() < MARGIN;
+        false
     }
 }
 
 impl Project {
     pub fn load(root: &Path) -> anyhow::Result<Project> {
+        // before grounds.toml is read: it is one of the files that may be
+        // written while the load runs
         let began = std::time::SystemTime::now();
         let config = Config::load(root)?;
-        Ok(Project { load_began: began, ..Self::load_with(root, config)? })
+        Self::load_from(root, config, began)
     }
 
     pub fn load_with(root: &Path, config: Config) -> anyhow::Result<Project> {
-        let load_began = std::time::SystemTime::now();
+        Self::load_from(root, config, std::time::SystemTime::now())
+    }
+
+    fn load_from(root: &Path, config: Config, load_began: std::time::SystemTime) -> anyhow::Result<Project> {
         let mut stats = LoadStats::default();
         let t = Instant::now();
         let source_sets = SourceSets::load(root);
@@ -286,7 +374,7 @@ impl Project {
             .map(|f| {
                 let (stamp, text) = FileStamp::read(&f.path);
                 let stub = text.map(|text| {
-                    let h = stamp.map_or_else(|| content_hash(&text), |s| s.hash) ^ lombok.key_for(&f.path);
+                    let h = stamp.and_then(|s| s.hash).unwrap_or_else(|| content_hash(&text)) ^ lombok.key_for(&f.path);
                     let key = f.path.to_string_lossy();
                     if let Some(s) = cache.get(&key, h) {
                         return (h, s, true);
