@@ -1369,9 +1369,10 @@ impl Rule for MutableException {
             let Some(decl) = n.ancestors().find(|a| grounds_syntax::is_type_declaration(a.kind())) else { return };
             let setters = |x: Node<'t>| annotation_names(x, cx.src).iter().any(|a| matches!(*a, "Setter" | "Data"));
             let lombok_setter = setters(n) || setters(decl);
+            let private = n.has_modifier("private");
             for d in n.fields("declarator") {
-                // nothing can change it after construction: no setter, no
-                // write outside the constructors
+                // nothing can change it after construction: private, no
+                // setter, no write outside the constructors
                 let name = d.field("name").map(|x| cx.text(x)).unwrap_or("");
                 let written = decl.descendants().any(|a| {
                     let target = match a.kind() {
@@ -1384,7 +1385,7 @@ impl Rule for MutableException {
                         (t == name || t.strip_prefix("this.") == Some(name)) && !a.ancestors().take_while(|x| *x != decl).any(|x| x.kind() == "constructor_declaration")
                     })
                 });
-                if !lombok_setter && !written {
+                if private && !lombok_setter && !written {
                     continue;
                 }
                 cx.report(d, "Exception fields should be final");

@@ -173,6 +173,25 @@ fn constants() {
 }
 
 #[test]
+fn guessed_overloads_match_when_all_of_them_do() {
+    // `o.keys()` has a type from a missing jar: prepareStatement(String, int[])
+    // or (String, String[]), both Connection.prepareStatement
+    let src = "import java.sql.*; import missing.Opts; class T { void m(Connection c, Opts o, String q) throws Exception { c.prepareStatement(q, o.keys()); wait(o); } void wait(Opts o) { } }";
+    let pf = ParsedFile::parse(src);
+    let mut idx = Index::new(jdk());
+    idx.set_file(Arc::from("T.java"), Arc::new(extract(&pf)));
+    let fm = FileModel::new(&pf, &idx, Arc::from("T.java"));
+    let calls: Vec<_> = pf.root().descendants().filter(|n| n.kind() == "method_invocation" && n.field("name").unwrap().text(src) != "keys").collect();
+    const PREPARE: MethodMatcher = MethodMatcher::instance("java.sql.Connection").named(&["prepareStatement"]);
+    const WAIT: MethodMatcher = MethodMatcher::instance("java.lang.Object").named(&["wait"]);
+    assert!(fm.select_method(calls[0]).unwrap().ambiguous);
+    assert!(fm.call_matches(calls[0], &PREPARE));
+    // `wait(o)` may be T.wait(Opts) as much as Object.wait(long)
+    assert!(fm.select_method(calls[1]).unwrap().ambiguous);
+    assert!(!fm.call_matches(calls[1], &WAIT));
+}
+
+#[test]
 fn matcher() {
     let src = "import java.util.*; class T { void m(ArrayList<String> l, String s) { l.add(\"x\"); s.equals(\"y\"); System.exit(1); } }";
     let pf = ParsedFile::parse(src);

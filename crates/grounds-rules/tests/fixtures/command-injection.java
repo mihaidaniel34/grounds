@@ -18,6 +18,7 @@ class Argv {
         Runtime.getRuntime().exec(new String[] {"/bin/sh", "-c", "cat " + file}); // expect
         new ProcessBuilder(java.util.Arrays.asList(SHELL, "-c", "ls " + file)); // expect
         new ProcessBuilder("cmd.exe", "/c", "type " + file); // expect
+        new ProcessBuilder("bash", "-lc", "cat " + file); // expect
         new ProcessBuilder("sh", "-c", "date");
     }
     // one string: Runtime.exec splits it on spaces

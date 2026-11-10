@@ -383,7 +383,7 @@ impl<'t> FileModel<'t> {
     }
 
     /// Candidate methods for a method invocation and the receiver type.
-    fn candidates(&self, call: Node<'t>) -> (Vec<MethodRef>, Option<Ty>, bool) {
+    pub(crate) fn candidates(&self, call: Node<'t>) -> (Vec<MethodRef>, Option<Ty>, bool) {
         let Some(name_node) = call.field("name") else { return (Vec::new(), None, false) };
         let name = name_node.text(self.src);
         match call.field("object") {

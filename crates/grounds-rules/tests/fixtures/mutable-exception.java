@@ -9,6 +9,11 @@ class SetOnce extends RuntimeException {
     SetOnce(int status) { this.status = status; }
     int getStatus() { return status; }
 }
+// other classes can write it
+class OpenField extends RuntimeException {
+    public int status; // expect
+    OpenField(int status) { this.status = status; }
+}
 @lombok.Data
 class WithSetter extends RuntimeException {
     private int status; // expect

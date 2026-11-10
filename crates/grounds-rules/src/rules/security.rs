@@ -680,7 +680,11 @@ impl Rule for CommandInjection {
             let shell = argv.iter().filter_map(lit).any(|c| {
                 let c = c.rsplit(['/', '\\']).next().unwrap_or("");
                 matches!(c.trim_end_matches(".exe"), "sh" | "bash" | "zsh" | "ksh" | "dash" | "cmd" | "powershell" | "pwsh")
-            }) && argv.iter().filter_map(lit).any(|f| matches!(f.as_str(), "-c" | "/c" | "/k" | "-command"));
+            }) && argv.iter().filter_map(lit).any(|f| {
+                // `-c`, or combined short options with c: `bash -lc`, `sh -ec`
+                let short = f.strip_prefix('-').filter(|o| !o.is_empty() && o.chars().all(|c| c.is_ascii_alphabetic()) && o.len() <= 4);
+                matches!(f.as_str(), "/c" | "/k" | "-command") || short.is_some_and(|o| o.contains('c'))
+            });
             if !shell {
                 return;
             }
