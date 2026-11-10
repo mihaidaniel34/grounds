@@ -772,6 +772,17 @@ impl<'a> Builder<'a> {
     /// Registrations the model could not turn into beans (see `DiModel::unseen`).
     fn unseen_registrations(&mut self, names: &[Name], imported_anywhere: &[Name]) {
         let mut unseen: Vec<(Name, bool)> = Vec::new();
+        // modules using CDI (and whether only their tests do): a bean
+        // archive discovered in mode "all" (an empty beans.xml, often added
+        // by a test's deployment) makes every class with a usable
+        // constructor a bean, and the model does not read beans.xml
+        let mut cdi: FxHashMap<String, bool> = FxHashMap::default();
+        for (path, stub) in self.index.files() {
+            if stub.imports.iter().any(|i| i.path.starts_with("jakarta.enterprise.") || i.path.starts_with("javax.enterprise.")) {
+                let only_tests = cdi.entry(module_of(path).to_string()).or_insert(true);
+                *only_tests &= is_test_path(path);
+            }
+        }
         for n in imported_anywhere {
             if !self.model.component_classes.contains_key(n) {
                 let is_test = self.index.source_file_of(n).is_some_and(|f| is_test_path(f));
@@ -803,9 +814,12 @@ impl<'a> Builder<'a> {
             // store module's repository base, a client library's interface):
             // the library defining that type may implement it at runtime
             let opaque_base = c.is_interface() && self.unresolved_supertype(n);
-            if unknown || stereotyped || main_scan || opaque_base || (!is_test && assignable.iter().any(|t| !t)) {
+            let discoverable = concrete
+                && (c.constructors().next().is_none() || c.constructors().any(|m| m.params.is_empty() || m.annotations.iter().any(|a| a.is("jakarta.inject.Inject") || a.is("javax.inject.Inject"))));
+            let discovered = if discoverable { c.source_file().and_then(|f| cdi.get(module_of(f)).copied()) } else { None };
+            if unknown || stereotyped || main_scan || opaque_base || discovered == Some(false) || (!is_test && assignable.iter().any(|t| !t)) {
                 unseen.push((n.clone(), is_test));
-            } else if (test_scan && (c.is_interface() || concrete)) || !assignable.is_empty() {
+            } else if (test_scan && (c.is_interface() || concrete)) || !assignable.is_empty() || discovered == Some(true) {
                 unseen.push((n.clone(), true));
             }
         }
@@ -3337,6 +3351,28 @@ mod tests {
         let app = ("src/main/java/s/App.java", "package s; @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }");
         let (idx, m) = model(&[app, spring]);
         assert!(matches!(point_resolution(&idx, &m, "group"), Resolution::QualifierNotFound { .. }));
+    }
+
+    #[test]
+    fn a_plain_class_may_be_a_cdi_bean() {
+        // bean discovery mode "all" (an empty beans.xml a test deployment
+        // adds) makes it one; the model does not read beans.xml
+        let bean = ("src/main/java/v/MyBean2.java", "package v; import javax.enterprise.context.RequestScoped; import javax.inject.Inject;
+             @RequestScoped public class MyBean2 { public MyBean2() {} @Inject public MyBean2(MyParameter value, Missing missing, Port port) {} }");
+        let rest = [
+            ("src/main/java/v/MyParameter.java", "package v; public class MyParameter { public String value; }"),
+            ("src/main/java/v/Missing.java", "package v; public interface Missing {}"),
+            // no usable constructor: never a bean
+            ("src/main/java/v/Port.java", "package v; public class Port { public Port(String host) {} }"),
+        ];
+        let (idx, m) = model(&[bean, rest[0], rest[1], rest[2]]);
+        assert_eq!(point_resolution(&idx, &m, "value"), Resolution::Unknown);
+        assert_eq!(point_resolution(&idx, &m, "missing"), Resolution::NotFound);
+        assert_eq!(point_resolution(&idx, &m, "port"), Resolution::NotFound);
+        // without CDI (JSR-330 in a Micronaut-style project) a plain class is no bean
+        let jsr = ("src/main/java/v/MyBean2.java", "package v; import jakarta.inject.Inject; @jakarta.inject.Singleton public class MyBean2 { @Inject public MyBean2(MyParameter value) {} }");
+        let (idx, m) = model(&[jsr, rest[0]]);
+        assert_eq!(point_resolution(&idx, &m, "value"), Resolution::NotFound);
     }
 
     #[test]

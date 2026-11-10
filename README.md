@@ -85,7 +85,9 @@ model cannot classify (a stereotype from a missing jar, an annotation a
 library scans for), is named in an `@Import` it did not follow, or is an
 interface extending a type grounds cannot resolve (a Spring Data store
 module's repository base without its jar), or a mapper scan cannot be
-expanded, or Spring XML may define beans, it stays silent.
+expanded, or Spring XML may define beans, it stays silent. In a module
+using CDI, a plain class with a usable constructor may be a bean (bean
+discovery mode `all`, set in a `beans.xml` grounds does not read).
 
 ## Numbers
 
