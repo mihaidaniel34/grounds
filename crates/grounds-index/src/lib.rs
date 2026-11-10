@@ -13,7 +13,7 @@ pub mod startup;
 pub mod stubs;
 
 pub use hierarchy::{ClassLookup, FieldRef, MethodRef, Tri};
-pub use index::{Classpath, Index, JdkApi, Scope};
+pub use index::{Classpath, Index, JdkApi, LocalClassScope, MemberType, Scope};
 pub use model::*;
 pub use stubs::{extract, is_assertion_name, FileStub, Import, RawClass, TypeSyntax};
 

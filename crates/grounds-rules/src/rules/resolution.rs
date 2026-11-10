@@ -22,6 +22,11 @@ fn closed_class<'t>(cx: &Ctx<'_, 't>, name: &str) -> Option<std::sync::Arc<Class
     if cx.fm.stub.classes.iter().any(|k| k.annotations.iter().any(|a| lombok::processor_annotation(a, &cx.fm.stub.imports).as_deref() == Some("lombok.experimental.ExtensionMethod"))) {
         return None;
     }
+    // a javac plugin that changes the language (Manifold) compiles this file:
+    // members, access and types are not the ones the model reads
+    if cx.fm.index.language_extended(&cx.fm.path) {
+        return None;
+    }
     // a file that does not parse as Java (a template, a file mid-edit) is no
     // ground for a claim that code does not compile
     if cx.fm.file.has_errors() {
@@ -427,8 +432,10 @@ declare_rule!(IncompatibleAssignment {
 impl Rule for IncompatibleAssignment {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
-        // a file that does not parse is no ground for a compile-break claim
-        if cx.fm.file.has_errors() {
+        // a file that does not parse is no ground for a compile-break claim,
+        // nor one a language-changing javac plugin compiles (Manifold's
+        // structural interfaces make unrelated classes assignable)
+        if cx.fm.file.has_errors() || cx.fm.index.language_extended(&cx.fm.path) {
             return;
         }
         // (declared type, value)
@@ -606,7 +613,8 @@ impl Rule for UnresolvedConstructor {
             return;
         }
         let Some(t) = n.field("type") else { return };
-        let ty = cx.fm.resolve_type_node(t);
+        // `outer.new Inner()` names a member type of the qualifier's type
+        let ty = cx.fm.created_class(n);
         let Some(tn) = ty.class_name() else { return };
         let Some(cls) = closed_class(cx, tn) else { return };
         if cls.is_interface() || cls.is_enum() {
@@ -727,7 +735,8 @@ impl Rule for OverrideWithoutSuper {
                             _ => false,
                         };
                         skew || !fully_known(cx, &at) || !fully_known(cx, &b.ty)
-                    }))
+                    })
+                        || same_erasure(&m, &cls, x, &map))
             });
         }
         if !found && cls.is_interface() {
@@ -739,6 +748,46 @@ impl Rule for OverrideWithoutSuper {
             }
         }
     }
+}
+
+/// Whether `m`, declared in `cls`, has the erased parameter types of `sup`
+/// as a member of the supertype (`map` substitutes its type arguments): a
+/// method overrides one whose signature's erasure is its own (JLS 8.4.2,
+/// 8.4.8.1), as `get(Object[])` does `get(A)` of `Ops<T[]>`, or `save(Book)`
+/// does `<S extends E> S save(S)` with `E` = `Book`. Type variables erase to
+/// their first bound (JLS 4.6). False when a type is not known.
+fn same_erasure(m: &MethodInfo, cls: &ClassInfo, sup: &MethodInfo, map: &[(Name, Ty)]) -> bool {
+    use grounds_index::hierarchy::apply_subst;
+    fn erase(t: &Ty, vars: &[TypeParam], depth: u32) -> Ty {
+        match t {
+            Ty::TypeVar(v) => match vars.iter().find(|p| p.name == *v) {
+                Some(p) if depth < 8 => p.bounds.first().map(|b| erase(b, vars, depth + 1)).unwrap_or_else(Ty::object),
+                _ => Ty::Unknown,
+            },
+            Ty::Array(e) => match erase(e, vars, depth) {
+                Ty::Unknown => Ty::Unknown,
+                e => Ty::Array(Box::new(e)),
+            },
+            t => t.erasure(),
+        }
+    }
+    // the supertype's arguments are in terms of `cls`'s type variables; the
+    // supertype method's own type variables keep their (substituted) bounds
+    let sup_vars: Vec<TypeParam> = sup
+        .type_params
+        .iter()
+        .map(|p| TypeParam { name: p.name.clone(), bounds: p.bounds.iter().map(|b| apply_subst(b, map)).collect() })
+        .chain(cls.type_params.iter().cloned())
+        .collect();
+    // a type variable of the supertype method substituted by `map` would be wrong
+    let shadow: Vec<(Name, Ty)> = map.iter().filter(|(k, _)| !sup.type_params.iter().any(|p| p.name == *k)).cloned().collect();
+    sup.params.len() == m.params.len()
+        && sup.params.iter().zip(&m.params).all(|(a, b)| {
+            // the overrider's own signature against the erased one: `m(T)`
+            // with `T extends Date` does not override `m(Date)` (a clash)
+            let x = erase(&apply_subst(&a.ty, &shadow), &sup_vars, 0);
+            !x.has_unknown() && x == b.ty
+        })
 }
 
 declare_rule!(UnimplementedAbstractMethod {
