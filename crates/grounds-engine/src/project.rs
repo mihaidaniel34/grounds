@@ -47,6 +47,9 @@ pub struct Project {
     pub classpath_warnings: Vec<crate::classpath::Warning>,
     /// The jars and class directories the classpath was built from.
     pub classpath_entries: Vec<PathBuf>,
+    /// When loading began. A file written after this may have been read
+    /// before or after the write.
+    pub load_began: std::time::SystemTime,
 }
 
 /// Class names registered through Spring's META-INF files in any module, and
@@ -208,6 +211,7 @@ impl Project {
     }
 
     pub fn load_with(root: &Path, config: Config) -> anyhow::Result<Project> {
+        let load_began = std::time::SystemTime::now();
         let mut stats = LoadStats::default();
         let t = Instant::now();
         let source_sets = SourceSets::load(root);
@@ -280,7 +284,7 @@ impl Project {
         di.lombok_copies_qualifiers = lombok_copies_qualifiers(&workspace.root);
         di.bean_overriding_allowed = bean_overriding_allowed(&workspace);
         let classpath_warnings = crate::classpath::warnings(&workspace, &config, &index);
-        Ok(Project { config, workspace, index, stats, di, source_sets, lombok, registered, auto_registered, classpath_warnings, classpath_entries: entries })
+        Ok(Project { config, workspace, index, stats, di, source_sets, lombok, registered, auto_registered, classpath_warnings, classpath_entries: entries, load_began })
     }
 
     pub fn source_kind(&self, path: &Path) -> SourceKind {

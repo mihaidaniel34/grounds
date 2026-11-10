@@ -176,11 +176,21 @@ impl Session {
         // same configuration as full checks, narrowed to edit-tier rules
         let edit_rules = RuleSet::new(crate::analyze::selected_rules(&project).into_iter().filter(|r| r.meta().tier == Tier::Edit).collect());
         let resolution_rules = RuleSet::new(crate::analyze::selected_rules(&project).into_iter().filter(|r| r.meta().id.starts_with("unresolved-")).collect());
-        let config = config_files(&project);
+        // The project's files were read some time ago, during the load, and
+        // their times are only read now. A file written in between (an edit
+        // while a daemon was starting) would be noted with its new time and
+        // its old content, and never be read again. So a time at or after
+        // the start of the load is not trusted: it is noted as one that
+        // cannot match, and the file is read again at the next sync. The
+        // margin covers clocks: file times come from a coarser clock than
+        // the one that timed the load, and some file systems keep seconds.
+        let racy = project.load_began.checked_sub(std::time::Duration::from_secs(2)).unwrap_or(SystemTime::UNIX_EPOCH);
+        let settled = |m: SystemTime| if m >= racy { SystemTime::UNIX_EPOCH } else { m };
+        let config = config_files(&project).into_iter().map(|(p, m)| (p, m.map(settled))).collect();
         let mut s = Session { project, all_rules, edit_rules, resolution_rules, options, mtimes: FxHashMap::default(), config, warned: false };
         for f in &s.project.workspace.files {
             if let Ok(m) = std::fs::metadata(&f.path).and_then(|m| m.modified()) {
-                s.mtimes.insert(f.path.clone(), m);
+                s.mtimes.insert(f.path.clone(), settled(m));
             }
         }
         s
@@ -211,7 +221,10 @@ impl Session {
         if self.config.iter().any(|(p, old)| std::fs::metadata(p).and_then(|m| m.modified()).ok() != *old) {
             let root = self.root().to_path_buf();
             if let Ok(project) = Project::load(&root) {
+                // warnings already shown are not shown again for the same state
+                let shown = self.warned.then(|| self.project.classpath_warnings.clone());
                 *self = Session::from_project(project);
+                self.warned = shown.is_some_and(|w| w == self.project.classpath_warnings);
             }
         }
         let mut stale: Vec<PathBuf> = Vec::new();
@@ -239,6 +252,9 @@ impl Session {
             let key = path_key(&p);
             let old = self.project.index.file(&key).map(|s| s.signature_hash);
             if exists {
+                // the time first, then the content: a write in between is
+                // then seen as a change at the next sync, not missed
+                let noted = std::fs::metadata(&p).and_then(|m| m.modified()).ok();
                 if let Ok(text) = std::fs::read_to_string(&p) {
                     let pf = ParsedFile::parse(text);
                     let stub = Arc::new(self.project.extract(&p, &pf));
@@ -254,7 +270,7 @@ impl Session {
                         changed.push(p.clone());
                     }
                 }
-                if let Ok(m) = std::fs::metadata(&p).and_then(|m| m.modified()) {
+                if let Some(m) = noted {
                     self.mtimes.insert(p.clone(), m);
                 }
             } else {

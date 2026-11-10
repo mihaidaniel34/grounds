@@ -472,3 +472,35 @@ fn a_changed_build_file_reloads_the_project() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_file_written_while_the_project_loads_is_read_again() {
+    let dir = std::env::temp_dir().join(format!("grounds-session-loadrace-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, "src/main/java/demo/Api.java", "package demo;\npublic class Api {\n    public void old() {}\n}\n");
+    write(&dir, "src/main/java/demo/Caller.java", "package demo;\npublic class Caller {\n    void m(Api a) { a.old(); }\n}\n");
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+    let classes = |index: &grounds_index::Index| {
+        let mut names: Vec<_> = index.source_class_names().cloned().collect();
+        names.sort();
+        names.iter().map(|n| format!("{:?}", index.class(n))).collect::<Vec<_>>()
+    };
+    // a daemon starting: the contents are read ...
+    let project = grounds_engine::Project::load(&dir).unwrap();
+    // ... an edit lands ...
+    write(&dir, "src/main/java/demo/Api.java", "package demo;\npublic class Api {\n    public void renamed() {}\n}\n");
+    // ... and only then does the session note the files' times
+    let mut s = Session::from_project(project);
+    s.sync(&[]);
+    let fresh = grounds_engine::Project::load(&dir).unwrap();
+    assert_eq!(classes(&s.project.index), classes(&fresh.index), "the edit made during the load must not be lost");
+    // and what it broke is reported, as a run from scratch reports it
+    let opts = CheckOptions { mode: Mode::Edit, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None };
+    let r = s.check(&opts);
+    assert_eq!(r.pending.len(), 1, "the caller of the renamed method: {:?}", r.pending);
+    let _ = std::fs::remove_dir_all(&dir);
+}

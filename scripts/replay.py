@@ -173,7 +173,15 @@ def main():
     subprocess.run([grounds, "daemon", "--root", d, "--stop"], capture_output=True)
     try:
         git(d, *move, line[0])
-        changed(grounds, d, None, True)  # the daemon loads the project as of the first commit
+        # The first asking starts the daemon and is answered without it: the
+        # daemon loads in the background. Wait until it answers itself, so
+        # that the walk asks the daemon and no checkout lands in its load.
+        changed(grounds, d, None, True)
+        deadline = time.monotonic() + TIMEOUT
+        while "running" not in subprocess.run([grounds, "daemon", "--root", d, "--status"], capture_output=True, text=True).stdout:
+            if time.monotonic() > deadline:
+                raise RuntimeError(f"the daemon did not come up in {TIMEOUT:.0f} s")
+            time.sleep(0.2)
         for parent, commit in zip(line, line[1:]):
             touched = java(parent, commit)
             git(d, *move, commit)
