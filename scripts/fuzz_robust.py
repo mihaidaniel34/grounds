@@ -951,7 +951,8 @@ def daemon_path(exe, d, spec, a, env):
             if why:
                 fails.append((f"changed#{attempt + 1}", why))
                 break
-            if attempt == 0:
+            # (exit 1 with an error is a project nothing can load, a broken grounds.toml: no daemon then)
+            if attempt == 0 and (code == 0 or "Error:" not in err):
                 # wait for the daemon the first run started. It loads the project as that run
                 # did, so it gets several times what the run took, and 10 s at least.
                 wait = max(10.0, 3 * secs + 5)
@@ -965,7 +966,7 @@ def daemon_path(exe, d, spec, a, env):
                 # a project the command could load, and no daemon: it died starting (its output
                 # goes nowhere, so that is all there is to report). Without this the second run
                 # would answer in-process and the case would pass without a daemon.
-                if not served and code in (0, 1):
+                if not served:
                     fails.append(("daemon", f"not running {wait:.0f} s after `changed` started it"))
                     break
     finally:
