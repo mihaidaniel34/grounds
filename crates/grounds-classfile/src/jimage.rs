@@ -34,6 +34,8 @@ pub struct JImage {
     /// Resource offsets are relative to the end of the index.
     data_start: usize,
     classes: Classes,
+    /// Every package of every module, exported or not (internal form).
+    packages: FxHashSet<String>,
 }
 
 impl JImage {
@@ -41,12 +43,19 @@ impl JImage {
         let file = File::open(path).with_context(|| format!("open {}", path.display()))?;
         // SAFETY: as for jars, the image is treated as immutable while indexed.
         let mmap = unsafe { Mmap::map(&file)? };
-        let (data_start, classes) = index(&mmap).with_context(|| format!("read {}", path.display()))?;
-        Ok(JImage { path: path.to_path_buf(), mmap, data_start, classes })
+        let (data_start, classes, packages) = index(&mmap).with_context(|| format!("read {}", path.display()))?;
+        Ok(JImage { path: path.to_path_buf(), mmap, data_start, classes, packages })
     }
 
     pub fn class_names(&self) -> impl Iterator<Item = &str> {
         self.classes.keys().map(String::as_str)
+    }
+
+    /// The packages of all modules, those not exported included
+    /// (`com/sun/tools/javac/util`): javac compiles a source class in such a
+    /// package, while the JDK has one too.
+    pub fn all_packages(&self) -> impl Iterator<Item = &str> {
+        self.packages.iter().map(String::as_str)
     }
 
     pub fn read_class_bytes(&self, internal_name: &str) -> Option<Vec<u8>> {
@@ -57,9 +66,9 @@ impl JImage {
 }
 
 /// Header, then the redirect and offset tables, the location attributes and
-/// the string table; resource data follows. Returns the start of the data and
-/// the exported classes.
-fn index(b: &[u8]) -> Result<(usize, Classes)> {
+/// the string table; resource data follows. Returns the start of the data,
+/// the exported classes and every package.
+fn index(b: &[u8]) -> Result<(usize, Classes, FxHashSet<String>)> {
     // written in native byte order: detect it from the magic
     let be = match (u32_at(b, 0, false), u32_at(b, 0, true)) {
         (Some(MAGIC), _) => false,
@@ -113,12 +122,13 @@ fn index(b: &[u8]) -> Result<(usize, Classes)> {
         let packages = unqualified_exports(data).context("corrupt module-info")?;
         exported.insert(module, packages.into_iter().collect());
     }
+    let packages = found.iter().filter(|(_, package, ..)| !package.is_empty()).map(|(_, package, ..)| package.to_string()).collect();
     let classes = found
         .into_iter()
         .filter(|(module, package, ..)| exported.get(module).is_some_and(|p| p.contains(*package)))
         .map(|(_, _, internal, offset, size)| (internal, (offset, size)))
         .collect();
-    Ok((data_start, classes))
+    Ok((data_start, classes, packages))
 }
 
 fn u32_at(b: &[u8], o: usize, be: bool) -> Option<u32> {

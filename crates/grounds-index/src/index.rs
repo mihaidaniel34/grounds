@@ -51,6 +51,9 @@ pub struct Classpath {
     /// Whether the JDK home has `lib/ct.sym`, which only a full JDK has: a
     /// runtime image cut down by jlink lacks modules, and their packages.
     jdk_full: bool,
+    /// Every package of the JDK: those of the API loaded, and those of the
+    /// installed JDK's runtime image, exported or not.
+    jdk_packages: FxHashSet<Name>,
 }
 
 impl std::fmt::Debug for Classpath {
@@ -61,7 +64,7 @@ impl std::fmt::Debug for Classpath {
 
 impl Classpath {
     pub fn empty() -> Classpath {
-        Classpath { containers: Vec::new(), names: FxHashMap::default(), packages: FxHashSet::default(), cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false }
+        Classpath { containers: Vec::new(), names: FxHashMap::default(), packages: FxHashSet::default(), cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false, jdk_packages: FxHashSet::default() }
     }
 
     /// Build from containers in priority order (first definition wins).
@@ -92,7 +95,7 @@ impl Classpath {
                 names.entry(Arc::from(b.as_str())).or_insert(i as u32);
             }
         }
-        Classpath { containers, names, packages, cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false }
+        Classpath { containers, names, packages, cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false, jdk_packages: FxHashSet::default() }
     }
 
     /// JDK classes for a release (see `ClassContainer::open_jdk`), followed by the given jars/dirs.
@@ -101,8 +104,20 @@ impl Classpath {
         let mut jdk = JdkApi::Complete;
         let mut jdk_release = None;
         let mut jdk_full = false;
+        let mut jdk_packages: FxHashSet<Name> = FxHashSet::default();
         if let Some(home) = java_home {
-            if let Ok(c) = ClassContainer::open_jdk(home, release) {
+            let opened = ClassContainer::open_jdk(home, release);
+            // the image lists every package, the internal ones too
+            let mut image_packages = |j: &grounds_classfile::jimage::JImage| jdk_packages.extend(j.all_packages().map(|p| Arc::from(p.replace('/', ".").as_str())));
+            match &opened {
+                Ok(ClassContainer::JImage(j)) => image_packages(j),
+                _ => {
+                    if let Ok(j) = grounds_classfile::jimage::JImage::open(&home.join("lib/modules")) {
+                        image_packages(&j);
+                    }
+                }
+            }
+            if let Ok(c) = opened {
                 jdk_release = Some(release);
                 jdk_full = home.join("lib/ct.sym").is_file();
                 // the JDK's own release is read exactly from its image; a newer one has no signatures anywhere
@@ -125,10 +140,28 @@ impl Classpath {
             }
         }
         let mut cp = Classpath::from_containers(containers);
+        if jdk_release.is_some() {
+            // the API's packages: a JDK older than 9 has no image
+            jdk_packages.extend(cp.names.iter().filter(|(_, &i)| i == 0).filter_map(|(n, _)| n.rfind('.').map(|i| Arc::from(&n[..i]))));
+        }
         cp.jdk = jdk;
         cp.jdk_release = jdk_release;
         cp.jdk_full = jdk_full;
+        cp.jdk_packages = jdk_packages;
         cp
+    }
+
+    /// Whether the JDK's API (an exported package of the release loaded)
+    /// has the class. javac does not compile a source class in such a
+    /// package together with the code ("package exists in another module"),
+    /// so the code compiles against the JDK's.
+    pub fn is_jdk_class(&self, name: &str) -> bool {
+        self.jdk_release.is_some() && self.names.get(name) == Some(&0)
+    }
+
+    /// Whether a package belongs to the JDK, exported or not.
+    pub fn is_jdk_package(&self, package: &str) -> bool {
+        self.jdk_packages.contains(package)
     }
 
     /// Whether `name` is a JDK class whose API may be newer than the one
@@ -314,6 +347,10 @@ impl Index {
         let body_only = self.files.get(&path).is_some_and(|old| old.signature_hash == stub.signature_hash);
         self.remove_file_inner(&path);
         for (i, c) in stub.classes.iter().enumerate() {
+            // a stand-in for a class of the JDK's API is not the class
+            if self.is_jdk_standin(&c.name) {
+                continue;
+            }
             if let Some((other, _)) = self.classes.get(&c.name) {
                 let files = self.copies.entry(c.name.clone()).or_default();
                 if files.is_empty() {
@@ -425,9 +462,26 @@ impl Index {
         self.classes.keys()
     }
 
-    /// Is this class name defined in more than one source file?
+    /// Is this class name defined in more than one source file? A source
+    /// class in a package of the JDK counts as declared twice: the JDK has
+    /// the package too (`com.sun.tools.javac.util`, not exported, which javac
+    /// compiles from sources; a stub of it that a build replaces with the
+    /// JDK's), so which declaration the code compiles against is a guess.
     pub fn is_duplicated(&self, name: &str) -> bool {
-        self.defs.get(name).is_some_and(|d| *d > 1)
+        self.defs.get(name).is_some_and(|d| *d > 1) || (self.classes.contains_key(name) && name.rfind('.').is_some_and(|i| self.classpath.is_jdk_package(&name[..i])))
+    }
+
+    /// A source class standing in for a class of the JDK's API, or nested in
+    /// one: it is not indexed, so every file sees the JDK's. javac refuses a
+    /// source class in an exported JDK package ("package exists in another
+    /// module"): no build compiles it with the code that uses the class (a
+    /// test input, a compile-only stub, a GWT emulation of `java.lang`).
+    fn is_jdk_standin(&self, name: &str) -> bool {
+        let top = match name.rfind('.') {
+            Some(i) => name[i..].find('$').map_or(name, |j| &name[..i + j]),
+            None => name.split('$').next().unwrap_or(name),
+        };
+        self.classpath.is_jdk_class(top)
     }
 
     /// The copy of a class declared in several files that the file at
