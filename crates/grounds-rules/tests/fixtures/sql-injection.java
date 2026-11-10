@@ -47,3 +47,91 @@ class CompoundSql {
         st.executeQuery(q); // expect
     }
 }
+// identifiers from fields and constants, values bound: nothing the caller sends reaches the text
+class IdentifiersFromFields {
+    static final String SCHEMA = System.getProperty("schema");
+    private final String table;
+    private final String idColumn;
+    private final java.util.List<String> indexes;
+    IdentifiersFromFields(String table, String idColumn, java.util.List<String> indexes) {
+        this.table = table;
+        this.idColumn = idColumn;
+        this.indexes = indexes;
+    }
+    String name() { return table; }
+    void bound(java.sql.Connection c, String id) throws java.sql.SQLException {
+        java.sql.PreparedStatement ps = c.prepareStatement("DELETE FROM " + table + " WHERE " + idColumn + " = ?");
+        ps.setString(1, id);
+        String sql = String.format("UPDATE %s.%s SET seen = ? WHERE %s = ?", SCHEMA, this.table, idColumn);
+        c.prepareStatement(sql);
+    }
+    void ddl(java.sql.Statement st, int dimension) throws java.sql.SQLException {
+        st.executeUpdate(String.format("TRUNCATE TABLE %s", table));
+        st.executeUpdate("DROP TABLE IF EXISTS " + name());
+        String index = table + "_idx";
+        st.executeUpdate("CREATE INDEX " + index + " ON " + table + " (v vector(" + dimension + "))");
+        for (String col : indexes) {
+            st.executeUpdate("CREATE INDEX ON " + table + " (" + col.trim() + ")");
+        }
+        indexes.forEach(col -> {
+            try {
+                st.executeUpdate("CREATE INDEX ON " + table + " (" + col + ")");
+            } catch (java.sql.SQLException e) {
+                throw new RuntimeException(e);
+            }
+        });
+    }
+    void numbers(java.sql.Statement st, int limit, Long id) throws java.sql.SQLException {
+        st.executeQuery("SELECT * FROM " + table + " WHERE id = " + id + " LIMIT " + limit);
+    }
+    void builder(java.sql.Connection c) throws java.sql.SQLException {
+        StringBuilder sb = new StringBuilder("INSERT INTO ").append(table).append(" VALUES (");
+        sb.append("?").append(")");
+        c.prepareStatement(sb.toString());
+    }
+    // a parameter still injects, in a value or beside a field
+    void value(java.sql.Statement st, String name) throws java.sql.SQLException {
+        st.executeQuery("SELECT * FROM " + table + " WHERE name = '" + name + "'"); // expect
+    }
+    void derived(java.sql.Statement st, String name) throws java.sql.SQLException {
+        String quoted = "'" + name.trim() + "'";
+        String sql = String.format("SELECT * FROM %s WHERE name = %s", table, quoted);
+        st.executeQuery(sql); // expect
+    }
+    void appended(java.sql.Connection c, String name) throws java.sql.SQLException {
+        StringBuilder sb = new StringBuilder("SELECT * FROM ").append(table);
+        sb.append(" WHERE name = '").append(name).append("'");
+        c.prepareStatement(sb.toString()); // expect
+    }
+    void each(java.sql.Statement st, java.util.List<String> names) throws java.sql.SQLException {
+        for (String n : names) {
+            st.executeUpdate("DELETE FROM " + table + " WHERE name = '" + n + "'"); // expect
+        }
+    }
+    void streamed(java.sql.Statement st, java.util.List<String> names) throws java.sql.SQLException {
+        String in = names.stream().map(n -> "'" + n + "'").collect(java.util.stream.Collectors.joining(","));
+        st.executeUpdate("DELETE FROM " + table + " WHERE name IN (" + in + ")"); // expect
+    }
+    // DDL takes no bind parameters
+    void createIndex(java.sql.Statement st, String table, String column) throws java.sql.SQLException {
+        String sql = String.format("create index if not exists %s_%s on %s (%s)", table, column, table, column);
+        st.executeUpdate(sql);
+        st.execute("DROP TABLE IF EXISTS " + table);
+    }
+    // the caller names the table and column, the value is bound
+    void named(java.sql.Connection c, String owner, String table, String column, String pref) throws java.sql.SQLException {
+        String query = String.format("select rowid, to_text(t.%s, json(?)) from %s.%s t", column, owner, table);
+        java.sql.PreparedStatement ps = c.prepareStatement(query);
+        ps.setString(1, pref);
+        c.prepareStatement("UPDATE " + table + " SET seen = ? WHERE id = ?");
+    }
+    // a value spliced in beside the placeholders
+    void mixed(java.sql.Connection c, String table, String name) throws java.sql.SQLException {
+        c.prepareStatement("SELECT * FROM " + table + " WHERE id = ? AND name = '" + name + "'"); // expect
+        c.prepareStatement(String.format("SELECT * FROM %2$s WHERE id = ? AND name = '%1$s'", name, table)); // expect
+        c.prepareStatement("SELECT * FROM t WHERE id = ? ORDER BY " + name); // expect
+    }
+    void getter(java.sql.Statement st, javax.servlet.http.HttpServletRequest req) throws java.sql.SQLException {
+        st.executeQuery("SELECT * FROM " + table + " WHERE name = '" + req.getParameter("name") + "'"); // expect
+    }
+}

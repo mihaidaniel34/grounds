@@ -4,7 +4,7 @@ use crate::framework::*;
 use crate::util::*;
 use crate::{declare_rule, rule_meta};
 use grounds_index::*;
-use grounds_semantic::MethodMatcher;
+use grounds_semantic::{LocalKind, MethodMatcher};
 use grounds_syntax::{Node, NodeExt};
 
 pub fn rules() -> Vec<Box<dyn Rule>> {
@@ -414,6 +414,178 @@ fn dynamically_built<'t>(e: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
     }
 }
 
+/// Can text handed to the enclosing method reach `e`: a parameter, or a local
+/// computed from one? Fields, constants, numbers and calls on them cannot.
+/// ```java
+/// "select * from " + table + " where id = ?"          // field `table`: no
+/// "select * from t where name = '" + name + "'"       // parameter `name`: yes
+/// ```
+fn from_parameter<'t>(e: Node<'t>, cx: &Ctx<'_, 't>, seen: &mut Vec<usize>) -> bool {
+    let e = e.unparen();
+    if is_literal(e) || cx.fm.constant_value(e).is_some() {
+        return false;
+    }
+    // a number or boolean cannot carry SQL text
+    if cx.type_of(e).unboxed().is_some() {
+        return false;
+    }
+    if e.kind() != "identifier" {
+        return e.kids().into_iter().any(|k| from_parameter(k, cx, seen));
+    }
+    // not a local: a field, a type name, a method name
+    let Some(i) = cx.fm.local_ref(e) else { return false };
+    let d = &cx.fm.binder.decls[i];
+    match d.kind {
+        LocalKind::Param => return true,
+        LocalKind::CatchParam => return false,
+        _ => {}
+    }
+    if seen.contains(&i) {
+        return false;
+    }
+    seen.push(i);
+    match d.kind {
+        // `for (String c : columns)`: as tainted as what is iterated
+        LocalKind::ForEach => d.decl_node.field("value").is_some_and(|v| from_parameter(v, cx, seen)),
+        // `ids.stream().map(id -> "'" + id + "'")`: as tainted as the stream
+        LocalKind::LambdaParam => {
+            let call = d.owner.and_then(|l| l.parent_unparen()).filter(|p| p.kind() == "argument_list").and_then(|p| p.parent());
+            call.is_none_or(|c| from_parameter(c, cx, seen))
+        }
+        LocalKind::Pattern => d.decl_node.field("left").is_none_or(|v| from_parameter(v, cx, seen)),
+        _ => {
+            if d.decl_node.field("value").is_some_and(|v| from_parameter(v, cx, seen)) {
+                return true;
+            }
+            cx.fm.binder.uses[i].iter().any(|u| {
+                // `q = q + name`, `q += name`
+                if let Some(a) = u.parent_unparen().filter(|p| p.kind() == "assignment_expression" && p.field("left").map(|l| l.unparen()) == Some(*u)) {
+                    return a.field("right").is_some_and(|v| from_parameter(v, cx, seen));
+                }
+                // `sb.append(name)`, `sb.append("x").append(name)`, `list.add(name)`
+                let mut cur = *u;
+                while let Some(p) = cur.parent().filter(|p| p.kind() == "method_invocation" && p.field("object") == Some(cur)) {
+                    if cx.fm.args_of(p).iter().any(|a| from_parameter(*a, cx, seen)) {
+                        return true;
+                    }
+                    cur = p;
+                }
+                false
+            })
+        }
+    }
+}
+
+enum SqlPart<'t> {
+    Text(String),
+    Dynamic(Node<'t>),
+}
+
+/// The query as literal text and the expressions spliced into it, in order:
+/// concatenations, `String.format` / `formatted` and locals assigned once.
+fn sql_parts<'t>(e: Node<'t>, cx: &Ctx<'_, 't>, depth: u8, out: &mut Vec<SqlPart<'t>>) {
+    let e = e.unparen();
+    if let Some(Constant::Str(s)) = cx.fm.constant_value(e) {
+        out.push(SqlPart::Text(s.to_string()));
+        return;
+    }
+    match e.kind() {
+        "binary_expression" if op(e) == "+" => {
+            if let Some((l, r)) = lr(e) {
+                sql_parts(l, cx, depth, out);
+                sql_parts(r, cx, depth, out);
+                return;
+            }
+        }
+        "method_invocation" => {
+            let args = cx.fm.args_of(e);
+            let format = match cx.fm.call_name(e) {
+                Some("formatted") => e.field("object").map(|o| (o, &args[..])),
+                Some("format") => args.split_first().map(|(f, rest)| (*f, rest)),
+                _ => None,
+            };
+            if let Some((f, rest)) = format {
+                if let Some(Constant::Str(s)) = cx.fm.constant_value(f) {
+                    if format_parts(&s, rest, out) {
+                        return;
+                    }
+                }
+            }
+        }
+        "identifier" if depth < 4 => {
+            if let Some(i) = cx.fm.local_ref(e) {
+                let d = &cx.fm.binder.decls[i];
+                let reassigned = cx.fm.binder.uses[i].iter().any(|u| u.parent_unparen().is_some_and(|p| p.kind() == "assignment_expression" && p.field("left").map(|l| l.unparen()) == Some(*u)));
+                if let (LocalKind::Local, false, Some(v)) = (d.kind, reassigned, d.decl_node.field("value")) {
+                    return sql_parts(v, cx, depth + 1, out);
+                }
+            }
+        }
+        _ => {}
+    }
+    out.push(SqlPart::Dynamic(e));
+}
+
+/// Split a format string at its specifiers; false when one cannot be matched
+/// to an argument.
+fn format_parts<'t>(fmt: &str, args: &[Node<'t>], out: &mut Vec<SqlPart<'t>>) -> bool {
+    let mut parts = Vec::new();
+    let mut text = String::new();
+    let mut next = 0;
+    let mut cs = fmt.chars().peekable();
+    while let Some(c) = cs.next() {
+        if c != '%' {
+            text.push(c);
+            continue;
+        }
+        let mut spec = String::new();
+        // up to the conversion letter
+        while let Some(&k) = cs.peek() {
+            cs.next();
+            spec.push(k);
+            if k.is_ascii_alphabetic() || k == '%' {
+                break;
+            }
+        }
+        match spec.chars().last() {
+            Some('%') => text.push('%'),
+            Some('n') => text.push('\n'),
+            Some(_) => {
+                // `%2$s` names its argument
+                let explicit = spec.split_once('$').and_then(|(n, _)| n.parse::<usize>().ok());
+                let idx = match explicit {
+                    Some(n) => n.wrapping_sub(1),
+                    None => {
+                        next += 1;
+                        next - 1
+                    }
+                };
+                let Some(a) = args.get(idx) else { return false };
+                parts.push(SqlPart::Text(std::mem::take(&mut text)));
+                parts.push(SqlPart::Dynamic(*a));
+            }
+            None => return false,
+        }
+    }
+    parts.push(SqlPart::Text(text));
+    out.extend(parts);
+    true
+}
+
+/// Does the SQL so far end where a table or column name goes: after `from`,
+/// `into`, `update`, `join`, `table`, or after a qualifier (`t.`)?
+fn identifier_position(before: &str) -> bool {
+    if before.ends_with('.') {
+        return true;
+    }
+    let trimmed = before.trim_end();
+    if trimmed.len() == before.len() {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    ["from", "into", "update", "join", "table"].iter().any(|k| lower.strip_suffix(k).is_some_and(|rest| !rest.ends_with(|c: char| c.is_alphanumeric() || c == '_')))
+}
+
 declare_rule!(SqlInjection {
     id: "sql-injection",
     name: "SQL query built from dynamic strings",
@@ -431,9 +603,42 @@ impl Rule for SqlInjection {
             return;
         }
         let Some(q) = cx.fm.args_of(n).first().copied() else { return };
-        if dynamically_built(q, cx) {
-            cx.report(q, "SQL built by string concatenation/formatting; use bind parameters");
+        // only text the caller supplies can inject; identifiers taken from
+        // fields and constants (`"delete from " + table + " where id = ?"`) cannot
+        if !dynamically_built(q, cx) || !from_parameter(q, cx, &mut Vec::new()) {
+            return;
         }
+        let mut parts = Vec::new();
+        sql_parts(q, cx, 0, &mut parts);
+        // DDL takes no bind parameters: `"create index on " + table + " (" + column + ")"`
+        if let Some(SqlPart::Text(head)) = parts.first() {
+            let head = head.trim_start().to_ascii_lowercase();
+            if ["create ", "drop ", "truncate ", "alter "].iter().any(|k| head.starts_with(k)) {
+                return;
+            }
+        }
+        // values are bound and the caller only names a table or column, which
+        // cannot be bound: `"select t." + column + " from " + table + " t where id = ?"`
+        if parts.iter().any(|p| matches!(p, SqlPart::Text(t) if t.contains('?'))) {
+            let mut before = String::new();
+            let mut only_identifiers = true;
+            for p in &parts {
+                match p {
+                    SqlPart::Text(t) => before.push_str(t),
+                    SqlPart::Dynamic(d) => {
+                        if from_parameter(*d, cx, &mut Vec::new()) && !identifier_position(&before) {
+                            only_identifiers = false;
+                            break;
+                        }
+                        before.push('\u{1}');
+                    }
+                }
+            }
+            if only_identifiers {
+                return;
+            }
+        }
+        cx.report(q, "SQL built by string concatenation/formatting; use bind parameters");
     }
 }
 
@@ -456,7 +661,42 @@ impl Rule for CommandInjection {
         if !is_sink {
             return;
         }
-        for a in cx.fm.args_of(n) {
+        let args = cx.fm.args_of(n);
+        // an argument vector: `new ProcessBuilder(a, b)`, `exec(new String[] {a, b})`,
+        // `new ProcessBuilder(List.of(a, b))`
+        let argv: Option<Vec<Node<'t>>> = match args.as_slice() {
+            [_, _, ..] if n.kind() == "object_creation_expression" => Some(args.clone()),
+            [first, ..] => {
+                let first = first.unparen();
+                match first.kind() {
+                    "array_creation_expression" => first.field("value").map(|v| v.kids()),
+                    "method_invocation" if matches!(cx.fm.call_name(first), Some("of" | "asList")) => Some(cx.fm.args_of(first)),
+                    _ => None,
+                }
+            }
+            [] => None,
+        };
+        if let Some(argv) = argv {
+            // each element reaches the program as one argument, whatever it
+            // contains (`"--target=" + dir`); only a shell parses it again
+            // (`"sh", "-c", "cat " + file`)
+            let lit = |a: &Node<'t>| match cx.fm.constant_value(*a) {
+                Some(Constant::Str(s)) => Some(s.to_ascii_lowercase()),
+                _ => None,
+            };
+            let shell = argv.iter().filter_map(lit).any(|c| {
+                let c = c.rsplit(['/', '\\']).next().unwrap_or("");
+                matches!(c.trim_end_matches(".exe"), "sh" | "bash" | "zsh" | "ksh" | "dash" | "cmd" | "powershell" | "pwsh")
+            }) && argv.iter().filter_map(lit).any(|f| matches!(f.as_str(), "-c" | "/c" | "/k" | "-command"));
+            if !shell {
+                return;
+            }
+            if let Some(a) = argv.iter().find(|a| dynamically_built(**a, cx)) {
+                cx.report(*a, "Shell command built by string concatenation; pass arguments separately, without a shell");
+            }
+            return;
+        }
+        for a in args {
             if dynamically_built(a, cx) {
                 cx.report(a, "Command built by string concatenation; pass arguments separately");
                 return;
@@ -514,6 +754,17 @@ impl Rule for CsrfDisabled {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
         let name = cx.fm.call_name(n).unwrap_or("");
+        if !matches!(name, "disable" | "csrf") {
+            return;
+        }
+        // `.sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))`
+        // in the same chain: no cookie session for a forged request to ride
+        if enclosing_method_decl(n).is_some_and(|m| {
+            let body = cx.text(m);
+            body.contains("sessionCreationPolicy") && body.contains("STATELESS")
+        }) {
+            return;
+        }
         if name == "disable" {
             if let Some(o) = n.field("object").map(|o| o.unparen()) {
                 if is_call_named(o, cx.src, &["csrf"]) && cx.fm.args_of(o).is_empty() {
