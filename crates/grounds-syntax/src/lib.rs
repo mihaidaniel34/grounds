@@ -183,11 +183,78 @@ impl ParsedFile {
 }
 
 /// Work around constructs the grammar cannot parse, preserving byte offsets
-/// (node text is read from the original source). Only text blocks need it
-/// with tree-sitter-java-orchard; qualified record patterns, `final` and `_`
-/// in patterns, and annotated varargs parse natively.
+/// (node text is read from the original source). With
+/// tree-sitter-java-orchard: text blocks, and `when` as a variable name;
+/// qualified record patterns, `final` and `_` in patterns, and annotated
+/// varargs parse natively.
 pub fn fixup_for_grammar(text: &str) -> Option<Vec<u8>> {
-    fixup_text_blocks(text, None)
+    let out = fixup_text_blocks(text, None);
+    fixup_when_identifiers(text, out)
+}
+
+/// `when` is a keyword only in a guard (`case String s when s.isEmpty()`);
+/// elsewhere it is an ordinary name, but the grammar rejects it after a type
+/// in some places: `for (Clause when : clauses)`, `for (Node when = first;
+/// ...)`, `o instanceof WhenNode when` (jruby, jsqlparser, h2). In the parse
+/// copy, a `when` outside a case label becomes `whEn`. Calls (`when(...)`,
+/// Mockito) parse already and are left alone.
+fn fixup_when_identifiers(text: &str, mut out: Option<Vec<u8>>) -> Option<Vec<u8>> {
+    if !text.contains("when") {
+        return out;
+    }
+    let b = text.as_bytes();
+    let n = b.len();
+    let code = code_mask(b);
+    let word = |c: u8| c.is_ascii_alphanumeric() || c == b'_' || c == b'$' || c >= 0x80;
+    // between `case` and the end of its label (`:` or `->`), where a `when`
+    // right after a pattern (a binding name or the `)` of a record pattern)
+    // starts a guard
+    let mut in_case_label = false;
+    let mut after_pattern = false;
+    let mut i = 0;
+    while i < n {
+        if !code[i] || b[i].is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        let c = b[i];
+        if word(c) {
+            let start = i;
+            while i < n && code[i] && word(b[i]) {
+                i += 1;
+            }
+            let w = &b[start..i];
+            let guard = in_case_label && after_pattern && w == b"when";
+            after_pattern = w != b"case";
+            match w {
+                b"case" => in_case_label = true,
+                b"when" if guard => {
+                    in_case_label = false;
+                    after_pattern = false;
+                }
+                b"when" => {
+                    let mut j = i;
+                    while j < n && b[j].is_ascii_whitespace() {
+                        j += 1;
+                    }
+                    if b.get(j) != Some(&b'(') {
+                        out.get_or_insert_with(|| b.to_vec())[start + 2] = b'E';
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
+        after_pattern = c == b')';
+        match c {
+            b';' | b'{' | b'}' => in_case_label = false,
+            b':' if b.get(i + 1) != Some(&b':') && (i == 0 || b[i - 1] != b':') => in_case_label = false,
+            b'-' if b.get(i + 1) == Some(&b'>') => in_case_label = false,
+            _ => {}
+        }
+        i += 1;
+    }
+    out
 }
 
 /// tree-sitter-java lexes `//` inside a text block as a comment start
@@ -654,6 +721,63 @@ mod tests {
         assert!(!field.has_modifier("public"));
         let lit = f.root().descendants().find(|n| n.kind() == "string_literal").unwrap();
         assert_eq!(string_literal_value(lit, &f.text).unwrap(), "a\tb");
+    }
+}
+
+#[cfg(test)]
+mod when_tests {
+    use super::*;
+
+    fn errors(src: &str) -> usize {
+        ParsedFile::parse(src).syntax_errors().len()
+    }
+
+    #[test]
+    fn when_as_a_name_parses() {
+        // each of these failed to parse (jsqlparser, h2, jruby)
+        for src in [
+            "class T { void f(java.util.List<W> l) { for (W when : l) {} } }",
+            "class T { void f(java.util.List<String> l) { for (var when : l) {} } }",
+            "class T { void f() { for (SimpleWhen when = first; when != null; when = when.next) {} } }",
+            "class T { void f(Object o) { if (o instanceof String when) {} } }",
+            "class T { Object f(Object o) { return o instanceof WhenNode when ? when.x() : null; } }",
+        ] {
+            assert_eq!(errors(src), 0, "{src}");
+            let pf = ParsedFile::parse(src);
+            // names keep their real text
+            assert!(pf.root().descendants().any(|n| n.kind() == "identifier" && pf.text_of(n) == "when"), "{src}");
+        }
+    }
+
+    #[test]
+    fn guards_and_calls_are_left_alone() {
+        for src in [
+            "class T { void f(Object o) { switch (o) { case String s when s.isEmpty() -> {} default -> {} } } }",
+            "class T { int f(Object o) { return switch (o) { case Point(int x, int y) when x > y -> 1; case String s when s.length() > 2 && s.contains(\"when\") -> 2; default -> 3; }; } }",
+            "class T { void f(Object o) { switch (o) { case String s when (s.isEmpty()): break; default: } } }",
+            "class T { void f() { when(m.get()).thenReturn(1); } }",
+        ] {
+            assert_eq!(errors(src), 0, "{src}");
+            let pf = ParsedFile::parse(src);
+            let guards = pf.root().descendants().filter(|n| n.kind() == "guard").count();
+            assert_eq!(guards, src.matches(" when ").count(), "{src}");
+        }
+        assert!(fixup_for_grammar("class T { void f() { when(x); } }").is_none());
+        // a `when` in a string or comment is not touched
+        assert!(fixup_for_grammar("class T { String s = \"a when\"; // when\n }").is_none());
+    }
+
+    #[test]
+    fn a_type_named_when_in_a_case_label_is_a_name() {
+        let src = "class T { int f(Object o) { return switch (o) { case when<T>(Object w) when w != null -> 1; case when w -> 2; default -> 3; }; } }";
+        let pf = ParsedFile::parse(src);
+        assert_eq!(pf.root().descendants().filter(|n| n.kind() == "guard").count(), 1, "{}", pf.root().to_sexp());
+    }
+
+    #[test]
+    fn a_name_when_inside_a_guard_is_a_name() {
+        let src = "class T { void f(Object o, boolean when) { switch (o) { case String s when when -> {} default -> {} } } }";
+        assert_eq!(errors(src), 0);
     }
 }
 
