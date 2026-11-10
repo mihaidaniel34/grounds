@@ -1556,6 +1556,28 @@ impl<'a> Builder<'a> {
         if roots.is_empty() {
             return Vec::new();
         }
+        // module dependencies the sources show: a main-source file naming,
+        // in an import, a class declared once in another module's main sources
+        let mut deps: FxHashMap<String, rustc_hash::FxHashSet<String>> = FxHashMap::default();
+        for (path, stub) in self.index.files() {
+            if is_test_path(path) {
+                continue;
+            }
+            let from = module_of(path);
+            for imp in stub.imports.iter().filter(|i| !i.on_demand) {
+                let owner = if imp.is_static { imp.path.rsplit_once('.').map(|(o, _)| o).unwrap_or("") } else { &imp.path };
+                let Some(bn) = self.index.binary_name_for_dotted(owner) else { continue };
+                if self.index.is_duplicated(&bn) {
+                    continue;
+                }
+                if let Some(f) = self.index.source_file_of(&bn).filter(|f| !is_test_path(f)) {
+                    let to = module_of(f);
+                    if to != from {
+                        deps.entry(from.to_string()).or_default().insert(to.to_string());
+                    }
+                }
+            }
+        }
         // the components a scan may register: (class, bean framework, module, in tests)
         let components: Vec<(Name, usize)> = {
             let mut v: Vec<(Name, usize)> = self.model.component_classes.iter().map(|(k, &i)| (k.clone(), i)).collect();
@@ -1566,6 +1588,13 @@ impl<'a> Builder<'a> {
         for root in roots {
             let Some(rf) = self.index.source_file_of(&root).cloned() else { continue };
             let root_module = module_of(&rf).to_string();
+            let mut visible: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
+            let mut stack = vec![root_module.clone()];
+            while let Some(m) = stack.pop() {
+                if visible.insert(m.clone()) {
+                    stack.extend(deps.get(&m).into_iter().flatten().cloned());
+                }
+            }
             let mut ctx = AppContext { root: root.clone(), ..Default::default() };
             ctx.members.insert(root.clone());
             let mut scans: Vec<(String, bool)> = Vec::new();
@@ -1598,7 +1627,7 @@ impl<'a> Builder<'a> {
                     let Some(file) = b.file.as_deref() else { continue };
                     let module = module_of(file);
                     let test = is_test_path(file);
-                    if test && module != root_module {
+                    if (test && module != root_module) || !visible.contains(module) {
                         continue;
                     }
                     // what Spring's scanner registers: Spring stereotypes and
@@ -2241,10 +2270,42 @@ mod tests {
             ("lib/src/main/java/demo/Config.java", "package demo; @org.springframework.context.annotation.ComponentScan(\"demo\") class Config {}"),
             ("lib/src/main/java/demo/Uses.java", "package demo; interface Supplied {} @org.springframework.stereotype.Service class Uses { Uses(Supplied s) {} }"),
             // a library the application scans is judged
-            ("core/src/main/java/other/core/Svc.java", "package other.core; interface Missing {} @org.springframework.stereotype.Service class Svc { Svc(Missing m) {} }"),
+            ("core/src/main/java/other/core/Svc.java", "package other.core; interface Missing {} @org.springframework.stereotype.Service public class Svc { Svc(Missing m) {} }"),
+            ("app/src/main/java/other/Uses.java", "package other; import other.core.Svc; @org.springframework.stereotype.Service class Uses { Uses(Svc svc) {} }"),
         ]);
         assert_eq!(resolution_of(&idx, &m, "lib/src/main/java/demo/Uses.java", "s"), Resolution::Unknown);
         assert_eq!(resolution_of(&idx, &m, "core/src/main/java/other/core/Svc.java", "m"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn a_scan_root_reaches_only_modules_its_application_depends_on() {
+        // one module's application scans a package other, independent modules
+        // share: what they hold is not in its context
+        let app = ("app/src/main/java/com/x/App.java", "package com.x; @org.springframework.boot.autoconfigure.SpringBootApplication public class App { public static void main(String[] args) {} }");
+        let lib = [
+            ("lib/src/main/java/com/x/lib/GreetingService.java", "package com.x.lib; @org.springframework.stereotype.Component public class GreetingService { @org.springframework.beans.factory.annotation.Autowired private Translator translator; }"),
+            ("lib/src/main/java/com/x/lib/Translator.java", "package com.x.lib; public interface Translator { String translate(String s); }"),
+            // a test's scan is not an application's
+            ("lib/src/test/java/com/x/lib/TestConfig.java", "package com.x.lib; import org.springframework.context.annotation.*;
+             @Configuration @ComponentScan(\"com.x.lib\") class TestConfig { @Bean Translator translator() { return null; } }"),
+        ];
+        let (idx, m) = model(&[app, lib[0], lib[1], lib[2]]);
+        assert_eq!(resolution_of(&idx, &m, "lib/src/main/java/com/x/lib/GreetingService.java", "translator"), Resolution::Unknown);
+        // two modules' components of the same name, scanned by one root
+        // package: only the application's own module is in its context
+        let other = ("other/src/main/java/com/x/web/Controller.java", "package com.x.web; @org.springframework.stereotype.Controller public class Controller {}");
+        let own = ("app/src/main/java/com/x/api/Controller.java", "package com.x.api; @org.springframework.stereotype.Controller public class Controller {}");
+        let (_, m) = model(&[app, own, other]);
+        assert!(m.name_conflicts().is_empty());
+        // an application naming a class of the module depends on it (also
+        // through a module in between): the module is judged
+        let uses = ("app/src/main/java/com/x/Uses.java", "package com.x; import com.x.mid.Mid; @org.springframework.stereotype.Service class Uses { Uses(Mid mid) {} }");
+        let mid = ("mid/src/main/java/com/x/mid/Mid.java", "package com.x.mid; import com.x.lib.Translator; @org.springframework.stereotype.Service public class Mid {}");
+        let (idx, m) = model(&[app, uses, mid, lib[0], lib[1]]);
+        assert_eq!(resolution_of(&idx, &m, "lib/src/main/java/com/x/lib/GreetingService.java", "translator"), Resolution::NotFound);
+        let uses_web = ("app/src/main/java/com/x/Uses.java", "package com.x; import com.x.web.Controller; class Uses {}");
+        let (_, m) = model(&[app, own, other, uses_web]);
+        assert_eq!(m.name_conflicts().len(), 1);
     }
 
     #[test]
@@ -2254,7 +2315,8 @@ mod tests {
         // beans the plugin's consumers provide
         let files = [
             ("org/springframework/boot/autoconfigure/AutoConfiguration.java", "package org.springframework.boot.autoconfigure; @org.springframework.context.annotation.Configuration public @interface AutoConfiguration {}"),
-            ("shop/src/main/java/com/example/shop/App.java", "package com.example.shop; @org.springframework.boot.autoconfigure.SpringBootApplication public class App { public static void main(String[] args) {} }"),
+            // (the application names a class of the plugin: it depends on it)
+            ("shop/src/main/java/com/example/shop/App.java", "package com.example.shop; import com.example.shop.plugin.Extension; @org.springframework.boot.autoconfigure.SpringBootApplication public class App { public static void main(String[] args) {} }"),
             ("shop/plugins/core/src/main/java/com/example/shop/plugin/Extension.java", "package com.example.shop.plugin; public interface Extension<T> {}"),
             (
                 "shop/plugins/core/src/main/java/com/example/shop/plugin/PluginAutoConfiguration.java",
