@@ -163,7 +163,23 @@ enum Cmd {
     },
 }
 
+/// Stack of the thread running a command and of the rayon workers. Syntax
+/// trees are walked recursively (binder, typing, rules), and generated or
+/// half-edited files can nest thousands of levels deep: a 2,000-term string
+/// concatenation overflowed rayon's default 2 MiB. Only the pages used are
+/// committed, so a large reservation costs nothing on ordinary files.
+const STACK_SIZE: usize = 256 << 20;
+
 fn main() -> anyhow::Result<()> {
+    let _ = rayon::ThreadPoolBuilder::new().stack_size(STACK_SIZE).build_global();
+    match std::thread::Builder::new().name("main".into()).stack_size(STACK_SIZE).spawn(run) {
+        Ok(t) => t.join().unwrap_or_else(|e| std::panic::resume_unwind(e)),
+        // no thread with such a stack (an address space limit): run here
+        Err(_) => run(),
+    }
+}
+
+fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let style = grounds_engine::report::Style::detect(&cli.color);
     match cli.cmd {

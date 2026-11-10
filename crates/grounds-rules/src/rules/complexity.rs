@@ -170,12 +170,27 @@ impl Rule for DeepNesting {
             return;
         }
         let max = cx.option_usize("max", 4);
-        let depth = n
+        // each ancestor with its parent (the next one), and no further than
+        // needed: `parent()` costs the depth of the tree, so calling it on
+        // every ancestor of every statement made nesting 900 deep take 30 s
+        let mut ancestors = n
             .ancestors()
             .take_while(|a| !matches!(a.kind(), "method_declaration" | "constructor_declaration" | "lambda_expression" | "class_body"))
-            .filter(|a| matches!(a.kind(), "if_statement" | "for_statement" | "enhanced_for_statement" | "while_statement" | "do_statement" | "switch_expression" | "try_statement"))
-            .filter(|a| !(a.kind() == "if_statement" && a.parent().is_some_and(|p| p.kind() == "if_statement" && p.field("alternative") == Some(*a))))
-            .count();
+            .peekable();
+        let mut depth = 0;
+        while let Some(a) = ancestors.next() {
+            if !matches!(a.kind(), "if_statement" | "for_statement" | "enhanced_for_statement" | "while_statement" | "do_statement" | "switch_expression" | "try_statement") {
+                continue;
+            }
+            // `else if` does not nest (the parent is never cut off by take_while)
+            let else_if = a.kind() == "if_statement" && ancestors.peek().is_some_and(|p| p.kind() == "if_statement" && p.field("alternative") == Some(a));
+            if !else_if {
+                depth += 1;
+                if depth > max {
+                    return;
+                }
+            }
+        }
         if depth == max {
             cx.report(n.child(0).unwrap_or(n), format!("Nesting depth exceeds {max}; extract a method or return early"));
         }

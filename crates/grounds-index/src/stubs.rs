@@ -292,6 +292,12 @@ pub fn extract_with(file: &ParsedFile, lombok: &crate::lombok::LombokConfig) -> 
     let src = &*file.text;
     let root = file.root();
     let mut stub = FileStub { package: Arc::from(""), has_syntax_errors: file.has_errors(), ..Default::default() };
+    if file.too_deep() {
+        // see `MAX_ANALYZED_DEPTH`: declares nothing, like a file that does not parse
+        stub.has_syntax_errors = true;
+        stub.signature_hash = signature_hash(&stub);
+        return stub;
+    }
     let mut imports: Vec<Import> = Vec::new();
     let mut module_imports: Vec<Import> = Vec::new();
     for ch in root.kids() {
