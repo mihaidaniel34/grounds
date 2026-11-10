@@ -239,3 +239,99 @@ fn inherited_harness_of_test_only_module_asserts() {
     let found = findings(&dir, &["test-without-assertion"]);
     assert!(found.is_empty(), "{found:?}");
 }
+
+#[test]
+fn java_files_under_resources_are_data() {
+    // a test copies a whole fixture project out of src/test/resources; its
+    // stub of a library class (whose jar is missing here) must not stand in
+    // for that class in the build, nor be analyzed itself
+    let dir = project(
+        "resources",
+        &[
+            ("core/pom.xml", "<project/>\n"),
+            ("core/src/main/java/app/Reader.java", "package app;\nimport org.acme.xml.Dom;\nclass Reader {\n    String m(Dom d) { return d.getChild(\"a\").getValue() + d.getAttribute(\"b\"); }\n    void broken(Reader r) { r.missing(); }\n}\n"),
+            ("core/src/test/java/app/ReaderTest.java", "package app;\nimport org.acme.xml.Dom;\nclass ReaderTest {\n    void t(Dom d) { d.addChild(new Dom(\"x\", \"y\")); }\n}\n"),
+            ("core/src/test/resources/fixture-1/pom.xml", "<project/>\n"),
+            ("core/src/test/resources/fixture-1/src/main/java/org/acme/xml/Dom.java", "package org.acme.xml;\npublic class Dom {\n    public Dom(String name) {}\n    public String getName() { return \"\"; }\n}\n"),
+            ("core/src/test/resources/fixture-1/src/main/java/org/acme/Uses.java", "package org.acme;\nclass Uses {\n    void m(org.acme.xml.Dom d) { d.nope(); }\n}\n"),
+            ("core/src/main/resources/templates/Tpl.java", "package tpl;\nclass Tpl {\n    void m(Tpl t) { t.nope(); }\n}\n"),
+        ],
+    );
+    let project = Project::load(&dir).unwrap();
+    let files: Vec<_> = project.workspace.files.iter().map(|f| f.path.strip_prefix(&project.workspace.root).unwrap().to_string_lossy().to_string()).collect();
+    assert_eq!(files, ["core/src/main/java/app/Reader.java", "core/src/test/java/app/ReaderTest.java"]);
+    assert!(!project.index.is_source_class("org.acme.xml.Dom"));
+    let found = findings(&dir, COMPILE);
+    assert_eq!(found, ["core/src/main/java/app/Reader.java:5 unresolved-method"]);
+}
+
+#[test]
+fn a_class_declared_in_several_modules_is_read_from_the_copy_the_file_sees() {
+    // `p.BaseTest` and `p.Component` exist in modules a and b with different
+    // members; module c has neither and sees one of them through a module
+    // dependency grounds does not know
+    let dir = project(
+        "duplicates",
+        &[
+            ("a/pom.xml", "<project/>\n"),
+            ("b/pom.xml", "<project/>\n"),
+            ("c/pom.xml", "<project/>\n"),
+            ("a/src/test/java/p/BaseTest.java", "package p;\npublic abstract class BaseTest {\n    protected String fromA() { return \"\"; }\n}\n"),
+            ("b/src/test/java/p/BaseTest.java", "package p;\npublic abstract class BaseTest {\n    protected String fromB() { return \"\"; }\n    protected Object request() { return null; }\n}\n"),
+            ("a/src/main/java/p/Component.java", "package p;\npublic interface Component {\n    void run();\n}\n"),
+            ("b/src/main/java/p/Component.java", "package p;\npublic interface Component {\n    void start();\n}\n"),
+            ("a/src/test/java/p/ATest.java", "package p;\nclass ATest extends BaseTest {\n    void t() { fromA(); fromB(); }\n}\n"),
+            ("b/src/test/java/p/BTest.java", "package p;\nclass BTest extends BaseTest {\n    void t() { fromB(); request(); fromA(); }\n}\n"),
+            ("b/src/test/java/p/Impl.java", "package p;\nclass Impl implements Component {\n    public void start() {}\n}\n"),
+            ("b/src/main/java/p/Started.java", "package p;\nclass Started implements Component {\n    @Override\n    public void start() {}\n    @Override\n    public void stop() {}\n}\n"),
+            ("c/src/test/java/p/CTest.java", "package p;\nclass CTest extends BaseTest {\n    void t() { fromA(); fromB(); nowhere(); }\n}\n"),
+            ("c/src/main/java/p/CImpl.java", "package p;\nclass CImpl implements Component {\n    public void start() {}\n}\n"),
+        ],
+    );
+    let mut found = findings(&dir, COMPILE);
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            "a/src/test/java/p/ATest.java:3 unresolved-method",
+            "b/src/main/java/p/Started.java:6 override-matches-nothing",
+            "b/src/test/java/p/BTest.java:3 unresolved-method",
+        ]
+    );
+}
+
+#[test]
+fn files_that_do_not_parse_as_java_ground_no_compile_break_report() {
+    // a Velocity template named .java, whose directives hide half of its
+    // members from the parser, and a class in a file with a syntax error
+    let template = "package ${package};\n\npublic class Location {\n    private final int line;\n#if ( $tracked )\n    private final String modelId;\n#end\n\n    public Location(int line, String modelId) {\n        this.line = line;\n#if ( $tracked )\n        this.modelId = modelId;\n#end\n    }\n\n    public int getLine() {\n        return line;\n    }\n\n#if ( $tracked )\n    public String getModelId() {\n        return modelId;\n    }\n#end\n\n    public String toString() {\n#if ( $tracked )\n        return getModelId() + \":\" + getLine();\n#else\n        return String.valueOf(getLine());\n#end\n    }\n}\n";
+    let dir = project(
+        "templates",
+        &[
+            ("src/mdo/java/Location.java", template),
+            ("src/main/java/app/Half.java", "package app;\npublic class Half {\n    public int one() { return 1 }\n    public int two() { return 2; }\n}\n"),
+            ("src/main/java/app/Uses.java", "package app;\nclass Uses {\n    int m(Half h) { return h.one() + h.two() + h.three(); }\n    void broken(Uses u) { u.missing(); }\n}\n"),
+        ],
+    );
+    let found = findings(&dir, COMPILE);
+    assert_eq!(found, ["src/main/java/app/Uses.java:4 unresolved-method"]);
+}
+
+#[test]
+fn a_resources_file_checked_by_name_is_not_analyzed() {
+    let dir = project(
+        "resources-by-name",
+        &[
+            ("src/main/java/p/Real.java", "package p;\npublic class Real {\n    public void a() {}\n}\n"),
+            ("src/test/resources/fixture/src/main/java/p/Uses.java", "package p;\nclass Uses {\n    void m(Real r) { r.b(); }\n}\n"),
+        ],
+    );
+    let mut project = Project::load(&dir).unwrap();
+    project.config.rules.enable = COMPILE.iter().map(|s| s.to_string()).collect();
+    let (set, options) = build_ruleset(&project);
+    let file = project.workspace.root.join("src/test/resources/fixture/src/main/java/p/Uses.java");
+    let text = std::fs::read_to_string(&file).unwrap();
+    let found = grounds_engine::analyze::analyze_text(&project, &set, &options, &file, &text);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(found.is_empty(), "{:?}", found.iter().map(|f| &f.message).collect::<Vec<_>>());
+}

@@ -17,9 +17,32 @@ pub fn rules() -> Vec<Box<dyn Rule>> {
 /// A project class whose full hierarchy is known and that no processor other
 /// than our Lombok model adds members to.
 fn closed_class<'t>(cx: &Ctx<'_, 't>, name: &str) -> Option<std::sync::Arc<ClassInfo>> {
-    let c = cx.fm.class(name)?;
-    if !c.is_source() || !cx.fm.hierarchy_complete(name) || cx.fm.index.is_duplicated(name) {
+    // a file that does not parse as Java (a template, a file mid-edit) is no
+    // ground for a claim that code does not compile
+    if cx.fm.file.has_errors() {
         return None;
+    }
+    let c = cx.fm.class(name)?;
+    if !c.is_source() || !cx.fm.hierarchy_complete(name) {
+        return None;
+    }
+    // every project class of the hierarchy must be read from a file that
+    // parses, and from the copy this file compiles against when its name is
+    // declared more than once (the build's module dependencies are not known)
+    let supertypes = cx.fm.all_supertypes(&c.this_type());
+    // the walk stops past 200 classes: what it did not see is unknown
+    if supertypes.len() > 200 {
+        return None;
+    }
+    for t in supertypes {
+        let Some(n) = t.class_name() else { return None };
+        if !cx.fm.copy_is_certain(n) {
+            return None;
+        }
+        let file = cx.fm.class(n).and_then(|k| k.source_file().map(|f| f.to_string()));
+        if file.is_some_and(|f| cx.fm.index.file(&f).is_some_and(|s| s.has_syntax_errors)) {
+            return None;
+        }
     }
     // Lombok @Delegate / @ExtensionMethod add members we do not model
     let file = c.source_file()?;
@@ -389,6 +412,10 @@ declare_rule!(IncompatibleAssignment {
 impl Rule for IncompatibleAssignment {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
+        // a file that does not parse is no ground for a compile-break claim
+        if cx.fm.file.has_errors() {
+            return;
+        }
         // (declared type, value)
         let (target, value) = if n.kind() == "variable_declarator" {
             let Some(v) = n.field("value") else { return };
@@ -456,7 +483,12 @@ impl Rule for IncompatibleAssignment {
             return;
         }
         // both hierarchies fully known: an unknown supertype could connect them
-        let known = |n: &str| cx.fm.class(n).is_some() && cx.fm.hierarchy_complete(n) && !cx.fm.index.is_duplicated(n);
+        // ...and read from files that parse (a broken stub may miss a supertype or overload)
+        let parses = |n: &str| cx.fm.class(n).and_then(|k| k.source_file().map(|f| f.to_string())).is_none_or(|f| !cx.fm.index.file(&f).is_some_and(|s| s.has_syntax_errors));
+        let known = |n: &str| cx.fm.class(n).is_some() && cx.fm.hierarchy_complete(n) && !cx.fm.index.is_duplicated(n) && parses(n);
+        if !parses(&c.owner) {
+            return;
+        }
         if !known(got) || !known(want) {
             return;
         }

@@ -117,6 +117,10 @@ fn severity_override(project: &Project, rule: &str, sev: Severity) -> Severity {
 
 /// Analyze one file whose current text is `text`.
 pub fn analyze_text(project: &Project, rules: &RuleSet, options: &RuleOptions, path: &Path, text: &str) -> Vec<Finding> {
+    // fixtures under src/*/resources are data, also when checked by name
+    if crate::workspace::is_resource(path.strip_prefix(&project.workspace.root).unwrap_or(path)) {
+        return Vec::new();
+    }
     let pf = ParsedFile::parse(text);
     let key = path_key(path);
     let fm = FileModel::new(&pf, &project.index, key.clone());

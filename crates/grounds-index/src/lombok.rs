@@ -106,6 +106,22 @@ fn has_method(c: &RawClass, name: &str, arity: usize) -> bool {
     c.methods.iter().any(|m| &*m.name == name && m.params.len() == arity)
 }
 
+// a parameter type as far as signatures clash: its name as written, without
+// type arguments, and array dimensions. Two spellings of one class (`Widget`,
+// `a.Widget`) count as different: the extra overload this models can only
+// make a call ambiguous, never unresolved.
+fn erased(t: &TypeSyntax) -> (Option<String>, usize) {
+    match t {
+        TypeSyntax::Array(e) => {
+            let (n, d) = erased(e);
+            (n, d + 1)
+        }
+        TypeSyntax::Prim(p) => (Some(p.keyword().to_string()), 0),
+        TypeSyntax::Named(segs) => (Some(segs.iter().map(|s| &*s.0).collect::<Vec<_>>().join(".")), 0),
+        _ => (None, 0),
+    }
+}
+
 fn self_type(c: &RawClass) -> TypeSyntax {
     let args = c.type_params.iter().map(|t| TypeSyntax::simple(&t.name)).collect();
     TypeSyntax::Named(vec![(Arc::from(c.simple_name()), args)])
@@ -353,8 +369,12 @@ fn apply_one(c: &mut RawClass, imported: bool, cfg: &LombokConfig) -> Vec<RawCla
     if let Some(a) = has("Data") {
         factories.extend(static_name(a, "staticConstructor").map(|n| (n, required.clone())));
     }
+    // the factory is generated whatever methods of that name exist: a
+    // hand-written `of(...)` is an overload unless it takes the same
+    // parameter types (which would not compile)
     for (name, fs) in &factories {
-        if !has_method(c, name, fs.len()) {
+        let same = |m: &RawMethod| &*m.name == name.as_str() && m.params.len() == fs.len() && m.params.iter().zip(fs.iter()).all(|(p, f)| erased(&p.ty) == erased(&f.ty));
+        if !c.methods.iter().any(same) {
             let ps: Vec<RawParam> = fs.iter().map(|f| param(&f.name, f.ty.clone())).collect();
             c.methods.push(gen_method(name, Flags::PUBLIC | Flags::STATIC, ps, self_type(c), range));
         }
