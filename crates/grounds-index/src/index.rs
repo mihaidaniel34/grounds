@@ -58,6 +58,9 @@ pub struct Classpath {
     /// Whether the JDK home has `lib/ct.sym`, which only a full JDK has: a
     /// runtime image cut down by jlink lacks modules, and their packages.
     jdk_full: bool,
+    /// Directory entries too large to be directories of classes
+    /// (`grounds_classfile::DIR_LIMIT`); nothing was read from them.
+    pub oversized: Vec<std::path::PathBuf>,
 }
 
 impl std::fmt::Debug for Classpath {
@@ -68,18 +71,25 @@ impl std::fmt::Debug for Classpath {
 
 impl Classpath {
     pub fn empty() -> Classpath {
-        Classpath { containers: Vec::new(), names: FxHashMap::default(), packages: FxHashSet::default(), cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false }
+        Classpath { containers: Vec::new(), names: FxHashMap::default(), packages: FxHashSet::default(), cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false, oversized: Vec::new() }
     }
 
     /// Build from containers in priority order (first definition wins).
     pub fn from_containers(containers: Vec<ClassContainer>) -> Classpath {
-        let lists: Vec<Vec<String>> = {
+        let lists: Vec<Option<Vec<String>>> = {
             use rayon::prelude::*;
-            containers.par_iter().map(|c| c.class_names()).collect()
+            containers.par_iter().map(|c| c.class_names_within(grounds_classfile::DIR_LIMIT)).collect()
         };
         let mut names = FxHashMap::default();
         let mut packages = FxHashSet::default();
+        let mut oversized = Vec::new();
         for (i, list) in lists.into_iter().enumerate() {
+            let Some(list) = list else {
+                if let ClassContainer::Dir(d) = &containers[i] {
+                    oversized.push(d.clone());
+                }
+                continue;
+            };
             for n in list {
                 let b = binary::internal_to_binary(&n);
                 if let Some(pos) = b.rfind('.') {
@@ -99,7 +109,7 @@ impl Classpath {
                 names.entry(Arc::from(b.as_str())).or_insert(i as u32);
             }
         }
-        Classpath { containers, names, packages, cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false }
+        Classpath { containers, names, packages, cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false, oversized }
     }
 
     /// JDK classes for a release (see `ClassContainer::open_jdk`), followed by the given jars/dirs.

@@ -32,6 +32,12 @@ impl std::fmt::Debug for ClassContainer {
     }
 }
 
+/// Files and directories a directory of classes may hold. More than this and
+/// the entry is something else (`/`, a home directory, a jar cache): listing
+/// it takes minutes and finds no packages. It is then not read at all, since
+/// the part listed before the limit would depend on the file system's order.
+pub const DIR_LIMIT: usize = 200_000;
+
 /// Release character used by ct.sym directory names: 8, 9, A=10, B=11, ...
 pub fn ct_sym_release_char(release: u32) -> char {
     match release {
@@ -97,10 +103,16 @@ impl ClassContainer {
     }
 
     /// All internal class names in this container (excluding module-info and
-    /// package-info).
+    /// package-info). A directory over [`DIR_LIMIT`] has none.
     pub fn class_names(&self) -> Vec<String> {
+        self.class_names_within(DIR_LIMIT).unwrap_or_default()
+    }
+
+    /// As [`ClassContainer::class_names`]; None for a directory with more
+    /// than `limit` files and directories below it.
+    pub fn class_names_within(&self, limit: usize) -> Option<Vec<String>> {
         let keep = |n: &str| !n.ends_with("module-info") && !n.ends_with("package-info");
-        match self {
+        Some(match self {
             ClassContainer::Jar(z) => z
                 .entries()
                 .iter()
@@ -121,19 +133,24 @@ impl ClassContainer {
                 let mut real = vec![root.clone()];
                 let mut linked: Vec<PathBuf> = Vec::new();
                 let mut visited = std::collections::HashSet::new();
+                let mut seen = 0usize;
                 while let Some(d) = real.pop().or_else(|| linked.pop()) {
                     if !visited.insert(d.canonicalize().unwrap_or_else(|_| d.clone())) {
                         continue;
                     }
                     let Ok(rd) = std::fs::read_dir(&d) else { continue };
                     for e in rd.flatten() {
+                        seen += 1;
+                        if seen > limit {
+                            return None;
+                        }
                         let p = e.path();
-                        if p.is_dir() {
-                            if e.file_type().is_ok_and(|t| t.is_symlink()) {
-                                linked.push(p);
-                            } else {
-                                real.push(p);
-                            }
+                        // the entry's own type costs no call; only a link is followed
+                        let Ok(kind) = e.file_type() else { continue };
+                        if kind.is_dir() {
+                            real.push(p);
+                        } else if kind.is_symlink() && p.is_dir() {
+                            linked.push(p);
                         } else if p.extension().is_some_and(|x| x == "class") {
                             if let Ok(rel) = p.strip_prefix(root) {
                                 let s = rel.with_extension("").to_string_lossy().replace('\\', "/");
@@ -146,7 +163,7 @@ impl ClassContainer {
                 }
                 out
             }
-        }
+        })
     }
 
     pub fn read_class_bytes(&self, internal_name: &str) -> Option<Vec<u8>> {
@@ -265,6 +282,24 @@ mod tests {
         }
         let names = super::ClassContainer::open_dir(&dir).class_names();
         assert_eq!(names, vec!["p/A".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_directory_over_the_limit_is_not_listed() {
+        // found by scripts/fuzz_robust.py: `[classpath] entries = ["/"]` listed the whole file system
+        let dir = std::env::temp_dir().join(format!("grounds-classdir-limit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("p/q")).unwrap();
+        for f in ["p/A.class", "p/B.class", "p/q/C.class", "p/notes.txt"] {
+            std::fs::write(dir.join(f), b"").unwrap();
+        }
+        let c = super::ClassContainer::open_dir(&dir);
+        // p, q and four files
+        let mut names = c.class_names_within(6).unwrap();
+        names.sort();
+        assert_eq!(names, vec!["p/A".to_string(), "p/B".to_string(), "p/q/C".to_string()]);
+        assert_eq!(c.class_names_within(5), None);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
