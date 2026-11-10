@@ -594,12 +594,16 @@ impl<'a> Builder<'a> {
             for m in c.annotations.iter() {
                 if !m.name.starts_with("java.lang.annotation.") && seen.insert(m.name.clone()) {
                     let mut m = m.clone();
-                    for el in &c.methods {
+                    // (Spring does not apply @AliasFor to @Qualifier's value)
+                    let qualifier = m.is("org.springframework.beans.factory.annotation.Qualifier");
+                    for el in c.methods.iter().filter(|_| !qualifier) {
                         let Some(alias) = el.annotations.iter().find(|x| x.simple_name() == "AliasFor") else { continue };
                         let targets = matches!(alias.arg("annotation"), Some(AnnotationValue::Class(t)) if t.class_name().is_some_and(|n| n == &*m.name || simple_name_of(n) == m.simple_name()));
                         let Some(v) = a.arg(&el.name).filter(|_| targets) else { continue };
                         let attribute = first_string(alias, &["attribute"]).unwrap_or_else(|| el.name.to_string());
-                        m.args.retain(|(k, _)| **k != *attribute);
+                        // (@Bean's name and value are aliases of each other: one attribute)
+                        let bean_name = m.simple_name() == "Bean" && matches!(attribute.as_str(), "name" | "value");
+                        m.args.retain(|(k, _)| **k != *attribute && !(bean_name && matches!(&**k, "name" | "value")));
                         m.args.push((Arc::from(attribute.as_str()), v.clone()));
                     }
                     out.push(m);
@@ -2951,5 +2955,34 @@ mod tests {
             let default = m.beans.iter().find(|b| b.declaring_class.ends_with("DefaultPort")).unwrap();
             assert!(!default.autowire_candidate, "{swap}");
         }
+    }
+
+    #[test]
+    fn an_alias_override_replaces_the_bean_name_group_and_leaves_qualifiers() {
+        // Bean.name and Bean.value are one attribute: overriding one through
+        // @AliasFor replaces a value carried in the other
+        let (_, m) = model(&[
+            ("src/main/java/app/Exported.java", "package app; import org.springframework.core.annotation.AliasFor; import org.springframework.context.annotation.Bean;
+             @Bean(name = \"old\") public @interface Exported { @AliasFor(annotation = Bean.class, attribute = \"value\") String[] value() default {}; }"),
+            ("src/main/java/app/A.java", "package app; import org.springframework.context.annotation.*;
+             interface Pipe {} interface Hose {}
+             @Configuration class Parts { @Exported(\"one\") Pipe pipe() { return null; } @Exported(\"two\") Hose hose() { return null; } }
+             @org.springframework.boot.autoconfigure.SpringBootApplication class App {}"),
+        ]);
+        let names: Vec<&str> = m.beans.iter().filter(|b| matches!(b.source, BeanSource::FactoryMethod(_))).map(|b| b.name.as_str()).collect();
+        assert_eq!(names, ["one", "two"]);
+        assert!(m.name_conflicts().is_empty());
+        // Spring does not support @AliasFor on @Qualifier's value: the carried value stays
+        let (idx, m) = model(&[
+            ("src/main/java/app/Fixed.java", "package app; import org.springframework.core.annotation.AliasFor; import org.springframework.context.annotation.Bean; import org.springframework.beans.factory.annotation.Qualifier;
+             @Bean @Qualifier(\"fixed\") public @interface Fixed { @AliasFor(annotation = Qualifier.class, attribute = \"value\") String value() default \"\"; }"),
+            ("src/main/java/app/A.java", "package app; import org.springframework.stereotype.*; import org.springframework.context.annotation.*; import org.springframework.beans.factory.annotation.Qualifier;
+             interface Pipe {}
+             @Configuration class Parts { @Fixed(\"wrong\") Pipe pipe() { return null; } }
+             @Service class Uses { Uses(@Qualifier(\"fixed\") Pipe fixed, @Qualifier(\"wrong\") Pipe wrong) {} }
+             @org.springframework.boot.autoconfigure.SpringBootApplication class App {}"),
+        ]);
+        assert!(matches!(point_resolution(&idx, &m, "fixed"), Resolution::Unique(_)));
+        assert!(matches!(point_resolution(&idx, &m, "wrong"), Resolution::QualifierNotFound { .. }));
     }
 }
