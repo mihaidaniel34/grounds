@@ -1231,9 +1231,11 @@ mod tests {
         assert_eq!(with(r, "`C` does not implement `I.a()`, `I.b()`, `I.c()` and 1 more", "`C` does not implement `I.a()`, `I.b()`, `I.c()`, `I.d()`"), with(r, "`C` does not implement `I.d()`, `I.c()`, `I.b()` and 1 more", "`C` does not implement `I.a()`, `I.b()`, `I.c()`, `I.d()`"));
         let r = "ambiguous-bean";
         assert_ne!(with(r, "2 beans of type `Api` match `api`: 'one' (One), 'two' (Two); add a @Qualifier or @Primary", "beans of type `Api` match `api`: 'one' (One), 'two' (Two)"), with(r, "2 beans of type `Api` match `api`: 'three' (Three), 'four' (Four); add a @Qualifier or @Primary", "beans of type `Api` match `api`: 'four' (Four), 'three' (Three)"));
+        // the cycle rule hands over no claim: the message, the cycle as the
+        // search meets it, is the claim (the rule is preview for that reason)
         let r = "circular-constructor-dependency";
-        assert_eq!(with(r, "Circular constructor dependency: A -> B -> A", "constructor cycle through a.A, a.B"), with(r, "Circular constructor dependency: B -> A -> B", "constructor cycle through a.A, a.B"));
-        assert_ne!(with(r, "Circular constructor dependency: A -> B -> A", "constructor cycle through a.A, a.B"), with(r, "Circular constructor dependency: A -> C -> A", "constructor cycle through a.A, a.C"));
+        differ(r, "Circular constructor dependency: A -> B -> A", "Circular constructor dependency: B -> A -> B");
+        same(r, "Circular constructor dependency: A -> B -> A", "Circular constructor dependency: A -> B -> A");
         // claims name types by their qualified names; the message may not
         assert_ne!(with("unresolved-method", "`Lib` has no method `x`", "`a.Lib` has no method `x`"), with("unresolved-method", "`Lib` has no method `x`", "`b.Lib` has no method `x`"));
         assert_ne!(with("unimplemented-abstract-method", "`Foo` does not implement `I.m(Bar)`", "`a.Foo` does not implement a.I.m(a.Bar)"), with("unimplemented-abstract-method", "`Foo` does not implement `I.m(Bar)`", "`a.Foo` does not implement a.I.m(b.Bar)"));

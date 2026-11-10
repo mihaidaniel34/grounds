@@ -78,8 +78,9 @@ pub fn selected_rules(project: &Project) -> Vec<Box<dyn grounds_rules::Rule>> {
 /// The rules the project configuration selects (`[rules] enable/disable`
 /// by id, category or source id; preview rules only with `preview = true` or
 /// when named by id or source id in `enable`). Maturity is that of the mode:
-/// with `changed` (`grounds changed` and the hooks), the compile-break and
-/// wiring rules are stable and run with `preview = false` too.
+/// with `changed` (`grounds changed` and the hooks), the compile-break rules
+/// of `STABLE_IN_CHANGED` are stable and run with `preview = false` too; the
+/// wiring rules stay preview there as well.
 pub fn selected_rules_for(project: &Project, changed: bool) -> Vec<Box<dyn grounds_rules::Rule>> {
     let cfg = &project.config.rules;
     all_rules()

@@ -114,7 +114,7 @@ fn the_break_rules_are_stable_in_changed_and_preview_in_check() {
     let p = Project::load(&dir).unwrap();
     // `grounds check`: no rule is stable, so none runs
     assert!(selected_rules_for(&p, false).is_empty());
-    // `grounds changed`: exactly the compile-break and wiring rules
+    // `grounds changed`: exactly the compile-break rules of `STABLE_IN_CHANGED`
     let mut changed: Vec<_> = selected_rules_for(&p, true).iter().map(|r| r.meta().id).collect();
     changed.sort();
     let mut expected: Vec<_> = grounds_rules::STABLE_IN_CHANGED.iter().copied().filter(|id| grounds_rules::meta_of(id).unwrap().default_enabled).collect();
