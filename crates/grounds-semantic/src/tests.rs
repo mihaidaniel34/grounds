@@ -1275,7 +1275,8 @@ fn an_inherited_field_shadows_an_outer_local() {
                 return /*T*/ live;
             }
         }";
-    assert_eq!(types_of(src), vec!["java.lang.String", "java.lang.Integer", "?unknown", "java.lang.Integer", "java.lang.Integer"]);
+    // an unresolved supertype may declare `live`; the name stays the local
+    assert_eq!(types_of(src), vec!["java.lang.String", "java.lang.Integer", "java.lang.Integer", "java.lang.Integer", "java.lang.Integer"]);
 }
 
 #[test]
@@ -1301,4 +1302,18 @@ fn qualified_creation_names_a_member_of_the_qualifier_type() {
         class Engine { class Builder { Builder(int x) { } } }
         class T { static class Builder { } Object f(Engine e) { return /*T*/ e.new Builder(1); } Object g() { return /*T*/ new Builder(); } }";
     assert_eq!(types_of(src), vec!["Engine.Builder", "T.Builder"]);
+}
+
+#[test]
+fn a_class_header_does_not_see_the_class_members() {
+    // JLS 6.3: annotations and supertypes of `C` are outside its body, so
+    // what an unresolved supertype may declare does not hide `Marker`
+    let src = "package p; @interface Marker { } @Marker class C extends lib.Missing { void f() { } }";
+    let pf = ParsedFile::parse(src);
+    let mut idx = Index::new(jdk());
+    idx.set_file(Arc::from("p/C.java"), Arc::new(extract(&pf)));
+    let fm = FileModel::new(&pf, &idx, Arc::from("p/C.java"));
+    let decl = pf.root().descendants().find(|n| n.kind() == "class_declaration").unwrap();
+    let anns = fm.annotations_of(decl);
+    assert!(anns.iter().any(|a| a.is("p.Marker")), "{anns:?}");
 }

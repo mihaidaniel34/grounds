@@ -143,6 +143,31 @@ where
         }
     }
 
+    /// Visit the children of `n` that are not in the named fields (error
+    /// nodes in code that does not parse).
+    fn visit_rest(&mut self, n: Node<'t>, fields: &[&str]) {
+        let skip: Vec<Node<'t>> = fields.iter().filter_map(|f| n.field(f)).collect();
+        for k in n.kids() {
+            if !skip.contains(&k) {
+                self.visit(k);
+            }
+        }
+    }
+
+    /// Visit a branch with pattern variables in scope, in a frame of its own
+    /// when there are any (without, as before: code that does not parse
+    /// may put a declaration there, `#if (x) Foo a = ...;` in a template).
+    fn visit_with(&mut self, branch: Node<'t>, bindings: &[usize]) {
+        if bindings.is_empty() {
+            self.visit(branch);
+            return;
+        }
+        self.push();
+        self.bring_into_scope(bindings);
+        self.visit(branch);
+        self.pop();
+    }
+
     /// Put declared locals back in scope, in the innermost frame.
     fn bring_into_scope(&mut self, decls: &[usize]) {
         for &i in decls {
@@ -382,17 +407,11 @@ where
                 let (when_true, when_false) = self.condition(n.field("condition"));
                 let then = n.field("consequence");
                 let alt = n.field("alternative");
-                self.push();
-                self.bring_into_scope(&when_true);
                 if let Some(t) = then {
-                    self.visit(t);
+                    self.visit_with(t, &when_true);
                 }
-                self.pop();
                 if let Some(e) = alt {
-                    self.push();
-                    self.bring_into_scope(&when_false);
-                    self.visit(e);
-                    self.pop();
+                    self.visit_with(e, &when_false);
                 }
                 if then.is_some_and(|t| !completes_normally(t)) {
                     self.bring_into_scope(&when_false);
@@ -400,19 +419,18 @@ where
                 if alt.is_some_and(|e| !completes_normally(e)) {
                     self.bring_into_scope(&when_true);
                 }
+                self.visit_rest(n, &["condition", "consequence", "alternative"]);
             }
             "while_statement" => {
                 let (when_true, when_false) = self.condition(n.field("condition"));
-                self.push();
-                self.bring_into_scope(&when_true);
                 if let Some(b) = n.field("body") {
-                    self.visit(b);
+                    self.visit_with(b, &when_true);
                 }
-                self.pop();
                 let breaks = n.field("body").is_some_and(|b| b.descendants().any(|d| d.kind() == "break_statement"));
                 if !breaks {
                     self.bring_into_scope(&when_false);
                 }
+                self.visit_rest(n, &["condition", "body"]);
             }
             "for_statement" => {
                 self.push();

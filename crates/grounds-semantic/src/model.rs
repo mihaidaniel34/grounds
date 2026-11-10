@@ -69,8 +69,6 @@ pub struct FileModel<'t> {
     local_lowered: RefCell<FxHashMap<Name, Option<Arc<ClassInfo>>>>,
     /// see `local_class_scope`; None while it is being computed
     local_scopes: RefCell<FxHashMap<Name, Option<LocalClassScope>>>,
-    /// identifiers that may name a local or an inherited field, unknown which
-    pub(crate) unknown_names: FxHashSet<usize>,
     pub(crate) types: RefCell<FxHashMap<usize, Ty>>,
     pub(crate) calls: RefCell<FxHashMap<usize, Option<Rc<ResolvedCall>>>>,
     /// method invocation types without target typing (see `arg_type`)
@@ -115,7 +113,6 @@ impl<'t> FileModel<'t> {
             local_simple: Vec::new(),
             local_lowered: RefCell::new(FxHashMap::default()),
             local_scopes: RefCell::new(FxHashMap::default()),
-            unknown_names: FxHashSet::default(),
             types: RefCell::new(FxHashMap::default()),
             calls: RefCell::new(FxHashMap::default()),
             standalone: RefCell::new(FxHashMap::default()),
@@ -135,41 +132,31 @@ impl<'t> FileModel<'t> {
 
     /// Inside a class body, a field the class inherits shadows a local of
     /// the enclosing method (JLS 6.4.1): such references are fields, not
-    /// locals. Where a supertype is not known, the name may be an inherited
-    /// field: it is unknown.
+    /// locals.
     fn inherited_fields_shadow_locals(&mut self) {
         let crossed = std::mem::take(&mut self.binder.crossed);
         for (ident, classes) in &crossed {
             let name = ident.text(self.src);
-            let mut verdict = None;
+            let mut is_field = false;
             for c in classes {
                 let Some(cn) = self.class_names.get(&c.id()).cloned() else { continue };
-                let Some(ci) = self.class(&cn) else {
-                    verdict = Some(false);
-                    break;
-                };
+                let Some(ci) = self.class(&cn) else { break };
                 // a private field of a supertype is not inherited
                 if self.field(&ci.this_type(), name).is_some_and(|f| !f.field.flags.is_private() || f.owner == cn) {
-                    verdict = Some(true);
+                    is_field = true;
                     break;
                 }
+                // a supertype that is not resolved may declare the field: that
+                // stays unknown, and the name a local, as other rules (unused
+                // fields and locals) would count an unknown name as no use
                 if !self.hierarchy_complete(&cn) {
-                    verdict = Some(false);
                     break;
                 }
             }
-            match verdict {
-                Some(true) => {
-                    if let Some(i) = self.binder.refs.remove(&ident.id()) {
-                        self.binder.uses[i].retain(|u| u.id() != ident.id());
-                    }
+            if is_field {
+                if let Some(i) = self.binder.refs.remove(&ident.id()) {
+                    self.binder.uses[i].retain(|u| u.id() != ident.id());
                 }
-                // the use stays a use of the local for what counts uses: a
-                // field would not make it unused
-                Some(false) => {
-                    self.unknown_names.insert(ident.id());
-                }
-                None => {}
             }
         }
         self.binder.crossed = crossed;
@@ -422,8 +409,13 @@ impl<'t> FileModel<'t> {
         // the byte ranges of the enclosing classes, for the local classes' levels
         let mut ranges: Vec<(usize, usize)> = Vec::new();
         let mut type_vars = Vec::new();
+        let mut prev: Option<Node<'t>> = None;
         for a in std::iter::once(n).chain(self.ancestors_of(n)) {
-            if let Some(name) = self.class_names.get(&a.id()) {
+            // a class's members are in scope in its body (JLS 6.3), not in
+            // its header: the annotations, the extends and implements clauses
+            let header = prev.is_some_and(|p| grounds_syntax::is_type_declaration(a.kind()) && a.field("body") != Some(p));
+            prev = Some(a);
+            if let Some(name) = self.class_names.get(&a.id()).filter(|_| !header) {
                 enclosing.push(name.clone());
                 ranges.push((a.start_byte(), a.end_byte()));
             }
@@ -491,7 +483,9 @@ impl<'t> FileModel<'t> {
     }
 
     pub fn annotations_of(&self, decl: Node<'t>) -> Vec<AnnotationInfo> {
-        let scope = self.scope_at(decl);
+        // a type declaration's annotations are outside its body
+        let at = if grounds_syntax::is_type_declaration(decl.kind()) { self.parent_of(decl).unwrap_or(decl) } else { decl };
+        let scope = self.scope_at(at);
         stubs::annotations_of(decl, self.src).iter().map(|a| self.index.resolve_annotation(a, &scope)).collect()
     }
 

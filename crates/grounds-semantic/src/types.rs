@@ -410,9 +410,6 @@ impl<'t> FileModel<'t> {
     fn compute_symbol(&self, n: Node<'t>) -> Option<Symbol<'t>> {
         match n.kind() {
             "identifier" => {
-                if self.unknown_names.contains(&n.id()) {
-                    return None;
-                }
                 if let Some(i) = self.binder.decl_index_of_ref(n) {
                     return Some(Symbol::Local(i, self.binder.decls[i].clone()));
                 }
