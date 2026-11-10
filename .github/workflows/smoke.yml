@@ -1,0 +1,87 @@
+name: smoke
+
+# The smoke corpus (corpus/smoke.tsv): about 150 projects grounds was never
+# tuned on, at pinned commits, in ten shards. A shard fails on a panic, a run
+# over the time limit, an unexpected exit status or a project that could not
+# be fetched (scripts/smoke.py). Parse errors and compile-break findings are
+# listed in the summary, not failed on. Weekly and on demand only: it takes
+# about an hour of runner time and judges nothing a pull request changed.
+on:
+  schedule:
+    - cron: "41 3 * * 0"
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "Comma-separated project names (default: all)"
+        required: false
+      timeout:
+        description: "Seconds per project"
+        required: false
+        default: "600"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked -p grounds-cli && cargo build --release --locked -p grounds-syntax --example errors
+      - uses: actions/upload-artifact@v5
+        with:
+          name: binaries
+          path: |
+            target/release/grounds
+            target/release/examples/errors
+
+  smoke:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v5
+      # the JDK's API signatures are read from the runtime image
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 25
+      - uses: actions/download-artifact@v5
+        with:
+          name: binaries
+          path: bin
+      - run: chmod +x bin/grounds bin/examples/errors
+      - name: smoke
+        run: |
+          python3 -I scripts/smoke.py --shard ${{ matrix.shard }}/10 ${ONLY:+--only "$ONLY"} --timeout "${TIMEOUT:-600}" \
+            --grounds bin/grounds --errors bin/examples/errors --dir "$RUNNER_TEMP/smoke" --out smoke-${{ matrix.shard }}.json
+        env:
+          ONLY: ${{ inputs.only }}
+          TIMEOUT: ${{ inputs.timeout }}
+      - if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: smoke-${{ matrix.shard }}
+          path: smoke-${{ matrix.shard }}.json
+          if-no-files-found: ignore
+
+  summary:
+    needs: smoke
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: smoke-*
+          merge-multiple: true
+          path: reports
+      - run: |
+          if ls reports/*.json > /dev/null 2>&1; then
+            python3 -I scripts/smoke.py --summary reports/*.json >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "no smoke reports" >> "$GITHUB_STEP_SUMMARY"
+          fi
