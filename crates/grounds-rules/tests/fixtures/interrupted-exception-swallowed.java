@@ -43,5 +43,11 @@ class Deferred {
         if (interrupted) System.out.println("stopped");
         return interrupted;
     }
+    // interrupting another thread does not restore this one's flag
+    void other(Thread worker) {
+        boolean interrupted = false;
+        try { Thread.sleep(10); } catch (InterruptedException e) { interrupted = true; } // expect
+        if (interrupted) worker.interrupt();
+    }
     boolean done() { return true; }
 }

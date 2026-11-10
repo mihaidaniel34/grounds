@@ -471,7 +471,10 @@ impl Rule for InterruptedSwallowed {
                 let deferred = ifs.iter().any(|i| {
                     i.start_byte() > n.end_byte()
                         && i.field("condition").is_some_and(|c| c.descendants().any(|d| d.kind() == "identifier" && flags.contains(&cx.text(d))))
-                        && i.field("consequence").is_some_and(|c| cx.text(c).contains("interrupt()"))
+                        && i.field("consequence").is_some_and(|c| {
+                            // on this thread: `worker.interrupt()` restores nothing here
+                            c.descendants().any(|d| d.kind() == "method_invocation" && cx.fm.call_name(d) == Some("interrupt") && d.field("object").is_none_or(|o| cx.text(o).ends_with("currentThread()")))
+                        })
                 });
                 if deferred {
                     return;

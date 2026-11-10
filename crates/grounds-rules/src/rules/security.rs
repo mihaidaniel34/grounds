@@ -52,14 +52,22 @@ fn looks_like_secret_value(v: &str) -> bool {
     // looks like a key name rather than a value: "db.password", "X-Api-Token",
     // "AccessKey.Create", ".certPrivateKeyPassword", "provisionDeviceSecret"
     let word_chars = v.chars().all(|c| c.is_ascii_alphabetic() || c == '.' || c == '-' || c == '_');
-    if word_chars && (v.contains('.') || v.contains('-') || v.contains('_')) {
+    if word_chars && (v.contains('.') || v.contains('-')) {
+        return false;
+    }
+    // with underscores alone, a name when it is a constant's ("LLM_API_KEY") or
+    // says what it holds ("client_credentials", "spas_accessKey");
+    // "correct_horse_battery_staple" is a passphrase
+    if word_chars && v.contains('_') && (v == v.to_ascii_uppercase() || ["key", "token", "secret", "password", "passwd", "pwd", "credential", "auth"].iter().any(|k| l.contains(k))) {
         return false;
     }
     // a query-string or form fragment ("&client_secret=", "?grant_type="), or
     // an i18n label ("$t('password')")
     // (not a Base64 value, which ends in padding: "c2VjcmV0LWtleS0xMjM0NTY3ODk=")
     let base64 = v.len() >= 16 && v.len() % 4 == 0 && v.trim_end_matches('=').chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/');
-    if v.ends_with('=') && !base64 || v.starts_with('&') || v.starts_with('?') || v.starts_with("$t(") {
+    // (nor a fragment that carries the value itself: "?client_secret=abc123")
+    let fragment = (v.starts_with('&') || v.starts_with('?')) && v[1..].split('&').all(|p| p.split_once('=').is_none_or(|(_, val)| val.is_empty()));
+    if v.ends_with('=') && !base64 || fragment || v.starts_with("$t(") {
         return false;
     }
     let humps = v.chars().zip(v.chars().skip(1)).filter(|(a, b)| a.is_ascii_lowercase() && b.is_ascii_uppercase()).count();
@@ -478,6 +486,17 @@ fn from_parameter<'t>(e: Node<'t>, cx: &Ctx<'_, 't>, seen: &mut Vec<usize>) -> b
     }
 }
 
+/// The initializer of a local nothing assigns again.
+fn sole_value<'t>(e: Node<'t>, cx: &Ctx<'_, 't>) -> Option<Node<'t>> {
+    let i = cx.fm.local_ref(e)?;
+    let d = &cx.fm.binder.decls[i];
+    let reassigned = cx.fm.binder.uses[i].iter().any(|u| u.parent_unparen().is_some_and(|p| p.kind() == "assignment_expression" && p.field("left").map(|l| l.unparen()) == Some(*u)));
+    if reassigned || !matches!(d.kind, LocalKind::Local) {
+        return None;
+    }
+    d.decl_node.field("value")
+}
+
 enum SqlPart<'t> {
     Text(String),
     Dynamic(Node<'t>),
@@ -515,12 +534,8 @@ fn sql_parts<'t>(e: Node<'t>, cx: &Ctx<'_, 't>, depth: u8, out: &mut Vec<SqlPart
             }
         }
         "identifier" if depth < 4 => {
-            if let Some(i) = cx.fm.local_ref(e) {
-                let d = &cx.fm.binder.decls[i];
-                let reassigned = cx.fm.binder.uses[i].iter().any(|u| u.parent_unparen().is_some_and(|p| p.kind() == "assignment_expression" && p.field("left").map(|l| l.unparen()) == Some(*u)));
-                if let (LocalKind::Local, false, Some(v)) = (d.kind, reassigned, d.decl_node.field("value")) {
-                    return sql_parts(v, cx, depth + 1, out);
-                }
+            if let Some(v) = sole_value(e, cx) {
+                return sql_parts(v, cx, depth + 1, out);
             }
         }
         _ => {}
@@ -679,7 +694,8 @@ impl Rule for CommandInjection {
             // each element reaches the program as one argument, whatever it
             // contains (`"--target=" + dir`); only a shell parses it again
             // (`"sh", "-c", "cat " + file`)
-            let lit = |a: &Node<'t>| match cx.fm.constant_value(*a) {
+            // (through a local: `String shell = "/bin/sh";`)
+            let lit = |a: &Node<'t>| match cx.fm.constant_value(sole_value(a.unparen(), cx).unwrap_or(*a)) {
                 Some(Constant::Str(s)) => Some(s.to_ascii_lowercase()),
                 _ => None,
             };

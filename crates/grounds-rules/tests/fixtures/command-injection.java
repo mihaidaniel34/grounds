@@ -20,6 +20,8 @@ class Argv {
         new ProcessBuilder("cmd.exe", "/c", "type " + file); // expect
         new ProcessBuilder("bash", "-lc", "cat " + file); // expect
         new ProcessBuilder("sh", "-c", "date");
+        String shell = "/bin/sh";
+        new ProcessBuilder(shell, "-c", "cat " + file); // expect
     }
     // one string: Runtime.exec splits it on spaces
     void single(String file) throws Exception {

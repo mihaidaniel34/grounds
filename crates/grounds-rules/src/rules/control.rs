@@ -704,10 +704,39 @@ impl InfiniteLoop {
                     })
             })
         });
-        if written {
+        // `boolean again = false; do { .. } while (again);` runs once
+        if written || known_bool(cond, cx) == Some(false) {
             return;
         }
         cx.report(n.child(0).unwrap_or(n), "Nothing in this loop changes its condition or leaves it; once entered it never terminates");
+    }
+}
+
+/// The value of a condition made of constants and locals that keep their
+/// initial value: `done`, `!done` after `boolean done = false;`.
+fn known_bool<'t>(e: Node<'t>, cx: &Ctx<'_, 't>) -> Option<bool> {
+    let e = e.unparen();
+    if let Some(Constant::Bool(b)) = cx.fm.constant_value(e) {
+        return Some(b);
+    }
+    match e.kind() {
+        "unary_expression" if op(e) == "!" => e.field("operand").and_then(|o| known_bool(o, cx)).map(|b| !b),
+        "identifier" => {
+            let i = cx.fm.local_ref(e)?;
+            let written = cx.fm.binder.uses[i].iter().any(|u| {
+                u.parent_unparen().is_some_and(|p| match p.kind() {
+                    "assignment_expression" => p.field("left").map(|l| l.unparen()) == Some(*u),
+                    "update_expression" => true,
+                    _ => false,
+                })
+            });
+            let d = &cx.fm.binder.decls[i];
+            if written || !matches!(d.kind, grounds_semantic::LocalKind::Local) {
+                return None;
+            }
+            known_bool(d.decl_node.field("value")?, cx)
+        }
+        _ => None,
     }
 }
 
