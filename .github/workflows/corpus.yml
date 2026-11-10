@@ -20,6 +20,8 @@ on:
       - "crates/**"
       - "corpus/**"
       - "scripts/corpus.sh"
+      - "scripts/ci_mutations.py"
+      - "scripts/replay.py"
       - "Cargo.lock"
       - ".github/workflows/corpus.yml"
   workflow_dispatch:

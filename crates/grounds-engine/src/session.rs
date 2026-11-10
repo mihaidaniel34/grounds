@@ -32,20 +32,42 @@ pub struct Session {
     warned: bool,
 }
 
-/// The files that decide a project's modules, classpath and settings: build
-/// files of the root and of every module, `lombok.config`, `grounds.toml`
-/// and the classpath dumps. Listed whether they exist or not, so that one
-/// appearing counts as a change.
+/// What a project is loaded from besides its Java sources, with modification
+/// times: the files that decide its modules, classpath, settings and beans.
+/// - build files and `lombok.config` of the root and of every module;
+/// - `grounds.toml`, the classpath dumps, the source sets a dump recorded and
+///   the classpath entries named in the configuration;
+/// - per module, Spring's registration files and `application*` settings,
+///   and the directories they sit in, whose own times change when a file is
+///   added or removed.
+///
+/// Listed whether they exist or not, so that one appearing counts as a
+/// change. Not followed: the jars a classpath dump lists and the modules'
+/// build outputs (they change with every build, and the dump is rewritten
+/// when dependencies do), and a `lombok.config` created later in a package
+/// directory that had none.
 fn config_files(project: &Project) -> Vec<(PathBuf, Option<SystemTime>)> {
     let ws = &project.workspace;
-    let mut paths: Vec<PathBuf> = ["grounds.toml", ".grounds/config.toml"].iter().map(|n| ws.root.join(n)).collect();
+    let cfg = &project.config;
+    let at_root = |p: &PathBuf| if p.is_absolute() { p.clone() } else { ws.root.join(p) };
+    let mut paths: Vec<PathBuf> = ["grounds.toml", ".grounds/config.toml", ".grounds/classpath.txt", ".grounds/source-sets.txt"].iter().map(|n| ws.root.join(n)).collect();
+    paths.extend(cfg.classpath.files.iter().chain(&cfg.classpath.entries).map(at_root));
     let mut dirs: Vec<&Path> = vec![&ws.root];
     dirs.extend(ws.modules.iter().map(|m| m.dir.as_path()));
     for d in dirs {
         paths.extend(crate::classpath::BUILD_FILES.iter().chain(&["lombok.config"]).map(|n| d.join(n)));
     }
     paths.extend(project.lombok.files());
-    paths.extend(crate::classpath::classpath_files(ws, &project.config));
+    for m in &ws.modules {
+        let resources = m.dir.join("src/main/resources");
+        let meta = resources.join("META-INF");
+        let listed = |dir: &Path, keep: &dyn Fn(&str) -> bool| -> Vec<PathBuf> {
+            std::fs::read_dir(dir).into_iter().flatten().flatten().filter(|e| keep(&e.file_name().to_string_lossy())).map(|e| e.path()).collect()
+        };
+        paths.extend(listed(&resources, &|n| n.starts_with("application")));
+        paths.extend(listed(&meta.join("spring"), &|n| n.ends_with(".imports")));
+        paths.extend([meta.join("spring.factories"), meta.join("spring"), meta, resources]);
+    }
     paths.sort();
     paths.dedup();
     paths.into_iter().map(|p| { let m = std::fs::metadata(&p).and_then(|m| m.modified()).ok(); (p, m) }).collect()
@@ -177,9 +199,10 @@ impl Session {
     /// Re-read files whose modification time changed (and the given extra
     /// files, which may be new). Returns files whose declarations changed.
     pub fn sync(&mut self, extra: &[PathBuf]) -> Vec<PathBuf> {
-        // A build or configuration file changed, appeared or went: the
-        // modules, the classpath and the settings come from those, so the
-        // project is loaded again, as a new session would load it. (Without
+        // A build, configuration or bean registration file changed, appeared
+        // or went: the modules, the classpath, the settings and the beans come
+        // from those, so the project is loaded again, as a new session would
+        // load it. (Without
         // this a daemon kept the layout it started with: after a module was
         // added or renamed its files counted as the root module's.)
         if self.config.iter().any(|(p, old)| std::fs::metadata(p).and_then(|m| m.modified()).ok() != *old) {

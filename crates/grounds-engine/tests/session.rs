@@ -444,5 +444,19 @@ fn a_changed_build_file_reloads_the_project() {
     s.sync(&[]);
     assert_eq!(s.project.config.exclude, ["lib/**"]);
     assert_eq!(module_of(&s, "lib/src/main/java/demo/Lib.java"), None, "the excluded file is gone, as in a fresh load");
+
+    // a registration file that did not exist: Spring's imports of the app module
+    assert!(s.project.registered.is_empty());
+    write(&dir, "app/src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports", "demo.App\n");
+    s.sync(&[]);
+    assert_eq!(s.project.registered, ["demo.App"]);
+
+    // the classpath dump `grounds classpath` writes, created after the session opened
+    // (it lists a jar that is not there, which a load warns about)
+    assert!(s.project.classpath_warnings.is_empty(), "{:?}", s.project.classpath_warnings);
+    write(&dir, ".grounds/classpath.txt", &format!("{}\n", dir.join("libs/some.jar").display()));
+    s.sync(&[]);
+    let warnings: Vec<String> = s.project.classpath_warnings.iter().map(|w| w.to_string()).collect();
+    assert!(warnings.iter().any(|w| w.contains("classpath.txt")), "the dump is read once it exists: {warnings:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
