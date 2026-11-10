@@ -236,7 +236,7 @@ Maturity: 0 rules are `stable` (held to the project's precision promise), 318 ar
 
 | id | severity | maturity | tier | origin |
 |---|---|---|---|---|
-| `url-equals-hashcode` | warning | preview | checkpoint | sonar:S2112, spotbugs:DMI_BLOCKING_METHODS_ON_URL, spotbugs:DMI_COLLECTION_OF_URLS, errorprone:URLEqualsHashCode |
+| `url-equals-hashcode` *off* | warning | preview | checkpoint | sonar:S2112, spotbugs:DMI_BLOCKING_METHODS_ON_URL, spotbugs:DMI_COLLECTION_OF_URLS, errorprone:URLEqualsHashCode |
 | `random-used-once` | info | preview | checkpoint | sonar:S2119, spotbugs:DMI_RANDOM_USED_ONLY_ONCE |
 | `string-constructor` | info | preview | checkpoint | sonar:S2129, spotbugs:DM_STRING_CTOR, spotbugs:DM_STRING_VOID_CTOR, pmd:StringInstantiation |
 | `boxed-primitive-constructor` | warning | preview | checkpoint | sonar:S2129, spotbugs:DM_NUMBER_CTOR, spotbugs:DM_BOOLEAN_CTOR, pmd:PrimitiveWrapperInstantiation |

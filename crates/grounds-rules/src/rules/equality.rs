@@ -920,6 +920,10 @@ declare_rule!(UrlEqualsHashCode {
     category: Performance,
     severity: Warning,
     maturity: Preview,
+    // off by default: the URLs compared in practice come from class loaders
+    // and code sources (file: and jar: URLs, no host, no DNS lookup), which
+    // the rule cannot tell from remote ones
+    enabled: false,
     sources: ["sonar:S2112", "spotbugs:DMI_BLOCKING_METHODS_ON_URL", "spotbugs:DMI_COLLECTION_OF_URLS", "errorprone:URLEqualsHashCode"],
     kinds: ["method_invocation", "object_creation_expression"],
     description: "`java.net.URL.equals()` and `hashCode()` resolve host names over the network, are slow, and give different answers depending on DNS. Use `java.net.URI` instead, also as Map/Set keys.",
