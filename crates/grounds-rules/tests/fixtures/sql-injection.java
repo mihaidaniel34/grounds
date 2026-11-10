@@ -136,3 +136,23 @@ class IdentifiersFromFields {
         st.executeQuery("SELECT * FROM " + table + " WHERE name = '" + req.getParameter("name") + "'"); // expect
     }
 }
+// a table or column name beside placeholders: reported when it visibly comes from the request
+class RequestIdentifiers {
+    void getter(java.sql.Connection c, javax.servlet.http.HttpServletRequest req) throws java.sql.SQLException {
+        c.prepareStatement("SELECT * FROM " + req.getParameter("table") + " WHERE id = ?"); // expect
+        String column = req.getParameter("column");
+        c.prepareStatement("SELECT t." + column + " FROM t WHERE id = ?"); // expect
+    }
+    void bound(java.sql.Connection c, @org.springframework.web.bind.annotation.RequestParam String table) throws java.sql.SQLException {
+        c.prepareStatement("UPDATE " + table + " SET seen = ? WHERE id = ?"); // expect
+    }
+    @org.springframework.web.bind.annotation.GetMapping("/rows")
+    void handler(java.sql.Connection c, String table) throws java.sql.SQLException {
+        c.prepareStatement("DELETE FROM " + table + " WHERE id = ?"); // expect
+    }
+    // the caller chose the name: nothing here says it is the request's
+    void helper(java.sql.Connection c, String table, UnknownRequest other) throws java.sql.SQLException {
+        c.prepareStatement("UPDATE " + table + " SET seen = ? WHERE id = ?");
+        c.prepareStatement("SELECT * FROM " + other.getParameter("table") + " WHERE id = ?");
+    }
+}
