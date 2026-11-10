@@ -1469,8 +1469,9 @@ impl<'a> Builder<'a> {
         // sources (a @MockBean method replaces the bean in its own test
         // only) leaves the replaced bean possibly present: it satisfies
         // injections but makes nothing ambiguous.
-        // (replaced class, module of the replacement, certain, in test sources)
-        let mut replaced: Vec<(Name, String, bool, bool)> = Vec::new();
+        // (replaced class, module of the replacement, certain, in test
+        // sources, the site is or may be a bean)
+        let mut replaced: Vec<(Name, String, bool, bool, bool)> = Vec::new();
         for n in &names {
             let Some(c) = self.index.class(n) else { continue };
             let file = c.source_file().unwrap_or("");
@@ -1479,15 +1480,25 @@ impl<'a> Builder<'a> {
             // (a method's annotations as factory methods read them: a composed
             // annotation may carry @Replaces)
             let method_anns: Vec<Vec<AnnotationInfo>> = c.methods.iter().map(|m| self.factory_method_annotations(&m.annotations)).collect();
-            let sites: Vec<(&[AnnotationInfo], bool)> =
-                std::iter::once((c.annotations.as_slice(), false)).chain(method_anns.iter().map(|anns| (anns.as_slice(), self.conditional_meta(anns)))).collect();
-            for (anns, site_conditional) in sites {
+            // a site registers when it is a bean, or may be one through an
+            // annotation the model cannot classify
+            let stub = self.index.raw_class(n).map(|(st, _)| st.clone());
+            let class_registers = self.model.component_classes.contains_key(n) || c.annotations.iter().any(|a| self.unclassified(a, stub.as_deref(), false, 0, true));
+            let method_registers: Vec<bool> = c
+                .methods
+                .iter()
+                .map(|m| self.produced.contains(&(n.clone(), m.name.clone())) || (class_registers && m.annotations.iter().any(|a| self.unclassified(a, stub.as_deref(), true, 0, true))))
+                .collect();
+            let sites: Vec<(&[AnnotationInfo], bool, bool)> = std::iter::once((c.annotations.as_slice(), false, class_registers))
+                .chain(method_anns.iter().zip(&method_registers).map(|(anns, r)| (anns.as_slice(), self.conditional_meta(anns), *r)))
+                .collect();
+            for (anns, site_conditional, registers) in sites {
                 for a in anns.iter().filter(|a| a.simple_name() == "Replaces") {
                     for k in ["value", "bean"] {
                         if let Some(AnnotationValue::Class(t)) = a.arg(k) {
                             if let Some(tn) = t.class_name() {
                                 let certain = !is_test_path(file) && !class_conditional && !site_conditional;
-                                replaced.push((Arc::from(tn), module.clone(), certain, is_test_path(file)));
+                                replaced.push((Arc::from(tn), module.clone(), certain, is_test_path(file), registers));
                             }
                         }
                     }
@@ -1499,12 +1510,15 @@ impl<'a> Builder<'a> {
                 continue;
             }
             let module = b.file.as_deref().map(module_of).unwrap_or("");
-            for (_, m, certain, in_tests) in replaced.iter().filter(|(r, _, _, _)| *r == b.declaring_class) {
+            for (_, m, certain, in_tests, registers) in replaced.iter().filter(|(r, _, _, _, _)| *r == b.declaring_class) {
                 if *certain && m == module {
                     b.autowire_candidate = false;
                 } else {
                     b.conditional = true;
-                    self.model.possibly_replaced.push((i, *in_tests));
+                    // (a site that registers nothing replaces nothing)
+                    if *registers {
+                        self.model.possibly_replaced.push((i, *in_tests));
+                    }
                 }
             }
         }
@@ -2984,5 +2998,20 @@ mod tests {
         ]);
         assert!(matches!(point_resolution(&idx, &m, "fixed"), Resolution::Unique(_)));
         assert!(matches!(point_resolution(&idx, &m, "wrong"), Resolution::QualifierNotFound { .. }));
+    }
+
+    #[test]
+    fn a_replacement_that_registers_nothing_leaves_a_cycle_certain() {
+        let (_, m) = model(&[
+            JSR330[0], JSR330[1], JSR330[2],
+            ("src/main/java/app/A.java", "package app; import jakarta.inject.*; import io.micronaut.context.annotation.*;
+             interface Port {}
+             @Singleton class A { @Inject A(Port port) {} }
+             @Singleton @Primary class DefaultPort implements Port { @Inject DefaultPort(A a) {} }
+             @io.micronaut.context.annotation.Requires(property = \"remote\") @io.micronaut.context.annotation.Replaces(DefaultPort.class) class UnregisteredReplacement implements Port {}
+             class Plain { @io.micronaut.context.annotation.Requires(property = \"remote\") @io.micronaut.context.annotation.Replaces(DefaultPort.class) Port port() { return null; } }"),
+        ]);
+        let edge = |from: &str, to: &str| m.ctor_edges.iter().any(|(a, b, _)| &**a == from && &**b == to);
+        assert!(edge("app.A", "app.DefaultPort") && edge("app.DefaultPort", "app.A"), "{:?}", m.ctor_edges);
     }
 }
