@@ -18,3 +18,24 @@ maven	https://github.com/apache/maven.git	3da0c9764ed0e7abb6e99fc809ca4ea519f0c9
 google-java-format	https://github.com/google/google-java-format.git	35bf6ffed833d87aa3310d18239ad1e3d3d96994
 shiro	https://github.com/apache/shiro.git	bbae5ab9af0051608ea055740b3143a4949b8714
 graphhopper	https://github.com/graphhopper/graphhopper.git	3b2a7eaaaffcd6a60625923a979c7c5d07face02
+# second set, 2026-11
+litemall	https://github.com/linlinjava/litemall.git	a1ef964a718b7277925b19ea26afe78ea3a1d325
+pig	https://github.com/pig-mesh/pig.git	193997016e39c2158a11c6da3ec1fc9fa3162a9d
+mall4j	https://github.com/gz-yami/mall4j.git	c69b6793ef2c7f528c5e7364aecd22f0b9f7209f
+conductor	https://github.com/conductor-oss/conductor.git	b65a5c9f1c5b125ea19034cc420a35b997214c8f
+dataease	https://github.com/dataease/dataease.git	195a2f35b65f459a42545514a26562329975dd1a
+zipkin	https://github.com/openzipkin/zipkin.git	878ce2a1fad54ca941d17fdcf2e1d924b148eb1f
+horreum	https://github.com/Hyperfoil/Horreum.git	353f7185f14dee395e08719f6b4dc9eeea2402de
+kestra	https://github.com/kestra-io/kestra.git	3cf5da52a13598106f144870263d5e96962e8d27
+soteria	https://github.com/eclipse-ee4j/soteria.git	32f9916d44852a4235e574bbef545425572dd317
+primefaces	https://github.com/primefaces/primefaces.git	109ff0023de3fd5fe172ebd91a03a046371040ab
+airlift	https://github.com/airlift/airlift.git	cf5998126dc0b50ae41c60c32baf19b49ea64ed2
+tsunami	https://github.com/google/tsunami-security-scanner.git	5dd969255145c0c237f8f57974c6519b49415046
+nomulus	https://github.com/google/nomulus.git	0770838c65784119aa890f72940994b9deff4154
+vertx-web	https://github.com/vert-x3/vertx-web.git	d5b010f7d88ff91eb02cbfcba4e869651c7e84c7
+kroxylicious	https://github.com/kroxylicious/kroxylicious.git	409a59a3229492723425e9cb665119022287abba
+lettuce	https://github.com/redis/lettuce.git	62e6e6e7010b8ba1bf8d4911c6a050d4dcff6084
+jackson-core	https://github.com/FasterXML/jackson-core.git	895a149e0da49568e367ac221ed3f078ddc0acbf
+commons-compress	https://github.com/apache/commons-compress.git	54f0e8ea790923a60812173b8e79b520da9da901
+hikaricp	https://github.com/brettwooldridge/HikariCP.git	a4d93f4f85517f90e632b795486d7102e933d7ff
+jgrapht	https://github.com/jgrapht/jgrapht.git	8a6b9547a32efd955758e53ec7463db5e00f695f
