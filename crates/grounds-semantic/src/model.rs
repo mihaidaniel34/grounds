@@ -507,6 +507,15 @@ impl Unknowable for Ty {
 // Hamcrest matcher trees reach millions.
 const WORK_BUDGET: u64 = 300_000;
 
+impl<'t> FileModel<'t> {
+    /// Whether the members of `name` as this file sees them are certain: a
+    /// class declared once, or in several files with one copy this file
+    /// certainly compiles against (its own, or the one of its module).
+    pub fn copy_is_certain(&self, name: &str) -> bool {
+        !self.index.is_duplicated(name) || self.stub.classes.iter().any(|c| &*c.name == name) || self.index.certain_copy(name, &self.path).is_some()
+    }
+}
+
 impl<'t> ClassLookup for FileModel<'t> {
     fn may_lack_members(&self, name: &str) -> bool {
         self.index.may_lack_members(name)
@@ -555,15 +564,17 @@ impl<'t> ClassLookup for FileModel<'t> {
             self.local_lowered.borrow_mut().insert(Arc::from(name), Some(arc.clone()));
             return Some(arc);
         }
-        // a class declared in this file (possibly duplicated elsewhere) comes from this file
+        // a class declared in several files: this file's own copy, else the
+        // copy this file certainly compiles against (see `copy_is_certain`)
         if self.index.is_duplicated(name) {
-            if let Some(raw) = self.stub.classes.iter().find(|c| &*c.name == name) {
+            let own = self.stub.classes.iter().find(|c| &*c.name == name).map(|raw| (&self.stub, raw, &self.path));
+            if let Some((stub, raw, file)) = own.or_else(|| self.index.certain_copy(name, &self.path)) {
                 if let Some(c) = self.local_lowered.borrow().get(name) {
                     return c.clone();
                 }
                 self.local_lowered.borrow_mut().insert(Arc::from(name), None);
-                let scope = self.index.scope_for_class(name).unwrap_or_default();
-                let info = self.index.lower_raw_class(raw, &Scope { package: &self.stub.package, imports: &self.stub.imports, ..scope }, Origin::Source { file: self.path.clone() });
+                let scope = self.index.scope_for_raw(stub, raw);
+                let info = self.index.lower_raw_class(raw, &scope, Origin::Source { file: file.clone() });
                 let arc = Arc::new(info);
                 self.local_lowered.borrow_mut().insert(Arc::from(name), Some(arc.clone()));
                 return Some(arc);

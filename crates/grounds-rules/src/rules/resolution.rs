@@ -17,9 +17,32 @@ pub fn rules() -> Vec<Box<dyn Rule>> {
 /// A project class whose full hierarchy is known and that no processor other
 /// than our Lombok model adds members to.
 fn closed_class<'t>(cx: &Ctx<'_, 't>, name: &str) -> Option<std::sync::Arc<ClassInfo>> {
-    let c = cx.fm.class(name)?;
-    if !c.is_source() || !cx.fm.hierarchy_complete(name) || cx.fm.index.is_duplicated(name) {
+    // a file that does not parse as Java (a template, a file mid-edit) is no
+    // ground for a claim that code does not compile
+    if cx.fm.file.has_errors() {
         return None;
+    }
+    let c = cx.fm.class(name)?;
+    if !c.is_source() || !cx.fm.hierarchy_complete(name) {
+        return None;
+    }
+    // every project class of the hierarchy must be read from a file that
+    // parses, and from the copy this file compiles against when its name is
+    // declared more than once (the build's module dependencies are not known)
+    let supertypes = cx.fm.all_supertypes(&c.this_type());
+    // the walk stops past 200 classes: what it did not see is unknown
+    if supertypes.len() > 200 {
+        return None;
+    }
+    for t in supertypes {
+        let Some(n) = t.class_name() else { return None };
+        if !cx.fm.copy_is_certain(n) {
+            return None;
+        }
+        let file = cx.fm.class(n).and_then(|k| k.source_file().map(|f| f.to_string()));
+        if file.is_some_and(|f| cx.fm.index.file(&f).is_some_and(|s| s.has_syntax_errors)) {
+            return None;
+        }
     }
     // Lombok @Delegate / @ExtensionMethod add members we do not model
     let file = c.source_file()?;
@@ -103,6 +126,7 @@ declare_rule!(UnresolvedMethod {
     name: "Call to a method that does not exist",
     category: Bug,
     severity: Error,
+    maturity: Preview,
     tier: Edit,
     sources: ["javac:cant.resolve.location.args", "intellij:UnresolvedReference"],
     kinds: ["method_invocation", "method_reference"],
@@ -276,6 +300,7 @@ declare_rule!(UnresolvedStaticImport {
     name: "Static import of a member that does not exist",
     category: Bug,
     severity: Error,
+    maturity: Preview,
     tier: Edit,
     sources: ["javac:cant.resolve.location", "intellij:UnresolvedReference"],
     kinds: ["import_declaration"],
@@ -321,6 +346,7 @@ declare_rule!(MissingJdkImport {
     name: "Import of a JDK class the Java release does not have",
     category: Bug,
     severity: Warning,
+    maturity: Preview,
     tier: Edit,
     sources: ["javac:doesnt.exist", "javac:cant.resolve.location"],
     kinds: ["import_declaration"],
@@ -335,6 +361,11 @@ impl Rule for MissingJdkImport {
         // multi-release sources (`src/main/java24`) compile for their own, newer release
         let own_release = cx.info.path.split(['/', '\\']).filter_map(|d| d.strip_prefix("java")).filter_map(|v| v.strip_prefix('-').unwrap_or(v).parse::<u32>().ok()).max();
         if own_release.is_some_and(|v| v > release) {
+            return;
+        }
+        // `import module java.base;` (JEP 511) names a module, not a class
+        let mut c = n.walk();
+        if n.children(&mut c).any(|k| !k.is_named() && k.kind() == "module") {
             return;
         }
         // `static` and `*` are tokens, not named children
@@ -376,6 +407,7 @@ declare_rule!(IncompatibleAssignment {
     name: "Call result assigned to an incompatible type",
     category: Bug,
     severity: Error,
+    maturity: Preview,
     tier: Edit,
     sources: ["javac:prob.found.req", "intellij:IncompatibleTypes"],
     kinds: ["variable_declarator", "assignment_expression"],
@@ -385,6 +417,10 @@ declare_rule!(IncompatibleAssignment {
 impl Rule for IncompatibleAssignment {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
+        // a file that does not parse is no ground for a compile-break claim
+        if cx.fm.file.has_errors() {
+            return;
+        }
         // (declared type, value)
         let (target, value) = if n.kind() == "variable_declarator" {
             let Some(v) = n.field("value") else { return };
@@ -452,7 +488,12 @@ impl Rule for IncompatibleAssignment {
             return;
         }
         // both hierarchies fully known: an unknown supertype could connect them
-        let known = |n: &str| cx.fm.class(n).is_some() && cx.fm.hierarchy_complete(n) && !cx.fm.index.is_duplicated(n);
+        // ...and read from files that parse (a broken stub may miss a supertype or overload)
+        let parses = |n: &str| cx.fm.class(n).and_then(|k| k.source_file().map(|f| f.to_string())).is_none_or(|f| !cx.fm.index.file(&f).is_some_and(|s| s.has_syntax_errors));
+        let known = |n: &str| cx.fm.class(n).is_some() && cx.fm.hierarchy_complete(n) && !cx.fm.index.is_duplicated(n) && parses(n);
+        if !parses(&c.owner) {
+            return;
+        }
         if !known(got) || !known(want) {
             return;
         }
@@ -541,6 +582,7 @@ declare_rule!(UnresolvedConstructor {
     name: "No constructor matches the arguments",
     category: Bug,
     severity: Error,
+    maturity: Preview,
     tier: Edit,
     sources: ["javac:cant.apply.symbol", "intellij:UnresolvedReference"],
     kinds: ["object_creation_expression"],
@@ -575,6 +617,7 @@ declare_rule!(UnresolvedField {
     name: "Access to a field that does not exist",
     category: Bug,
     severity: Error,
+    maturity: Preview,
     tier: Edit,
     sources: ["javac:cant.resolve.location", "intellij:UnresolvedReference"],
     kinds: ["field_access"],
@@ -624,6 +667,7 @@ declare_rule!(OverrideWithoutSuper {
     name: "@Override method does not override anything",
     category: Bug,
     severity: Error,
+    maturity: Preview,
     tier: Edit,
     sources: ["javac:method.does.not.override.superclass", "intellij:MethodDoesntOverride"],
     kinds: ["method_declaration"],
@@ -692,6 +736,7 @@ declare_rule!(UnimplementedAbstractMethod {
     name: "Concrete class does not implement an abstract method",
     category: Bug,
     severity: Error,
+    maturity: Preview,
     tier: Edit,
     sources: ["javac:does.not.override.abstract", "intellij:ClassNotImplementingAbstractMethods"],
     kinds: ["class_declaration", "enum_declaration", "record_declaration"],

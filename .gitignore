@@ -29,7 +29,13 @@
 !/scripts/*.py
 !/scripts/*.baseline.json
 !/corpus/projects.tsv
+# smoke corpus: pinned projects grounds was not tuned on (scripts/smoke.py)
+!/corpus/smoke.tsv
 !/corpus/classpath-skip.tsv
+!/corpus/replay-known.txt
+# projects the rules were not tuned on, and what was measured on them
+!/corpus/holdout.tsv
+!/docs/holdout/*
 !/corpus/planted/*.patch
 !/corpus/planted/*.expected
 !/corpus/ci/*.txt

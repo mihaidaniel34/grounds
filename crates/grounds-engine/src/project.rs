@@ -45,6 +45,8 @@ pub struct Project {
     pub auto_registered: Vec<String>,
     /// Classpath problems found at load (missing, stale, too few jars).
     pub classpath_warnings: Vec<crate::classpath::Warning>,
+    /// The jars and class directories the classpath was built from.
+    pub classpath_entries: Vec<PathBuf>,
 }
 
 /// Class names registered through Spring's META-INF files in any module, and
@@ -86,6 +88,11 @@ pub struct LombokConfigs {
 }
 
 impl LombokConfigs {
+    /// The `lombok.config` files found.
+    pub fn files(&self) -> impl Iterator<Item = PathBuf> + '_ {
+        self.dirs.iter().map(|(d, _)| d.join("lombok.config"))
+    }
+
     pub fn discover(root: &Path) -> LombokConfigs {
         let mut dirs = Vec::new();
         let walker = ignore::WalkBuilder::new(root)
@@ -244,7 +251,7 @@ impl Project {
         di.lombok_copies_qualifiers = lombok_copies_qualifiers(&workspace.root);
         di.bean_overriding_allowed = bean_overriding_allowed(&workspace);
         let classpath_warnings = crate::classpath::warnings(&workspace, &config, &index);
-        Ok(Project { config, workspace, index, stats, di, source_sets, lombok, registered, auto_registered, classpath_warnings })
+        Ok(Project { config, workspace, index, stats, di, source_sets, lombok, registered, auto_registered, classpath_warnings, classpath_entries: entries })
     }
 
     pub fn source_kind(&self, path: &Path) -> SourceKind {
@@ -254,6 +261,9 @@ impl Project {
     /// Re-read one file and update the index. Returns true if its
     /// declaration signature changed.
     pub fn refresh_file(&mut self, path: &Path) -> bool {
+        if crate::workspace::is_resource(path.strip_prefix(&self.workspace.root).unwrap_or(path)) {
+            return false;
+        }
         let key = path_key(path);
         let old = self.index.file(&key).map(|s| s.signature_hash);
         match crate::fsutil::read_text(path) {

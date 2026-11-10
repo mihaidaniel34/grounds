@@ -163,12 +163,12 @@ enum Cmd {
     },
 }
 
-/// Stack of the thread running a command and of the rayon workers. Syntax
-/// trees are walked recursively (binder, typing, rules), and generated or
-/// half-edited files can nest thousands of levels deep: a 2,000-term string
-/// concatenation overflowed rayon's default 2 MiB. Only the pages used are
-/// committed, so a large reservation costs nothing on ordinary files.
-const STACK_SIZE: usize = 256 << 20;
+/// Stack of the thread running a command and of the rayon workers. Parsing,
+/// indexing and the rules recurse along the syntax tree; rayon's default
+/// 2 MiB (and the main thread's 8 MiB) overflowed on code that is deeply
+/// nested but under the analysis limit (grounds_engine::analyze::
+/// MAX_TREE_DEPTH). Unused stack is only reserved address space.
+const STACK_SIZE: usize = 64 << 20;
 
 fn main() -> anyhow::Result<()> {
     let _ = rayon::ThreadPoolBuilder::new().stack_size(STACK_SIZE).build_global();
@@ -343,12 +343,14 @@ fn run() -> anyhow::Result<()> {
                 }
                 println!("# Rule catalog\n\n{} rules. `grounds explain <id>` prints the full description.\n", cat.len());
                 println!("Tier `edit` rules run after every edit; all rules run at checkpoints. Rules marked *off* are disabled by default (enable in `grounds.toml`).\n");
+                let stable = cat.iter().filter(|m| m.maturity == grounds_rules::Maturity::Stable).count();
+                println!("Maturity: {stable} rules are `stable` (held to the project's precision promise), {} are `preview` (still being measured). Preview rules run by default for now; `preview = false` under `[rules]` in `grounds.toml` turns them off, except those named by id in `enable` or `--rules`. See the README.\n", cat.len() - stable);
                 for (c, ms) in by {
-                    println!("## {c} ({})\n\n| id | severity | tier | origin |\n|---|---|---|---|", ms.len());
+                    println!("## {c} ({})\n\n| id | severity | maturity | tier | origin |\n|---|---|---|---|---|", ms.len());
                     for m in ms {
                         let tier = match m.tier { grounds_rules::Tier::Edit => "edit", _ => "checkpoint" };
                         let off = if m.default_enabled { "" } else { " *off*" };
-                        println!("| `{}`{off} | {} | {tier} | {} |", m.id, m.severity.as_str(), m.sources.join(", "));
+                        println!("| `{}`{off} | {} | {} | {tier} | {} |", m.id, m.severity.as_str(), m.maturity.as_str(), m.sources.join(", "));
                     }
                     println!();
                 }
@@ -356,14 +358,18 @@ fn run() -> anyhow::Result<()> {
                 println!("{}", serde_json::to_string_pretty(&cat).unwrap());
             } else {
                 for m in cat {
-                    println!("{:<40} {:<8} {:<13} {}", m.id, m.severity.as_str(), m.category.as_str(), m.name);
+                    println!("{:<40} {:<8} {:<13} {:<8} {}", m.id, m.severity.as_str(), m.category.as_str(), m.maturity.as_str(), m.name);
                 }
                 println!("{} rules", cat.len());
             }
         }
         Cmd::Explain { rule } => match grounds_rules::meta_of(&rule) {
             Some(m) => {
-                println!("{} ({}, {})\n\n{}\n\nsources: {}", m.name, m.severity.as_str(), m.category.as_str(), m.description, m.sources.join(", "));
+                let maturity = match m.maturity {
+                    grounds_rules::Maturity::Stable => "stable: covered by the project's precision promise",
+                    grounds_rules::Maturity::Preview => "preview: precision still being measured; runs by default, `preview = false` under [rules] in grounds.toml turns it off unless it is named in `enable` or `--rules`",
+                };
+                println!("{} ({}, {})\n\n{}\n\nsources: {}\nmaturity: {maturity}", m.name, m.severity.as_str(), m.category.as_str(), m.description, m.sources.join(", "));
             }
             None => {
                 eprintln!("unknown rule {rule}");

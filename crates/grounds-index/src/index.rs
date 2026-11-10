@@ -16,6 +16,8 @@ thread_local! {
     /// cycle (`A.X = B.Y`, `B.Y = A.X`) nor a chain doubling at each class
     /// (`K2.V = K1.V * K1.V`) is bounded by the depth alone.
     static CONST_EVAL: Cell<(u32, u32)> = const { Cell::new((0, 0)) };
+    /// (class, field) constant initializers being evaluated on this thread
+    static CONSTANTS_IN_PROGRESS: std::cell::RefCell<Vec<(Name, Name)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Nested constant evaluations allowed at once on a thread (all classes).
@@ -259,6 +261,8 @@ pub struct Index {
     /// Number of source files defining each class name (>1 = duplicated
     /// across modules, e.g. test fixtures).
     defs: FxHashMap<Name, u32>,
+    /// The files declaring each duplicated class name (`defs` > 1).
+    copies: FxHashMap<Name, Vec<Arc<str>>>,
     pub generation: u64,
     // the generation resolve_ordered last filled the cache at
     resolved_at: AtomicU64,
@@ -298,6 +302,27 @@ impl Drop for InGroup {
     }
 }
 
+/// Evaluate the initializer of `owner.field` with `f`, or `None` if it is
+/// already being evaluated further up on this thread: initializers that refer
+/// to each other (`A.X = B.Y; B.Y = A.X + 1;` compiles, and neither is a
+/// constant) would otherwise recurse until the stack overflows.
+fn evaluating_constant<T>(owner: &str, field: &Name, f: impl FnOnce() -> Option<T>) -> Option<T> {
+    let key: (Name, Name) = (Arc::from(owner), field.clone());
+    if CONSTANTS_IN_PROGRESS.with(|c| c.borrow().contains(&key)) {
+        return None;
+    }
+    CONSTANTS_IN_PROGRESS.with(|c| c.borrow_mut().push(key));
+    // leave also when `f` panics (the rule runner catches panics)
+    struct Leave;
+    impl Drop for Leave {
+        fn drop(&mut self) {
+            CONSTANTS_IN_PROGRESS.with(|c| c.borrow_mut().pop());
+        }
+    }
+    let _leave = Leave;
+    f()
+}
+
 /// Marks a class as being resolved on this thread for as long as it lives,
 /// also when resolution panics (rule and daemon panics are caught and the
 /// thread is reused). Borrows the name: nothing to clone.
@@ -321,13 +346,23 @@ impl Drop for Resolving<'_> {
 
 impl Index {
     pub fn new(classpath: Arc<Classpath>) -> Index {
-        Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), generation: 0, resolved_at: AtomicU64::new(u64::MAX), plan: parking_lot::Mutex::new(None) }
+        Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), copies: FxHashMap::default(), generation: 0, resolved_at: AtomicU64::new(u64::MAX), plan: parking_lot::Mutex::new(None) }
     }
 
     pub fn set_file(&mut self, path: Arc<str>, stub: Arc<FileStub>) {
         let body_only = self.files.get(&path).is_some_and(|old| old.signature_hash == stub.signature_hash);
         self.remove_file_inner(&path);
         for (i, c) in stub.classes.iter().enumerate() {
+            if let Some((other, _)) = self.classes.get(&c.name) {
+                let files = self.copies.entry(c.name.clone()).or_default();
+                if files.is_empty() {
+                    files.push(other.clone());
+                }
+                if !files.contains(&path) {
+                    files.push(path.clone());
+                    files.sort();
+                }
+            }
             // a class defined in several files resolves to the smallest path,
             // whatever order files were loaded, refreshed or swapped in
             match self.classes.get(&c.name) {
@@ -378,8 +413,14 @@ impl Index {
             for c in &old.classes {
                 if let Some(d) = self.defs.get_mut(&c.name) {
                     *d -= 1;
-                    if *d == 0 {
+                    let left = *d;
+                    if left == 0 {
                         self.defs.remove(&c.name);
+                    }
+                    if left <= 1 {
+                        self.copies.remove(&c.name);
+                    } else if let Some(files) = self.copies.get_mut(&c.name) {
+                        files.retain(|f| &**f != path);
                     }
                 }
                 if self.classes.get(&c.name).is_some_and(|(p, _)| &**p == path) {
@@ -426,6 +467,28 @@ impl Index {
     /// Is this class name defined in more than one source file?
     pub fn is_duplicated(&self, name: &str) -> bool {
         self.defs.get(name).is_some_and(|d| *d > 1)
+    }
+
+    /// The copy of a class declared in several files that the file at
+    /// `from` compiles against, when that is certain without knowing the
+    /// build's module dependencies: the copy in the file's own module and
+    /// source set, else the only copy in its module when that one is main
+    /// code and the file a test (tests see their module's main classes).
+    /// None for a class declared once, or when the choice would be a guess.
+    pub fn certain_copy(&self, name: &str, from: &str) -> Option<(&Arc<FileStub>, &RawClass, &Arc<str>)> {
+        use crate::sources::{is_test_set, source_set_of};
+        let set = |p: &str| source_set_of(std::path::Path::new(p)).map(str::to_string);
+        let files = self.copies.get(name)?;
+        let mine: Vec<&Arc<str>> = files.iter().filter(|f| module_dir(f) == module_dir(from)).collect();
+        let same_set: Vec<&Arc<str>> = mine.iter().copied().filter(|f| set(f) == set(from)).collect();
+        let pick = match (same_set.as_slice(), mine.as_slice()) {
+            ([one], _) => *one,
+            ([], [one]) if set(from).is_some_and(|s| is_test_set(&s)) && set(one).as_deref() == Some("main") => *one,
+            _ => return None,
+        };
+        let stub = self.files.get(&**pick)?;
+        let raw = stub.classes.iter().find(|c| &*c.name == name)?;
+        Some((stub, raw, pick))
     }
 
     pub fn is_source_class(&self, name: &str) -> bool {
@@ -540,14 +603,16 @@ impl Index {
         self.resolved_at.store(self.generation, Ordering::Release);
     }
 
-    fn scope_for_raw<'a>(&self, stub: &'a FileStub, raw: &RawClass) -> Scope<'a> {
+    pub fn scope_for_raw<'a>(&self, stub: &'a FileStub, raw: &RawClass) -> Scope<'a> {
         let mut enclosing = vec![raw.name.clone()];
         let mut type_vars: Vec<Name> = raw.type_params.iter().map(|t| t.name.clone()).collect();
         let mut o = raw.outer.clone();
         while let Some(on) = o {
             enclosing.push(on.clone());
-            o = match self.raw_class(&on) {
-                Some((_, oc)) => {
+            // the outer class of the same copy, for a class declared in several files
+            let outer = stub.classes.iter().find(|c| c.name == on).or_else(|| self.raw_class(&on).map(|(_, c)| c));
+            o = match outer {
+                Some(oc) => {
                     if !raw.flags.is_static() {
                         type_vars.extend(oc.type_params.iter().map(|t| t.name.clone()));
                     }
@@ -670,12 +735,12 @@ impl Index {
                             return Some(c.clone());
                         }
                         if let Some(ie) = &f.init {
-                            return self.eval_const_expr(ie, scope, done, raw, depth + 1);
+                            return evaluating_constant(&raw.name, &f.name, || self.eval_const_expr(ie, scope, done, raw, depth + 1));
                         }
                         return None;
                     }
                 }
-                match self.resolve_constant_name(n, scope)? {
+                match self.resolve_constant_name_at(n, scope, depth + 1)? {
                     AnnotationValue::Const(c) => Some(c),
                     _ => None,
                 }
@@ -723,6 +788,11 @@ impl Index {
 
     /// Resolve `CONST`, `Type.CONST` or a static import to an annotation value.
     pub fn resolve_constant_name(&self, n: &str, scope: &Scope) -> Option<AnnotationValue> {
+        self.resolve_constant_name_at(n, scope, 0)
+    }
+
+    /// `depth`: how deep in constant evaluation this lookup is.
+    fn resolve_constant_name_at(&self, n: &str, scope: &Scope, depth: u32) -> Option<AnnotationValue> {
         let segs: Vec<&str> = n.split('.').collect();
         // constants of source classes are read from raw stubs, which also works
         // while the class itself is being lowered
@@ -737,7 +807,7 @@ impl Index {
             }
             let init = f.init.as_ref()?;
             let owner_scope = self.scope_for_class(owner)?;
-            self.eval_const_expr(init, &owner_scope, &[], raw, 0).map(AnnotationValue::Const)
+            evaluating_constant(owner, &f.name, || self.eval_const_expr(init, &owner_scope, &[], raw, depth + 1)).map(AnnotationValue::Const)
         };
         if segs.len() == 1 {
             for e in &scope.enclosing {
@@ -992,7 +1062,7 @@ impl Index {
             // a same-package class from another module (a test fixture in a
             // module this one does not depend on) loses to an on-demand
             // import that provides the name; javac would not see it
-            let module = |n: &str| self.source_file_of(n).map(|f| f.split("/src/").next().unwrap_or("").to_string());
+            let module = |n: &str| self.source_file_of(n).map(|f| module_dir(f).to_string());
             let here = scope.enclosing.last().and_then(|e| module(e));
             let other_module = matches!((module(&same), here), (Some(a), Some(b)) if a != b);
             if !other_module {
@@ -1063,6 +1133,19 @@ impl ClassLookup for Index {
     }
 }
 
+/// The module directory of a source file: the path before the `src` of its
+/// source set (`<module>/src/<set>/java/...`), else before its last `/src/`.
+/// Not the first `/src/`: the checkout itself may sit below one.
+pub fn module_dir(path: &str) -> &str {
+    const LANGS: &[&str] = &["java", "kotlin", "groovy", "scala"];
+    let starts: Vec<usize> = path.match_indices("/src/").map(|(i, _)| i).collect();
+    let set_root = starts.iter().rev().find(|&&i| path[i + 5..].split('/').nth(1).is_some_and(|l| LANGS.contains(&l)));
+    match set_root.or(starts.last()) {
+        Some(&i) => &path[..i],
+        None => "",
+    }
+}
+
 /// Convert a folded constant to the representation of the declared type.
 pub fn coerce_constant(v: Constant, ty: &Ty) -> Option<Constant> {
     Some(match ty {
@@ -1124,5 +1207,46 @@ mod resolving_tests {
             let missing: Vec<_> = idx.source_class_names().filter(|n| !idx.cache.contains_key(*n)).collect();
             assert!(missing.is_empty(), "after a body-only edit of {path}: {missing:?}");
         }
+    }
+
+    #[test]
+    fn the_copy_a_file_compiles_against_is_chosen_only_when_certain() {
+        use crate::stubs::extract;
+        use grounds_syntax::ParsedFile;
+        let stub = |src: &str| Arc::new(extract(&ParsedFile::parse(src)));
+        let mut idx = Index::new(Arc::new(Classpath::empty()));
+        let b = "package p; public class B {}";
+        idx.set_file(Arc::from("/r/a/src/test/java/p/B.java"), stub(b));
+        idx.set_file(Arc::from("/r/b/src/main/java/p/B.java"), stub(b));
+        idx.set_file(Arc::from("/r/b/src/test/java/p/B.java"), stub(b));
+        let pick = |idx: &Index, from: &str| idx.certain_copy("p.B", from).map(|(_, _, f)| f.to_string());
+        // the own module and source set; a test sees its module's main code
+        assert_eq!(pick(&idx, "/r/a/src/test/java/p/T.java").as_deref(), Some("/r/a/src/test/java/p/B.java"));
+        assert_eq!(pick(&idx, "/r/b/src/main/java/p/M.java").as_deref(), Some("/r/b/src/main/java/p/B.java"));
+        assert_eq!(pick(&idx, "/r/b/src/test/java/p/T.java").as_deref(), Some("/r/b/src/test/java/p/B.java"));
+        assert_eq!(pick(&idx, "/r/b/src/it/java/p/T.java"), None);
+        // main code does not see its module's tests; other modules are a guess
+        assert_eq!(pick(&idx, "/r/a/src/main/java/p/M.java"), None);
+        assert_eq!(pick(&idx, "/r/c/src/test/java/p/T.java"), None);
+        idx.remove_file("/r/b/src/test/java/p/B.java");
+        assert_eq!(pick(&idx, "/r/b/src/it/java/p/T.java").as_deref(), Some("/r/b/src/main/java/p/B.java"));
+        idx.remove_file("/r/b/src/main/java/p/B.java");
+        assert!(!idx.is_duplicated("p.B"));
+        assert_eq!(pick(&idx, "/r/a/src/test/java/p/T.java"), None);
+        // a checkout below a directory named src: modules stay apart
+        let mut idx = Index::new(Arc::new(Classpath::empty()));
+        idx.set_file(Arc::from("/w/src/r/a/src/test/java/p/B.java"), stub(b));
+        idx.set_file(Arc::from("/w/src/r/b/src/main/java/p/B.java"), stub(b));
+        assert_eq!(pick(&idx, "/w/src/r/b/src/test/java/p/T.java").as_deref(), Some("/w/src/r/b/src/main/java/p/B.java"));
+        assert_eq!(pick(&idx, "/w/src/r/c/src/test/java/p/T.java"), None);
+    }
+
+    #[test]
+    fn module_dirs() {
+        assert_eq!(module_dir("/w/src/r/a/src/test/java/p/B.java"), "/w/src/r/a");
+        assert_eq!(module_dir("/r/a/src/main/java/com/x/src/C.java"), "/r/a");
+        assert_eq!(module_dir("/r/src/mdo/java/C.java"), "/r");
+        assert_eq!(module_dir("/r/a/src/C.java"), "/r/a");
+        assert_eq!(module_dir("C.java"), "");
     }
 }

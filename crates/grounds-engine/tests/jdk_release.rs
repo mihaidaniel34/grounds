@@ -72,6 +72,8 @@ fn imports_of_jdk_classes_the_release_lacks_are_reported() {
             "import static java.util.Map.*;",
             "import java.util.concurrent.*;",
             "import java.net.http.HttpClient;",
+            // a module import (JEP 511, Java 25) names a module, not a class
+            "import module java.base;",
         ];
         write(&dir, "src/main/java/demo/Uses.java", &format!("package demo;\n{}\nclass Uses {{}}\n", imports.join("\n")));
         // multi-release sources compile for their own release
