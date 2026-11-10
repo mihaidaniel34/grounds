@@ -115,9 +115,8 @@ impl std::fmt::Display for Warning {
             ),
             Warning::OversizedEntry { entry } => write!(
                 f,
-                "grounds: warning: classpath entry {entry} holds more than {} files and directories, or more than {} linked directories, so it is not read as a directory of classes. List the directory that holds the compiled packages, or the jars themselves (silence: `[classpath] warn = false`)",
-                grounds_classfile::DIR_LIMIT,
-                grounds_classfile::LINKED_DIR_LIMIT
+                "grounds: warning: classpath entry {entry} holds more than {} files and directories, so it is not read as a directory of classes. List the directory that holds the compiled packages, or the jars themselves (silence: `[classpath] warn = false`)",
+                grounds_classfile::DIR_LIMIT
             ),
         }
     }
