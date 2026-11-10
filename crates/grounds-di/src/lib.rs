@@ -1487,7 +1487,7 @@ impl<'a> Builder<'a> {
             let method_registers: Vec<bool> = c
                 .methods
                 .iter()
-                .map(|m| self.produced.contains(&(n.clone(), m.name.clone())) || (class_registers && m.annotations.iter().any(|a| self.unclassified(a, stub.as_deref(), true, 0, true))))
+                .map(|m| self.produced.contains(&(n.clone(), m.name.clone())) || (class_registers && (self.is_factory_method(m) || m.annotations.iter().any(|a| self.unclassified(a, stub.as_deref(), true, 0, true)))))
                 .collect();
             let sites: Vec<(&[AnnotationInfo], bool, bool)> = std::iter::once((c.annotations.as_slice(), false, class_registers))
                 .chain(method_anns.iter().zip(&method_registers).map(|(anns, r)| (anns.as_slice(), self.conditional_meta(anns), *r)))
@@ -3013,5 +3013,23 @@ mod tests {
         ]);
         let edge = |from: &str, to: &str| m.ctor_edges.iter().any(|(a, b, _)| &**a == from && &**b == to);
         assert!(edge("app.A", "app.DefaultPort") && edge("app.DefaultPort", "app.A"), "{:?}", m.ctor_edges);
+    }
+
+    #[test]
+    fn a_factory_method_replacement_in_a_class_that_may_register_makes_a_cycle_uncertain() {
+        // a class that may be a factory (an annotation the model cannot
+        // classify) with a recognised factory method that may replace DefaultPort
+        let (_, m) = model(&[
+            JSR330[0], JSR330[1], JSR330[2],
+            ("src/main/java/app/MaybeFactory.java", "package app; @com.acme.Unknown public @interface MaybeFactory {}"),
+            ("src/main/java/app/A.java", "package app; import jakarta.inject.*;
+             interface Port {}
+             @Singleton class A { @Inject A(Port port) {} }
+             @Singleton @io.micronaut.context.annotation.Primary class DefaultPort implements Port { @Inject DefaultPort(A a) {} }
+             @MaybeFactory class Ports { @Singleton @io.micronaut.context.annotation.Requires(property = \"remote\") @io.micronaut.context.annotation.Replaces(DefaultPort.class) Port port() { return null; } }"),
+        ]);
+        let edge = |from: &str, to: &str| m.ctor_edges.iter().any(|(a, b, _)| &**a == from && &**b == to);
+        assert!(edge("app.DefaultPort", "app.A"));
+        assert!(!edge("app.A", "app.DefaultPort"), "{:?}", m.ctor_edges);
     }
 }
