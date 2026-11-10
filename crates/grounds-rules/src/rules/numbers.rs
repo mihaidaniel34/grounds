@@ -440,6 +440,15 @@ impl Rule for BigDecimalFromDouble {
         }
         let at = cx.type_of(args[0]);
         if matches!(at.prim(), Some(Prim::Double | Prim::Float)) {
+            // the double is exactly the intended value (a literal such as 0.0
+            // or 0.5, a whole number, Double.MAX_VALUE): nothing is rounded
+            if exact_double(cx, args[0]) {
+                return;
+            }
+            // rounded on purpose to an explicit precision
+            if args.len() == 2 && cx.type_of(args[1]).is_class("java.math.MathContext") {
+                return;
+            }
             let fix = if args.len() == 1 { Some(Fix::replace("Use BigDecimal.valueOf", n, format!("java.math.BigDecimal.valueOf({})", cx.text(args[0])))) } else { None };
             match fix {
                 Some(f) => cx.report_fix(n, "BigDecimal built from a double keeps its binary rounding error; use `BigDecimal.valueOf()` or a String", f),
@@ -447,6 +456,71 @@ impl Rule for BigDecimalFromDouble {
             }
         }
     }
+}
+
+/// Is a double expression exactly the value it is written as? A decimal
+/// literal whose binary value equals it, a whole number converted from an
+/// integral type, or a constant of `Double`/`Float` (`MAX_VALUE`).
+fn exact_double<'t>(cx: &Ctx<'_, 't>, e: Node<'t>) -> bool {
+    let e = e.unparen();
+    match e.kind() {
+        "unary_expression" if matches!(op(e), "-" | "+") => e.field("operand").is_some_and(|o| exact_double(cx, o)),
+        "cast_expression" => e.field("value").is_some_and(|v| matches!(cx.type_of(v).prim(), Some(Prim::Int | Prim::Long | Prim::Short | Prim::Byte | Prim::Char)) || exact_double(cx, v)),
+        "decimal_floating_point_literal" | "decimal_integer_literal" => literal_is_exact(e.text(cx.src)),
+        "field_access" | "identifier" => matches!(cx.fm.symbol(e), Some(grounds_semantic::Symbol::Field(f)) if matches!(&*f.owner, "java.lang.Double" | "java.lang.Float")),
+        _ => false,
+    }
+}
+
+/// Is a decimal literal (`0.00`, `2.5e3`, `0.1f`) exactly representable in
+/// binary, so that its double has the same value?
+fn literal_is_exact(text: &str) -> bool {
+    let t: String = text.chars().filter(|c| *c != '_').collect();
+    let is_float = t.ends_with(['f', 'F']);
+    let t = t.trim_end_matches(['f', 'F', 'd', 'D']);
+    let (mant, exp) = match t.find(['e', 'E']) {
+        Some(i) => (&t[..i], t[i + 1..].parse::<i32>().ok()),
+        None => (t, Some(0)),
+    };
+    let Some(exp) = exp else { return false };
+    let (int_part, frac_part) = mant.split_once('.').unwrap_or((mant, ""));
+    let digits = format!("{int_part}{frac_part}");
+    let digits = digits.trim_start_matches('0');
+    // value = a * 10^k
+    let k = exp - frac_part.len() as i32;
+    if digits.is_empty() {
+        return true; // zero
+    }
+    if digits.len() > 30 {
+        return false;
+    }
+    let Ok(a) = digits.parse::<u128>() else { return false };
+    let x: f64 = if is_float { t.parse::<f32>().map(|v| v as f64).unwrap_or(f64::NAN) } else { t.parse::<f64>().unwrap_or(f64::NAN) };
+    if !x.is_finite() || x == 0.0 {
+        return false;
+    }
+    // x = m * 2^-p with m odd
+    let bits = x.abs().to_bits();
+    let raw_exp = ((bits >> 52) & 0x7ff) as i32;
+    let mut m = if raw_exp == 0 { bits & ((1 << 52) - 1) } else { (bits & ((1 << 52) - 1)) | (1 << 52) } as u128;
+    let mut p = 1075 - raw_exp.max(1);
+    while m % 2 == 0 && m > 0 {
+        m /= 2;
+        p -= 1;
+    }
+    // compare a * 10^k with m * 2^-p, as a * 10^k * 2^p == m
+    let pow = |b: u128, n: u32| b.checked_pow(n);
+    let lhs = if k >= 0 { pow(10, k as u32).and_then(|t| a.checked_mul(t)) } else { Some(a) };
+    let rhs = if k >= 0 { Some(m) } else { pow(10, (-k) as u32).and_then(|t| m.checked_mul(t)) };
+    let (Some(mut lhs), Some(mut rhs)) = (lhs, rhs) else { return false };
+    if p >= 0 {
+        let Some(l) = pow(2, p as u32).and_then(|t| lhs.checked_mul(t)) else { return false };
+        lhs = l;
+    } else {
+        let Some(r) = pow(2, (-p) as u32).and_then(|t| rhs.checked_mul(t)) else { return false };
+        rhs = r;
+    }
+    lhs == rhs
 }
 
 declare_rule!(OddCheckWithRemainder {

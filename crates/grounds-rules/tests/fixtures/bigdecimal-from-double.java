@@ -8,3 +8,20 @@ class A {
         BigDecimal ok3 = new BigDecimal(i);
     }
 }
+class Exact {
+    void m(double d, int count, java.math.MathContext mc) {
+        // the double is exactly the written value: nothing is rounded
+        BigDecimal zero = new BigDecimal(0.00);
+        BigDecimal half = new BigDecimal(0.5);
+        BigDecimal big = new BigDecimal(2.5e3);
+        BigDecimal max = new BigDecimal(Double.MAX_VALUE);
+        BigDecimal min = new BigDecimal(-Float.MAX_VALUE);
+        BigDecimal whole = new BigDecimal((double) count);
+        // rounded on purpose to an explicit precision
+        BigDecimal rounded = new BigDecimal(d, mc);
+        // still reported: not representable in binary
+        BigDecimal tenth = new BigDecimal(0.1f); // expect
+        BigDecimal price = new BigDecimal(19.99); // expect
+        BigDecimal third = new BigDecimal(1.0 / 3); // expect
+    }
+}
