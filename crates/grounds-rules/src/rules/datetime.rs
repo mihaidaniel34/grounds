@@ -91,7 +91,8 @@ impl Rule for DayOfYearPattern {
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
         let Some((a, p)) = date_pattern(n, cx) else { return };
         let l = pattern_letters(&p);
-        if l.contains("DD") && l.contains('M') {
+        // with `dd` as well the day of the year is meant: "yyyy-MM-dd 'day' DDD"
+        if l.contains("DD") && l.contains('M') && !l.contains("dd") {
             cx.report(a, "`DD` is the day of the year; use `dd` for the day of the month");
         }
     }

@@ -42,6 +42,8 @@ declare_rule!(ThreadRunDirect {
     category: Concurrency,
     severity: Error,
     tier: Edit,
+    // a test calls `run()` to execute the task body synchronously and assert on it
+    scope: Main,
     sources: ["sonar:S1217", "spotbugs:RU_INVOKE_RUN", "pmd:DontCallThreadRun"],
     kinds: ["method_invocation"],
     description: "`thread.run()` executes the code synchronously in the current thread; `start()` is what spawns a new thread.",
@@ -381,6 +383,8 @@ declare_rule!(LockWithoutUnlock {
     name: "Lock acquired without unlock() in finally",
     category: Concurrency,
     severity: Warning,
+    // a lock left held by a failing test dies with the test; lock tests take and release in sequence
+    scope: Main,
     sources: ["sonar:S2222", "spotbugs:UL_UNRELEASED_LOCK", "spotbugs:UL_UNRELEASED_LOCK_EXCEPTION_PATH"],
     kinds: ["method_invocation"],
     description: "If code between `lock()` and `unlock()` throws, the lock is never released and every other thread blocks forever. Release it in a `finally` block.",
@@ -662,6 +666,8 @@ declare_rule!(ThreadGroupUsage {
     name: "ThreadGroup usage",
     category: Concurrency,
     severity: Info,
+    // tests of thread utilities build groups as data
+    scope: Main,
     sources: ["sonar:S3014"],
     kinds: ["object_creation_expression"],
     description: "`ThreadGroup` is a legacy, mostly non-thread-safe API (many methods are deprecated). Use executors instead.",

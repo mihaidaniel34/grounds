@@ -153,12 +153,42 @@ impl Rule for IgnoredReturnValue {
         });
         // `verify(mock).method()`: the call is the verification
         let verified = e.field("object").is_some_and(|o| o.kind() == "method_invocation" && cx.fm.call_name(o) == Some("verify"));
-        if in_try_with_catch || verified {
+        if in_try_with_catch || verified || cx.is_test() && provokes_exception(n, cx) {
             return;
         }
         if pure_method(cx, &c) {
             cx.report(e, format!("The result of `{}.{}()` is ignored; the call has no other effect", simple_name_of(&c.owner), c.method.name));
         }
+    }
+}
+
+/// In a test, a statement run for the exception it throws: the last one of a
+/// `try` body with a catch, or the one before its `fail()`
+/// (`try { list.size(); fail(); } catch (Exception e) {...}`), and the last
+/// one of a lambda given to `assertThrows` and the like.
+fn provokes_exception<'t>(n: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+    let Some(block) = n.parent().filter(|b| b.kind() == "block") else { return false };
+    let Some(owner) = block.parent() else { return false };
+    let stmts: Vec<Node<'t>> = block.kids().into_iter().filter(|k| !k.kind().contains("comment")).collect();
+    let Some(i) = stmts.iter().position(|s| *s == n) else { return false };
+    match owner.kind() {
+        "try_statement" => {
+            // `fail()`, `assertTrue(false)`, `assertFalse(true)`
+            let fails = |s: Node<'t>| {
+                s.first_kid().filter(|c| s.kind() == "expression_statement" && c.kind() == "method_invocation").is_some_and(|c| {
+                    let arg = cx.fm.args_of(c).first().map(|a| a.unparen().kind());
+                    matches!((cx.fm.call_name(c), arg), (Some("fail"), _) | (Some("assertTrue"), Some("false")) | (Some("assertFalse"), Some("true")))
+                })
+            };
+            owner.field("body") == Some(block) && owner.kids().iter().any(|k| k.kind() == "catch_clause") && (i + 1 == stmts.len() || i + 2 == stmts.len() && fails(stmts[i + 1]))
+        }
+        "lambda_expression" => {
+            i + 1 == stmts.len()
+                && owner.ancestors().find(|a| a.kind() == "method_invocation").is_some_and(|c| {
+                    cx.fm.args_of(c).contains(&owner) && cx.fm.call_name(c).is_some_and(|m| m.starts_with("assertThrows") || matches!(m, "assertThatThrownBy" | "catchThrowable" | "catchThrowableOfType" | "expectThrows" | "isThrownBy"))
+                })
+        }
+        _ => false,
     }
 }
 
@@ -262,6 +292,8 @@ declare_rule!(IgnoredReadResult {
     name: "InputStream.read()/skip() result ignored",
     category: Bug,
     severity: Warning,
+    // tests read in-memory streams of known length; a short read fails the next assertion
+    scope: Main,
     sources: ["sonar:S2674", "spotbugs:RR_NOT_CHECKED", "spotbugs:SR_NOT_CHECKED"],
     kinds: ["expression_statement"],
     description: "`read(buf)` may fill only part of the buffer and `skip(n)` may skip fewer bytes; the return value says how many. Loop until done, or use `readNBytes`/`readAllBytes`/`DataInputStream.readFully`.",
@@ -413,6 +445,8 @@ declare_rule!(ToStringReturnsNull {
     name: "toString() or clone() returns null",
     category: Bug,
     severity: Error,
+    // a stub in a test returns null on purpose, to exercise the caller's null handling
+    scope: Main,
     sources: ["sonar:S2225", "spotbugs:NP_TOSTRING_COULD_RETURN_NULL", "spotbugs:NP_CLONE_COULD_RETURN_NULL"],
     kinds: ["return_statement"],
     description: "Callers (string concatenation, logging, collections) never expect `toString()` or `clone()` to return null. Return an empty string or a proper copy.",
@@ -455,6 +489,10 @@ impl Rule for CollectionAddsItself {
         let Some(o) = n.field("object") else { return };
         let args = cx.fm.args_of(n);
         if args.len() != 1 || !is_subtype_any(cx.fm, &cx.type_of(o), &["java.util.Collection"]) {
+            return;
+        }
+        // a test builds the cycle on purpose: `a.add(a); assertNotNull(print(a));`
+        if cx.is_test() && name == "add" {
             return;
         }
         if same_pure_expr(o, args[0], cx.src) {

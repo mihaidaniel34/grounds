@@ -87,7 +87,8 @@ declare_rule!(AssertionArgumentOrder {
 impl Rule for AssertionArgumentOrder {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
-        if !matches!(cx.fm.call_name(n), Some("assertEquals" | "assertNotEquals" | "assertSame" | "assertNotSame" | "assertArrayEquals")) {
+        // not `assertNotEquals`: its failure message names no expected value
+        if !matches!(cx.fm.call_name(n), Some("assertEquals" | "assertSame" |"assertNotSame" | "assertArrayEquals")) {
             return;
         }
         let args = cx.fm.args_of(n);
@@ -669,7 +670,7 @@ declare_rule!(ConstantAssertion {
     scope: Test,
     sources: ["sonar:S2701", "sonar:S5845"],
     kinds: ["method_invocation"],
-    description: "`assertTrue(true)`, `assertNotNull(new X())` or `assertEquals(1, 1)` can never fail; they hide missing assertions. Use `fail()` for unreachable code.",
+    description: "`assertTrue(true)`, `assertNotNull(\"text\")` or `assertEquals(1, 1)` can never fail; they hide missing assertions. Use `fail()` for unreachable code.",
 });
 
 impl Rule for ConstantAssertion {
@@ -683,7 +684,8 @@ impl Rule for ConstantAssertion {
         let Some(first) = args.first().map(|a| a.unparen()) else { return };
         let constant = match name {
             "assertTrue" | "assertFalse" => matches!(first.kind(), "true" | "false"),
-            "assertNotNull" => matches!(first.kind(), "object_creation_expression" | "string_literal" | "array_creation_expression"),
+            // not `assertNotNull(new Utils())`: written to run the constructor
+            "assertNotNull" => matches!(first.kind(), "string_literal" | "array_creation_expression"),
             "assertNull" => first.kind() == "null_literal",
             "assertEquals" if args.len() >= 2 => is_literal(args[0]) && is_literal(args[1]),
             _ => false,

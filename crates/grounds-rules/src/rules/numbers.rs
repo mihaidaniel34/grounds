@@ -159,6 +159,8 @@ declare_rule!(IntOverflowInLongContext {
     name: "int arithmetic may overflow before widening to long",
     category: Bug,
     severity: Warning,
+    // test arithmetic runs on the small values the test picked
+    scope: Main,
     sources: ["sonar:S2184", "spotbugs:ICAST_INTEGER_MULTIPLY_CAST_TO_LONG", "errorprone:IntLongMath"],
     kinds: ["binary_expression"],
     description: "`long millis = days * 24 * 3600 * 1000;` multiplies in `int` and overflows before the result is widened. Make the first operand long: `days * 24L * 3600 * 1000`.",
@@ -411,6 +413,8 @@ declare_rule!(BigDecimalFromDouble {
     category: Bug,
     severity: Warning,
     tier: Edit,
+    // a wrong expected value in a test fails that test
+    scope: Main,
     sources: ["sonar:S2111", "spotbugs:DMI_BIGDECIMAL_CONSTRUCTED_FROM_DOUBLE", "pmd:AvoidDecimalLiteralsInBigDecimalConstructor"],
     kinds: ["object_creation_expression"],
     description: "`new BigDecimal(0.1)` captures the binary approximation 0.1000000000000000055511151231257827... Use `BigDecimal.valueOf(0.1)` or `new BigDecimal(\"0.1\")`.",

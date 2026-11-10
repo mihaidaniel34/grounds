@@ -891,6 +891,8 @@ declare_rule!(CloneWithoutSuper {
     name: "clone() does not call super.clone()",
     category: Bug,
     severity: Warning,
+    // test stubs (`clone() { return null; }`, `return new Stub();`) have no subclasses to get wrong
+    scope: Main,
     sources: ["sonar:S1182", "spotbugs:CN_IDIOM_NO_SUPER_CALL", "pmd:ProperCloneImplementation"],
     kinds: ["method_declaration"],
     description: "A `clone()` built with `new` returns the wrong type for subclasses. Call `super.clone()` (or better, provide a copy constructor).",
@@ -911,7 +913,15 @@ impl Rule for CloneWithoutSuper {
             return;
         }
         let Some(body) = n.field("body") else { return };
-        if !cx.text(body).contains("super.clone()") {
+        // `return cloneReset();` where `cloneReset()` of this class calls super.clone()
+        let via_helper = body.descendants().any(|d| {
+            d.kind() == "method_invocation"
+                && d.field("object").is_none_or(|o| o.kind() == "this")
+                && cx.fm.call_name(d).is_some_and(|callee| {
+                    decl.field("body").is_some_and(|b| b.kids().iter().any(|m| m.kind() == "method_declaration" && method_name(*m, cx.src) == callee && cx.text(*m).contains("super.clone()")))
+                })
+        });
+        if !cx.text(body).contains("super.clone()") && !via_helper {
             if let Some(nm) = n.field("name") {
                 cx.report(nm, "`clone()` should obtain the copy via `super.clone()`");
             }

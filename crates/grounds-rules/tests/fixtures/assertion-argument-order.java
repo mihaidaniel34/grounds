@@ -6,6 +6,8 @@ class ATest {
         int result = compute();
         assertEquals(result, 42); // expect
         assertEquals(42, result);
+        // symmetric: neither argument is "the expected value"
+        assertNotEquals(result, 41);
         assertEquals(result, "x".length());
     }
     int compute() { return 42; }
