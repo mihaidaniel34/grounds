@@ -271,6 +271,9 @@ impl Session {
             changed
         });
         if reload {
+            if self.config_unread {
+                crate::trace::log(|| "sync: reload, the version of a configuration file the load read is not known".into());
+            }
             let root = self.root().to_path_buf();
             // stamped before the load begins, to tell afterwards whether the
             // load read them as they are then
