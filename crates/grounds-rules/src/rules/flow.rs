@@ -352,6 +352,13 @@ impl Rule for ResourceLeak {
         for n in root.descendants() {
             if let Some(pos) = found.iter().position(|(id, _)| *id == n.id()) {
                 let (_, msg) = found.remove(pos);
+                // a test's closeables are mostly in memory or test doubles (a
+                // reader over a String, a heap buffer, a pool of strings), and
+                // the test ends soon: only a file, socket or database handle
+                // left open there is worth a report
+                if cx.is_test() && !holds_os_resource(cx, n) {
+                    continue;
+                }
                 cx.report(n, msg);
                 if found.is_empty() {
                     break;
@@ -359,6 +366,38 @@ impl Rule for ResourceLeak {
             }
         }
     }
+}
+
+/// JDK types that hold an operating-system or database handle.
+const OS_RESOURCES: &[&str] = &[
+    "java.io.FileInputStream",
+    "java.io.FileOutputStream",
+    "java.io.FileReader",
+    "java.io.FileWriter",
+    "java.io.RandomAccessFile",
+    "java.net.Socket",
+    "java.net.ServerSocket",
+    "java.net.DatagramSocket",
+    "java.sql.Connection",
+    "java.sql.Statement",
+    "java.sql.ResultSet",
+    "java.util.zip.ZipFile",
+    "java.nio.channels.FileChannel",
+    "java.nio.channels.SocketChannel",
+    "java.nio.channels.ServerSocketChannel",
+    "java.nio.file.DirectoryStream",
+    "java.nio.file.WatchService",
+];
+
+/// Does the expression creating a resource open a file, socket or database
+/// handle (itself, or inside the creations it wraps)?
+fn holds_os_resource<'t>(cx: &Ctx<'_, 't>, site: Node<'t>) -> bool {
+    site.descendants().filter(|d| matches!(d.kind(), "object_creation_expression" | "method_invocation")).any(|d| {
+        if d.kind() == "method_invocation" && cx.fm.select_method(d).is_some_and(|m| &*m.owner == "java.nio.file.Files" && m.method.name.starts_with("new")) {
+            return true;
+        }
+        cx.type_of(d).class_name().is_some_and(|t| OS_RESOURCES.iter().any(|r| t == *r || cx.fm.is_subclass(t, r).is_yes()))
+    })
 }
 
 declare_rule!(OptionalGetWithoutCheck {
