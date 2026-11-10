@@ -233,6 +233,49 @@ fn package_private_jdk_classes_are_not_visible() {
 }
 
 #[test]
+fn constants_defined_by_each_other_across_classes_are_bounded() {
+    // found by scripts/fuzz_robust.py: each class hop restarted the depth
+    // bound, so a cycle overflowed the stack and a chain doubling at each
+    // class took 2^n steps. Run on a 2 MiB stack like a rayon worker.
+    std::thread::Builder::new()
+        .stack_size(2 << 20)
+        .spawn(|| {
+            let idx = index_of(&[
+                ("A.java", "package p; class A { static final int X = B.Y * 2 + A.X; }"),
+                ("B.java", "package p; class B { static final int Y = A.X + 1; }"),
+            ]);
+            assert_eq!(idx.class("p.A").unwrap().field("X").unwrap().constant, None);
+            assert_eq!(idx.class("p.B").unwrap().field("Y").unwrap().constant, None);
+
+            let srcs: Vec<(String, String)> = (0..80)
+                .map(|i| {
+                    let init = if i == 0 { "1".to_string() } else { format!("K{p}.V + K{p}.V", p = i - 1) };
+                    (format!("K{i}.java"), format!("package p; class K{i} {{ static final int V = {init}; }}"))
+                })
+                .collect();
+            let files: Vec<(&str, &str)> = srcs.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+            let idx = index_of(&files);
+            let t = std::time::Instant::now();
+            // a short chain is still evaluated
+            assert_eq!(idx.class("p.K10").unwrap().field("V").unwrap().constant, Some(Constant::Int(1024)));
+            let _ = idx.class("p.K79").unwrap().field("V").unwrap().constant.clone();
+            assert!(t.elapsed() < std::time::Duration::from_secs(10), "{:?}", t.elapsed());
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn string_constants_stop_at_the_class_file_limit() {
+    use crate::stubs::{fold_binary, MAX_CONSTANT_STRING};
+    let short = fold_binary("+", &Constant::Str(Arc::from("ab")), &Constant::Int(1));
+    assert_eq!(short, Some(Constant::Str(Arc::from("ab1"))));
+    let half = Constant::Str(Arc::from("x".repeat(MAX_CONSTANT_STRING / 2 + 1).as_str()));
+    assert_eq!(fold_binary("+", &half, &half), None);
+}
+
+#[test]
 fn lombok_auto_singular_names() {
     use crate::lombok::auto_singularize;
     // the answers of Lombok 1.18.36's Singulars.autoSingularize, run on these names

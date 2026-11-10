@@ -426,7 +426,7 @@ impl<'t> NodeExt<'t> for Node<'t> {
         &src[self.start_byte()..self.end_byte()]
     }
     fn ancestors(&self) -> Ancestors<'t> {
-        Ancestors { cur: self.parent() }
+        Ancestors { cur: self.parent(), steps: 0, path: None }
     }
     fn ancestor_of_kind(&self, kinds: &[&str]) -> Option<Node<'t>> {
         self.ancestors().find(|n| kinds.contains(&n.kind()))
@@ -449,7 +449,31 @@ impl<'t> NodeExt<'t> for Node<'t> {
         Some(p)
     }
     fn modifiers(&self) -> Option<Node<'t>> {
-        self.kid_of_kind("modifiers")
+        // the grammar puts `modifiers` among the first three children (first
+        // in declarations, third in `for (final X x : xs)` and `o instanceof
+        // final T t`): looking no further keeps this constant on a class body
+        // of a million members or a block of a million `;` (suppression
+        // checks ask it of every ancestor of every finding)
+        let mut c = self.walk();
+        if !c.goto_first_child() {
+            return None;
+        }
+        let mut seen = 0;
+        loop {
+            let n = c.node();
+            if !is_comment_node(&n) {
+                if n.kind() == "modifiers" {
+                    return Some(n);
+                }
+                seen += 1;
+                if seen == 3 {
+                    return None;
+                }
+            }
+            if !c.goto_next_sibling() {
+                return None;
+            }
+        }
     }
     fn has_modifier(&self, keyword: &str) -> bool {
         match self.modifiers() {
@@ -478,15 +502,49 @@ impl<'t> NodeExt<'t> for Node<'t> {
 
 pub struct Ancestors<'t> {
     cur: Option<Node<'t>>,
+    steps: u32,
+    /// past [`ANCESTOR_STEPS`]: the remaining ancestors, the root first
+    path: Option<Vec<Node<'t>>>,
 }
+
+/// Steps an ancestor walk takes with `parent()` before it switches to one
+/// descent from the root. tree-sitter's `parent()` itself descends from the
+/// root, so a walk of k steps costs k times the depth: in a deep tree (a
+/// call nested in 500 calls) the rules' ancestor walks made analysis cubic.
+const ANCESTOR_STEPS: u32 = 8;
 
 impl<'t> Iterator for Ancestors<'t> {
     type Item = Node<'t>;
     fn next(&mut self) -> Option<Node<'t>> {
+        if let Some(path) = &mut self.path {
+            return path.pop();
+        }
         let n = self.cur?;
-        self.cur = n.parent();
+        self.steps += 1;
+        if self.steps >= ANCESTOR_STEPS {
+            self.path = Some(path_from_root(n));
+            self.cur = None;
+        } else {
+            self.cur = n.parent();
+        }
         Some(n)
     }
+}
+
+/// The ancestors of `n`, from the root down to its parent, in one descent.
+fn path_from_root<'t>(n: Node<'t>) -> Vec<Node<'t>> {
+    // SAFETY: the root of the tree `n` belongs to lives as long as `n`
+    let root = unsafe { Node::from_raw(tree_sitter::ffi::ts_tree_root_node(n.into_raw().tree)) };
+    let mut path = Vec::new();
+    let mut a = root;
+    while a != n {
+        path.push(a);
+        match a.child_with_descendant(n) {
+            Some(c) if c != a => a = c,
+            _ => break,
+        }
+    }
+    path
 }
 
 /// Pre-order traversal over named, non-comment descendants (including self).
@@ -675,6 +733,43 @@ pub fn char_literal_value(node: Node, src: &str) -> Option<char> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn modifiers_are_found_wherever_the_grammar_puts_them() {
+        let src = "class A { @Deprecated /* c */ final int f = 0; void m(final int p, Object o, java.util.List<String> xs) { final int l = 1; for (final String s : xs) {} if (o instanceof final String t) {} } }";
+        let f = ParsedFile::parse(src);
+        let mut found = Vec::new();
+        let mut stack = vec![f.root()];
+        while let Some(n) = stack.pop() {
+            if let Some(m) = n.modifiers() {
+                found.push(format!("{}:{}", n.kind(), m.text(src).split_whitespace().last().unwrap_or("")));
+            }
+            let mut c = n.walk();
+            stack.extend(n.children(&mut c));
+        }
+        found.sort();
+        assert_eq!(found, vec!["enhanced_for_statement:final", "field_declaration:final", "formal_parameter:final", "instanceof_expression:final", "local_variable_declaration:final"]);
+    }
+
+    #[test]
+    fn ancestors_match_the_parent_chain_and_depth_is_measured() {
+        let deep = format!("class A {{ int m() {{ return {}1{}; }} }} class B {{ void m() {{ if (true) {{ while (x) {{ f(g(h(1))); }} }} }} }}", "f(".repeat(40), ")".repeat(40));
+        for src in ["class A { void m() { int x = 1; } }", deep.as_str(), "class { ( } )) <<"] {
+            let f = ParsedFile::parse(src);
+            let mut stack = vec![f.root()];
+            while let Some(n) = stack.pop() {
+                let mut want = Vec::new();
+                let mut cur = n.parent();
+                while let Some(p) = cur {
+                    want.push(p.id());
+                    cur = p.parent();
+                }
+                assert_eq!(n.ancestors().map(|a| a.id()).collect::<Vec<_>>(), want, "{}", n.kind());
+                let mut c = n.walk();
+                stack.extend(n.children(&mut c));
+            }
+        }
+    }
 
     #[test]
     fn parses_and_walks() {
