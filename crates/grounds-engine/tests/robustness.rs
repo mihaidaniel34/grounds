@@ -209,7 +209,8 @@ fn a_source_file_replaced_by_a_pipe_is_refused_and_not_taken_as_read() {
     for f in ["grounds.toml", "src/main/java/p/B.java"] {
         std::fs::File::options().write(true).open(dir.join(f)).unwrap().set_modified(old).unwrap();
     }
-    let pipe = dir.join("src/main/java/p/Pipe.java");
+    // (as the session names it: on macOS the temporary directory is reached through the /var symlink)
+    let pipe = dir.canonicalize().unwrap().join("src/main/java/p/Pipe.java");
     let d = dir.clone();
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
