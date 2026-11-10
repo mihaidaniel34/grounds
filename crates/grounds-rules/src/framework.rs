@@ -91,12 +91,33 @@ pub enum Tier {
     Checkpoint,
 }
 
+/// How far a rule is proven. Stable rules are covered by the project's
+/// promises about precision; preview rules are still being measured against
+/// them. Every rule states its maturity in [`declare_rule!`] (the field is
+/// required), so a new rule cannot be added without that decision.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Maturity {
+    Stable,
+    Preview,
+}
+
+impl Maturity {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Maturity::Stable => "stable",
+            Maturity::Preview => "preview",
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct RuleMeta {
     pub id: &'static str,
     pub name: &'static str,
     pub category: Category,
     pub severity: Severity,
+    pub maturity: Maturity,
     pub tier: Tier,
     pub scope: Scope,
     /// Origin of the rule idea: `sonar:S1234`, `spotbugs:PATTERN`, `pmd:Rule`,
@@ -330,6 +351,7 @@ macro_rules! declare_rule {
             name: $name:literal,
             category: $cat:ident,
             severity: $sev:ident,
+            maturity: $maturity:ident,
             $(tier: $tier:ident,)?
             $(scope: $scope:ident,)?
             $(enabled: $enabled:literal,)?
@@ -346,6 +368,7 @@ macro_rules! declare_rule {
                 name: $name,
                 category: $crate::framework::Category::$cat,
                 severity: $crate::framework::Severity::$sev,
+                maturity: $crate::framework::Maturity::$maturity,
                 tier: $crate::declare_rule!(@tier $($tier)?),
                 scope: $crate::declare_rule!(@scope $($scope)?),
                 sources: &[$($src),*],

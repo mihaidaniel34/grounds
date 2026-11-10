@@ -153,3 +153,23 @@ fn every_rule_has_a_fixture_and_valid_metadata() {
     }
     assert!(missing.is_empty(), "rules without fixtures: {missing:?}");
 }
+
+/// The stable rules: none yet. The first candidates were the rules that say
+/// code would not compile or the application would not start, which have a
+/// zero-tolerance gate on the corpus. A measurement on 20 projects the rules
+/// were never tuned on (docs/holdout/2026-11.md) found 298 of their 313
+/// findings there false, so they stay preview until the causes are fixed and
+/// a fresh measurement shows it. A rule moves here only with such evidence;
+/// this list makes that a deliberate change.
+const STABLE: &[&str] = &[];
+
+#[test]
+fn stable_rules_are_exactly_the_intended_set() {
+    use grounds_rules::Maturity;
+    // `maturity` is a required field of `declare_rule!`, so every rule has one
+    let mut stable: Vec<_> = all_rules().iter().map(|r| r.meta()).filter(|m| m.maturity == Maturity::Stable).map(|m| m.id).collect();
+    stable.sort();
+    assert_eq!(stable, STABLE, "the set of stable rules changed; update STABLE (and the README) only with evidence");
+    let preview = all_rules().iter().filter(|r| r.meta().maturity == Maturity::Preview).count();
+    assert_eq!(preview + STABLE.len(), all_rules().len());
+}
