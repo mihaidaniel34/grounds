@@ -1269,6 +1269,11 @@ impl Index {
                 return Lookup::Unknown;
             }
             headers_agree = copies.windows(2).all(|w| w[0].1.superclass == w[1].1.superclass && w[0].1.interfaces == w[1].1.interfaces);
+            // what the supertypes provide depends on the copy: absent from one
+            // copy's supertypes is no answer for the others
+            if !headers_agree {
+                return Lookup::Unknown;
+            }
         }
         let mut sups: Vec<Name> = Vec::new();
         let header = |sups: &mut Vec<Name>, stub: &FileStub, raw: &RawClass| {

@@ -230,3 +230,19 @@ fn a_default_package_name_declared_in_another_directory_is_unknown() {
     );
     assert_eq!(findings(&dir), vec!["a/Impl.java:1 unimplemented-abstract-method".to_string()]);
 }
+
+#[test]
+fn copies_with_different_supertypes_leave_inherited_member_types_unknown() {
+    let dir = project(
+        "duplicate-headers",
+        &[
+            ("lib/src/main/java/p/Empty.java", "package p;\npublic class Empty {}\n"),
+            ("lib/src/main/java/p/Base.java", "package p;\npublic class Base {\n    public static class Member { public static void ping() {} }\n}\n"),
+            ("lib/src/main/java/q/Member.java", "package q;\npublic class Member {}\n"),
+            // two copies of p.Owner with the same imports and different supertypes
+            ("one/src/main/java/p/Owner.java", "package p;\nimport q.*;\nclass Owner extends Empty {\n}\n"),
+            ("two/src/main/java/p/Owner.java", "package p;\nimport q.*;\nclass Owner extends Base {\n    void f() { Member.ping(); }\n}\n"),
+        ],
+    );
+    assert_eq!(findings(&dir), Vec::<String>::new());
+}
