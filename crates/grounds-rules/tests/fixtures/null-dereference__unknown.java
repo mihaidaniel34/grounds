@@ -20,6 +20,11 @@ class Unknown {
         if (item != null) { log("ok"); } else { require(item, "item"); }
         return item.name();
     }
+    // validated first in a try that catches only another, checked exception
+    String validatedFirstInTry(@Nullable Item item, java.nio.file.Path path) {
+        try { require(item, "item"); java.nio.file.Files.readString(path); } catch (java.io.IOException ignored) { }
+        return item.name();
+    }
     // under a condition that does not involve the variable
     String correlatedKey(@Nullable Item item, java.util.Map<String, Item> byName, String name) {
         if (byName.containsKey(name)) {
@@ -103,6 +108,11 @@ class Unknown {
     // still reported: an earlier call in the try may throw before the validation
     String throwsFirst(@Nullable Item item, java.nio.file.Path path) {
         try { java.nio.file.Files.readString(path); require(item, "item"); } catch (java.io.IOException e) { }
+        return item.name(); // expect
+    }
+    // still reported: the catch may swallow what the validation throws
+    String validationCaught(@Nullable Item item, java.nio.file.Path path) {
+        try { require(item, "item"); java.nio.file.Files.readString(path); } catch (java.io.IOException | RuntimeException e) { }
         return item.name(); // expect
     }
     // still reported: the validation is on the non-null branch

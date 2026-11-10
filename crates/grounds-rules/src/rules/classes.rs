@@ -1058,32 +1058,37 @@ impl Rule for NonSerializableField {
         // (when the container provides it: an injected field, or a field set
         // by an @Inject constructor; `new Probe()` is a plain object)
         // (an @Inject constructor that assigns this field)
-        let names: Vec<&str> = n.fields("declarator").iter().filter_map(|d| d.field("name")).map(|x| cx.text(x)).collect();
-        let injected = cx.fm.annotations_of(n).iter().any(|a| INJECTED_BY_CONTAINER.iter().any(|f| a.is(f)))
-            || n.fields("declarator").iter().all(|d| d.field("value").is_none())
-                && owning_type_decl(n).is_some_and(|d| {
-                    members(d).iter().any(|m| {
-                        m.kind() == "constructor_declaration"
-                            && cx.fm.annotations_of(*m).iter().any(|a| a.is("jakarta.inject.Inject") || a.is("javax.inject.Inject"))
-                            // every field of the declaration (`Probe a, b;`)
-                            && names.iter().all(|name| {
-                                m.descendants().filter(|x| x.kind() == "assignment_expression").any(|x| {
-                                    // the field itself: not a parameter of the same name
-                                    // (`service = service`), nor a nested class's
-                                    !x.ancestors().take_while(|a| a != m).any(|a| matches!(a.kind(), "lambda_expression" | "class_body"))
-                                    && x.field("left").is_some_and(|l| {
-                                        let l = l.unparen();
-                                        if l.kind() == "identifier" && cx.fm.local_ref(l).is_some() {
-                                            return false;
-                                        }
-                                        let target = if l.kind() == "field_access" { l.field("field") } else { Some(l) };
-                                        target.is_some_and(|t| cx.text(t) == *name)
-                                    }) && x.field("right").is_some_and(|r| from_injected_parameter(*m, r, cx))
-                                })
+        // decided per field of the declaration (`Probe a, b;`)
+        let annotated = cx.fm.annotations_of(n).iter().any(|a| INJECTED_BY_CONTAINER.iter().any(|f| a.is(f)));
+        let normal_scoped = tc.annotations.iter().any(|a| CDI_NORMAL_SCOPES.iter().any(|f| a.is(f)));
+        let injected = |d: Node<'t>| {
+            annotated
+                || d.field("value").is_none()
+                    && d.field("name").map(|x| cx.text(x)).is_some_and(|name| {
+                        owning_type_decl(n).is_some_and(|decl| {
+                            members(decl).iter().any(|m| {
+                                m.kind() == "constructor_declaration"
+                                    && cx.fm.annotations_of(*m).iter().any(|a| a.is("jakarta.inject.Inject") || a.is("javax.inject.Inject"))
+                                    && m.descendants().filter(|x| x.kind() == "assignment_expression").any(|x| {
+                                        // the field itself: not a parameter of the same name
+                                        // (`service = service`), nor a nested class's
+                                        !x.ancestors().take_while(|a| a != m).any(|a| matches!(a.kind(), "lambda_expression" | "class_body"))
+                                            && x.field("left").is_some_and(|l| {
+                                                let l = l.unparen();
+                                                if l.kind() == "identifier" && cx.fm.local_ref(l).is_some() {
+                                                    return false;
+                                                }
+                                                let target = if l.kind() == "field_access" { l.field("field") } else { Some(l) };
+                                                target.is_some_and(|t| cx.text(t) == name)
+                                            })
+                                            && x.field("right").is_some_and(|r| from_injected_parameter(*m, r, cx))
+                                    })
                             })
+                        })
                     })
-                });
-        if injected && tc.annotations.iter().any(|a| CDI_NORMAL_SCOPES.iter().any(|f| a.is(f))) {
+        };
+        let reported: Vec<Node<'t>> = n.fields("declarator").into_iter().filter(|d| !(normal_scoped && injected(*d))).collect();
+        if reported.is_empty() {
             return;
         }
         // interfaces and non-final classes may have serializable implementations
@@ -1097,7 +1102,7 @@ impl Rule for NonSerializableField {
             }
         }
         if cx.fm.is_subclass(tn, "java.io.Serializable").is_no() && cx.fm.hierarchy_complete(tn) {
-            for d in n.fields("declarator") {
+            for d in reported {
                 cx.report(d, format!("Field of non-serializable type `{}` in a Serializable class; make it transient", ty.display_simple()));
             }
         }

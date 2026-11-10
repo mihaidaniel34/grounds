@@ -299,7 +299,7 @@ fn writes_file_after<'t>(cx: &Ctx<'_, 't>, stmt: Node<'t>, mkdirs: Node<'t>) -> 
         match e.kind() {
             "identifier" => Some(cx.text(e)),
             "method_invocation" => match cx.fm.call_name(e) {
-                Some("toPath" | "toFile" | "getParentFile" | "getAbsoluteFile" | "getCanonicalFile" | "getPath" | "getAbsolutePath" | "resolve" | "resolveSibling" | "normalize" | "toAbsolutePath" | "getParent") => {
+                Some("toPath" | "toFile" | "getParentFile" | "getAbsoluteFile" | "getCanonicalFile" | "getPath" | "getAbsolutePath" | "getCanonicalPath" | "toRealPath" | "resolve" | "resolveSibling" | "normalize" | "toAbsolutePath" | "getParent") => {
                     e.field("object").and_then(|o| path_root(cx, o))
                 }
                 Some("get" | "of") if e.field("object").is_some_and(|o| matches!(cx.text(o), "Paths" | "Path" | "java.nio.file.Paths" | "java.nio.file.Path")) => {

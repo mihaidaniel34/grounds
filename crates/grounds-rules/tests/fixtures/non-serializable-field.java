@@ -56,7 +56,9 @@ class PartlyInjected implements Serializable {
 class BuildsItself implements Serializable {
     private Probe built; // expect
     private Probe checked;
-    private Probe given, made; // expect
+    // decided per field: `given` holds the proxy, `made` does not
+    private Probe given,
+        made; // expect
     @jakarta.inject.Inject
     BuildsItself(Probe injected) { built = new Probe(); checked = java.util.Objects.requireNonNull(injected); given = injected; made = new Probe(); }
 }

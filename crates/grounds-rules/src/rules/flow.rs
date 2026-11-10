@@ -80,7 +80,9 @@ impl Rule for NullDereference {
 /// dereference is not also inside (`if (x != null) consume(x); x.length()`).
 /// `null_branch(if, branch)` names the branches only the null paths take
 /// (`if (x == null) require(x);`): the call needs to run on those alone.
-fn runs_on_every_path_to<'t>(call: Node<'t>, deref: Node<'t>, null_branch: impl Fn(Node<'t>, Node<'t>) -> bool) -> bool {
+/// `try_safe(try, call)` says the try neither skips the call (no earlier
+/// part of the try may throw what it catches) nor swallows its exception.
+fn runs_on_every_path_to<'t>(call: Node<'t>, deref: Node<'t>, null_branch: impl Fn(Node<'t>, Node<'t>) -> bool, try_safe: impl Fn(Node<'t>, Node<'t>) -> bool) -> bool {
     let mut child = call;
     for a in call.ancestors() {
         if deref.ancestors().any(|d| d == a) {
@@ -97,7 +99,7 @@ fn runs_on_every_path_to<'t>(call: Node<'t>, deref: Node<'t>, null_branch: impl 
             "switch_block_statement_group" | "switch_rule" | "catch_clause" | "lambda_expression" | "class_body" | "assert_statement" => true,
             // a try whose exception is caught before the dereference: the
             // call may have thrown and the path goes on without it
-            "try_statement" | "try_with_resources_statement" => a.field("body") == Some(child) && a.kids().iter().any(|k| k.kind() == "catch_clause"),
+            "try_statement" | "try_with_resources_statement" => a.field("body") == Some(child) && a.kids().iter().any(|k| k.kind() == "catch_clause") && !try_safe(a, call),
             _ => false,
         };
         if conditional {
@@ -151,6 +153,48 @@ fn maybe_null_unknown<'t>(cx: &Ctx<'_, 't>, callable: Node<'t>, i: usize, deref:
                 }
         })
     };
+    // a try around the call that cannot bypass it nor swallow what it throws:
+    // it catches only checked exceptions, the call declares none of them, and
+    // nothing before it in the try may throw one
+    let try_safe = |t: Node<'t>, call: Node<'t>| {
+        let caught: Vec<Ty> = t
+            .kids()
+            .into_iter()
+            .filter(|k| k.kind() == "catch_clause")
+            .flat_map(|k| k.descendants().filter(|d| d.kind() == "catch_type").flat_map(|ct| ct.kids().into_iter().filter(|x| x.is_named())).collect::<Vec<_>>())
+            .map(|ty| cx.fm.resolve_type_node(ty))
+            .collect();
+        let checked = |ty: &Ty| {
+            ty.class_name().is_some_and(|c| {
+                !matches!(c, "java.lang.Exception" | "java.lang.Throwable")
+                    && cx.fm.is_subclass(c, "java.lang.Exception").is_yes()
+                    && cx.fm.is_subclass(c, "java.lang.RuntimeException").is_no()
+            })
+        };
+        if caught.is_empty() || !caught.iter().all(checked) {
+            return false;
+        }
+        let may_throw_caught = |c: Node<'t>| match cx.fm.select_method(c) {
+            None => true,
+            Some(m) => {
+                m.ambiguous
+                    || m.method.throws.iter().any(|th| match th.class_name() {
+                        None => true,
+                        Some(tn) => caught.iter().filter_map(|k| k.class_name()).any(|k| k == tn || !cx.fm.is_subclass(k, tn).is_no() || !cx.fm.is_subclass(tn, k).is_no()),
+                    })
+            }
+        };
+        let is_call = |d: &Node<'t>| matches!(d.kind(), "method_invocation" | "object_creation_expression");
+        // the call itself, and every call before it in the try (resources included)
+        !may_throw_caught(call)
+            && !t
+                .kids()
+                .into_iter()
+                .filter(|k| matches!(k.kind(), "block" | "resource_specification"))
+                .flat_map(|k| k.descendants())
+                .filter(|d| is_call(d) && d.end_byte() <= call.start_byte())
+                .any(may_throw_caught)
+    };
     // handed to a call
     let handed = refs.iter().any(|r| {
         r.start_byte() >= last
@@ -159,7 +203,7 @@ fn maybe_null_unknown<'t>(cx: &Ctx<'_, 't>, callable: Node<'t>, i: usize, deref:
                 a.kind() == "argument_list"
                     && a.parent().is_some_and(|call| {
                         !call.descendants().any(|d| d == deref)
-                            && runs_on_every_path_to(call, deref, null_branch)
+                            && runs_on_every_path_to(call, deref, null_branch, try_safe)
                             && !(call.kind() == "method_invocation"
                                 && (super::exceptions::is_log_like(call, cx) || matches!(cx.fm.call_name(call), Some("println" | "print" | "printf" | "format" | "valueOf"))))
                     })

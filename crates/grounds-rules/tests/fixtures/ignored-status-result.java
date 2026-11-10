@@ -80,6 +80,10 @@ class Directories {
         dir.mkdirs(); // expect
         java.nio.file.Files.write(new File(other, dir.getName()).toPath(), data);
     }
+    void canonicalChild(File dir) throws java.io.IOException {
+        dir.mkdirs();
+        java.nio.file.Files.writeString(java.nio.file.Paths.get(dir.getCanonicalPath(), "out.txt"), "data");
+    }
     void childOfDir(File dir, byte[] data) throws java.io.IOException {
         dir.mkdirs();
         java.nio.file.Files.write(new File(dir, "a.bin").toPath(), data);
