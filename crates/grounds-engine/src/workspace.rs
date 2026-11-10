@@ -464,40 +464,10 @@ pub fn modules_built_against_own_release(ws: &Workspace) -> Vec<PathBuf> {
     let mut declarations: Vec<(PathBuf, String)> = Vec::new();
     let gradle_dirs: Vec<PathBuf> = seen_dirs.iter().map(|d| d.to_path_buf()).collect();
     for (dir, text) in &scripts {
-        let mut own_text = String::new();
-        let mut last = 0;
-        let mut from = 0;
-        while let Some(i) = text[from..].find("project(") {
-            let start = from + i + "project(".len();
-            from = start;
-            let Some(close) = text[start..].find(')') else { break };
-            let path = text[start..start + close].trim().trim_matches(['\'', '"']);
-            let after = text[start + close + 1..].trim_start();
-            if !path.starts_with(':') || !after.starts_with('{') {
-                continue;
-            }
-            let open = text.len() - after.len();
-            let mut depth = 0;
-            let mut end = text.len();
-            for (j, c) in text[open..].char_indices() {
-                match c {
-                    '{' => depth += 1,
-                    '}' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            end = open + j;
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            declarations.push((ws.root.join(path.trim_start_matches(':').replace(':', "/")), text[open..end].to_string()));
-            own_text.push_str(&text[last..start - "project(".len()]);
-            last = end;
-            from = end.max(start);
+        let (own_text, blocks) = crate::java_release::project_blocks(text);
+        for (path, body) in blocks {
+            declarations.push((ws.root.join(path), body));
         }
-        own_text.push_str(&text[last.min(text.len())..]);
         // a script's `subprojects { }` and `allprojects { }` declare for the
         // modules below it (and itself, for `allprojects`): which of them a
         // block really reaches is the build's business, so all of them

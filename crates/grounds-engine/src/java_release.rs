@@ -97,6 +97,22 @@ pub fn module_evidence(ws: &Workspace) -> Vec<Evidence> {
             }
         }
     }
+    // the scripts of the Gradle modules, without their `project(':x') { }`
+    // blocks, which are settings of x (merged with x's own: set in both
+    // places with different values, the release is not known)
+    let mut scripts: Vec<(PathBuf, String)> = Vec::new();
+    let mut targeted: Vec<(PathBuf, GradleSettings)> = Vec::new();
+    for m in ws.modules.iter().filter(|m| m.build_system == BuildSystem::Gradle) {
+        for f in ["build.gradle", "build.gradle.kts"] {
+            if let Ok(t) = crate::fsutil::read_text(m.dir.join(f)) {
+                let (own, blocks) = project_blocks(&strip_script_comments(&t, false));
+                for (path, body) in blocks {
+                    targeted.push((ws.root.join(path), GradleSettings::read(&body)));
+                }
+                scripts.push((m.dir.clone(), own));
+            }
+        }
+    }
     ws.modules
         .iter()
         .map(|m| {
@@ -107,12 +123,13 @@ pub fn module_evidence(ws: &Workspace) -> Vec<Evidence> {
                 BuildSystem::Maven => poms.evidence(&m.dir.join("pom.xml")),
                 BuildSystem::Gradle => {
                     let mut own = GradleSettings::default();
-                    for f in ["build.gradle", "build.gradle.kts"] {
-                        if let Ok(t) = crate::fsutil::read_text(m.dir.join(f)) {
-                            // `subprojects { }` of the root does not apply to the root
-                            let t = if m.dir == ws.root { without_blocks(&strip_script_comments(&t, false), "subprojects") } else { t };
-                            own.merge(&GradleSettings::read(&t));
-                        }
+                    for (_, t) in scripts.iter().filter(|(d, _)| *d == m.dir) {
+                        // `subprojects { }` of the root does not apply to the root
+                        let t = if m.dir == ws.root { without_blocks(t, "subprojects") } else { t.clone() };
+                        own.merge(&GradleSettings::read(&t));
+                    }
+                    for (_, g) in targeted.iter().filter(|(d, _)| *d == m.dir) {
+                        own.merge(g);
                     }
                     own.or(if m.dir == ws.root { &conventions } else { &for_subprojects }).evidence()
                 }
@@ -120,6 +137,48 @@ pub fn module_evidence(ws: &Workspace) -> Vec<Evidence> {
             }
         })
         .collect()
+}
+
+/// A script's `project(':path') { ... }` blocks, which configure another
+/// module: the script without them, and each block's path (`a/b` for
+/// `:a:b`) and body.
+pub(crate) fn project_blocks(text: &str) -> (String, Vec<(String, String)>) {
+    let mut own = String::new();
+    let mut found = Vec::new();
+    let mut last = 0;
+    let mut from = 0;
+    while let Some(i) = text[from..].find("project(") {
+        let start = from + i + "project(".len();
+        from = start;
+        let Some(close) = text[start..].find(')') else { break };
+        let path = text[start..start + close].trim().trim_matches(['\'', '"']);
+        let after = text[start + close + 1..].trim_start();
+        if !path.starts_with(':') || !after.starts_with('{') {
+            continue;
+        }
+        let open = text.len() - after.len();
+        let mut depth = 0;
+        let mut end = text.len();
+        for (j, c) in text[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = open + j;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        found.push((path.trim_start_matches(':').replace(':', "/"), text[open..end].to_string()));
+        own.push_str(&text[last..start - "project(".len()]);
+        last = end;
+        from = end.max(start);
+    }
+    own.push_str(&text[last.min(text.len())..]);
+    (own, found)
 }
 
 /// A script without its `name { ... }` blocks.
@@ -1009,6 +1068,17 @@ mod tests {
             ],
         );
         assert_eq!(evidence_of(&dir), vec![(":".into(), Exact(17)), ("dotted".into(), Unknown), ("jvm".into(), Unknown)]);
+        // a root's `project(':x') { }` blocks configure x, not the root; a
+        // module set both there and in its own script is set twice
+        let dir = temp(
+            "project-blocks",
+            &[
+                ("build.gradle", "project(':lib') {\n  compileJava { options.release = 11 }\n}\nproject(':plugin') {\n  compileJava { options.release = 11 }\n}\n"),
+                ("lib/build.gradle", "dependencies { }\n"),
+                ("plugin/build.gradle", "compileJava { options.release = 17 }\n"),
+            ],
+        );
+        assert_eq!(evidence_of(&dir), vec![(":".into(), Unknown), ("lib".into(), Exact(11)), ("plugin".into(), Unknown)]);
         // Maven: --release is exact, source/target a lower bound, an
         // unresolvable property or a parent outside the repository unknown
         let pom = |inner: &str| format!("<project>{inner}</project>");
