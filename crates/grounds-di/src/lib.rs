@@ -324,6 +324,16 @@ const CDI_BEAN_DEFINING_META: &[&str] = &["jakarta.enterprise.context.NormalScop
 
 pub const QUALIFIER_ANNOTATIONS: &[&str] = &["org.springframework.beans.factory.annotation.Qualifier", "jakarta.inject.Named", "javax.inject.Named"];
 pub const INJECT_ANNOTATIONS: &[&str] = &["org.springframework.beans.factory.annotation.Autowired", "jakarta.inject.Inject", "javax.inject.Inject", "jakarta.annotation.Resource", "javax.annotation.Resource"];
+/// Does the annotation ask the container for a bean? `@Resource` does only
+/// in Spring (CommonAnnotationBeanPostProcessor looks the name up as a bean,
+/// then the type). In a Jakarta EE component it is a resource reference
+/// bound in the component's JNDI environment (by the server, `web.xml`,
+/// `ejb-jar.xml`), which the model does not see, and Micronaut does not
+/// read it at all.
+fn injects(a: &AnnotationInfo, fw: Framework) -> bool {
+    let resource = a.is("jakarta.annotation.Resource") || a.is("javax.annotation.Resource");
+    INJECT_ANNOTATIONS.iter().any(|x| a.is(x)) && (!resource || fw == Framework::Spring)
+}
 const BEAN_METHOD_ANNOTATIONS: &[&str] = &["org.springframework.context.annotation.Bean", "io.micronaut.context.annotation.Bean", "jakarta.inject.Singleton", "javax.inject.Singleton", "io.micronaut.context.annotation.Prototype", "io.micronaut.context.annotation.Context", "jakarta.enterprise.inject.Produces", "javax.enterprise.inject.Produces"];
 const CONDITIONAL_PREFIXES: &[&str] = &["Profile", "Conditional", "Requires", "Requirements", "IfBuildProperty", "LookupIfProperty"];
 
@@ -1372,7 +1382,7 @@ impl<'a> Builder<'a> {
             // field injection
             let raw_inits: Vec<Name> = self.index.raw_class(&c.name).map(|(_, r)| r.fields.iter().filter(|f| f.has_initializer).map(|f| f.name.clone()).collect()).unwrap_or_default();
             for f in &c.fields {
-                if f.annotations.iter().any(|a| INJECT_ANNOTATIONS.iter().any(|x| a.is(x))) {
+                if f.annotations.iter().any(|a| injects(a, fw)) {
                     // Micronaut keeps the field's default value when no bean exists
                     let defaulted = fw != Framework::Spring && raw_inits.contains(&f.name);
                     let optional = defaulted || f.annotations.iter().any(|a| a.simple_name() == "Autowired" && a.arg("required").and_then(|v| v.as_bool()) == Some(false));
@@ -1383,7 +1393,7 @@ impl<'a> Builder<'a> {
             }
             // setter / method injection
             for m in &c.methods {
-                if m.is_constructor() || !m.annotations.iter().any(|a| INJECT_ANNOTATIONS.iter().any(|x| a.is(x))) {
+                if m.is_constructor() || !m.annotations.iter().any(|a| injects(a, fw)) {
                     continue;
                 }
                 let optional = m.annotations.iter().any(|a| a.simple_name() == "Autowired" && a.arg("required").and_then(|v| v.as_bool()) == Some(false));
@@ -3167,5 +3177,40 @@ mod tests {
              interface Listeners {} @Service class Container { @jakarta.inject.Inject Listeners listeners; }");
         let (idx, m) = model(&[app, spring]);
         assert_eq!(point_resolution(&idx, &m, "listeners"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn a_resource_reference_is_a_bean_lookup_only_in_spring() {
+        let ee = "package g; import jakarta.annotation.Resource; import jakarta.ejb.Singleton; import jakarta.enterprise.context.ApplicationScoped;
+             public interface Group {} interface RegistryFactory {}
+             @ApplicationScoped class LegacyGroupBean implements Group {
+                 @Resource(name = \"clustering/group\") private Group group;
+                 @Resource(name = \"clustering/registry\") private RegistryFactory factory;
+                 @jakarta.inject.Inject private RegistryFactory injected;
+             }";
+        let (idx, m) = model(&[("g/LegacyGroupBean.java", ee)]);
+        assert!(m.points.iter().all(|p| p.name == "injected"));
+        assert_eq!(point_resolution(&idx, &m, "injected"), Resolution::NotFound);
+        // Spring resolves @Resource to beans: still judged
+        let spring = ("src/main/java/s/A.java", "package s; import jakarta.annotation.Resource;
+             interface Group {} @org.springframework.stereotype.Service class GroupBean implements Group {}
+             @org.springframework.stereotype.Service class Uses { @Resource(name = \"clustering/group\") private Group group; }");
+        let app = ("src/main/java/s/App.java", "package s; @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }");
+        let (idx, m) = model(&[app, spring]);
+        assert!(matches!(point_resolution(&idx, &m, "group"), Resolution::QualifierNotFound { .. }));
+    }
+
+    #[test]
+    fn an_ejb_session_bean_may_provide_its_type() {
+        // (fixed by #70; kept as the regression test of the triage's reproducer)
+        let files = [
+            ("e/Ejb.java", "package e; import jakarta.ejb.Stateless; @Stateless public class Ejb {}"),
+            ("e/StartUp.java", "package e; import jakarta.ejb.Singleton; import jakarta.ejb.Startup; import jakarta.inject.Inject;
+             @Singleton @Startup public class StartUp { @Inject private Ejb ejb; }"),
+            ("e/Uses.java", "package e; @jakarta.enterprise.context.ApplicationScoped class Uses { @jakarta.inject.Inject Ejb ejb; @jakarta.inject.Inject Missing missing; } interface Missing {}"),
+        ];
+        let (idx, m) = model(&files);
+        assert!(m.points.iter().filter(|p| p.name == "ejb").all(|p| m.resolve(&idx, p, false) == Resolution::Unknown));
+        assert_eq!(point_resolution(&idx, &m, "missing"), Resolution::NotFound);
     }
 }
