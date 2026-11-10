@@ -627,16 +627,22 @@ pub const MAX_CONSTANT_STRING: usize = 1 << 20;
 pub fn fold_binary(op: &str, l: &Constant, r: &Constant) -> Option<Constant> {
     use Constant::*;
     if op == "+" {
-        let s = match (l, r) {
-            (Str(a), b) => Some(format!("{}{}", a, const_to_string(b))),
-            (a, Str(b)) => Some(format!("{}{}", const_to_string(a), b)),
-            _ => None,
-        };
-        if let Some(s) = s {
+        if matches!(l, Str(_)) || matches!(r, Str(_)) {
+            fn part(c: &Constant) -> std::borrow::Cow<'_, str> {
+                match c {
+                    Str(s) => std::borrow::Cow::Borrowed(&**s),
+                    c => std::borrow::Cow::Owned(const_to_string(c)),
+                }
+            }
+            let (a, b) = (part(l), part(r));
             // not a constant past the class file limit (javac: "constant
-            // string too long"); constants defined twice by the previous one
-            // over 50 classes (`K2.S = K1.S + K1.S`) reached 2^50 bytes
-            return (s.len() <= MAX_CONSTANT_STRING).then(|| Str(Arc::from(s.as_str())));
+            // string too long"), checked before joining: constants defined
+            // twice by the previous one over 50 classes (`K2.S = K1.S + K1.S`)
+            // reached 2^50 bytes
+            if a.len().saturating_add(b.len()) > MAX_CONSTANT_STRING {
+                return None;
+            }
+            return Some(Str(Arc::from(format!("{a}{b}").as_str())));
         }
     }
     let integral = |c: &Constant| matches!(c, Int(_) | Long(_) | Char(_));
