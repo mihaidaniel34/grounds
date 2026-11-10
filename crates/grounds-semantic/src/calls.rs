@@ -399,7 +399,10 @@ impl<'t> FileModel<'t> {
                 while let Some(c) = cur {
                     if let Some(cn) = self.class_names.get(&c.id()) {
                         if let Some(ci) = self.class(cn) {
-                            let ms = self.methods_named(&ci.this_type(), name);
+                            // only members of the class: not a private method of
+                            // a supertype (JLS 8.2), which leaves the search to go
+                            // on outward (JLS 15.12.1)
+                            let ms: Vec<MethodRef> = self.members(self.methods_named(&ci.this_type(), name), cn, call).into_iter().filter(|m| !m.method.flags.is_private() || m.owner == *cn).collect();
                             if !ms.is_empty() {
                                 return (ms, Some(ci.this_type()), false);
                             }
@@ -412,7 +415,7 @@ impl<'t> FileModel<'t> {
                     if imp.on_demand || imp.is_named(name) {
                         let cls = if imp.on_demand { imp.path.to_string() } else { imp.path.rsplit_once('.').map(|x| x.0.to_string()).unwrap_or_default() };
                         if let Some(b) = self.index.binary_name_for_dotted(&cls) {
-                            out.extend(self.methods_named(&Ty::class(&b), name).into_iter().filter(|m| m.is_static()));
+                            out.extend(self.members(self.methods_named(&Ty::class(&b), name), &b, call).into_iter().filter(|m| m.is_static()));
                         }
                     }
                 }
@@ -423,11 +426,11 @@ impl<'t> FileModel<'t> {
                     let Some(c) = self.enclosing_class(call) else { return (Vec::new(), None, false) };
                     let mut out = Vec::new();
                     if let Some(st) = &c.superclass {
-                        out = self.methods_named(st, name);
+                        out = self.members_of(st, name, call);
                     }
                     if out.is_empty() {
                         for i in &c.interfaces {
-                            out.extend(self.methods_named(i, name));
+                            out.extend(self.members_of(i, name, call));
                         }
                     }
                     return (out, c.superclass.clone(), false);
@@ -442,7 +445,7 @@ impl<'t> FileModel<'t> {
                 }
                 if matches!(obj.kind(), "identifier" | "field_access" | "scoped_identifier") {
                     if let Some(Symbol::Type(t)) = self.symbol(obj) {
-                        let ms = self.methods_named(&Ty::class(&t), name);
+                        let ms = self.members_of(&Ty::class(&t), name, call);
                         let statics: Vec<MethodRef> = ms.iter().filter(|m| m.is_static()).cloned().collect();
                         return (if statics.is_empty() { ms } else { statics }, None, true);
                     }
@@ -450,7 +453,7 @@ impl<'t> FileModel<'t> {
                 let rt = self.type_of(obj);
                 if let Ty::TypeVar(ref v) = rt {
                     for b in self.type_var_bounds(v, call) {
-                        let ms = self.methods_named(&b, name);
+                        let ms = self.members_of(&b, name, call);
                         if !ms.is_empty() {
                             return (ms, Some(b), false);
                         }
@@ -470,9 +473,36 @@ impl<'t> FileModel<'t> {
                     }
                     return (ms, Some(rt), false);
                 }
-                (self.methods_named(&rt, name), Some(rt), false)
+                (self.members_of(&rt, name, call), Some(rt), false)
             }
         }
+    }
+
+    /// The methods named `name` that are members of `ty` and accessible at
+    /// `call` (see `members`).
+    fn members_of(&self, ty: &Ty, name: &str, call: Node<'t>) -> Vec<MethodRef> {
+        let ms = self.methods_named(ty, name);
+        match ty.class_name() {
+            Some(c) => self.members(ms, c, call),
+            None => ms,
+        }
+    }
+
+    /// Of methods found on class `of`, the ones a call at `call` may select:
+    /// a static method of an interface is not inherited (JLS 8.4.8), so it is
+    /// a member of that interface only; a private method is a member only of
+    /// the class declaring it and accessible only within its top-level class
+    /// (JLS 8.2, 6.6.1), and an inaccessible method is not potentially
+    /// applicable (JLS 15.12.2.1).
+    fn members(&self, ms: Vec<MethodRef>, of: &str, call: Node<'t>) -> Vec<MethodRef> {
+        let top = |n: &str| -> String { n.split('$').next().unwrap_or(n).to_string() };
+        let here = self.enclosing_class_name(call).map(|c| top(&c));
+        ms.into_iter()
+            .filter(|m| !(m.is_static() && m.owner_kind == ClassKind::Interface && &*m.owner != of))
+            // a private method is not inherited either (JLS 8.2): only one the
+            // searched type declares itself
+            .filter(|m| !m.method.flags.is_private() || (&*m.owner == of && here.as_deref().is_none_or(|h| top(&m.owner) == h)))
+            .collect()
     }
 
     fn fit(&self, param: &Ty, arg: &ArgShape) -> Fit {
@@ -1775,10 +1805,8 @@ impl<'t> FileModel<'t> {
 
     fn select_constructor(&self, call: Node<'t>) -> Option<Rc<ResolvedCall>> {
         let class_ty = if call.kind() == "object_creation_expression" {
-            let t = call.field("type")?;
-            let raw = self.resolve_type_node(t);
             // anonymous class: constructor of the super class
-            raw
+            self.created_class(call)
         } else {
             let c = self.enclosing_class(call)?;
             match call.field("constructor").map(|k| k.kind()) {
@@ -2461,12 +2489,82 @@ impl<'t> FileModel<'t> {
         if recv_ty.is_unknown() {
             return Ty::Unknown;
         }
-        let ms = self.methods_named(&recv_ty, name);
+        // members only, as for a call: no private method of a supertype, no
+        // static method of a superinterface
+        let ms = self.members_of(&recv_ty, name, mref);
         let n = sam.params.len();
-        let pick = ms
+        let by_arity: Vec<&MethodRef> = ms
             .iter()
-            .find(|m| if is_type { (m.is_static() && m.method.params.len() == n) || (!m.is_static() && m.method.params.len() + 1 == n) } else { m.method.params.len() == n })
-            .or_else(|| ms.first());
+            .filter(|m| if is_type { (m.is_static() && m.method.params.len() == n) || (!m.is_static() && m.method.params.len() + 1 == n) } else { m.method.params.len() == n })
+            .collect();
+        // overloads of that arity: the ones whose parameters take the
+        // function type's (JLS 15.13.1); unknown unless they agree on one
+        let pick = match by_arity.as_slice() {
+            [] if ms.len() == 1 => ms.first(),
+            [] => None,
+            [one] => Some(*one),
+            several => {
+                // strict invocation: subtyping and primitive widening only;
+                // loose: boxing and unboxing too (JLS 5.3, 15.12.2.2-3)
+                let strict = |s: &Ty, p: &Ty| -> Tri {
+                    match (s.prim(), p.prim()) {
+                        (Some(a), Some(b)) => Tri::from_bool(a.widens_to(b)),
+                        (None, None) => self.is_assignable(s, p),
+                        _ => Tri::No,
+                    }
+                };
+                // (strict, loose) applicability of one candidate
+                let fits = |m: &MethodRef| -> (Tri, Tri) {
+                    // an unbound receiver takes the first parameter, which must
+                    // be of the referenced type
+                    let skip = usize::from(is_type && !m.is_static());
+                    let receiver = if skip == 1 {
+                        let st = sam.params[0].ty.upper_bound();
+                        if st.mentions_type_var() || recv_ty.mentions_type_var() { Tri::Unknown } else { self.is_assignable(&st, &recv_ty) }
+                    } else {
+                        Tri::Yes
+                    };
+                    sam.params[skip..].iter().zip(&m.method.params).fold((receiver, receiver), |(sa, la), (s, p)| {
+                        let st = s.ty.upper_bound();
+                        if st.mentions_type_var() || p.ty.mentions_type_var() {
+                            (sa.and(Tri::Unknown), la.and(Tri::Unknown))
+                        } else {
+                            (sa.and(strict(&st, &p.ty)), la.and(self.is_assignable(&st, &p.ty)))
+                        }
+                    })
+                };
+                let verdicts: Vec<(Tri, Tri)> = several.iter().map(|m| fits(m)).collect();
+                let possible: Vec<&MethodRef> = several.iter().zip(&verdicts).filter(|(_, v)| !v.1.is_no()).map(|(m, _)| *m).collect();
+                // the earliest phase in which some candidate applies; every
+                // candidate's phase must be known
+                let decided = verdicts.iter().all(|(s, l)| s.is_yes() || (s.is_no() && *l != Tri::Unknown) || l.is_no());
+                let phase: Vec<&MethodRef> = if verdicts.iter().any(|v| v.0.is_yes()) {
+                    several.iter().zip(&verdicts).filter(|(_, v)| v.0.is_yes()).map(|(m, _)| *m).collect()
+                } else {
+                    several.iter().zip(&verdicts).filter(|(_, v)| v.1.is_yes()).map(|(m, _)| *m).collect()
+                };
+                // the most specific of them: each parameter a subtype of the
+                // other's, primitives by widening (JLS 15.12.2.5)
+                let below = |a: &MethodRef, b: &MethodRef| {
+                    a.method.params.len() == b.method.params.len() && a.method.params.iter().zip(&b.method.params).all(|(p, q)| !p.ty.mentions_type_var() && !q.ty.mentions_type_var() && strict(&p.ty, &q.ty).is_yes())
+                };
+                let most_specific = || -> Option<&MethodRef> {
+                    let best: Vec<&MethodRef> = phase.iter().copied().filter(|a| phase.iter().all(|b| std::ptr::eq(*a, *b) || below(a, b))).collect();
+                    match best.as_slice() {
+                        [one] if phase.iter().all(|b| std::ptr::eq(*one, *b) || !below(b, one)) => Some(*one),
+                        _ => None,
+                    }
+                };
+                let chosen = match phase.as_slice() {
+                    _ if !decided => None,
+                    [one] => Some(*one),
+                    [] => None,
+                    _ => most_specific(),
+                };
+                // otherwise, only when all that may apply return the same type
+                chosen.or_else(|| possible.first().filter(|f| possible.iter().all(|m| m.method.ret == f.method.ret)).copied())
+            }
+        };
         match pick {
             Some(m) if !m.method.ret.mentions_type_var() => m.method.ret.clone(),
             Some(m) if is_type && !m.is_static() && n >= 1 => {
@@ -2489,6 +2587,28 @@ impl<'t> FileModel<'t> {
 
     /// Type of a `new` expression, inferring diamond type arguments from the
     /// target type.
+    /// The class an instance creation names. In a qualified one,
+    /// `outer.new Inner()`, the name is a member type of the qualifier's type
+    /// (JLS 15.9.1), whatever the name means in scope.
+    pub fn created_class(&self, n: Node<'t>) -> Ty {
+        let Some(tn) = n.field("type") else { return Ty::Unknown };
+        let qualifier = n.kids().into_iter().find(|k| k.end_byte() <= tn.start_byte() && !matches!(k.kind(), "type_arguments" | "annotation" | "marker_annotation"));
+        let Some(q) = qualifier else { return self.resolve_type_node(tn) };
+        let (simple, args) = match tn.kind() {
+            "type_identifier" => (tn, None),
+            "generic_type" => match (tn.named_child(0), tn.kid_of_kind("type_arguments")) {
+                (Some(s), ta) if s.kind() == "type_identifier" => (s, ta),
+                _ => return Ty::Unknown,
+            },
+            _ => return Ty::Unknown,
+        };
+        let Some(outer) = self.type_of(q).class_name().map(str::to_string) else { return Ty::Unknown };
+        let simple = simple.text(self.src);
+        let Some(member) = self.index.member_type(&outer, simple).or_else(|| self.class(&format!("{outer}${simple}")).map(|c| c.name.clone())) else { return Ty::Unknown };
+        let args = args.map(|ta| ta.kids().into_iter().map(|a| self.resolve_type_node(a)).collect()).unwrap_or_default();
+        Ty::Class { name: member, args }
+    }
+
     pub fn creation_type(&self, n: Node<'t>) -> Ty {
         if n.kind() != "object_creation_expression" {
             return Ty::Unknown;
@@ -2500,7 +2620,7 @@ impl<'t> FileModel<'t> {
             }
         }
         let Some(tn) = n.field("type") else { return Ty::Unknown };
-        let t = self.resolve_type_node(tn);
+        let t = self.created_class(n);
         let is_diamond = tn.kind() == "generic_type" && tn.kid_of_kind("type_arguments").is_some_and(|ta| ta.kids().is_empty());
         if !is_diamond {
             return t;

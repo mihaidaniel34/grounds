@@ -9,7 +9,7 @@ use std::sync::Arc;
 const LOMBOK: &str = "lombok";
 
 /// Settings from `lombok.config` files that change generated signatures.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct LombokConfig {
     /// `lombok.accessors.fluent`: getters/setters named like the field
     pub fluent: bool,
@@ -190,6 +190,59 @@ fn members_unknown(c: &RawClass, imports: &[Import], cfg: &LombokConfig) -> bool
     };
     c.fields.iter().any(|f| unmodelled_singular(&f.annotations, &f.ty, &strip_prefix_name(&f.name, &cfg.prefixes)))
         || c.methods.iter().flat_map(|m| m.params.iter()).any(|p| unmodelled_singular(&p.annotations, &p.ty, &p.name))
+}
+
+/// The annotations Lombok takes for "non-null" (`NONNULL_ANNOTATIONS` of
+/// Lombok 1.18.36, read from its `HandlerUtil`): a field carrying one is required by
+/// `@RequiredArgsConstructor`.
+const NON_NULL: &[&str] = &[
+    "android.annotation.NonNull",
+    "android.support.annotation.NonNull",
+    "android.support.annotation.RecentlyNonNull",
+    "androidx.annotation.NonNull",
+    "androidx.annotation.RecentlyNonNull",
+    "com.android.annotations.NonNull",
+    "com.google.firebase.database.annotations.NotNull",
+    "com.mongodb.lang.NonNull",
+    "com.sun.istack.NotNull",
+    "com.unboundid.util.NotNull",
+    "edu.umd.cs.findbugs.annotations.NonNull",
+    "io.micrometer.core.lang.NonNull",
+    "io.reactivex.annotations.NonNull",
+    "io.reactivex.rxjava3.annotations.NonNull",
+    "jakarta.annotation.Nonnull",
+    "javax.annotation.Nonnull",
+    "libcore.util.NonNull",
+    "lombok.NonNull",
+    "org.checkerframework.checker.nullness.compatqual.NonNullDecl",
+    "org.checkerframework.checker.nullness.compatqual.NonNullType",
+    "org.checkerframework.checker.nullness.qual.NonNull",
+    "org.codehaus.commons.nullanalysis.NotNull",
+    "org.eclipse.jdt.annotation.NonNull",
+    "org.jetbrains.annotations.NotNull",
+    "org.jmlspecs.annotation.NonNull",
+    "org.jspecify.annotations.NonNull",
+    "org.netbeans.api.annotations.common.NonNull",
+    "org.springframework.lang.NonNull",
+    "reactor.util.annotation.NonNull",
+];
+
+/// Whether `a` is one of [`NON_NULL`], by its qualified name or through the
+/// file's imports. A bare `@NonNull` stays Lombok's when nothing else is
+/// imported under that name, as before.
+fn non_null(a: &RawAnnotation, imports: &[Import]) -> bool {
+    let simple = a.simple_name();
+    if !matches!(simple, "NonNull" | "NotNull" | "Nonnull" | "RecentlyNonNull" | "NonNullDecl" | "NonNullType") {
+        return false;
+    }
+    if a.name.contains('.') {
+        return NON_NULL.contains(&&*a.name);
+    }
+    let named: Vec<&Import> = imports.iter().filter(|i| !i.is_static && !i.on_demand && i.path.rsplit('.').next() == Some(simple)).collect();
+    if let Some(i) = named.first() {
+        return NON_NULL.contains(&&*i.path);
+    }
+    simple == "NonNull" || imports.iter().any(|i| i.on_demand && !i.is_static && NON_NULL.contains(&format!("{}.{simple}", i.path).as_str()))
 }
 
 /// An implemented annotation used with an option the model does not
@@ -538,11 +591,12 @@ fn apply_one(c: &mut RawClass, imported: bool, imports: &[Import], cfg: &LombokC
     // static method, so for constructors it counts as uninitialized.
     let builder_default = |f: &RawField| f.annotations.iter().any(|a| a.name.ends_with("Builder.Default") || (&*a.name == "Default" && imported));
     let initialized = |f: &RawField| f.has_initializer && !builder_default(f);
-    let instance_fields: Vec<&RawField> = fields.iter().filter(|f| !f.flags.is_static() && !f.flags.has(Flags::ENUM_CONSTANT)).collect();
+    // Lombok leaves fields whose name starts with `$` out of constructors
+    let instance_fields: Vec<&RawField> = fields.iter().filter(|f| !f.flags.is_static() && !f.flags.has(Flags::ENUM_CONSTANT) && !f.name.starts_with('$')).collect();
     let required: Vec<&RawField> = instance_fields
         .iter()
         .copied()
-        .filter(|f| !initialized(f) && (f.flags.is_final() || f.annotations.iter().any(|a| a.simple_name() == "NonNull")))
+        .filter(|f| !initialized(f) && (f.flags.is_final() || f.annotations.iter().any(|a| non_null(a, imports))))
         .collect();
     let all: Vec<&RawField> = instance_fields.iter().copied().filter(|f| !(f.flags.is_final() && initialized(f))).collect();
     let explicit_ctor = c.methods.iter().any(|m| m.flags.has(Flags::CONSTRUCTOR) && !m.flags.has(Flags::IMPLICIT));

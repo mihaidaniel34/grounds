@@ -317,3 +317,192 @@ fn lombok_classes_with_unmodelled_annotations_are_marked_open() {
         assert!(open(n), "{n} not open");
     }
 }
+
+#[test]
+fn a_receiver_parameter_is_not_a_parameter() {
+    // JLS 8.4: `@A R this` and `R.this` only carry type annotations
+    let idx = index_of(&[(
+        "R.java",
+        "package p; class R {
+           boolean ok(@A R this, int x) { return true; }
+           boolean plain(R this) { return true; }
+           class I { I(@A R R.this, int y) {} }
+         }",
+    )]);
+    let r = idx.class("p.R").unwrap();
+    let ok = r.methods_named("ok").next().unwrap();
+    assert_eq!(ok.params.iter().map(|p| &*p.name).collect::<Vec<_>>(), ["x"]);
+    assert!(r.methods_named("plain").next().unwrap().params.is_empty());
+    let i = idx.class("p.R$I").unwrap();
+    assert_eq!(i.methods_named("<init>").next().map(|m| m.params.len()), Some(1));
+}
+
+#[test]
+fn manifold_runtime_imports_mark_their_module_as_extended() {
+    let mut idx = index_of(&[
+        ("/r/a/src/test/java/p/A.java", "package p; import manifold.ext.rt.api.Jailbreak; class A {}"),
+        ("/r/a/src/main/java/p/B.java", "package p; class B {}"),
+        ("/r/b/src/main/java/q/C.java", "package q; import manifold.ext.Other; class C {}"),
+    ]);
+    assert!(idx.language_extended("/r/a/src/main/java/p/B.java"));
+    assert!(!idx.language_extended("/r/b/src/main/java/q/C.java"), "no runtime API import in module b");
+    // an extension class adds methods in every module
+    let pf = ParsedFile::parse("package e; import manifold.ext.rt.api.Extension; @Extension public class MyStringExt {}");
+    idx.set_file(Arc::from("/r/c/src/main/java/e/MyStringExt.java"), Arc::new(extract(&pf)));
+    assert!(idx.language_extended("/r/b/src/main/java/q/C.java"));
+}
+
+fn simple_in(idx: &Index, class: &str, simple: &str) -> Option<String> {
+    let scope = idx.scope_for_class(class).unwrap();
+    idx.resolve_simple_type(simple, &scope).map(|n| n.to_string())
+}
+
+#[test]
+fn a_private_member_type_of_a_superclass_is_not_inherited() {
+    // JLS 8.2, 8.5: `Value` in r.T is the imported one, not q.Base's private class
+    let idx = index_of(&[
+        ("q/Base.java", "package q; public class Base { private static class Value { } protected static class Kept { } }"),
+        ("lib/Value.java", "package lib; public class Value { }"),
+        ("r/T.java", "package r; import lib.Value; import q.Base; class T extends Base { }"),
+    ]);
+    assert_eq!(simple_in(&idx, "r.T", "Value").as_deref(), Some("lib.Value"));
+    assert_eq!(simple_in(&idx, "r.T", "Kept").as_deref(), Some("q.Base$Kept"));
+    assert_eq!(simple_in(&idx, "q.Base", "Value").as_deref(), Some("q.Base$Value"));
+}
+
+#[test]
+fn an_on_demand_import_imports_only_accessible_classes() {
+    // JLS 7.5.2: a.Node is package-private, so b sees no `Node` from `a.*`
+    let idx = index_of(&[
+        ("a/Graph.java", "package a; public class Graph { } class Node { }"),
+        ("a/Edge.java", "package a; public class Edge { }"),
+        ("a/Other.java", "package a; class Other { }"),
+        ("b/Viewer.java", "package b; import a.*; import lib.graph.*; class Viewer { }"),
+        ("a/Same.java", "package a; import a.*; class Same { }"),
+    ]);
+    assert_eq!(simple_in(&idx, "b.Viewer", "Node"), None);
+    assert_eq!(simple_in(&idx, "b.Viewer", "Edge").as_deref(), Some("a.Edge"));
+    assert_eq!(simple_in(&idx, "a.Same", "Other").as_deref(), Some("a.Other"));
+}
+
+#[test]
+fn a_test_class_is_not_imported_into_main_sources_or_another_module() {
+    let idx = index_of(&[
+        ("m/src/test/java/a/Node.java", "package a; public class Node { }"),
+        ("m/src/main/java/a/Graph.java", "package a; public class Graph { }"),
+        ("m/src/main/java/b/Main.java", "package b; import a.*; class Main { }"),
+        ("m/src/test/java/b/MainTest.java", "package b; import a.*; class MainTest { }"),
+        ("n/src/test/java/c/OtherTest.java", "package c; import a.*; class OtherTest { }"),
+    ]);
+    assert_eq!(simple_in(&idx, "b.Main", "Node"), None);
+    assert_eq!(simple_in(&idx, "b.MainTest", "Node").as_deref(), Some("a.Node"));
+    assert_eq!(simple_in(&idx, "c.OtherTest", "Node"), None);
+    assert_eq!(simple_in(&idx, "b.Main", "Graph").as_deref(), Some("a.Graph"));
+}
+
+#[test]
+fn an_unresolved_supertype_may_declare_any_member_type() {
+    let in_code = |idx: &Index, class: &str, simple: &str| {
+        let mut scope = idx.scope_for_class(class).unwrap();
+        scope.unknown_if_inherited = true;
+        idx.resolve_simple_type(simple, &scope).map(|n| n.to_string())
+    };
+    // lib.DataSource is not on the classpath: `Attribute` may be its member type
+    let idx = index_of(&[
+        ("p/Attribute.java", "package p; enum Attribute { NAME }"),
+        ("p/Ds.java", "package p; import lib.DataSource; import java.util.List; class Ds implements DataSource { static class Inner { } }"),
+        ("p/Plain.java", "package p; class Plain { }"),
+        ("p/Module.java", "package p; interface Module { }"),
+        ("p/Sub.java", "package p; class Sub extends Ds { }"),
+    ]);
+    assert_eq!(in_code(&idx, "p.Ds", "Attribute"), None);
+    assert_eq!(in_code(&idx, "p.Sub", "Attribute"), None, "through a project superclass too");
+    // what is known stays known: member types, single-type imports, java.lang
+    assert_eq!(in_code(&idx, "p.Ds", "Inner").as_deref(), Some("p.Ds$Inner"));
+    assert_eq!(in_code(&idx, "p.Ds", "List").as_deref(), Some("java.util.List"));
+    assert_eq!(in_code(&idx, "p.Ds", "String").as_deref(), Some("java.lang.String"));
+    // a same-package class would shadow java.lang's
+    assert_eq!(in_code(&idx, "p.Ds", "Module"), None);
+    assert_eq!(in_code(&idx, "p.Plain", "Attribute").as_deref(), Some("p.Attribute"));
+    // declarations lowered for the whole project keep the package's class
+    assert_eq!(simple_in(&idx, "p.Ds", "Attribute").as_deref(), Some("p.Attribute"));
+}
+
+#[test]
+fn an_inherited_member_type_comes_before_the_class_own_name() {
+    let idx = index_of(&[
+        ("P.java", "public class P { public static class Q extends P { public static class B { } } }"),
+        ("S.java", "public class S extends P { public static class Q extends P { public static class B extends Q.B { } } }"),
+    ]);
+    assert_eq!(simple_in(&idx, "S$Q", "Q").as_deref(), Some("P$Q"));
+    let b = idx.class("S$Q$B").unwrap();
+    assert_eq!(b.superclass.as_ref().unwrap().to_string(), "P.Q.B");
+    assert_eq!(simple_in(&idx, "S", "S").as_deref(), Some("S"));
+}
+
+#[test]
+fn inherited_override_equivalent_methods_keep_the_one_a_call_selects() {
+    let idx = index_of(&[(
+        "p/T.java",
+        "package p;
+         interface Model { Model setPrefix(String p); }
+         interface Prefixed<R> { R setPrefix(String p); }
+         interface Ont extends Model, Prefixed<Ont> { }
+         interface Named { CharSequence name(); }
+         interface Titled { Comparable<String> name(); }
+         interface Both extends Named, Titled { }
+         interface Data { }
+         interface Manager { Data data(); }
+         class Cache implements Data { }
+         abstract class AbstractManager implements Manager { public Cache data() { return null; } }
+         abstract class Holder<H> extends AbstractManager { }
+         class User extends Holder<String> implements Manager { }
+         interface Impl { private Object help() { return null; } }
+         interface Api { String help(); }
+         interface Helped extends Impl, Api { }",
+    )]);
+    let ret = |cls: &str, m: &str| {
+        let ms = idx.methods_named(&Ty::class(cls), m);
+        assert_eq!(ms.len(), 1, "{cls}.{m}: {ms:?}");
+        ms[0].method.ret.to_string()
+    };
+    assert_eq!(ret("p.Ont", "setPrefix"), "p.Ont");
+    assert_eq!(ret("p.User", "data"), "p.Cache");
+    // neither return type is a subtype of the other: unknown
+    assert_eq!(ret("p.Both", "name"), "?unknown");
+    // the abstract method is still the one found once implemented
+    assert_eq!(idx.all_methods(&Ty::class("p.User")).iter().filter(|m| &*m.method.name == "data").count(), 1);
+    // a private interface method is not inherited, and is no rival
+    let ms = idx.methods_named(&Ty::class("p.Helped"), "help");
+    assert!(ms.iter().any(|m| &*m.owner == "p.Api" && m.method.ret.to_string() == "java.lang.String"), "{ms:?}");
+}
+
+#[test]
+fn a_wildcard_for_a_parameter_with_several_bounds_is_unknown() {
+    // JLS 4.9: the capture is an intersection, which one type cannot stand for
+    let idx = index_of(&[(
+        "p/N.java",
+        "package p; abstract class Root { } interface Code { }
+         class Nodes<N extends Root & Code> { N get() { return null; } }
+         class One<N extends Root> { N get() { return null; } }",
+    )]);
+    let wild = |c: &str| Ty::class_with(c, vec![Ty::Wildcard(None)]);
+    assert_eq!(idx.methods_named(&wild("p.Nodes"), "get")[0].method.ret, Ty::Unknown);
+    assert_eq!(idx.methods_named(&wild("p.One"), "get")[0].method.ret.to_string(), "p.Root");
+    let root = Ty::Wildcard(Some(Box::new(WildcardBound::Super(Ty::class("p.Root")))));
+    assert!(idx.methods_named(&Ty::class_with("p.Nodes", vec![root]), "get")[0].method.ret.is_known());
+}
+
+#[test]
+fn lombok_required_fields_follow_its_non_null_annotations() {
+    let idx = index_of(&[(
+        "q/R.java",
+        "package q; import lombok.*; import javax.annotation.*; import com.example.NotNull;
+         @RequiredArgsConstructor class R { @Nonnull String a; @NotNull String b; @javax.annotation.Nonnull String c; String d; }
+         @AllArgsConstructor class S { String a; String $b; }",
+    )]);
+    let ctor = |c: &str| idx.class(c).unwrap().methods_named("<init>").map(|m| m.params.len()).collect::<Vec<_>>();
+    // com.example.NotNull is not one Lombok knows
+    assert_eq!(ctor("q.R"), vec![2]);
+    assert_eq!(ctor("q.S"), vec![1]);
+}
