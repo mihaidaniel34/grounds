@@ -633,6 +633,10 @@ declare_rule!(NegatedCompareTo {
     category: Bug,
     severity: Warning,
     maturity: Preview,
+    // off by default: the comparators it meets (String, Double.compare,
+    // project types) never return Integer.MIN_VALUE, and the hold-out
+    // projects showed no case where one could
+    enabled: false,
     sources: ["spotbugs:RV_NEGATING_RESULT_OF_COMPARETO"],
     kinds: ["unary_expression"],
     description: "`compareTo` may return `Integer.MIN_VALUE`, whose negation is itself, so `-a.compareTo(b)` does not reliably reverse the order. Swap the operands instead: `b.compareTo(a)`.",

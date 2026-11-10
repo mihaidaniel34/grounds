@@ -65,7 +65,7 @@ Maturity: 0 rules are `stable` (held to the project's precision promise), 318 ar
 | `nan-comparison` | error | preview | edit | spotbugs:FE_TEST_IF_EQUAL_TO_NOT_A_NUMBER, errorprone:EqualsNaN |
 | `equals-null` | error | preview | edit | spotbugs:EC_NULL_ARG, pmd:EqualsNull |
 | `compareto-specific-value` | error | preview | edit | sonar:S2200, spotbugs:RV_CHECK_COMPARETO_FOR_SPECIFIC_RETURN_VALUE |
-| `negated-compareto` | warning | preview | checkpoint | spotbugs:RV_NEGATING_RESULT_OF_COMPARETO |
+| `negated-compareto` *off* | warning | preview | checkpoint | spotbugs:RV_NEGATING_RESULT_OF_COMPARETO |
 | `equals-without-hashcode` | error | preview | edit | sonar:S1206, spotbugs:HE_EQUALS_NO_HASHCODE, spotbugs:HE_HASHCODE_NO_EQUALS, pmd:OverrideBothEqualsAndHashcode, intellij:EqualsAndHashcode |
 | `equals-overload` | error | preview | edit | sonar:S1201, spotbugs:EQ_SELF_NO_OBJECT, errorprone:NonOverridingEquals, intellij:CovariantEquals |
 | `class-name-comparison` | info | preview | checkpoint | sonar:S1872, spotbugs:EQ_COMPARING_CLASS_NAMES |
