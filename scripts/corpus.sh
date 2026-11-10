@@ -17,7 +17,8 @@
 # CORPUS_BASELINE=dir compares with dir/<project>.txt instead of the local
 # target/corpus/baseline (CI keeps its own baseline in corpus/ci: runners
 # have no Maven/Gradle caches, so fewer calls resolve than on a dev machine).
-# CORPUS_SHALLOW=1 fetches just the pinned commit (CI).
+# CORPUS_SHALLOW=1 fetches just the pinned commit (CI), or with CORPUS_DEPTH=n
+# the n commits that end there (for scripts/replay.py).
 set -euo pipefail
 
 repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -46,7 +47,7 @@ fetch() {
     dir=$corpus_dir/$name
     if [ ! -d "$dir/.git" ] && [ -n "${CORPUS_SHALLOW:-}" ]; then
       echo "fetch $name"
-      git init -q "$dir" && git -C "$dir" fetch -q --depth 1 "$url" "$commit" && git -C "$dir" checkout -q --detach FETCH_HEAD
+      git init -q "$dir" && git -C "$dir" fetch -q --depth "${CORPUS_DEPTH:-1}" "$url" "$commit" && git -C "$dir" checkout -q --detach FETCH_HEAD
       continue
     fi
     if [ ! -d "$dir/.git" ]; then

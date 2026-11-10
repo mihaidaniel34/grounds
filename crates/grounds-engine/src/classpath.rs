@@ -22,7 +22,7 @@ pub fn home_dir() -> Option<PathBuf> {
 
 /// Classpath files in use: those listed in grounds.toml, then the default
 /// dump if it exists and is not listed.
-fn classpath_files(ws: &Workspace, cfg: &Config) -> Vec<PathBuf> {
+pub(crate) fn classpath_files(ws: &Workspace, cfg: &Config) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = cfg.classpath.files.iter().map(|f| if f.is_absolute() { f.clone() } else { ws.root.join(f) }).collect();
     let default_dump = ws.root.join(".grounds/classpath.txt");
     if default_dump.exists() && !files.contains(&default_dump) {
@@ -115,7 +115,7 @@ impl std::fmt::Display for Warning {
 }
 
 /// Build files a classpath dump is generated from.
-const BUILD_FILES: &[&str] = &["pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "gradle.properties", "gradle/libs.versions.toml"];
+pub(crate) const BUILD_FILES: &[&str] = &["pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts", "gradle.properties", "gradle/libs.versions.toml"];
 
 /// A classpath file this much older than a build file is stale; checkouts
 /// write files in some order, so a few seconds apart means nothing.

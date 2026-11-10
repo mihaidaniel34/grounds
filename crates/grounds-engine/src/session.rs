@@ -25,8 +25,30 @@ pub struct Session {
     pub resolution_rules: RuleSet,
     pub options: RuleOptions,
     mtimes: FxHashMap<PathBuf, SystemTime>,
+    /// Build and configuration files the project was loaded from (and the
+    /// places one may appear), with their modification times.
+    config: Vec<(PathBuf, Option<SystemTime>)>,
     /// Classpath warnings already shown in this session.
     warned: bool,
+}
+
+/// The files that decide a project's modules, classpath and settings: build
+/// files of the root and of every module, `lombok.config`, `grounds.toml`
+/// and the classpath dumps. Listed whether they exist or not, so that one
+/// appearing counts as a change.
+fn config_files(project: &Project) -> Vec<(PathBuf, Option<SystemTime>)> {
+    let ws = &project.workspace;
+    let mut paths: Vec<PathBuf> = ["grounds.toml", ".grounds/config.toml"].iter().map(|n| ws.root.join(n)).collect();
+    let mut dirs: Vec<&Path> = vec![&ws.root];
+    dirs.extend(ws.modules.iter().map(|m| m.dir.as_path()));
+    for d in dirs {
+        paths.extend(crate::classpath::BUILD_FILES.iter().chain(&["lombok.config"]).map(|n| d.join(n)));
+    }
+    paths.extend(project.lombok.files());
+    paths.extend(crate::classpath::classpath_files(ws, &project.config));
+    paths.sort();
+    paths.dedup();
+    paths.into_iter().map(|p| { let m = std::fs::metadata(&p).and_then(|m| m.modified()).ok(); (p, m) }).collect()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -129,7 +151,8 @@ impl Session {
         // same configuration as full checks, narrowed to edit-tier rules
         let edit_rules = RuleSet::new(crate::analyze::selected_rules(&project).into_iter().filter(|r| r.meta().tier == Tier::Edit).collect());
         let resolution_rules = RuleSet::new(crate::analyze::selected_rules(&project).into_iter().filter(|r| r.meta().id.starts_with("unresolved-")).collect());
-        let mut s = Session { project, all_rules, edit_rules, resolution_rules, options, mtimes: FxHashMap::default(), warned: false };
+        let config = config_files(&project);
+        let mut s = Session { project, all_rules, edit_rules, resolution_rules, options, mtimes: FxHashMap::default(), config, warned: false };
         for f in &s.project.workspace.files {
             if let Ok(m) = std::fs::metadata(&f.path).and_then(|m| m.modified()) {
                 s.mtimes.insert(f.path.clone(), m);
@@ -154,6 +177,17 @@ impl Session {
     /// Re-read files whose modification time changed (and the given extra
     /// files, which may be new). Returns files whose declarations changed.
     pub fn sync(&mut self, extra: &[PathBuf]) -> Vec<PathBuf> {
+        // A build or configuration file changed, appeared or went: the
+        // modules, the classpath and the settings come from those, so the
+        // project is loaded again, as a new session would load it. (Without
+        // this a daemon kept the layout it started with: after a module was
+        // added or renamed its files counted as the root module's.)
+        if self.config.iter().any(|(p, old)| std::fs::metadata(p).and_then(|m| m.modified()).ok() != *old) {
+            let root = self.root().to_path_buf();
+            if let Ok(project) = Project::load(&root) {
+                *self = Session::from_project(project);
+            }
+        }
         let mut stale: Vec<PathBuf> = Vec::new();
         for (p, old) in &self.mtimes {
             match std::fs::metadata(p).and_then(|m| m.modified()) {

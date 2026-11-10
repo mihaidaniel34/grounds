@@ -86,6 +86,11 @@ pub struct LombokConfigs {
 }
 
 impl LombokConfigs {
+    /// The `lombok.config` files found.
+    pub fn files(&self) -> impl Iterator<Item = PathBuf> + '_ {
+        self.dirs.iter().map(|(d, _)| d.join("lombok.config"))
+    }
+
     pub fn discover(root: &Path) -> LombokConfigs {
         let mut dirs = Vec::new();
         let walker = ignore::WalkBuilder::new(root)

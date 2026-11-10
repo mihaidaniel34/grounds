@@ -401,3 +401,48 @@ fn a_body_only_edit_resolves_classes_as_a_fresh_load_does() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_changed_build_file_reloads_the_project() {
+    let dir = std::env::temp_dir().join(format!("grounds-session-reload-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write(&dir, "settings.gradle", "include 'app'\n");
+    write(&dir, "app/build.gradle", "plugins { id 'java' }\n");
+    write(&dir, "app/src/main/java/demo/App.java", "package demo;\npublic class App {}\n");
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+    let mut s = Session::open(&dir).unwrap();
+    let modules = |s: &Session| {
+        let mut names: Vec<String> = s.project.workspace.modules.iter().map(|m| m.name.clone()).collect();
+        names.sort();
+        names
+    };
+    let module_of = |s: &Session, rel: &str| {
+        let ws = &s.project.workspace;
+        let file = ws.root.join(rel);
+        ws.files.iter().find(|f| f.path == file).map(|f| ws.modules[f.module].name.clone())
+    };
+    assert_eq!(modules(&s), [":", "app"]);
+
+    // a second module: its build file, the settings that include it, a source file
+    write(&dir, "lib/build.gradle", "plugins { id 'java-library' }\n");
+    write(&dir, "lib/src/main/java/demo/Lib.java", "package demo;\npublic class Lib {}\n");
+    write(&dir, "settings.gradle", "include 'app', 'lib'\n");
+    let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
+    std::fs::File::options().write(true).open(dir.join("settings.gradle")).unwrap().set_modified(later).unwrap();
+    s.sync(&[dir.join("lib/src/main/java/demo/Lib.java")]);
+    let fresh = Session::open(&dir).unwrap();
+    assert_eq!(modules(&s), modules(&fresh), "the modules a fresh load finds");
+    assert_eq!(modules(&s), [":", "app", "lib"]);
+    assert_eq!(module_of(&s, "lib/src/main/java/demo/Lib.java").as_deref(), Some("lib"), "the new file belongs to the new module");
+
+    // a setting changed: grounds.toml did not exist when the session opened
+    assert!(s.project.config.exclude.is_empty());
+    write(&dir, "grounds.toml", "exclude = [\"lib/**\"]\n");
+    s.sync(&[]);
+    assert_eq!(s.project.config.exclude, ["lib/**"]);
+    assert_eq!(module_of(&s, "lib/src/main/java/demo/Lib.java"), None, "the excluded file is gone, as in a fresh load");
+    let _ = std::fs::remove_dir_all(&dir);
+}
