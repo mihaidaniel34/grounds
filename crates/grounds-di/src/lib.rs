@@ -278,7 +278,7 @@ pub fn decapitalize(s: &str) -> String {
     a.to_lowercase().collect::<String>() + &s[a.len_utf8()..]
 }
 
-use grounds_index::sources::is_test_path;
+use grounds_index::sources::{is_test_code, is_test_path};
 
 /// `public static void main(String[])`, the entry point of an application.
 fn has_main(c: &ClassInfo) -> bool {
@@ -362,7 +362,21 @@ impl<'a> Builder<'a> {
             }
             let metas = c.annotations.clone();
             // a JSR-330 scope (Micronaut's own scopes are meta-annotated @Scope)
-            if metas.iter().any(|m| m.is("jakarta.inject.Scope") || m.is("javax.inject.Scope")) {
+            // (an unresolved `@Scope` by the file's imports: it may be Spring's)
+            let jsr330_scope = |m: &AnnotationInfo| match (m.resolved, &*m.name) {
+                (true, name) => matches!(name, "jakarta.inject.Scope" | "javax.inject.Scope"),
+                (false, "jakarta.inject.Scope" | "javax.inject.Scope") => true,
+                (false, "Scope") => self.index.raw_class(n).is_some_and(|(stub, _)| {
+                    let single: Vec<_> = stub.imports.iter().filter(|i| !i.is_static && !i.on_demand && i.is_named("Scope")).collect();
+                    match single.as_slice() {
+                        [] => stub.imports.iter().any(|i| !i.is_static && i.on_demand && matches!(&*i.path, "jakarta.inject" | "javax.inject")),
+                        [i] => matches!(&*i.path, "jakarta.inject.Scope" | "javax.inject.Scope"),
+                        _ => false,
+                    }
+                }),
+                _ => false,
+            };
+            if metas.iter().any(jsr330_scope) {
                 return Some(if n.starts_with("io.micronaut") { Framework::Micronaut } else { Framework::Jakarta });
             }
             metas.iter().find_map(|m| if &*m.name == n { None } else { self.stereotype(m, depth + 1) })
@@ -461,9 +475,11 @@ impl<'a> Builder<'a> {
                 continue;
             }
             for imp in &stub.imports {
-                if let Some((_, name)) = UNMODELED_CONTAINERS.iter().find(|(prefix, _)| imp.path.starts_with(prefix)) {
+                // (`import com.google.inject.*` keeps only the package)
+                let imported = format!("{}.", imp.path);
+                if let Some((_, name)) = UNMODELED_CONTAINERS.iter().find(|(prefix, _)| imported.starts_with(prefix)) {
                     // (the smallest name, whatever order the files come in)
-                    let slot = if is_test_path(path) { &mut self.model.unmodeled_container_in_tests } else { &mut self.model.unmodeled_container };
+                    let slot = if is_test_code(path) { &mut self.model.unmodeled_container_in_tests } else { &mut self.model.unmodeled_container };
                     if slot.is_none_or(|s| *name < s) {
                         *slot = Some(name);
                     }
@@ -816,8 +832,11 @@ impl<'a> Builder<'a> {
                         // subclass and calls the override: an override without
                         // @Bean (of an abstract @Bean method) still defines the bean
                         Some(x) => {
+                            // (the override's own annotations, @Primary or a
+                            // qualifier, stay)
                             if is_factory(m) && !is_factory(x) {
-                                x.annotations = m.annotations.clone();
+                                let missing: Vec<AnnotationInfo> = m.annotations.iter().filter(|a| !x.annotations.iter().any(|o| o.name == a.name)).cloned().collect();
+                                x.annotations.extend(missing);
                             }
                         }
                         None => factory_methods.push(m.clone()),
@@ -1191,7 +1210,7 @@ impl DiModel {
         // bindings we cannot see: Guice resolves cycles through proxies,
         // Sisu picks the highest-ranked of several implementations, and
         // any module, binder or build step may bind the type
-        if p.framework == Framework::Jakarta && (self.unmodeled_container.is_some() || (self.unmodeled_container_in_tests.is_some() && p.file.as_deref().is_some_and(is_test_path))) {
+        if p.framework == Framework::Jakarta && (self.unmodeled_container.is_some() || (self.unmodeled_container_in_tests.is_some() && p.file.as_deref().is_some_and(is_test_code))) {
             return Resolution::Unknown;
         }
         // a library's beans are wired by the application using it
@@ -1819,6 +1838,7 @@ mod tests {
         // cycle (Guice proxies interfaces)
         for evidence in [
             "package app.wiring; import com.google.inject.AbstractModule; public class Wiring extends AbstractModule {}",
+            "package app.wiring; import com.google.inject.*; public class Wiring extends AbstractModule {}",
             "package app.wiring; import org.eclipse.sisu.space.SpaceModule; public class Wiring {}",
             "package app.wiring; import org.glassfish.hk2.utilities.binding.AbstractBinder; public class Wiring extends AbstractBinder {}",
             "package app.wiring; import dagger.Module; @Module public class Wiring {}",
@@ -1834,6 +1854,11 @@ mod tests {
         }
         // a Guice module in the tests wires the tests only
         let (idx, m) = jsr330_project(&[("src/test/java/app/TestWiring.java", "package app; import com.google.inject.AbstractModule; class TestWiring extends AbstractModule {}")]);
+        assert_eq!(point_resolution(&idx, &m, "store"), Resolution::NotFound);
+        assert_eq!(point_resolution(&idx, &m, "testStore"), Resolution::Unknown);
+        // ... and so does one in a module that exists only for testing
+        let (idx, m) = jsr330_project(&[("tests/fixtures/src/main/java/fixture/Wiring.java", "package fixture; import com.google.inject.AbstractModule; class Wiring extends AbstractModule {}")]);
+        assert!(m.unmodeled_container.is_none());
         assert_eq!(point_resolution(&idx, &m, "store"), Resolution::NotFound);
         assert_eq!(point_resolution(&idx, &m, "testStore"), Resolution::Unknown);
     }
@@ -1868,6 +1893,21 @@ mod tests {
         ]);
         assert!(matches!(point_resolution(&idx, &m, "wrapper"), Resolution::Unique(_)));
         assert!(matches!(point_resolution(&idx, &m, "tenant"), Resolution::Unique(_)));
+        // only JSR-330's @Scope, by its full name, even when it does not
+        // resolve; an unresolved Spring @Scope on a composed annotation is
+        // not one
+        let (idx, m) = model(&[
+            ("src/main/java/app/PerTenant.java", "package app; import jakarta.inject.Scope; @Scope public @interface PerTenant {}"),
+            ("src/main/java/app/Odd.java", "package app; import org.springframework.context.annotation.Scope; @Scope(\"request\") public @interface Odd {}"),
+            ("src/main/java/app/A.java", "package app; import jakarta.inject.*;
+             interface Tenant {}
+             @PerTenant class CurrentTenant implements Tenant {}
+             interface Session {}
+             @Odd class OddSession implements Session {}
+             @Singleton class Uses { @Inject Uses(Tenant tenant, Session session) {} }"),
+        ]);
+        assert!(matches!(point_resolution(&idx, &m, "tenant"), Resolution::Unique(_)));
+        assert_eq!(point_resolution(&idx, &m, "session"), Resolution::NotFound);
     }
 
     #[test]
@@ -1912,6 +1952,18 @@ mod tests {
              abstract class BaseConfig { @Bean(name = \"testProps\") public abstract Props props(); }
              @Configuration class TestConfig extends BaseConfig { @Override public Props props() { return null; } }
              @Service class Uses { Uses(@Qualifier(\"testProps\") Props p) {} }",
+        )]);
+        let test_props = m.beans.iter().position(|b| b.name == "testProps").expect("bean from the inherited @Bean method");
+        assert_eq!(point_resolution(&idx, &m, "p"), Resolution::Unique(test_props));
+        // the override keeps its own annotations
+        let (idx, m) = model(&[(
+            "src/test/java/app/A.java",
+            "package app; import org.springframework.stereotype.*; import org.springframework.context.annotation.*;
+             interface Props {}
+             @Component class DefaultProps implements Props {}
+             abstract class BaseConfig { @Bean(name = \"testProps\") public abstract Props props(); }
+             @Configuration class TestConfig extends BaseConfig { @Override @Primary public Props props() { return null; } }
+             @Service class Uses { Uses(Props p) {} }",
         )]);
         let test_props = m.beans.iter().position(|b| b.name == "testProps").expect("bean from the inherited @Bean method");
         assert_eq!(point_resolution(&idx, &m, "p"), Resolution::Unique(test_props));
