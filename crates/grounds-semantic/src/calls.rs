@@ -2500,8 +2500,22 @@ impl<'t> FileModel<'t> {
                 let verdicts: Vec<Tri> = several.iter().map(|m| fits(m)).collect();
                 let yes: Vec<&MethodRef> = several.iter().zip(&verdicts).filter(|(_, v)| v.is_yes()).map(|(m, _)| *m).collect();
                 let maybe = verdicts.iter().filter(|v| !v.is_no()).count();
+                // of several that apply, the one whose parameters are all
+                // subtypes of each other one's (JLS 15.12.2.5)
+                let most_specific = || -> Option<&MethodRef> {
+                    let below = |a: &MethodRef, b: &MethodRef| {
+                        a.method.params.len() == b.method.params.len()
+                            && a.method.params.iter().zip(&b.method.params).all(|(p, q)| !p.ty.mentions_type_var() && !q.ty.mentions_type_var() && self.is_assignable(&p.ty, &q.ty).is_yes())
+                    };
+                    let best: Vec<&MethodRef> = yes.iter().copied().filter(|a| yes.iter().all(|b| std::ptr::eq(*a, *b) || below(a, b))).collect();
+                    match best.as_slice() {
+                        [one] if yes.iter().all(|b| std::ptr::eq(*one, *b) || !below(b, one)) => Some(*one),
+                        _ => None,
+                    }
+                };
                 match yes.as_slice() {
                     [one] if maybe == 1 => Some(*one),
+                    _ if maybe == yes.len() && yes.len() > 1 && most_specific().is_some() => most_specific(),
                     _ => {
                         let rest: Vec<&MethodRef> = several.iter().zip(&verdicts).filter(|(_, v)| !v.is_no()).map(|(m, _)| *m).collect();
                         // all that may apply return the same type

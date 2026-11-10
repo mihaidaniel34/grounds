@@ -52,3 +52,33 @@ class PatternScope {
         type.stop();
     }
 }
+
+class Good { void ok() { } }
+class Bad { void other() { } }
+
+class CompletionRules {
+    Bad s;
+
+    void tryFinally(Object o) {
+        if (!(o instanceof Good s)) {
+            try { throw new IllegalArgumentException(); } finally { System.out.println("bad"); }
+        }
+        s.ok();
+    }
+
+    void nestedLoopBreak(Object o) {
+        while (!(o instanceof Good s)) {
+            for (;;) { break; }
+            o = new Good();
+        }
+        s.ok();
+    }
+
+    void completes(Object o) {
+        if (!(o instanceof Good s)) {
+            try { System.out.println("x"); } finally { System.out.println("y"); }
+        }
+        s.other();
+        s.ok(); // expect
+    }
+}

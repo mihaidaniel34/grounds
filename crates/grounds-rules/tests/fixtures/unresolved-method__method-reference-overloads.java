@@ -18,3 +18,14 @@ class UseConv {
     void g(List<ConvA> l) { l.stream().map(Conv::conv).forEach(r -> r.x()); }
     void h(List<ConvA> l) { l.stream().map(Conv::conv).forEach(r -> r.y()); } // expect
 }
+
+class MrGood { void ok() { } }
+class MrBad { void other() { } }
+
+class MostSpecificRef {
+    static MrGood m(String x) { return null; }
+    static MrBad m(Object x) { return null; }
+
+    void test(List<String> xs) { xs.stream().map(MostSpecificRef::m).forEach(x -> x.ok()); }
+    void wrong(List<String> xs) { xs.stream().map(MostSpecificRef::m).forEach(x -> x.nonexistent()); } // expect
+}

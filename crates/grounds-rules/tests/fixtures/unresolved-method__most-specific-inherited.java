@@ -19,3 +19,12 @@ class MostSpecificUse {
     int k(UserManager u) { return u.data().clear(); } // expect
     int l(Manager m) { return m.data().check("x", 1); } // expect
 }
+
+class Picked { void ok() { } }
+interface WithDefault { default Picked pick() { return null; } }
+class PickBase { public Picked pick() { return null; } }
+
+class ClassBeatsDefault extends PickBase implements WithDefault {
+    void test() { pick().ok(); }
+    void wrong() { pick().nonexistent(); } // expect
+}

@@ -30,3 +30,16 @@ class Holder {
         new Local().g();
     }
 }
+
+class Spot { void ok() { } }
+
+class PrivateMembers {
+    void m() {
+        class Base { private class Spot { void bad() { } } }
+        // Base.Spot is private, so not inherited: `Spot` is the top-level class
+        class Sub extends Base {
+            void test(Spot s) { s.ok(); }
+            void wrong(Spot s) { s.bad(); } // expect
+        }
+    }
+}

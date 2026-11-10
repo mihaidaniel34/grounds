@@ -1317,3 +1317,30 @@ fn a_class_header_does_not_see_the_class_members() {
     let anns = fm.annotations_of(decl);
     assert!(anns.iter().any(|a| a.is("p.Marker")), "{anns:?}");
 }
+
+#[test]
+fn a_package_private_field_of_another_package_does_not_shadow_a_local() {
+    // JLS 8.2, 8.3: a.Base's `x` is not inherited by an anonymous class in b
+    let files = [
+        ("a/Bad.java", "package a; public class Bad { }"),
+        ("a/Base.java", "package a; public class Base { Bad x; protected Bad y; }"),
+        ("b/T.java", "package b; class Good { } class T { void test() { Good x = null; Good y = null; new a.Base() { Object f() { return /*T*/ x; } Object g() { return /*T*/ y; } }; } }"),
+    ];
+    let mut idx = Index::new(jdk());
+    let parsed: Vec<_> = files.iter().map(|(p, s)| (*p, ParsedFile::parse(*s))).collect();
+    for (p, pf) in &parsed {
+        idx.set_file(Arc::from(*p), Arc::new(extract(pf)));
+    }
+    let (path, pf) = &parsed[2];
+    let fm = FileModel::new(pf, &idx, Arc::from(*path));
+    let src = files[2].1;
+    let tys: Vec<String> = src
+        .match_indices("/*T*/ ")
+        .map(|(i, m)| {
+            let at = i + m.len();
+            let n = pf.root().descendants().find(|n| n.start_byte() == at && n.kind() == "identifier").unwrap();
+            fm.type_of(n).to_string()
+        })
+        .collect();
+    assert_eq!(tys, vec!["b.Good", "a.Bad"]);
+}

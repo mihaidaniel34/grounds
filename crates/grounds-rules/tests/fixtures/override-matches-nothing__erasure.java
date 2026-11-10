@@ -62,3 +62,9 @@ class ClashOverride<T extends Date> extends Adapter<Date> {
     @Override void write(StringBuilder out, Date value) { }
     @Override void write(StringBuilder out, T value) { } // expect
 }
+
+interface ObjectSink { void put(Object x); }
+
+abstract class GenericPut implements ObjectSink {
+    @Override public <V> void put(V x) { } // expect
+}

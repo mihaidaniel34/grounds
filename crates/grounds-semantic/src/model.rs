@@ -295,7 +295,9 @@ impl<'t> FileModel<'t> {
                 Ty::Class { name: s, .. } => match self.local_class_scope(&s) {
                     // a local supertype: what it declares and inherits
                     Some(sl) => {
-                        lc.members.extend(sl.members.iter().filter(|(m, _)| !lc.members.iter().any(|(x, _)| x == m)).cloned().collect::<Vec<_>>());
+                        // a private member type is not inherited (JLS 8.2, 8.5)
+                        let private = |b: &Name| self.local_raw.get(b).is_some_and(|(r, _)| r.flags.is_private());
+                        lc.members.extend(sl.members.iter().filter(|(m, b)| !private(b) && !lc.members.iter().any(|(x, _)| x == m)).cloned().collect::<Vec<_>>());
                         lc.supers.extend(sl.supers);
                         lc.unknown_super |= sl.unknown_super;
                     }

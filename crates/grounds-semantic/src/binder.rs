@@ -48,10 +48,15 @@ pub struct Binder<'t> {
     /// crossed, innermost first. A field the class inherits shadows the local
     /// (JLS 6.4.1), which only the class hierarchy can tell.
     pub crossed: Vec<(Node<'t>, Vec<Node<'t>>)>,
+    /// References to a pattern variable that may or may not be in scope
+    /// there (whether a branch completes normally is not known): the name is
+    /// unknown, neither the variable nor a field.
+    pub uncertain: rustc_hash::FxHashSet<usize>,
 }
 
 enum Frame<'t> {
-    Vars(Vec<(&'t str, usize)>),
+    /// Locals in scope: name, declaration, and whether only maybe in scope.
+    Vars(Vec<(&'t str, usize, bool)>),
     /// Class boundary: member fields with these names shadow outer locals;
     /// the class's declaration (or anonymous body) node.
     Barrier(Vec<&'t str>, Option<Node<'t>>),
@@ -107,18 +112,19 @@ where
         self.b.uses.push(Vec::new());
         self.b.by_name_node.insert(name_node.id(), idx);
         if let Some(Frame::Vars(v)) = self.stack.iter_mut().rev().find(|f| matches!(f, Frame::Vars(_))) {
-            v.push((name, idx));
+            v.push((name, idx, false));
         }
     }
 
-    /// The local `name` refers to, and the classes crossed to reach it.
-    fn lookup(&self, name: &str) -> Option<(usize, Vec<Node<'t>>)> {
+    /// The local `name` refers to, whether it is only maybe in scope, and the
+    /// classes crossed to reach it.
+    fn lookup(&self, name: &str) -> Option<(usize, bool, Vec<Node<'t>>)> {
         let mut crossed = Vec::new();
         for f in self.stack.iter().rev() {
             match f {
                 Frame::Vars(v) => {
-                    if let Some((_, i)) = v.iter().rev().find(|(n, _)| *n == name) {
-                        return Some((*i, crossed));
+                    if let Some((_, i, maybe)) = v.iter().rev().find(|(n, _, _)| *n == name) {
+                        return Some((*i, *maybe, crossed));
                     }
                 }
                 Frame::Barrier(fields, class) => {
@@ -134,7 +140,11 @@ where
 
     fn reference(&mut self, ident: Node<'t>) {
         let name = ident.text(self.src);
-        if let Some((i, crossed)) = self.lookup(name) {
+        if let Some((i, maybe, crossed)) = self.lookup(name) {
+            if maybe {
+                self.b.uncertain.insert(ident.id());
+                return;
+            }
             self.b.refs.insert(ident.id(), i);
             self.b.uses[i].push(ident);
             if !crossed.is_empty() {
@@ -170,10 +180,19 @@ where
 
     /// Put declared locals back in scope, in the innermost frame.
     fn bring_into_scope(&mut self, decls: &[usize]) {
+        self.bring_into_scope_if(decls, Some(true));
+    }
+
+    /// Put declared locals in scope when `certain` is true, as maybe in scope
+    /// when it is not known (None), not at all when false.
+    fn bring_into_scope_if(&mut self, decls: &[usize], certain: Option<bool>) {
+        if certain == Some(false) {
+            return;
+        }
         for &i in decls {
             let name = self.b.decls[i].name;
             if let Some(Frame::Vars(v)) = self.stack.iter_mut().rev().find(|f| matches!(f, Frame::Vars(_))) {
-                v.push((name, i));
+                v.push((name, i, certain.is_none()));
             }
         }
     }
@@ -413,11 +432,13 @@ where
                 if let Some(e) = alt {
                     self.visit_with(e, &when_false);
                 }
-                if then.is_some_and(|t| !completes_normally(t)) {
-                    self.bring_into_scope(&when_false);
+                // in scope after the `if` when the other branch cannot
+                // complete normally; maybe in scope when that is not known
+                if let Some(t) = then {
+                    self.bring_into_scope_if(&when_false, completes_normally(t).map(|c| !c));
                 }
-                if alt.is_some_and(|e| !completes_normally(e)) {
-                    self.bring_into_scope(&when_true);
+                if let Some(e) = alt {
+                    self.bring_into_scope_if(&when_true, completes_normally(e).map(|c| !c));
                 }
                 self.visit_rest(n, &["condition", "consequence", "alternative"]);
             }
@@ -426,10 +447,8 @@ where
                 if let Some(b) = n.field("body") {
                     self.visit_with(b, &when_true);
                 }
-                let breaks = breaks_out_of(n);
-                if !breaks {
-                    self.bring_into_scope(&when_false);
-                }
+                // in scope after the loop unless a break may leave it
+                self.bring_into_scope_if(&when_false, breaks_out_of(n).map(|b| !b));
                 self.visit_rest(n, &["condition", "body"]);
             }
             "for_statement" => {
@@ -614,49 +633,91 @@ fn introduced_when(decl: Node, cond: Node) -> Option<bool> {
     Some(when)
 }
 
-/// Whether a statement can complete normally, roughly (JLS 14.22): not when it
-/// is a `return`, `throw`, `break`, `continue` or `yield`, a block ending with
-/// one, or an `if` whose branches both cannot.
-fn completes_normally(s: Node) -> bool {
+/// Whether a statement can complete normally (JLS 14.22): Some(false) for
+/// `return`, `throw`, `break`, `continue`, `yield`, a block ending with one,
+/// an `if` whose branches both cannot, a `try` whose blocks cannot, a loop
+/// that runs forever with no break out; None where these rules are not
+/// modelled (a labeled statement, a switch); Some(true) for the rest.
+fn completes_normally(s: Node) -> Option<bool> {
     match s.kind() {
-        "return_statement" | "throw_statement" | "break_statement" | "continue_statement" | "yield_statement" => false,
-        "block" => s.kids().into_iter().rfind(|k| !matches!(k.kind(), "line_comment" | "block_comment")).is_none_or(completes_normally),
-        "if_statement" => match (s.field("consequence"), s.field("alternative")) {
-            (Some(t), Some(e)) => completes_normally(t) || completes_normally(e),
-            _ => true,
+        "return_statement" | "throw_statement" | "break_statement" | "continue_statement" | "yield_statement" => Some(false),
+        "block" | "constructor_body" => match s.kids().into_iter().rfind(|k| !matches!(k.kind(), "line_comment" | "block_comment" | "{" | "}")) {
+            Some(last) => completes_normally(last),
+            None => Some(true),
         },
+        "if_statement" => match (s.field("consequence"), s.field("alternative")) {
+            (Some(t), Some(e)) => or3(completes_normally(t), completes_normally(e)),
+            _ => Some(true),
+        },
+        "synchronized_statement" => s.kid_of_kind("block").map_or(Some(true), completes_normally),
+        // the try block or a catch completes, and the finally block does
+        "try_statement" | "try_with_resources_statement" => {
+            let mut body = s.field("body").map_or(Some(true), completes_normally);
+            for c in s.kids().into_iter().filter(|k| k.kind() == "catch_clause") {
+                body = or3(body, c.field("body").map_or(Some(true), completes_normally));
+            }
+            match s.kid_of_kind("finally_clause").and_then(|f| f.kid_of_kind("block")) {
+                Some(f) => match completes_normally(f) {
+                    Some(false) => Some(false),
+                    Some(true) => body,
+                    None => body.filter(|b| !b),
+                },
+                None => body,
+            }
+        }
         // `while (true)`, `do ... while (true)`, `for (;;)` without a break out
         "while_statement" | "do_statement" | "for_statement" => {
             let forever = match s.field("condition") {
                 None => s.kind() == "for_statement",
                 Some(c) => c.unparen().kind() == "true",
             };
-            !forever || breaks_out_of(s)
+            if forever {
+                breaks_out_of(s)
+            } else {
+                Some(true)
+            }
         }
-        _ => true,
+        "labeled_statement" | "switch_expression" | "switch_statement" => None,
+        _ => Some(true),
     }
 }
 
-/// Whether a `break` in the body of `loop_` may leave it: an unlabeled one
-/// not inside a nested loop or switch, or any labeled one.
-fn breaks_out_of(loop_: Node) -> bool {
-    let Some(body) = loop_.field("body") else { return false };
-    body.descendants().filter(|d| d.kind() == "break_statement").any(|b| {
+/// Three-valued "either completes".
+fn or3(a: Option<bool>, b: Option<bool>) -> Option<bool> {
+    match (a, b) {
+        (Some(true), _) | (_, Some(true)) => Some(true),
+        (Some(false), Some(false)) => Some(false),
+        _ => None,
+    }
+}
+
+/// Whether a `break` in the body of `loop_` leaves it: Some(true) for an
+/// unlabeled one not inside a nested loop or switch, None when only a
+/// labeled one may (its target is not modelled), Some(false) otherwise.
+fn breaks_out_of(loop_: Node) -> Option<bool> {
+    let Some(body) = loop_.field("body") else { return Some(false) };
+    let mut labeled = false;
+    for b in body.descendants().filter(|d| d.kind() == "break_statement") {
         if b.kid_of_kind("identifier").is_some() {
-            return true;
+            labeled = true;
+            continue;
         }
         let mut cur = b.parent();
         while let Some(a) = cur {
             if a == loop_ {
-                return true;
+                return Some(true);
             }
             if matches!(a.kind(), "while_statement" | "do_statement" | "for_statement" | "enhanced_for_statement" | "switch_block" | "switch_expression") {
-                return false;
+                break;
             }
             cur = a.parent();
         }
-        false
-    })
+    }
+    if labeled {
+        None
+    } else {
+        Some(false)
+    }
 }
 
 impl<'t> Binder<'t> {

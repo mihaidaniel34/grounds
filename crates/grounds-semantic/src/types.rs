@@ -413,6 +413,10 @@ impl<'t> FileModel<'t> {
                 if let Some(i) = self.binder.decl_index_of_ref(n) {
                     return Some(Symbol::Local(i, self.binder.decls[i].clone()));
                 }
+                // a pattern variable that may be in scope here, or not
+                if self.binder.uncertain.contains(&n.id()) {
+                    return None;
+                }
                 if let Some(p) = self.parent_of(n) {
                     let non_expr = match p.kind() {
                         "method_invocation" => p.field("name") == Some(n),

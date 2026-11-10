@@ -432,8 +432,10 @@ declare_rule!(IncompatibleAssignment {
 impl Rule for IncompatibleAssignment {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
-        // a file that does not parse is no ground for a compile-break claim
-        if cx.fm.file.has_errors() {
+        // a file that does not parse is no ground for a compile-break claim,
+        // nor one a language-changing javac plugin compiles (Manifold's
+        // structural interfaces make unrelated classes assignable)
+        if cx.fm.file.has_errors() || cx.fm.index.language_extended(&cx.fm.path) {
             return;
         }
         // (declared type, value)

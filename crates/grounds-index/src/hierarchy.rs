@@ -486,9 +486,10 @@ pub trait ClassLookup {
 
     /// Of instance methods with the same erased parameters inherited from
     /// supertypes that do not override each other, keep the one a call
-    /// selects: the one that is not abstract, else the one whose return type
-    /// is a subtype of the others' (JLS 8.4.8.4, 15.12.2.5); when none is,
-    /// its return type is unknown.
+    /// selects: the one that is not abstract (a class's over interface
+    /// defaults), else the one whose return type is a subtype of the others'
+    /// (JLS 8.4.8, 8.4.8.4, 15.12.2.5); when none is, its return type is
+    /// unknown.
     fn merge_inherited(&self, mut out: Vec<MethodRef>) -> Vec<MethodRef> {
         let key = |m: &MethodRef| -> Option<Vec<Ty>> {
             let ps: Vec<Ty> = m.method.params.iter().map(|p| p.ty.erasure()).collect();
@@ -508,11 +509,15 @@ pub trait ClassLookup {
             }
             let abstract_ = |m: &MethodRef| m.method.flags.is_abstract();
             let concrete: Vec<usize> = group.iter().copied().filter(|&j| !abstract_(&out[j])).collect();
-            let keep = match concrete.as_slice() {
-                [one] => Some(*one),
-                [] => group.iter().copied().find(|&j| group.iter().all(|&o| o == j || self.return_substitutable(&out[j].method.ret, &out[o].method.ret))),
-                // several defaults (or a class method and defaults): javac's
-                // choice depends on rules not modelled here
+            // a concrete method of a class wins over interface defaults: they
+            // are not inherited beside it (JLS 8.4.8)
+            let from_class: Vec<usize> = concrete.iter().copied().filter(|&j| out[j].owner_kind != ClassKind::Interface).collect();
+            let keep = match (concrete.as_slice(), from_class.as_slice()) {
+                ([one], _) => Some(*one),
+                (_, [one]) => Some(*one),
+                ([], _) => group.iter().copied().find(|&j| group.iter().all(|&o| o == j || self.return_substitutable(&out[j].method.ret, &out[o].method.ret))),
+                // several defaults: javac rejects the class unless it
+                // overrides them, which it then does
                 _ => None,
             };
             let mut kept = out[keep.unwrap_or(i)].clone();
