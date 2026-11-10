@@ -18,15 +18,19 @@ with --no-daemon, which loads the project from scratch.
             a report is to be read, then listed in --known.)
 
 Commits in between that change no Java file are checked out but not asked
-about (the daemon still has to follow what they do to build files). With
---budget the walk stops asking once that many seconds have passed, and says
-how far it got. The checkout is put back on the
+about (the daemon still has to follow what they do to build files).
+
+With --budget SECONDS the newest commit is asked about once first, to see
+what a step costs on this project, and N is lowered to what fits: the walk
+is of the newest commits either way. Should it still run over, it stops
+asking and says how many commits were left. A single `grounds changed` that
+takes longer than --timeout (default 900 s) is a failure. The checkout is put back on the
 branch or commit it was at. Uncommitted changes to tracked files are refused,
 and a checkout that would overwrite an ignored file stops the run; all the
 same, run it on a checkout made for the purpose. With a shallow checkout only
 the commits it has are replayed.
 
-  python3 -I scripts/replay.py DIR [--commits 30] [--budget SECONDS]
+  python3 -I scripts/replay.py DIR [--commits 30] [--budget SECONDS] [--timeout SECONDS]
       [--grounds target/release/grounds] [--known FILE] [--out report.json]
 
 --known lists `project commit path:line rule` lines of reports already
@@ -51,6 +55,9 @@ def git(d, *args, check=True):
     return subprocess.run(["git", "-C", d, *args], capture_output=True, text=True, check=check).stdout
 
 
+TIMEOUT = 900.0
+
+
 def changed(grounds, d, base, daemon):
     cmd = [grounds, "changed", "--root", d, "--format", "json", "--exit-zero", "--max", "100000",
            "--min-severity", "info", "--no-baseline", "--color", "never"]
@@ -58,7 +65,10 @@ def changed(grounds, d, base, daemon):
         cmd += ["--base", base]
     if not daemon:
         cmd.append("--no-daemon")
-    p = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL)
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"grounds changed gave no answer in {TIMEOUT:.0f} s ({'daemon' if daemon else 'fresh'}, base {base})")
     if p.returncode != 0:
         raise RuntimeError(f"grounds changed failed ({p.returncode}): {p.stderr[-2000:]}")
     # the whole answer: lists in a fixed order, everything else as it is
@@ -94,17 +104,22 @@ def summary(path):
 
 
 def main():
+    global TIMEOUT
     if len(sys.argv) == 3 and sys.argv[1] == "--summary":
         return summary(sys.argv[2])
     ap = argparse.ArgumentParser()
     ap.add_argument("dir")
     ap.add_argument("--commits", type=int, default=30, help="commits that change a Java file")
-    ap.add_argument("--budget", type=float, help="stop asking after this many seconds")
+    ap.add_argument("--budget", type=float, help="seconds of asking to fit the walk into")
+    ap.add_argument("--timeout", type=float, default=TIMEOUT, help="seconds one `grounds changed` may take")
     ap.add_argument("--grounds", default=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                                       "target", "release", "grounds"))
     ap.add_argument("--known")
     ap.add_argument("--out")
     a = ap.parse_args()
+    if a.commits < 1:
+        ap.error("--commits must be at least 1")
+    TIMEOUT = a.timeout
     d = os.path.abspath(a.dir)
     grounds = os.path.abspath(a.grounds)
     project = os.path.basename(d)
@@ -122,13 +137,20 @@ def main():
     # the main line, newest first, back to the parent of the Nth commit with Java changes
     line = git(d, "rev-list", "--first-parent", head).split()
     java = lambda parent, commit: git(d, "diff", "--name-only", parent, commit, "--", "*.java").split()
-    wanted, start = 0, len(line) - 1
-    for i in range(len(line) - 1):
-        if java(line[i + 1], line[i]):
-            wanted += 1
-            if wanted == a.commits:
-                start = i + 1
-                break
+    steps_back = [i for i in range(len(line) - 1) if java(line[i + 1], line[i])][:a.commits]
+    fit = len(steps_back)
+    if a.budget is not None and steps_back:
+        # what the newest step costs from scratch; the daemon's answer costs about as much
+        i = steps_back[0]
+        git(d, *move, line[i])
+        t = time.monotonic()
+        changed(grounds, d, line[i + 1], False)
+        cost = 2 * (time.monotonic() - t)
+        # (with a fifth to spare: the first steps also load the project)
+        fit = max(1, min(fit, int(0.8 * a.budget / cost))) if cost > 0 else fit
+        if fit < len(steps_back):
+            print(f"{project}: a step takes about {cost:.0f} s, so the last {fit} of {len(steps_back)} commits with Java changes are replayed")
+    start = steps_back[fit - 1] + 1 if steps_back else 0
     line = line[:start + 1]
     line.reverse()  # oldest first; line[0] is only a starting point
     steps, stats = [], {"commits": 0, "skipped": 0, "differs": 0, "reported": 0, "known": 0, "left": 0}
