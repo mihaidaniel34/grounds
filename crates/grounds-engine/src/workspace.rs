@@ -105,10 +105,10 @@ impl SourceSets {
     }
 }
 
-/// The `.java` files under `root` that git tracks although `.gitignore`
-/// matches them, relative to `root`. Empty outside a git work tree.
+/// The `.java` files and build files under `root` that git tracks although
+/// `.gitignore` matches them, relative to `root`. Empty outside a git work tree.
 fn tracked_but_ignored(root: &Path) -> Vec<PathBuf> {
-    let out = std::process::Command::new("git").arg("-C").arg(root).args(["ls-files", "-z", "--cached", "--ignored", "--exclude-standard", "--", "*.java"]).stderr(std::process::Stdio::null()).output();
+    let out = std::process::Command::new("git").arg("-C").arg(root).args(["ls-files", "-z", "--cached", "--ignored", "--exclude-standard", "--", "*.java", "*pom.xml", "*build.gradle", "*build.gradle.kts"]).stderr(std::process::Stdio::null()).output();
     match out {
         Ok(o) if o.status.success() => o.stdout.split(|&b| b == 0).filter(|p| !p.is_empty()).filter_map(|p| std::str::from_utf8(p).ok()).map(PathBuf::from).collect(),
         _ => Vec::new(),
@@ -177,8 +177,14 @@ impl Workspace {
             let skipped = rel.components().any(|c| c.as_os_str().to_str().is_none_or(|n| SKIP_DIRS.contains(&n) || n.starts_with('.')));
             let p = root.join(&rel);
             let Some(name) = rel.file_name().and_then(|n| n.to_str()) else { continue };
-            if !skipped && p.is_file() && source(&p, name) {
-                java_files.push(p);
+            if skipped || !p.is_file() {
+                continue;
+            }
+            match name {
+                "build.gradle" | "build.gradle.kts" => module_dirs.push((p.parent().unwrap_or(&root).to_path_buf(), BuildSystem::Gradle)),
+                "pom.xml" => module_dirs.push((p.parent().unwrap_or(&root).to_path_buf(), BuildSystem::Maven)),
+                _ if source(&p, name) => java_files.push(p),
+                _ => {}
             }
         }
         java_files.sort();
@@ -509,6 +515,25 @@ mod tests {
         assert!(modules_built_against_own_release(&ws).is_empty(), "{:?}", modules_built_against_own_release(&ws));
         let ws = Workspace::discover(&dir.join("gr"), &[]);
         assert!(modules_built_against_own_release(&ws).is_empty(), "{:?}", modules_built_against_own_release(&ws));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_tracked_build_file_in_an_ignored_directory_makes_a_module() {
+        let dir = std::env::temp_dir().join(format!("grounds-tracked-module-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (rel, text) in [(".gitignore", "/ignored/\n"), ("pom.xml", "<project/>"), ("ignored/pom.xml", "<project/>"), ("ignored/src/main/java/p/A.java", "package p; class A {}")] {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        }
+        let git = |args: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(&dir).args(args).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t").env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t").status().is_ok_and(|s| s.success()));
+        git(&["init", "-q"]);
+        git(&["add", "-f", "."]);
+        git(&["commit", "-qm", "init"]);
+        let ws = Workspace::discover(&dir, &[]);
+        let file = ws.files.iter().find(|f| f.path.ends_with("A.java")).expect("the tracked file");
+        assert_eq!(ws.modules[file.module].name, "ignored");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
