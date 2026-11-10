@@ -247,6 +247,11 @@ pub struct DiModel {
     /// instance may be of any subtype (`Store store()` may return a
     /// `RedisStore`), so they may provide subtypes of that type too.
     unseen_producers: Vec<(Name, bool)>,
+    /// Beans a replacement that is not certain (conditional, in another
+    /// module, in test sources) may remove, and whether every such
+    /// replacement is in test sources: a constructor cycle through one is
+    /// not certain where the replacement may apply.
+    possibly_replaced: Vec<(usize, bool)>,
 }
 
 /// Imports that show wiring through a container or mechanism the model does
@@ -518,8 +523,9 @@ struct Builder<'a> {
     /// (class, method) pairs that produce a bean
     produced: rustc_hash::FxHashSet<(Name, Name)>,
     /// project annotations named by scan filters (`includeFilters`,
-    /// @MapperScan's annotationClass): they register what they annotate
-    filter_annotations: rustc_hash::FxHashSet<String>,
+    /// @MapperScan's annotationClass): they register what they annotate,
+    /// in tests only when every such filter is in test sources
+    filter_annotations: FxHashMap<String, bool>,
     /// a @MapperScan the model could not expand (placeholders, @MapperScans,
     /// a MapperScannerConfigurer set up in code), in main sources and only
     /// in test sources
@@ -662,6 +668,47 @@ impl<'a> Builder<'a> {
         !m.is_constructor() && m.annotations.iter().any(|a| self.factory_annotation(a, 0))
     }
 
+    /// A factory method's annotations as the container reads them: its own,
+    /// then those carried by the project annotations that make it a factory
+    /// method (`@Exported` meta-annotated `@Bean("special") @Primary`), so
+    /// the bean's name, qualifiers, primary, conditions and the rest come
+    /// from the same place whether written directly or composed. Direct
+    /// annotations come first and win. An element of a composed annotation
+    /// declared `@AliasFor(annotation = Bean.class, attribute = "name")`
+    /// passes the value written where it is used (`@NamedBean("foo")`).
+    fn factory_method_annotations(&mut self, anns: &[AnnotationInfo]) -> Vec<AnnotationInfo> {
+        let mut out: Vec<AnnotationInfo> = anns.to_vec();
+        let mut seen: rustc_hash::FxHashSet<Name> = anns.iter().map(|a| a.name.clone()).collect();
+        let mut i = 0;
+        while i < out.len() {
+            let a = out[i].clone();
+            i += 1;
+            if BEAN_METHOD_ANNOTATIONS.iter().any(|b| a.is(b)) || !self.factory_annotation(&a, 0) {
+                continue;
+            }
+            let Some(c) = self.class(&a.name).filter(|c| c.kind == ClassKind::Annotation) else { continue };
+            for m in c.annotations.iter() {
+                if !m.name.starts_with("java.lang.annotation.") && seen.insert(m.name.clone()) {
+                    let mut m = m.clone();
+                    // (Spring does not apply @AliasFor to @Qualifier's value)
+                    let qualifier = m.is("org.springframework.beans.factory.annotation.Qualifier");
+                    for el in c.methods.iter().filter(|_| !qualifier) {
+                        let Some(alias) = el.annotations.iter().find(|x| x.simple_name() == "AliasFor") else { continue };
+                        let targets = matches!(alias.arg("annotation"), Some(AnnotationValue::Class(t)) if t.class_name().is_some_and(|n| n == &*m.name || simple_name_of(n) == m.simple_name()));
+                        let Some(v) = a.arg(&el.name).filter(|_| targets) else { continue };
+                        let attribute = first_string(alias, &["attribute"]).unwrap_or_else(|| el.name.to_string());
+                        // (@Bean's name and value are aliases of each other: one attribute)
+                        let bean_name = m.simple_name() == "Bean" && matches!(attribute.as_str(), "name" | "value");
+                        m.args.retain(|(k, _)| **k != *attribute && !(bean_name && matches!(&**k, "name" | "value")));
+                        m.args.push((Arc::from(attribute.as_str()), v.clone()));
+                    }
+                    out.push(m);
+                }
+            }
+        }
+        out
+    }
+
     fn is_custom_qualifier(&mut self, ann: &AnnotationInfo) -> bool {
         if let Some(r) = self.qualifier_ann.get(&ann.name) {
             return *r;
@@ -734,12 +781,19 @@ impl<'a> Builder<'a> {
     /// to register anything are classified; everything else is not: a
     /// library annotation from a jar we do not have may be a stereotype
     /// through its meta-annotations, or a library may scan for it.
-    fn unclassified(&mut self, a: &AnnotationInfo, stub: Option<&FileStub>, on_method: bool, depth: u32) -> bool {
+    /// (`tests`: judged for test points, where scan filters declared in
+    /// test sources apply too)
+    fn unclassified(&mut self, a: &AnnotationInfo, stub: Option<&FileStub>, on_method: bool, depth: u32, tests: bool) -> bool {
         let defining = if on_method { self.factory_annotation(a, 0) } else { self.stereotype(a, 0).is_some() };
         if defining || Self::conditional(std::slice::from_ref(a)) {
             return false;
         }
         if QUALIFIER_ANNOTATIONS.iter().any(|q| a.is(q)) || self.is_custom_qualifier(a) {
+            return false;
+        }
+        // registrations discovery knows to make no bean: a MapStruct mapper
+        // with the default component model, Spring Data's @NoRepositoryBean
+        if (is_mapstruct_mapper(a) && !mapper_is_bean(a)) || a.is("org.springframework.data.repository.NoRepositoryBean") {
             return false;
         }
         let qualified: Option<String> = if a.resolved || a.name.contains('.') {
@@ -748,7 +802,7 @@ impl<'a> Builder<'a> {
             stub.and_then(|st| st.imports.iter().find(|i| !i.is_static && !i.on_demand && i.is_named(&a.name)).map(|i| i.path.to_string()))
         };
         let Some(q) = qualified else { return true };
-        if self.filter_annotations.contains(&q) {
+        if self.filter_annotations.get(&q).is_some_and(|only_tests| tests || !only_tests) {
             return true;
         }
         // a project annotation: what its own annotations are
@@ -764,13 +818,15 @@ impl<'a> Builder<'a> {
             if metas.iter().any(|m| self.stereotype(m, depth + 1).is_some() || self.factory_annotation(m, depth + 1)) {
                 return true;
             }
-            return metas.iter().any(|m| self.unclassified(m, meta_stub.as_deref(), on_method, depth + 1));
+            return metas.iter().any(|m| self.unclassified(m, meta_stub.as_deref(), on_method, depth + 1, tests));
         }
         !inert_annotation(&q)
     }
 
     /// Registrations the model could not turn into beans (see `DiModel::unseen`).
-    fn unseen_registrations(&mut self, names: &[Name], imported_anywhere: &[Name]) {
+    /// (`imported_anywhere`: classes named by an @Import, and whether the
+    /// importing class is in test sources)
+    fn unseen_registrations(&mut self, names: &[Name], imported_anywhere: &[(Name, bool)]) {
         let mut unseen: Vec<(Name, bool)> = Vec::new();
         // modules using CDI (and whether only their tests do): a bean
         // archive discovered in mode "all" (an empty beans.xml, often added
@@ -783,9 +839,10 @@ impl<'a> Builder<'a> {
                 *only_tests &= is_test_path(path);
             }
         }
-        for n in imported_anywhere {
+        for (n, by_test) in imported_anywhere {
             if !self.model.component_classes.contains_key(n) {
-                let is_test = self.index.source_file_of(n).is_some_and(|f| is_test_path(f));
+                // registered where the importing class is
+                let is_test = *by_test || self.index.source_file_of(n).is_some_and(|f| is_test_path(f));
                 unseen.push((n.clone(), is_test));
             }
         }
@@ -798,7 +855,9 @@ impl<'a> Builder<'a> {
                 continue;
             }
             let anns = c.annotations.clone();
-            let unknown = anns.iter().any(|a| self.unclassified(a, stub.as_deref(), false, 0));
+            let unknown = anns.iter().any(|a| self.unclassified(a, stub.as_deref(), false, 0, is_test));
+            // (only through a scan filter declared in test sources)
+            let unknown_in_tests = !unknown && !is_test && anns.iter().any(|a| self.unclassified(a, stub.as_deref(), false, 0, true));
             // a stereotype on a concrete class that is still no bean, for a
             // reason the model does not know
             let stereotyped = !c.is_abstract() && anns.iter().any(|a| self.stereotype(a, 0).is_some());
@@ -819,7 +878,7 @@ impl<'a> Builder<'a> {
             let discovered = if discoverable { c.source_file().and_then(|f| cdi.get(module_of(f)).copied()) } else { None };
             if unknown || stereotyped || main_scan || opaque_base || discovered == Some(false) || (!is_test && assignable.iter().any(|t| !t)) {
                 unseen.push((n.clone(), is_test));
-            } else if (test_scan && (c.is_interface() || concrete)) || !assignable.is_empty() || discovered == Some(true) {
+            } else if (test_scan && (c.is_interface() || concrete)) || !assignable.is_empty() || unknown_in_tests || discovered == Some(true) {
                 unseen.push((n.clone(), true));
             }
         }
@@ -846,7 +905,7 @@ impl<'a> Builder<'a> {
                 }
                 let Some(ret) = m.ret.class_name() else { continue };
                 let anns = m.annotations.clone();
-                if self.is_factory_method(m) || anns.iter().any(|a| self.unclassified(a, stub.as_deref(), true, 0)) {
+                if self.is_factory_method(m) || anns.iter().any(|a| self.unclassified(a, stub.as_deref(), true, 0, is_test)) {
                     producers.push((Arc::from(ret), is_test));
                 }
             }
@@ -918,6 +977,15 @@ impl<'a> Builder<'a> {
             }
         }
         false
+    }
+
+    /// Annotations a scan filter names; one declared in main sources
+    /// registers everywhere.
+    fn add_filter_annotations(&mut self, names: impl IntoIterator<Item = String>, in_tests: bool) {
+        for n in names {
+            let only_tests = self.filter_annotations.entry(n).or_insert(in_tests);
+            *only_tests &= in_tests;
+        }
     }
 
     fn add_bean(&mut self, b: Bean) -> usize {
@@ -1012,7 +1080,7 @@ impl<'a> Builder<'a> {
                 }
                 mapper_pkgs.extend(pkgs.into_iter().map(|p| (p, in_tests)));
                 if let Some(v) = a.arg("annotationClass") {
-                    self.filter_annotations.extend(v.values().into_iter().filter_map(|x| if let AnnotationValue::Class(t) = x { t.class_name().map(str::to_string) } else { None }));
+                    self.add_filter_annotations(v.values().into_iter().filter_map(|x| if let AnnotationValue::Class(t) = x { t.class_name().map(str::to_string) } else { None }), in_tests);
                 }
             }
             if c.annotations.iter().any(|a| a.simple_name() == "MapperScans") {
@@ -1051,7 +1119,7 @@ impl<'a> Builder<'a> {
                     };
                     let classes: Vec<String> = ["classes", "value"].iter().flat_map(|k| f.arg(k).map(|v| v.values()).unwrap_or_default()).filter_map(|x| if let AnnotationValue::Class(t) = x { t.class_name().map(str::to_string) } else { None }).collect();
                     match kind.as_deref() {
-                        Some("ANNOTATION") => self.filter_annotations.extend(classes),
+                        Some("ANNOTATION") => self.add_filter_annotations(classes, in_tests),
                         Some("ASSIGNABLE_TYPE") => self.filter_types.extend(classes.into_iter().map(|t| (Arc::from(t.as_str()), in_tests))),
                         _ => {
                             if in_tests { self.opaque_filter_in_tests = true } else { self.opaque_filter = true }
@@ -1119,13 +1187,14 @@ impl<'a> Builder<'a> {
         // classes named by an @Import anywhere: those the walk from scanned
         // classes did not reach may still be registered (by a configuration
         // registered some other way)
-        let mut imported_anywhere: Vec<Name> = Vec::new();
+        let mut imported_anywhere: Vec<(Name, bool)> = Vec::new();
         for n in &names {
             let Some(c) = self.class(n) else { continue };
+            let by_test = c.source_file().is_some_and(is_test_path);
             for a in c.annotations.iter().filter(|a| matches!(a.simple_name(), "Import" | "EnableConfigurationProperties")) {
                 for v in a.arg("value").map(|v| v.values()).unwrap_or_default() {
                     if let AnnotationValue::Class(t) = v {
-                        imported_anywhere.extend(t.class_name().map(Arc::from));
+                        imported_anywhere.extend(t.class_name().map(|t| (Arc::from(t), by_test)));
                     }
                 }
             }
@@ -1436,14 +1505,15 @@ impl<'a> Builder<'a> {
                 if m.ret == Ty::Void || m.ret.is_unknown() {
                     continue;
                 }
-                let bean_ann = m.annotations.iter().find(|a| a.simple_name() == "Bean");
+                let anns = self.factory_method_annotations(&m.annotations);
+                let bean_ann = anns.iter().find(|a| a.simple_name() == "Bean");
                 let names: Vec<String> = bean_ann.map(|a| ["name", "value"].iter().flat_map(|k| a.arg(k).map(|v| v.strings()).unwrap_or_default()).collect()).unwrap_or_default();
                 let (name, aliases) = match names.split_first() {
                     Some((f, rest)) => (f.clone(), rest.to_vec()),
                     None => (m.name.to_string(), Vec::new()),
                 };
-                let mut qualifiers = self.qualifiers_of(&m.annotations);
-                if let Some(nm) = m.annotations.iter().find(|a| a.simple_name() == "Named").and_then(|a| first_string(a, &["value"])) {
+                let mut qualifiers = self.qualifiers_of(&anns);
+                if let Some(nm) = anns.iter().find(|a| a.simple_name() == "Named").and_then(|a| first_string(a, &["value"])) {
                     qualifiers.push(nm);
                 }
                 let autowire_candidate = bean_ann.and_then(|a| a.arg("autowireCandidate")).and_then(|v| v.as_bool()) != Some(false);
@@ -1454,14 +1524,14 @@ impl<'a> Builder<'a> {
                     declaring_class: c.name.clone(),
                     source: BeanSource::FactoryMethod(m.name.clone()),
                     qualifiers,
-                    primary: m.annotations.iter().any(|a| a.simple_name() == "Primary"),
-                    conditional: conditional || self.conditional_meta(&m.annotations),
+                    primary: anns.iter().any(|a| a.simple_name() == "Primary"),
+                    conditional: conditional || self.conditional_meta(&anns),
                     file: file.clone(),
                     is_test,
                     autowire_candidate,
                     framework: fw,
-                    dynamic_names: class_dynamic || m.annotations.iter().any(|a| matches!(a.simple_name(), "EachBean" | "EachProperty")),
-                    replaces: m.annotations.iter().any(|a| a.simple_name() == "Replaces"),
+                    dynamic_names: class_dynamic || anns.iter().any(|a| matches!(a.simple_name(), "EachBean" | "EachProperty")),
+                    replaces: anns.iter().any(|a| a.simple_name() == "Replaces"),
                     static_factory: m.flags.is_static(),
                 };
                 self.add_bean(mbean);
@@ -1577,38 +1647,56 @@ impl<'a> Builder<'a> {
         // sources (a @MockBean method replaces the bean in its own test
         // only) leaves the replaced bean possibly present: it satisfies
         // injections but makes nothing ambiguous.
-        // (replaced class, module of the replacement, certain)
-        let mut replaced: Vec<(Name, String, bool)> = Vec::new();
+        // (replaced class, module of the replacement, certain, in test
+        // sources, the site is or may be a bean)
+        let mut replaced: Vec<(Name, String, bool, bool, bool)> = Vec::new();
         for n in &names {
             let Some(c) = self.class(n) else { continue };
             let file = c.source_file().unwrap_or("");
             let module = module_of(file).to_string();
             let class_conditional = self.conditional_meta(&c.annotations);
-            let sites: Vec<(&[AnnotationInfo], bool)> =
-                std::iter::once((c.annotations.as_slice(), false)).chain(c.methods.iter().map(|m| (m.annotations.as_slice(), self.conditional_meta(&m.annotations)))).collect();
-            for (anns, site_conditional) in sites {
+            // (a method's annotations as factory methods read them: a composed
+            // annotation may carry @Replaces)
+            let method_anns: Vec<Vec<AnnotationInfo>> = c.methods.iter().map(|m| self.factory_method_annotations(&m.annotations)).collect();
+            // a site registers when it is a bean, or may be one through an
+            // annotation the model cannot classify
+            let stub = self.index.raw_class(n).map(|(st, _)| st.clone());
+            let class_registers = self.model.component_classes.contains_key(n) || c.annotations.iter().any(|a| self.unclassified(a, stub.as_deref(), false, 0, true));
+            let method_registers: Vec<bool> = c
+                .methods
+                .iter()
+                .map(|m| self.produced.contains(&(n.clone(), m.name.clone())) || (class_registers && (self.is_factory_method(m) || m.annotations.iter().any(|a| self.unclassified(a, stub.as_deref(), true, 0, true)))))
+                .collect();
+            let sites: Vec<(&[AnnotationInfo], bool, bool)> = std::iter::once((c.annotations.as_slice(), false, class_registers))
+                .chain(method_anns.iter().zip(&method_registers).map(|(anns, r)| (anns.as_slice(), self.conditional_meta(anns), *r)))
+                .collect();
+            for (anns, site_conditional, registers) in sites {
                 for a in anns.iter().filter(|a| a.simple_name() == "Replaces") {
                     for k in ["value", "bean"] {
                         if let Some(AnnotationValue::Class(t)) = a.arg(k) {
                             if let Some(tn) = t.class_name() {
                                 let certain = !is_test_path(file) && !class_conditional && !site_conditional;
-                                replaced.push((Arc::from(tn), module.clone(), certain));
+                                replaced.push((Arc::from(tn), module.clone(), certain, is_test_path(file), registers));
                             }
                         }
                     }
                 }
             }
         }
-        for b in &mut self.model.beans {
+        for (i, b) in self.model.beans.iter_mut().enumerate() {
             if b.source != BeanSource::Component {
                 continue;
             }
             let module = b.file.as_deref().map(module_of).unwrap_or("");
-            for (_, m, certain) in replaced.iter().filter(|(r, _, _)| *r == b.declaring_class) {
+            for (_, m, certain, in_tests, registers) in replaced.iter().filter(|(r, _, _, _, _)| *r == b.declaring_class) {
                 if *certain && m == module {
                     b.autowire_candidate = false;
                 } else {
                     b.conditional = true;
+                    // (a site that registers nothing replaces nothing)
+                    if *registers {
+                        self.model.possibly_replaced.push((i, *in_tests));
+                    }
                 }
             }
         }
@@ -2316,6 +2404,12 @@ impl DiModel {
             }
             if let Resolution::Unique(b) = self.resolve(lk, p, false) {
                 let bean = &self.beans[b];
+                // a bean a replacement may remove is only possibly present
+                // (a test's replacement applies to test points only)
+                let in_tests = p.file.as_deref().is_some_and(is_test_path);
+                if self.possibly_replaced.iter().any(|&(i, tests_only)| i == b && (in_tests || !tests_only)) {
+                    continue;
+                }
                 if bean.source == BeanSource::Component {
                     out.push((p.owner.clone(), bean.declaring_class.clone(), pi));
                 }
@@ -3527,5 +3621,251 @@ mod tests {
         let svc = ("lib/src/main/java/b/Svc.java", "package b; interface Missing {} @org.springframework.stereotype.Service class Svc { Svc(Missing m) {} }");
         let (idx, m) = model(&[app, lib, svc]);
         assert_eq!(point_resolution(&idx, &m, "m"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn a_composed_factory_annotation_keeps_the_bean_metadata_it_carries() {
+        // a project annotation carrying @Bean("special") names the bean
+        // "special", one carrying @Bean @Primary makes it primary, as the
+        // same annotations directly on the method do
+        let (idx, m) = model(&[
+            ("src/main/java/app/Exported.java", "package app; @org.springframework.context.annotation.Bean(\"special\") public @interface Exported {}"),
+            ("src/main/java/app/Chosen.java", "package app; @org.springframework.context.annotation.Bean @org.springframework.context.annotation.Primary public @interface Chosen {}"),
+            ("src/main/java/app/Plain.java", "package app; @org.springframework.context.annotation.Bean public @interface Plain {}"),
+            ("src/main/java/app/A.java", "package app; import org.springframework.stereotype.*; import org.springframework.context.annotation.*; import org.springframework.beans.factory.annotation.Qualifier;
+             interface Pipe {} interface Hose {} interface Valve {}
+             @Configuration class Parts {
+               @Exported Pipe pipe() { return null; }
+               @Chosen Hose mainHose() { return null; } @Bean Hose spareHose() { return null; }
+               @Plain Valve leftValve() { return null; } @Bean Valve rightValve() { return null; } }
+             @Service class Uses { Uses(@Qualifier(\"special\") Pipe special, @Qualifier(\"other\") Pipe other, Hose hose, Valve valve) {} }
+             @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }"),
+        ]);
+        let special = point_resolution(&idx, &m, "special");
+        assert!(matches!(special, Resolution::Unique(i) if m.beans[i].name == "special"), "{special:?}");
+        let hose = point_resolution(&idx, &m, "hose");
+        assert!(matches!(hose, Resolution::Unique(i) if m.beans[i].name == "mainHose"), "{hose:?}");
+        // what the composed annotation does not carry is not invented
+        assert!(matches!(point_resolution(&idx, &m, "other"), Resolution::QualifierNotFound { .. }));
+        assert!(matches!(point_resolution(&idx, &m, "valve"), Resolution::Ambiguous(_)));
+    }
+
+    #[test]
+    fn a_bean_a_replacement_may_remove_makes_no_definite_cycle() {
+        // A -> Port, and the @Primary DefaultPort -> A, but a conditional
+        // replacement of DefaultPort provides Port without dependencies
+        let files = |replacement: (&'static str, &'static str)| {
+            vec![
+                JSR330[0], JSR330[1], JSR330[2],
+                ("src/main/java/app/A.java", "package app; import jakarta.inject.*; import io.micronaut.context.annotation.*;
+                 interface Port {}
+                 @Singleton class A { @Inject A(Port port) {} }
+                 @Singleton @Primary class DefaultPort implements Port { @Inject DefaultPort(A a) {} }"),
+                replacement,
+            ]
+        };
+        let edge = |m: &DiModel, from: &str, to: &str| m.ctor_edges.iter().any(|(a, b, _)| &**a == from && &**b == to);
+        let (_, m) = model(&files(("src/main/java/app/Remote.java", "package app; import jakarta.inject.*; import io.micronaut.context.annotation.*;
+             @Singleton @Requires(property = \"remote\") @Replaces(DefaultPort.class) class RemotePort implements Port {}")));
+        assert!(edge(&m, "app.DefaultPort", "app.A"));
+        assert!(!edge(&m, "app.A", "app.DefaultPort"), "{:?}", m.ctor_edges);
+        // a test's replacement leaves production as it is: the cycle stays
+        let (_, m) = model(&files(("src/test/java/app/Remote.java", "package app; import jakarta.inject.*; import io.micronaut.context.annotation.*;
+             @Singleton @Replaces(DefaultPort.class) class RemotePort implements Port {}")));
+        assert!(edge(&m, "app.A", "app.DefaultPort") && edge(&m, "app.DefaultPort", "app.A"), "{:?}", m.ctor_edges);
+    }
+
+    #[test]
+    fn a_bean_a_replacement_may_remove_makes_nothing_ambiguous_and_clashes_with_no_name() {
+        let replacement = ("src/main/java/app/Remote.java", "package app; import jakarta.inject.*; import io.micronaut.context.annotation.*;
+             @Singleton @Requires(property = \"remote\") @Replaces(DefaultPort.class) class Remote {}");
+        let ports = |extra: Option<(&'static str, &'static str)>| {
+            let mut files = vec![
+                JSR330[0], JSR330[1], JSR330[2],
+                ("src/main/java/app/A.java", "package app; import jakarta.inject.*;
+                 interface Port {}
+                 @Singleton class DefaultPort implements Port {}
+                 @Singleton class OtherPort implements Port {}
+                 @Singleton class A { @Inject A(Port port) {} }"),
+            ];
+            files.extend(extra);
+            let (idx, m) = model(&files);
+            point_resolution(&idx, &m, "port")
+        };
+        assert!(matches!(ports(None), Resolution::Ambiguous(_)));
+        assert_eq!(ports(Some(replacement)), Resolution::Unknown);
+        let conflicts = |extra: Option<(&'static str, &'static str)>| {
+            let mut files = vec![
+                ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }"),
+                ("src/main/java/app/a/Exporter.java", "package app.a; @org.springframework.stereotype.Component public class Exporter {}"),
+                ("src/main/java/app/b/Exporter.java", "package app.b; @org.springframework.stereotype.Component public class Exporter {}"),
+            ];
+            files.extend(extra);
+            model(&files).1.name_conflicts().len()
+        };
+        assert_eq!(conflicts(None), 1);
+        assert_eq!(conflicts(Some(("src/main/java/app/Remote.java", "package app; @org.springframework.stereotype.Component @io.micronaut.context.annotation.Requires(property = \"remote\") @io.micronaut.context.annotation.Replaces(app.a.Exporter.class) class Remote {}"))), 0);
+    }
+
+    #[test]
+    fn an_annotation_filter_registers_in_its_own_source_set() {
+        let app = ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }");
+        let port = ("src/main/java/app/Port.java", "package app; public interface Port {}");
+        let uses = ("src/main/java/app/Uses.java", "package app; import org.springframework.stereotype.*; @Service class Uses { Uses(Port port) {} }");
+        let test_uses = ("src/test/java/app/TestUses.java", "package app; import org.springframework.stereotype.*; @Service class TestUses { TestUses(Port testPort) {} }");
+        let tagged = ("src/main/java/app/Tagged.java", "package app; public @interface Tagged {}");
+        let impl_ = ("src/main/java/app/PortImpl.java", "package app; @Tagged class PortImpl implements Port {}");
+        let resolve = |scan: (&'static str, &'static str), name: &str| {
+            let (idx, m) = model(&[app, port, uses, test_uses, tagged, impl_, scan]);
+            point_resolution(&idx, &m, name)
+        };
+        let filter = "package app; import org.springframework.context.annotation.*; @Configuration @ComponentScan(includeFilters = @ComponentScan.Filter(Tagged.class)) class Scan {}";
+        let mapper = "package app; @org.mybatis.spring.annotation.MapperScan(value = \"app.none\", annotationClass = Tagged.class) class Scan {}";
+        for scan in [filter, mapper] {
+            // a scan in test sources registers PortImpl in tests only
+            assert_eq!(resolve(("src/test/java/app/Scan.java", scan), "port"), Resolution::NotFound, "{scan}");
+            assert_eq!(resolve(("src/test/java/app/Scan.java", scan), "testPort"), Resolution::Unknown, "{scan}");
+        }
+        // in main sources, everywhere
+        assert_eq!(resolve(("src/main/java/app/Scan.java", filter), "port"), Resolution::Unknown);
+    }
+
+    #[test]
+    fn an_unreached_import_registers_in_the_source_set_of_the_importing_class() {
+        let app = ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }");
+        let port = ("src/main/java/app/Port.java", "package app; public interface Port {}");
+        let uses = ("src/main/java/app/Uses.java", "package app; import org.springframework.stereotype.*; @Service class Uses { Uses(Port port) {} }");
+        let test_uses = ("src/test/java/app/TestUses.java", "package app; import org.springframework.stereotype.*; @Service class TestUses { TestUses(Port testPort) {} }");
+        let impl_ = ("src/main/java/app/PortImpl.java", "package app; class PortImpl implements Port {}");
+        let resolve = |import: (&'static str, &'static str), name: &str| {
+            let (idx, m) = model(&[app, port, uses, test_uses, impl_, import]);
+            point_resolution(&idx, &m, name)
+        };
+        // a test's @Import of a main class: registered in that test only
+        let in_test = ("src/test/java/app/PortTest.java", "package app; @org.springframework.context.annotation.Import(PortImpl.class) class PortTest {}");
+        assert_eq!(resolve(in_test, "port"), Resolution::NotFound);
+        assert_eq!(resolve(in_test, "testPort"), Resolution::Unknown);
+        // an @Import in main sources may register it in production
+        let in_main = ("src/main/java/other/Wiring.java", "package other; @org.springframework.context.annotation.Import(app.PortImpl.class) class Wiring {}");
+        assert_eq!(resolve(in_main, "port"), Resolution::Unknown);
+    }
+
+    #[test]
+    fn a_registration_known_to_make_no_bean_is_evidence_of_no_bean() {
+        let app = ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }");
+        let uses = ("src/main/java/app/Uses.java", "package app; import org.springframework.stereotype.*; @Service class Uses { Uses(Port port) {} }");
+        let resolution = |files: &[(&'static str, &'static str)]| {
+            let mut all = vec![app, uses];
+            all.extend_from_slice(files);
+            let (idx, m) = model(&all);
+            point_resolution(&idx, &m, "port")
+        };
+        // MapStruct's default component model and @NoRepositoryBean make no bean, and discovery knows it
+        let default_mapper = ("src/main/java/app/Port.java", "package app; import org.mapstruct.Mapper; @Mapper(componentModel = \"default\") public interface Port {}");
+        let constant_mapper = ("src/main/java/app/Port.java", "package app; import org.mapstruct.*; @org.mapstruct.Mapper(componentModel = MappingConstants.ComponentModel.DEFAULT) public abstract class Port {}");
+        let no_repository = ("src/main/java/app/Port.java", "package app; import org.springframework.data.repository.NoRepositoryBean; @NoRepositoryBean public interface Port {}");
+        for port in [default_mapper, constant_mapper, no_repository] {
+            assert_eq!(resolution(&[port]), Resolution::NotFound, "{}", port.1);
+            // other evidence still counts
+            assert_eq!(resolution(&[port, ("src/main/java/app/Impl.java", "package app; @com.acme.Registered class PortImpl implements Port {}")]), Resolution::Unknown, "{}", port.1);
+        }
+        // a mapper with a container model is a bean
+        assert!(matches!(resolution(&[("src/main/java/app/Port.java", "package app; import org.mapstruct.Mapper; @Mapper(componentModel = \"spring\") public interface Port {}")]), Resolution::Unique(_)));
+    }
+
+    #[test]
+    fn a_composed_factory_annotation_applies_its_aliases_and_replacements() {
+        // @AliasFor(annotation = Bean.class, attribute = "name") on an
+        // element passes the value written where the annotation is used
+        let (idx, m) = model(&[
+            ("src/main/java/app/NamedBean.java", "package app; import org.springframework.core.annotation.AliasFor; import org.springframework.context.annotation.Bean;
+             @Bean public @interface NamedBean { @AliasFor(annotation = Bean.class, attribute = \"name\") String[] value() default {}; }"),
+            ("src/main/java/app/SameBean.java", "package app; import org.springframework.core.annotation.AliasFor; import org.springframework.context.annotation.Bean;
+             @Bean public @interface SameBean { @AliasFor(annotation = Bean.class) String[] name() default {}; String note() default \"\"; }"),
+            ("src/main/java/app/A.java", "package app; import org.springframework.stereotype.*; import org.springframework.context.annotation.*; import org.springframework.beans.factory.annotation.Qualifier;
+             interface Pipe {} interface Hose {}
+             @Configuration class Parts { @NamedBean(\"foo\") Pipe pipe() { return null; } @SameBean(name = \"bar\", note = \"x\") Hose hose() { return null; } }
+             @Service class Uses { Uses(@Qualifier(\"foo\") Pipe foo, @Qualifier(\"bar\") Hose bar, @Qualifier(\"x\") Hose x) {} }
+             @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }"),
+        ]);
+        assert!(matches!(point_resolution(&idx, &m, "foo"), Resolution::Unique(i) if m.beans[i].name == "foo"));
+        assert!(matches!(point_resolution(&idx, &m, "bar"), Resolution::Unique(i) if m.beans[i].name == "bar"));
+        // an element that is no alias passes nothing
+        assert!(matches!(point_resolution(&idx, &m, "x"), Resolution::QualifierNotFound { .. }));
+        // a composed @Replaces on a factory method replaces, as a direct one does
+        for swap in ["@Swap", "@io.micronaut.context.annotation.Bean @io.micronaut.context.annotation.Replaces(DefaultPort.class)"] {
+            let (_, m) = model(&[
+                JSR330[0], JSR330[1], JSR330[2],
+                ("src/main/java/app/Swap.java", "package app; @io.micronaut.context.annotation.Bean @io.micronaut.context.annotation.Replaces(DefaultPort.class) public @interface Swap {}"),
+                ("src/main/java/app/A.java", &*Box::leak(format!("package app; import jakarta.inject.*;
+                 interface Port {{}}
+                 @Singleton class DefaultPort implements Port {{}}
+                 @io.micronaut.context.annotation.Factory class Ports {{ {swap} Port remote() {{ return null; }} }}").into_boxed_str())),
+            ]);
+            let default = m.beans.iter().find(|b| b.declaring_class.ends_with("DefaultPort")).unwrap();
+            assert!(!default.autowire_candidate, "{swap}");
+        }
+    }
+
+    #[test]
+    fn an_alias_override_replaces_the_bean_name_group_and_leaves_qualifiers() {
+        // Bean.name and Bean.value are one attribute: overriding one through
+        // @AliasFor replaces a value carried in the other
+        let (_, m) = model(&[
+            ("src/main/java/app/Exported.java", "package app; import org.springframework.core.annotation.AliasFor; import org.springframework.context.annotation.Bean;
+             @Bean(name = \"old\") public @interface Exported { @AliasFor(annotation = Bean.class, attribute = \"value\") String[] value() default {}; }"),
+            ("src/main/java/app/A.java", "package app; import org.springframework.context.annotation.*;
+             interface Pipe {} interface Hose {}
+             @Configuration class Parts { @Exported(\"one\") Pipe pipe() { return null; } @Exported(\"two\") Hose hose() { return null; } }
+             @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }"),
+        ]);
+        let names: Vec<&str> = m.beans.iter().filter(|b| matches!(b.source, BeanSource::FactoryMethod(_))).map(|b| b.name.as_str()).collect();
+        assert_eq!(names, ["one", "two"]);
+        assert!(m.name_conflicts().is_empty());
+        // Spring does not support @AliasFor on @Qualifier's value: the carried value stays
+        let (idx, m) = model(&[
+            ("src/main/java/app/Fixed.java", "package app; import org.springframework.core.annotation.AliasFor; import org.springframework.context.annotation.Bean; import org.springframework.beans.factory.annotation.Qualifier;
+             @Bean @Qualifier(\"fixed\") public @interface Fixed { @AliasFor(annotation = Qualifier.class, attribute = \"value\") String value() default \"\"; }"),
+            ("src/main/java/app/A.java", "package app; import org.springframework.stereotype.*; import org.springframework.context.annotation.*; import org.springframework.beans.factory.annotation.Qualifier;
+             interface Pipe {}
+             @Configuration class Parts { @Fixed(\"wrong\") Pipe pipe() { return null; } }
+             @Service class Uses { Uses(@Qualifier(\"fixed\") Pipe fixed, @Qualifier(\"wrong\") Pipe wrong) {} }
+             @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }"),
+        ]);
+        assert!(matches!(point_resolution(&idx, &m, "fixed"), Resolution::Unique(_)));
+        assert!(matches!(point_resolution(&idx, &m, "wrong"), Resolution::QualifierNotFound { .. }));
+    }
+
+    #[test]
+    fn a_replacement_that_registers_nothing_leaves_a_cycle_certain() {
+        let (_, m) = model(&[
+            JSR330[0], JSR330[1], JSR330[2],
+            ("src/main/java/app/A.java", "package app; import jakarta.inject.*; import io.micronaut.context.annotation.*;
+             interface Port {}
+             @Singleton class A { @Inject A(Port port) {} }
+             @Singleton @Primary class DefaultPort implements Port { @Inject DefaultPort(A a) {} }
+             @io.micronaut.context.annotation.Requires(property = \"remote\") @io.micronaut.context.annotation.Replaces(DefaultPort.class) class UnregisteredReplacement implements Port {}
+             class Plain { @io.micronaut.context.annotation.Requires(property = \"remote\") @io.micronaut.context.annotation.Replaces(DefaultPort.class) Port port() { return null; } }"),
+        ]);
+        let edge = |from: &str, to: &str| m.ctor_edges.iter().any(|(a, b, _)| &**a == from && &**b == to);
+        assert!(edge("app.A", "app.DefaultPort") && edge("app.DefaultPort", "app.A"), "{:?}", m.ctor_edges);
+    }
+
+    #[test]
+    fn a_factory_method_replacement_in_a_class_that_may_register_makes_a_cycle_uncertain() {
+        // a class that may be a factory (an annotation the model cannot
+        // classify) with a recognised factory method that may replace DefaultPort
+        let (_, m) = model(&[
+            JSR330[0], JSR330[1], JSR330[2],
+            ("src/main/java/app/MaybeFactory.java", "package app; @com.acme.Unknown public @interface MaybeFactory {}"),
+            ("src/main/java/app/A.java", "package app; import jakarta.inject.*;
+             interface Port {}
+             @Singleton class A { @Inject A(Port port) {} }
+             @Singleton @io.micronaut.context.annotation.Primary class DefaultPort implements Port { @Inject DefaultPort(A a) {} }
+             @MaybeFactory class Ports { @Singleton @io.micronaut.context.annotation.Requires(property = \"remote\") @io.micronaut.context.annotation.Replaces(DefaultPort.class) Port port() { return null; } }"),
+        ]);
+        let edge = |from: &str, to: &str| m.ctor_edges.iter().any(|(a, b, _)| &**a == from && &**b == to);
+        assert!(edge("app.DefaultPort", "app.A"));
+        assert!(!edge("app.A", "app.DefaultPort"), "{:?}", m.ctor_edges);
     }
 }
