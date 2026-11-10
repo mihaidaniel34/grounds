@@ -180,7 +180,6 @@ mcp/mcp-annotations/src/main/java/org/springframework/ai/mcp/annotation/method/c
 mcp/mcp-annotations/src/main/java/org/springframework/ai/mcp/annotation/method/changed/tool/AsyncToolListChangedSpecification.java:27 record-array-component
 mcp/mcp-annotations/src/main/java/org/springframework/ai/mcp/annotation/method/changed/tool/SyncToolListChangedSpecification.java:26 record-array-component
 mcp/mcp-annotations/src/main/java/org/springframework/ai/mcp/annotation/method/complete/AbstractMcpCompleteMethodCallback.java:148 cognitive-complexity
-mcp/mcp-annotations/src/main/java/org/springframework/ai/mcp/annotation/method/complete/AbstractMcpCompleteMethodCallback.java:282 null-dereference
 mcp/mcp-annotations/src/main/java/org/springframework/ai/mcp/annotation/method/complete/AsyncMcpCompleteMethodCallback.java:155 complex-boolean-expression
 mcp/mcp-annotations/src/main/java/org/springframework/ai/mcp/annotation/method/complete/AsyncStatelessMcpCompleteMethodCallback.java:147 complex-boolean-expression
 mcp/mcp-annotations/src/main/java/org/springframework/ai/mcp/annotation/method/elicitation/AbstractMcpElicitationMethodCallback.java:108 todo-comment
@@ -197,7 +196,6 @@ mcp/mcp-annotations/src/main/java/org/springframework/ai/mcp/annotation/method/p
 mcp/mcp-annotations/src/main/java/org/springframework/ai/mcp/annotation/method/progress/SyncProgressSpecification.java:32 record-array-component
 mcp/mcp-annotations/src/main/java/org/springframework/ai/mcp/annotation/method/prompt/AbstractMcpPromptMethodCallback.java:111 cognitive-complexity
 mcp/mcp-annotations/src/main/java/org/springframework/ai/mcp/annotation/method/prompt/AbstractMcpPromptMethodCallback.java:208 cognitive-complexity
-mcp/mcp-annotations/src/main/java/org/springframework/ai/mcp/annotation/method/prompt/AbstractMcpPromptMethodCallback.java:262 null-dereference
 mcp/mcp-annotations/src/main/java/org/springframework/ai/mcp/annotation/method/prompt/AbstractMcpPromptMethodCallback.java:287 cognitive-complexity
 mcp/mcp-annotations/src/main/java/org/springframework/ai/mcp/annotation/method/prompt/AbstractMcpPromptMethodCallback.java:364 bigdecimal-from-double
 mcp/mcp-annotations/src/main/java/org/springframework/ai/mcp/annotation/method/prompt/AbstractMcpPromptMethodCallback.java:71 constructor-calls-overridable-method
@@ -340,7 +338,6 @@ mcp/mcp-annotations/src/test/java/org/springframework/ai/mcp/annotation/method/r
 mcp/mcp-annotations/src/test/java/org/springframework/ai/mcp/annotation/method/resource/SyncMcpResourceMethodCallbackExample.java:156 unused-private-method
 mcp/mcp-annotations/src/test/java/org/springframework/ai/mcp/annotation/method/resource/SyncMcpResourceMethodCallbackExample.java:356 unused-private-method
 mcp/mcp-annotations/src/test/java/org/springframework/ai/mcp/annotation/method/resource/SyncMcpResourceMethodCallbackExample.java:383 unused-parameter
-mcp/mcp-annotations/src/test/java/org/springframework/ai/mcp/annotation/method/resource/SyncMcpResourceMethodCallbackExample.java:402 identical-branches
 mcp/mcp-annotations/src/test/java/org/springframework/ai/mcp/annotation/method/resource/SyncMcpResourceMethodCallbackTests.java:1353 throw-generic-exception
 mcp/mcp-annotations/src/test/java/org/springframework/ai/mcp/annotation/method/resource/SyncMcpResourceMethodCallbackTests.java:361 unused-local-variable
 mcp/mcp-annotations/src/test/java/org/springframework/ai/mcp/annotation/method/resource/SyncStatelessMcpResourceMethodCallbackTests.java:1042 throw-generic-exception
@@ -352,7 +349,6 @@ mcp/mcp-annotations/src/test/java/org/springframework/ai/mcp/annotation/method/t
 mcp/mcp-annotations/src/test/java/org/springframework/ai/mcp/annotation/method/tool/SyncMcpToolMethodCallbackTests.java:639 throw-generic-exception
 mcp/mcp-annotations/src/test/java/org/springframework/ai/mcp/annotation/method/tool/SyncStatelessMcpToolMethodCallbackTests.java:644 throw-generic-exception
 mcp/mcp-annotations/src/test/java/org/springframework/ai/mcp/annotation/provider/logging/AsyncMcpLoggingProviderTests.java:41 disabled-test-without-reason
-mcp/mcp-annotations/src/test/java/org/springframework/ai/mcp/annotation/provider/progress/AsyncMcpProgressProviderTests.java:66 ignored-status-result
 mcp/transport/mcp-spring-webflux/src/main/java/org/springframework/ai/mcp/client/webflux/transport/WebClientStreamableHttpTransport.java:141 stream-sorted-findfirst
 mcp/transport/mcp-spring-webflux/src/main/java/org/springframework/ai/mcp/client/webflux/transport/WebClientStreamableHttpTransport.java:227 cognitive-complexity
 mcp/transport/mcp-spring-webflux/src/main/java/org/springframework/ai/mcp/client/webflux/transport/WebClientStreamableHttpTransport.java:313 cognitive-complexity
@@ -394,7 +390,6 @@ mcp/transport/mcp-spring-webflux/src/test/java/org/springframework/ai/mcp/common
 mcp/transport/mcp-spring-webflux/src/test/java/org/springframework/ai/mcp/security/WebFluxServerTransportSecurityIT.java:216 deprecated-api-usage
 mcp/transport/mcp-spring-webflux/src/test/java/org/springframework/ai/mcp/security/WebFluxServerTransportSecurityIT.java:231 deprecated-api-usage
 mcp/transport/mcp-spring-webflux/src/test/java/org/springframework/ai/mcp/security/WebFluxServerTransportSecurityIT.java:240 deprecated-api-usage
-mcp/transport/mcp-spring-webflux/src/test/java/org/springframework/ai/mcp/server/webflux/transport/WebFluxSseMcpAsyncServerIT.java:47 deprecated-api-usage
 mcp/transport/mcp-spring-webflux/src/test/java/org/springframework/ai/mcp/server/webflux/transport/WebFluxSseMcpSyncServerIT.java:58 deprecated-api-usage
 mcp/transport/mcp-spring-webmvc/src/main/java/org/springframework/ai/mcp/server/webmvc/transport/WebMvcSseServerTransportProvider.java:305 cognitive-complexity
 mcp/transport/mcp-spring-webmvc/src/main/java/org/springframework/ai/mcp/server/webmvc/transport/WebMvcSseServerTransportProvider.java:351 exception-message-only-logged
@@ -488,7 +483,6 @@ memory-repositories/spring-ai-model-chat-memory-repository-redis/src/main/java/o
 memory-repositories/spring-ai-model-chat-memory-repository-redis/src/main/java/org/springframework/ai/chat/memory/repository/redis/RedisChatMemoryRepository.java:412 deep-nesting
 memory-repositories/spring-ai-model-chat-memory-repository-redis/src/main/java/org/springframework/ai/chat/memory/repository/redis/RedisChatMemoryRepository.java:459 exception-message-only-logged
 memory-repositories/spring-ai-model-chat-memory-repository-redis/src/main/java/org/springframework/ai/chat/memory/repository/redis/RedisChatMemoryRepository.java:470 cognitive-complexity
-memory-repositories/spring-ai-model-chat-memory-repository-redis/src/main/java/org/springframework/ai/chat/memory/repository/redis/RedisChatMemoryRepository.java:528 identical-branches
 memory-repositories/spring-ai-model-chat-memory-repository-redis/src/main/java/org/springframework/ai/chat/memory/repository/redis/RedisChatMemoryRepository.java:692 cognitive-complexity
 memory-repositories/spring-ai-model-chat-memory-repository-redis/src/main/java/org/springframework/ai/chat/memory/repository/redis/RedisChatMemoryRepository.java:840 exception-message-only-logged
 memory-repositories/spring-ai-model-chat-memory-repository-redis/src/main/java/org/springframework/ai/chat/memory/repository/redis/RedisChatMemoryRepository.java:853 cognitive-complexity
@@ -566,8 +560,6 @@ models/spring-ai-bedrock-converse/src/main/java/org/springframework/ai/bedrock/c
 models/spring-ai-bedrock-converse/src/main/java/org/springframework/ai/bedrock/converse/BedrockProxyChatModel.java:249 local-immediately-returned
 models/spring-ai-bedrock-converse/src/main/java/org/springframework/ai/bedrock/converse/BedrockProxyChatModel.java:260 cognitive-complexity
 models/spring-ai-bedrock-converse/src/main/java/org/springframework/ai/bedrock/converse/BedrockProxyChatModel.java:260 method-too-long
-models/spring-ai-bedrock-converse/src/main/java/org/springframework/ai/bedrock/converse/BedrockProxyChatModel.java:266 null-dereference
-models/spring-ai-bedrock-converse/src/main/java/org/springframework/ai/bedrock/converse/BedrockProxyChatModel.java:451 null-dereference
 models/spring-ai-bedrock-converse/src/main/java/org/springframework/ai/bedrock/converse/BedrockProxyChatModel.java:495 cognitive-complexity
 models/spring-ai-bedrock-converse/src/main/java/org/springframework/ai/bedrock/converse/BedrockProxyChatModel.java:537 deep-nesting
 models/spring-ai-bedrock-converse/src/main/java/org/springframework/ai/bedrock/converse/BedrockProxyChatModel.java:542 throw-generic-exception
@@ -600,7 +592,6 @@ models/spring-ai-deepseek/src/main/java/org/springframework/ai/deepseek/DeepSeek
 models/spring-ai-deepseek/src/main/java/org/springframework/ai/deepseek/DeepSeekChatModel.java:196 local-immediately-returned
 models/spring-ai-deepseek/src/main/java/org/springframework/ai/deepseek/DeepSeekChatModel.java:205 cognitive-complexity
 models/spring-ai-deepseek/src/main/java/org/springframework/ai/deepseek/DeepSeekChatModel.java:343 cognitive-complexity
-models/spring-ai-deepseek/src/main/java/org/springframework/ai/deepseek/DeepSeekChatModel.java:398 null-dereference
 models/spring-ai-deepseek/src/main/java/org/springframework/ai/deepseek/DeepSeekChatModel.java:458 cognitive-complexity
 models/spring-ai-deepseek/src/main/java/org/springframework/ai/deepseek/DeepSeekChatModel.java:476 log-string-concatenation
 models/spring-ai-deepseek/src/main/java/org/springframework/ai/deepseek/DeepSeekChatOptions.java:156 too-many-parameters
@@ -623,7 +614,6 @@ models/spring-ai-elevenlabs/src/main/java/org/springframework/ai/elevenlabs/Elev
 models/spring-ai-elevenlabs/src/test/java/org/springframework/ai/elevenlabs/ElevenLabsTestConfiguration.java:55 bean-method-call-in-lite-mode
 models/spring-ai-elevenlabs/src/test/java/org/springframework/ai/elevenlabs/api/ElevenLabsApiIT.java:212 assertthrows-multiple-calls
 models/spring-ai-google-genai-embedding/src/main/java/org/springframework/ai/google/genai/text/GoogleGenAiTextEmbeddingModel.java:126 cognitive-complexity
-models/spring-ai-google-genai-embedding/src/main/java/org/springframework/ai/google/genai/text/GoogleGenAiTextEmbeddingModel.java:142 null-dereference
 models/spring-ai-google-genai-embedding/src/main/java/org/springframework/ai/google/genai/text/GoogleGenAiTextEmbeddingModel.java:199 deep-nesting
 models/spring-ai-google-genai-embedding/src/main/java/org/springframework/ai/google/genai/text/GoogleGenAiTextEmbeddingModel.java:208 deep-nesting
 models/spring-ai-google-genai-embedding/src/test/java/org/springframework/ai/google/genai/text/GoogleGenAiTextEmbeddingModelIT.java:129 unused-local-variable
@@ -632,7 +622,6 @@ models/spring-ai-google-genai-embedding/src/test/java/org/springframework/ai/goo
 models/spring-ai-google-genai-embedding/src/test/java/org/springframework/ai/google/genai/text/GoogleGenAiTextEmbeddingModelIT.java:169 unused-parameter
 models/spring-ai-google-genai-embedding/src/test/java/org/springframework/ai/google/genai/text/GoogleGenAiTextEmbeddingModelIT.java:191 throw-generic-exception
 models/spring-ai-google-genai-embedding/src/test/java/org/springframework/ai/google/genai/text/GoogleGenAiTextEmbeddingModelIT.java:194 throw-generic-exception
-models/spring-ai-google-genai-image/src/main/java/org/springframework/ai/google/genai/image/GoogleGenAiImageModel.java:130 null-dereference
 models/spring-ai-google-genai-image/src/main/java/org/springframework/ai/google/genai/image/GoogleGenAiImageOptions.java:126 too-many-parameters
 models/spring-ai-google-genai-image/src/main/java/org/springframework/ai/google/genai/image/GoogleGenAiImageOptions.java:247 complex-boolean-expression
 models/spring-ai-google-genai-image/src/main/java/org/springframework/ai/google/genai/image/GoogleGenAiImageOptions.java:345 cognitive-complexity
@@ -641,7 +630,6 @@ models/spring-ai-google-genai/src/main/java/org/springframework/ai/google/genai/
 models/spring-ai-google-genai/src/main/java/org/springframework/ai/google/genai/GoogleGenAiChatModel.java:1460 private-constructor-class-not-final
 models/spring-ai-google-genai/src/main/java/org/springframework/ai/google/genai/GoogleGenAiChatModel.java:358 cognitive-complexity
 models/spring-ai-google-genai/src/main/java/org/springframework/ai/google/genai/GoogleGenAiChatModel.java:459 log-string-concatenation
-models/spring-ai-google-genai/src/main/java/org/springframework/ai/google/genai/GoogleGenAiChatModel.java:524 identical-branches
 models/spring-ai-google-genai/src/main/java/org/springframework/ai/google/genai/GoogleGenAiChatModel.java:532 throw-generic-exception
 models/spring-ai-google-genai/src/main/java/org/springframework/ai/google/genai/GoogleGenAiChatModel.java:541 throw-generic-exception
 models/spring-ai-google-genai/src/main/java/org/springframework/ai/google/genai/GoogleGenAiChatModel.java:550 throw-generic-exception
@@ -650,7 +638,6 @@ models/spring-ai-google-genai/src/main/java/org/springframework/ai/google/genai/
 models/spring-ai-google-genai/src/main/java/org/springframework/ai/google/genai/GoogleGenAiChatModel.java:705 todo-comment
 models/spring-ai-google-genai/src/main/java/org/springframework/ai/google/genai/GoogleGenAiChatModel.java:778 complex-boolean-expression
 models/spring-ai-google-genai/src/main/java/org/springframework/ai/google/genai/GoogleGenAiChatModel.java:868 cognitive-complexity
-models/spring-ai-google-genai/src/main/java/org/springframework/ai/google/genai/GoogleGenAiChatModel.java:876 null-dereference
 models/spring-ai-google-genai/src/main/java/org/springframework/ai/google/genai/GoogleGenAiChatOptions.java:209 too-many-parameters
 models/spring-ai-google-genai/src/main/java/org/springframework/ai/google/genai/GoogleGenAiChatOptions.java:397 complex-boolean-expression
 models/spring-ai-google-genai/src/main/java/org/springframework/ai/google/genai/GoogleGenAiChatOptions.java:551 missing-override
@@ -699,8 +686,6 @@ models/spring-ai-ollama/src/main/java/org/springframework/ai/ollama/OllamaChatMo
 models/spring-ai-ollama/src/main/java/org/springframework/ai/ollama/OllamaChatModel.java:295 cognitive-complexity
 models/spring-ai-ollama/src/main/java/org/springframework/ai/ollama/OllamaChatModel.java:444 cognitive-complexity
 models/spring-ai-ollama/src/main/java/org/springframework/ai/ollama/OllamaChatModel.java:452 collapsible-if
-models/spring-ai-ollama/src/main/java/org/springframework/ai/ollama/OllamaChatModel.java:492 null-dereference
-models/spring-ai-ollama/src/main/java/org/springframework/ai/ollama/OllamaEmbeddingModel.java:196 null-dereference
 models/spring-ai-ollama/src/main/java/org/springframework/ai/ollama/api/OllamaApi.java:648 commented-out-code
 models/spring-ai-ollama/src/main/java/org/springframework/ai/ollama/api/OllamaChatOptions.java:1113 missing-override
 models/spring-ai-ollama/src/main/java/org/springframework/ai/ollama/api/OllamaChatOptions.java:1123 missing-override
@@ -732,7 +717,6 @@ models/spring-ai-openai/src/main/java/org/springframework/ai/openai/OpenAiChatMo
 models/spring-ai-openai/src/main/java/org/springframework/ai/openai/OpenAiChatModel.java:1452 cognitive-complexity
 models/spring-ai-openai/src/main/java/org/springframework/ai/openai/OpenAiChatModel.java:1611 utility-class-instantiable
 models/spring-ai-openai/src/main/java/org/springframework/ai/openai/OpenAiChatModel.java:612 throw-generic-exception
-models/spring-ai-openai/src/main/java/org/springframework/ai/openai/OpenAiChatModel.java:726 null-dereference
 models/spring-ai-openai/src/main/java/org/springframework/ai/openai/OpenAiChatOptions.java:1113 cognitive-complexity
 models/spring-ai-openai/src/main/java/org/springframework/ai/openai/OpenAiChatOptions.java:205 too-many-parameters
 models/spring-ai-openai/src/main/java/org/springframework/ai/openai/OpenAiChatOptions.java:640 complex-boolean-expression
@@ -749,7 +733,6 @@ models/spring-ai-openai/src/main/java/org/springframework/ai/openai/http/okhttp/
 models/spring-ai-openai/src/main/java/org/springframework/ai/openai/metadata/OpenAiRateLimit.java:113 complex-boolean-expression
 models/spring-ai-openai/src/main/java/org/springframework/ai/openai/metadata/OpenAiRateLimit.java:136 catch-return-null
 models/spring-ai-openai/src/main/java/org/springframework/ai/openai/metadata/OpenAiRateLimit.java:160 catch-return-null
-models/spring-ai-openai/src/main/java/org/springframework/ai/openai/responses/OpenAiResponsesChatModel.java:275 null-dereference
 models/spring-ai-openai/src/main/java/org/springframework/ai/openai/responses/OpenAiResponsesChatOptions.java:491 complex-boolean-expression
 models/spring-ai-openai/src/main/java/org/springframework/ai/openai/responses/OpenAiResponsesChatOptions.java:840 cognitive-complexity
 models/spring-ai-openai/src/main/java/org/springframework/ai/openai/responses/ResponsesItemMapper.java:344 log-string-concatenation
@@ -757,13 +740,11 @@ models/spring-ai-openai/src/main/java/org/springframework/ai/openai/responses/Re
 models/spring-ai-openai/src/main/java/org/springframework/ai/openai/responses/ResponsesItemMapper.java:409 log-string-concatenation
 models/spring-ai-openai/src/main/java/org/springframework/ai/openai/responses/ResponsesItemMapper.java:483 cognitive-complexity
 models/spring-ai-openai/src/main/java/org/springframework/ai/openai/responses/ResponsesRequestBuilder.java:85 cognitive-complexity
-models/spring-ai-openai/src/main/java/org/springframework/ai/openai/responses/ResponsesRequestBuilder.java:94 null-dereference
 models/spring-ai-openai/src/main/java/org/springframework/ai/openai/setup/OpenAiSetup.java:124 too-many-parameters
 models/spring-ai-openai/src/main/java/org/springframework/ai/openai/setup/OpenAiSetup.java:151 too-many-parameters
 models/spring-ai-openai/src/main/java/org/springframework/ai/openai/setup/OpenAiSetup.java:215 too-many-parameters
 models/spring-ai-openai/src/main/java/org/springframework/ai/openai/setup/OpenAiSetup.java:304 cognitive-complexity
 models/spring-ai-openai/src/main/java/org/springframework/ai/openai/setup/OpenAiSetup.java:343 lost-stack-trace
-models/spring-ai-openai/src/main/java/org/springframework/ai/openai/setup/OpenAiSetup.java:355 identical-branches
 models/spring-ai-openai/src/main/java/org/springframework/ai/openai/setup/OpenAiSetup.java:97 too-many-parameters
 models/spring-ai-openai/src/test/java/org/springframework/ai/openai/OpenAiChatModelTests.java:1298 assertj-assertion-without-check
 models/spring-ai-openai/src/test/java/org/springframework/ai/openai/OpenAiChatModelTests.java:1345 deprecated-api-usage
@@ -781,13 +762,12 @@ models/spring-ai-openai/src/test/java/org/springframework/ai/openai/audio/OpenAi
 models/spring-ai-openai/src/test/java/org/springframework/ai/openai/audio/OpenAiAudioSpeechModelTests.java:249 random-used-once
 models/spring-ai-openai/src/test/java/org/springframework/ai/openai/audio/OpenAiAudioSpeechModelTests.java:286 random-used-once
 models/spring-ai-openai/src/test/java/org/springframework/ai/openai/audio/OpenAiAudioSpeechModelTests.java:322 random-used-once
-models/spring-ai-openai/src/test/java/org/springframework/ai/openai/audio/OpenAiAudioSpeechModelTests.java:348 ignored-status-result
-models/spring-ai-openai/src/test/java/org/springframework/ai/openai/audio/OpenAiAudioSpeechModelTests.java:427 ignored-status-result
 models/spring-ai-openai/src/test/java/org/springframework/ai/openai/audio/OpenAiAudioSpeechModelTests.java:508 unused-local-variable
 models/spring-ai-openai/src/test/java/org/springframework/ai/openai/azure/AzureOpenAiChatModelFunctionCallIT.java:244 optional-orelse-eager-call
 models/spring-ai-openai/src/test/java/org/springframework/ai/openai/chat/OpenAiChatModelFunctionCallingIT.java:65 unused-local-variable
 models/spring-ai-openai/src/test/java/org/springframework/ai/openai/chat/OpenAiChatModelIT.java:472 test-without-assertion
 models/spring-ai-openai/src/test/java/org/springframework/ai/openai/chat/OpenAiChatModelIT.java:488 unused-local-variable
+models/spring-ai-openai/src/test/java/org/springframework/ai/openai/chat/OpenAiChatModelResponseFormatIT.java:175 record-array-component
 models/spring-ai-openai/src/test/java/org/springframework/ai/openai/chat/OpenAiPromptCachingIT.java:70 throw-generic-exception
 models/spring-ai-openai/src/test/java/org/springframework/ai/openai/chat/client/OpenAiChatClientMemoryAdvisorReproIT.java:50 test-without-assertion
 models/spring-ai-openai/src/test/java/org/springframework/ai/openai/chat/client/OpenAiChatClientMethodInvokingFunctionCallbackIT.java:187 unused-local-variable
@@ -829,7 +809,6 @@ models/spring-ai-vertex-ai-embedding/src/main/java/org/springframework/ai/vertex
 models/spring-ai-vertex-ai-embedding/src/main/java/org/springframework/ai/vertexai/embedding/VertexAiEmbeddingUtils.java:69 unnecessary-boxing
 models/spring-ai-vertex-ai-embedding/src/main/java/org/springframework/ai/vertexai/embedding/multimodal/VertexAiMultimodalEmbeddingModel.java:150 throw-generic-exception
 models/spring-ai-vertex-ai-embedding/src/main/java/org/springframework/ai/vertexai/embedding/multimodal/VertexAiMultimodalEmbeddingModel.java:156 cognitive-complexity
-models/spring-ai-vertex-ai-embedding/src/main/java/org/springframework/ai/vertexai/embedding/text/VertexAiTextEmbeddingModel.java:139 null-dereference
 models/spring-ai-vertex-ai-embedding/src/main/java/org/springframework/ai/vertexai/embedding/text/VertexAiTextEmbeddingModel.java:242 throw-generic-exception
 models/spring-ai-vertex-ai-embedding/src/main/java/org/springframework/ai/vertexai/embedding/text/VertexAiTextEmbeddingModel.java:249 local-immediately-returned
 models/spring-ai-vertex-ai-embedding/src/test/java/org/springframework/ai/vertexai/embedding/text/VertexAiTextEmbeddingModelIT.java:181 throw-generic-exception
@@ -957,7 +936,6 @@ spring-ai-model/src/main/java/org/springframework/ai/model/tool/DefaultToolCalli
 spring-ai-model/src/main/java/org/springframework/ai/model/tool/DefaultToolCallingManager.java:207 unused-parameter
 spring-ai-model/src/main/java/org/springframework/ai/model/tool/DefaultToolCallingManager.java:221 cognitive-complexity
 spring-ai-model/src/main/java/org/springframework/ai/model/tool/DefaultToolCallingManager.java:224 collapsible-if
-spring-ai-model/src/main/java/org/springframework/ai/model/tool/DefaultToolCallingManager.java:286 null-dereference
 spring-ai-model/src/main/java/org/springframework/ai/moderation/Categories.java:197 complex-boolean-expression
 spring-ai-model/src/main/java/org/springframework/ai/moderation/CategoryScores.java:198 complex-boolean-expression
 spring-ai-model/src/main/java/org/springframework/ai/moderation/ModerationModel.java:33 missing-override
@@ -1011,7 +989,6 @@ spring-ai-rag/src/main/java/org/springframework/ai/rag/preretrieval/query/transf
 spring-ai-rag/src/main/java/org/springframework/ai/rag/preretrieval/query/transformation/QueryTransformer.java:40 missing-override
 spring-ai-rag/src/main/java/org/springframework/ai/rag/retrieval/join/DocumentJoiner.java:44 missing-override
 spring-ai-rag/src/main/java/org/springframework/ai/rag/retrieval/search/DocumentRetriever.java:43 missing-override
-spring-ai-rag/src/test/java/org/springframework/ai/rag/util/PromptAssertTests.java:33 test-without-assertion
 spring-ai-spring-boot-docker-compose/src/test/java/org/springframework/boot/docker/compose/service/connection/test/AbstractDockerComposeIT.java:88 default-charset
 spring-ai-spring-boot-docker-compose/src/test/java/org/springframework/boot/docker/compose/service/connection/test/AbstractDockerComposeIT.java:90 default-charset
 spring-ai-spring-boot-docker-compose/src/test/java/org/springframework/boot/testsupport/DisabledIfProcessUnavailableCondition.java:57 catch-throwable
@@ -1026,9 +1003,6 @@ spring-ai-template-st/src/test/java/org/springframework/ai/template/st/StTemplat
 spring-ai-test/src/main/java/org/springframework/ai/test/chat/client/advisor/MockWeatherService.java:99 local-variable-naming
 spring-ai-test/src/main/java/org/springframework/ai/test/chat/client/advisor/MockWeatherService.java:99 local-variable-naming
 spring-ai-test/src/main/java/org/springframework/ai/test/chat/client/advisor/MockWeatherService.java:99 local-variable-naming
-spring-ai-test/src/main/java/org/springframework/ai/test/vectorstore/AbstractVectorStoreUpsertTests.java:231 null-dereference
-spring-ai-test/src/main/java/org/springframework/ai/test/vectorstore/AbstractVectorStoreUpsertTests.java:251 null-dereference
-spring-ai-test/src/main/java/org/springframework/ai/test/vectorstore/AbstractVectorStoreUpsertTests.java:329 null-dereference
 spring-ai-test/src/main/java/org/springframework/ai/utils/AudioPlayer.java:63 throw-generic-exception
 spring-ai-tool-search-tool/src/main/java/org/springframework/ai/tool/toolsearch/eviction/AlwaysEvictStrategy.java:69 empty-method
 spring-ai-tool-search-tool/src/main/java/org/springframework/ai/tool/toolsearch/eviction/NeverEvictStrategy.java:60 empty-method
@@ -1166,7 +1140,6 @@ vector-stores/spring-ai-chroma-store/src/main/java/org/springframework/ai/chroma
 vector-stores/spring-ai-chroma-store/src/main/java/org/springframework/ai/chroma/vectorstore/ChromaApi.java:614 private-constructor-class-not-final
 vector-stores/spring-ai-chroma-store/src/main/java/org/springframework/ai/chroma/vectorstore/ChromaVectorStore.java:103 constructor-calls-overridable-method
 vector-stores/spring-ai-chroma-store/src/main/java/org/springframework/ai/chroma/vectorstore/ChromaVectorStore.java:135 throw-generic-exception
-vector-stores/spring-ai-chroma-store/src/main/java/org/springframework/ai/chroma/vectorstore/ChromaVectorStore.java:141 null-dereference
 vector-stores/spring-ai-chroma-store/src/main/java/org/springframework/ai/chroma/vectorstore/ChromaVectorStore.java:279 private-constructor-class-not-final
 vector-stores/spring-ai-chroma-store/src/main/java/org/springframework/ai/chroma/vectorstore/ChromaVectorStore.java:374 missing-override
 vector-stores/spring-ai-chroma-store/src/test/java/org/springframework/ai/chroma/vectorstore/ChromaVectorStoreObservationIT.java:83 throw-generic-exception
@@ -1191,7 +1164,6 @@ vector-stores/spring-ai-elasticsearch-store/src/main/java/org/springframework/ai
 vector-stores/spring-ai-elasticsearch-store/src/main/java/org/springframework/ai/vectorstore/elasticsearch/ElasticsearchAiSearchFilterExpressionConverter.java:78 empty-method
 vector-stores/spring-ai-elasticsearch-store/src/main/java/org/springframework/ai/vectorstore/elasticsearch/ElasticsearchAiSearchFilterExpressionConverter.java:97 throw-generic-exception
 vector-stores/spring-ai-elasticsearch-store/src/main/java/org/springframework/ai/vectorstore/elasticsearch/ElasticsearchVectorStore.java:289 throw-generic-exception
-vector-stores/spring-ai-elasticsearch-store/src/main/java/org/springframework/ai/vectorstore/elasticsearch/ElasticsearchVectorStore.java:309 enum-compared-with-equals
 vector-stores/spring-ai-elasticsearch-store/src/main/java/org/springframework/ai/vectorstore/elasticsearch/ElasticsearchVectorStore.java:327 throw-generic-exception
 vector-stores/spring-ai-elasticsearch-store/src/main/java/org/springframework/ai/vectorstore/elasticsearch/ElasticsearchVectorStore.java:382 throw-generic-exception
 vector-stores/spring-ai-elasticsearch-store/src/main/java/org/springframework/ai/vectorstore/elasticsearch/ElasticsearchVectorStore.java:397 throw-generic-exception

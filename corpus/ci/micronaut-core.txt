@@ -8,7 +8,6 @@ aop/src/main/java/io/micronaut/aop/chain/DefaultInterceptorRegistry.java:138 com
 aop/src/main/java/io/micronaut/aop/chain/InterceptorChain.java:122 lost-stack-trace
 aop/src/main/java/io/micronaut/aop/chain/InterceptorChain.java:300 collapsible-if
 aop/src/main/java/io/micronaut/aop/chain/MethodInterceptorChain.java:117 nested-ternary
-aop/src/main/java/io/micronaut/aop/internal/intercepted/InterceptedMethodUtil.java:76 identical-branches
 aop/src/main/java/io/micronaut/aop/runtime/DefaultRuntimeProxyDefinition.java:49 record-array-component
 aop/src/main/java/io/micronaut/aop/runtime/RuntimeProxyDefinition.java:91 record-array-component
 benchmarks/src/jmh/java/io/micronaut/aop/around/AroundCompileBenchmark.java:99 lost-stack-trace
@@ -62,8 +61,6 @@ context-python/src/main/java/io/micronaut/context/python/PythonCoercion.java:101
 context-python/src/main/java/io/micronaut/context/python/PythonCoercion.java:1051 complex-boolean-expression
 context-python/src/main/java/io/micronaut/context/python/PythonCoercion.java:1300 catch-return-null
 context-python/src/main/java/io/micronaut/context/python/PythonCoercion.java:232 null-dereference
-context-python/src/main/java/io/micronaut/context/python/PythonCoercion.java:543 identical-branches
-context-python/src/main/java/io/micronaut/context/python/PythonCoercion.java:545 identical-branches
 context-python/src/main/java/io/micronaut/context/python/PythonCoercion.java:618 catch-return-null
 context-python/src/main/java/io/micronaut/context/python/PythonContextRegistry.java:59 unused-private-field
 context-python/src/main/java/io/micronaut/context/python/PythonContextRuntime.java:1873 complex-boolean-expression
@@ -120,7 +117,6 @@ context/src/main/java/io/micronaut/runtime/beans/MapperIntroduction.java:289 dee
 context/src/main/java/io/micronaut/runtime/beans/MapperIntroduction.java:320 optional-orelse-eager-call
 context/src/main/java/io/micronaut/runtime/beans/MapperIntroduction.java:380 too-many-parameters
 context/src/main/java/io/micronaut/runtime/beans/MapperIntroduction.java:479 cognitive-complexity
-context/src/main/java/io/micronaut/runtime/beans/MapperIntroduction.java:502 identical-branches
 context/src/main/java/io/micronaut/runtime/context/scope/ThreadLocalCustomScope.java:53 threadlocal-not-removed
 context/src/main/java/io/micronaut/runtime/context/scope/refresh/RefreshEventListener.java:39 cognitive-complexity
 context/src/main/java/io/micronaut/runtime/context/scope/refresh/RefreshEventListener.java:50 deep-nesting
@@ -153,7 +149,6 @@ context/src/main/java/io/micronaut/scheduling/io/watch/DefaultWatchThread.java:9
 context/src/main/java/io/micronaut/scheduling/processor/ScheduledMethodProcessor.java:113 cognitive-complexity
 context/src/test/groovy/io/micronaut/runtime/event/annotation/AsyncListener.java:33 interrupted-exception-swallowed
 context/src/test/java/io/micronaut/runtime/BeanDefinitionPrefetchStartupTest.java:452 catch-return-null
-context/src/test/java/io/micronaut/runtime/BeanDefinitionPrefetchStartupTest.java:599 ignored-status-result
 context/src/test/java/io/micronaut/runtime/context/CompositeMessageSourceTest.java:23 deprecated-api-usage
 context/src/test/java/io/micronaut/runtime/context/CompositeMessageSourceTest.java:49 constructor-calls-overridable-method
 context/src/test/java/io/micronaut/scheduling/LoomSupportTest.java:43 assert-true-with-comparison
@@ -192,7 +187,6 @@ core-processor/src/main/java/io/micronaut/expressions/EvaluatedExpressionConstan
 core-processor/src/main/java/io/micronaut/expressions/parser/SingleEvaluatedExpressionParser.java:143 catch-null-pointer
 core-processor/src/main/java/io/micronaut/expressions/parser/SingleEvaluatedExpressionParser.java:144 lost-stack-trace
 core-processor/src/main/java/io/micronaut/expressions/parser/ast/access/CandidateMethod.java:166 cognitive-complexity
-core-processor/src/main/java/io/micronaut/expressions/parser/ast/operator/binary/MatchesOperator.java:79 lost-stack-trace
 core-processor/src/main/java/io/micronaut/expressions/util/EvaluatedExpressionsUtils.java:106 cognitive-complexity
 core-processor/src/main/java/io/micronaut/inject/annotation/AbstractAnnotationMetadataBuilder.java:1055 cognitive-complexity
 core-processor/src/main/java/io/micronaut/inject/annotation/AbstractAnnotationMetadataBuilder.java:107 catch-throwable
@@ -241,9 +235,7 @@ core-processor/src/main/java/io/micronaut/inject/ast/PrimitiveElement.java:115 c
 core-processor/src/main/java/io/micronaut/inject/ast/PropertyElement.java:188 cognitive-complexity
 core-processor/src/main/java/io/micronaut/inject/ast/PropertyElementQuery.java:237 complex-boolean-expression
 core-processor/src/main/java/io/micronaut/inject/ast/TypeVariableBinder.java:68 cognitive-complexity
-core-processor/src/main/java/io/micronaut/inject/ast/annotation/MethodElementAnnotationsHelper.java:69 identical-branches
 core-processor/src/main/java/io/micronaut/inject/ast/annotation/PropertyElementAnnotationMetadata.java:49 cognitive-complexity
-core-processor/src/main/java/io/micronaut/inject/ast/utils/AstBeanPropertiesUtils.java:260 identical-branches
 core-processor/src/main/java/io/micronaut/inject/ast/utils/AstBeanPropertiesUtils.java:297 cognitive-complexity
 core-processor/src/main/java/io/micronaut/inject/ast/utils/AstBeanPropertiesUtils.java:406 complex-boolean-expression
 core-processor/src/main/java/io/micronaut/inject/ast/utils/AstBeanPropertiesUtils.java:540 complex-boolean-expression
@@ -251,7 +243,6 @@ core-processor/src/main/java/io/micronaut/inject/ast/utils/AstBeanPropertiesUtil
 core-processor/src/main/java/io/micronaut/inject/ast/utils/AstBeanPropertiesUtils.java:77 cognitive-complexity
 core-processor/src/main/java/io/micronaut/inject/ast/utils/AstBeanPropertiesUtils.java:77 method-too-long
 core-processor/src/main/java/io/micronaut/inject/ast/utils/AstBeanPropertiesUtils.java:77 too-many-parameters
-core-processor/src/main/java/io/micronaut/inject/ast/utils/AstBeanPropertiesUtils.java:771 identical-branches
 core-processor/src/main/java/io/micronaut/inject/ast/utils/EnclosedElementsQuery.java:218 cognitive-complexity
 core-processor/src/main/java/io/micronaut/inject/ast/utils/EnclosedElementsQuery.java:225 collapsible-if
 core-processor/src/main/java/io/micronaut/inject/ast/utils/EnclosedElementsQuery.java:292 cognitive-complexity
@@ -259,10 +250,7 @@ core-processor/src/main/java/io/micronaut/inject/ast/utils/EnclosedElementsQuery
 core-processor/src/main/java/io/micronaut/inject/ast/utils/EnclosedElementsQuery.java:332 deep-nesting
 core-processor/src/main/java/io/micronaut/inject/ast/utils/EnclosedElementsQuery.java:90 cognitive-complexity
 core-processor/src/main/java/io/micronaut/inject/beans/visitor/BeanIntrospectionWriter.java:1643 cognitive-complexity
-core-processor/src/main/java/io/micronaut/inject/beans/visitor/BeanIntrospectionWriter.java:1684 identical-branches
 core-processor/src/main/java/io/micronaut/inject/beans/visitor/BeanIntrospectionWriter.java:1761 cognitive-complexity
-core-processor/src/main/java/io/micronaut/inject/beans/visitor/BeanIntrospectionWriter.java:1782 identical-branches
-core-processor/src/main/java/io/micronaut/inject/beans/visitor/BeanIntrospectionWriter.java:1803 identical-branches
 core-processor/src/main/java/io/micronaut/inject/beans/visitor/BeanIntrospectionWriter.java:310 unused-private-field
 core-processor/src/main/java/io/micronaut/inject/beans/visitor/BeanIntrospectionWriter.java:425 cognitive-complexity
 core-processor/src/main/java/io/micronaut/inject/beans/visitor/BeanIntrospectionWriter.java:425 too-many-parameters
@@ -304,7 +292,6 @@ core-processor/src/main/java/io/micronaut/inject/processing/DeclaredBeanElementC
 core-processor/src/main/java/io/micronaut/inject/processing/DeclaredBeanElementCreator.java:486 cognitive-complexity
 core-processor/src/main/java/io/micronaut/inject/processing/DeclaredBeanElementCreator.java:491 complex-boolean-expression
 core-processor/src/main/java/io/micronaut/inject/processing/DeclaredBeanElementCreator.java:638 cognitive-complexity
-core-processor/src/main/java/io/micronaut/inject/processing/DeclaredBeanElementCreator.java:689 identical-branches
 core-processor/src/main/java/io/micronaut/inject/processing/DeclaredBeanElementCreator.java:734 todo-comment
 core-processor/src/main/java/io/micronaut/inject/processing/FactoryBeanElementCreator.java:119 commented-out-code
 core-processor/src/main/java/io/micronaut/inject/processing/FactoryBeanElementCreator.java:163 cognitive-complexity
@@ -385,10 +372,8 @@ core-processor/src/main/java/io/micronaut/inject/writer/ByteCodeWriterUtils.java
 core-processor/src/main/java/io/micronaut/inject/writer/DispatchWriter.java:372 unused-parameter
 core-processor/src/main/java/io/micronaut/inject/writer/DispatchWriter.java:586 complex-boolean-expression
 core-processor/src/main/java/io/micronaut/inject/writer/FileBackedGeneratedFile.java:61 ignored-status-result
-core-processor/src/main/java/io/micronaut/inject/writer/FileBackedGeneratedFile.java:67 ignored-status-result
 core-processor/src/main/java/io/micronaut/inject/writer/FileBackedGeneratedFile.java:73 ignored-status-result
 core-processor/src/main/java/io/micronaut/inject/writer/FileBackedGeneratedFile.java:80 default-charset
-core-processor/src/main/java/io/micronaut/inject/writer/FileBackedGeneratedFile.java:87 ignored-status-result
 core-processor/src/main/java/io/micronaut/inject/writer/ParameterDefaultValueProviderLoader.java:51 utility-class-instantiable
 core-processor/src/main/java/io/micronaut/validation/visitor/async/AsyncTypeElementVisitor.java:60 complex-boolean-expression
 core-reactive/src/main/java/io/micronaut/core/async/processor/SingleSubscriberProcessor.java:41 empty-method
@@ -539,7 +524,6 @@ core/src/main/java/io/micronaut/core/util/CollectionUtils.java:53 utility-class-
 core/src/main/java/io/micronaut/core/util/ConnectionString.java:285 complex-boolean-expression
 core/src/main/java/io/micronaut/core/util/ConnectionString.java:489 cognitive-complexity
 core/src/main/java/io/micronaut/core/util/ConnectionString.java:86 too-many-parameters
-core/src/main/java/io/micronaut/core/util/ObjectUtils.java:92 identical-branches
 core/src/main/java/io/micronaut/core/util/StreamUtils.java:118 cognitive-complexity
 core/src/main/java/io/micronaut/core/util/StreamUtils.java:34 utility-class-instantiable
 core/src/main/java/io/micronaut/core/util/StreamUtils.java:46 cognitive-complexity
@@ -551,7 +535,6 @@ core/src/main/java/io/micronaut/core/util/StringUtils.java:40 utility-class-inst
 core/src/main/java/io/micronaut/core/util/StringUtils.java:406 cognitive-complexity
 core/src/main/java/io/micronaut/core/util/StringUtils.java:596 loop-counter-modified-in-body
 core/src/main/java/io/micronaut/core/util/SupplierUtil.java:29 utility-class-instantiable
-core/src/main/java/io/micronaut/core/util/clhm/ConcurrentLinkedHashMap.java:1204 non-serializable-field
 core/src/main/java/io/micronaut/core/util/clhm/ConcurrentLinkedHashMap.java:1566 inner-class-could-be-static
 core/src/main/java/io/micronaut/core/util/clhm/ConcurrentLinkedHashMap.java:350 deprecated-api-usage
 core/src/main/java/io/micronaut/core/util/clhm/ConcurrentLinkedHashMap.java:428 deprecated-api-usage
@@ -562,7 +545,6 @@ core/src/main/java/io/micronaut/core/util/clhm/LinkedDeque.java:185 loop-counter
 core/src/main/java/io/micronaut/core/version/SemanticVersion.java:120 compareto-specific-value
 core/src/main/java/io/micronaut/core/version/SemanticVersion.java:78 compareto-without-equals
 core/src/main/java/io/micronaut/core/version/VersionUtils.java:34 utility-class-instantiable
-core/src/test/java/io/micronaut/core/io/service/JfrErrorRecorder.java:60 resource-leak
 core/src/test/java/io/micronaut/core/io/service/MicronautMetaServiceLoaderUtilsTest.java:77 thread-sleep-in-test
 core/src/test/java/io/micronaut/core/naming/NameUtilsTest.java:112 throw-generic-exception
 core/src/test/java/io/micronaut/core/naming/NameUtilsTest.java:18 disabled-test-without-reason
@@ -580,7 +562,6 @@ discovery-core/src/main/java/io/micronaut/discovery/cloud/digitalocean/DigitalOc
 discovery-core/src/main/java/io/micronaut/discovery/cloud/digitalocean/DigitalOceanNetworkInterface.java:60 useless-override
 discovery-core/src/main/java/io/micronaut/discovery/cloud/digitalocean/DigitalOceanNetworkInterface.java:65 useless-override
 discovery-core/src/main/java/io/micronaut/discovery/cloud/digitalocean/DigitalOceanNetworkInterface.java:70 useless-override
-discovery-core/src/main/java/io/micronaut/health/HeartbeatEvent.java:29 non-serializable-field
 function-client/src/main/java/io/micronaut/function/client/aop/FunctionClientAdvice.java:83 optional-orelse-eager-call
 function-web/src/main/java/io/micronaut/function/web/AnnotatedFunctionRouteBuilder.java:101 cognitive-complexity
 function-web/src/main/java/io/micronaut/function/web/AnnotatedFunctionRouteBuilder.java:144 deep-nesting
@@ -598,8 +579,6 @@ function/src/main/java/io/micronaut/function/executor/FunctionInitializer.java:5
 function/src/main/java/io/micronaut/function/executor/FunctionInitializer.java:51 constructor-calls-overridable-method
 function/src/main/java/io/micronaut/function/executor/FunctionInitializer.java:83 constructor-calls-overridable-method
 function/src/main/java/io/micronaut/function/executor/StreamFunctionExecutor.java:148 cognitive-complexity
-function/src/test/groovy/io/micronaut/function/executor/FunctionInitializerSpec.java:44 resource-leak
-function/src/test/groovy/io/micronaut/function/executor/FunctionInitializerSpec.java:52 resource-leak
 function/src/test/groovy/io/micronaut/function/executor/TestFunctionExitHandler.java:35 throw-generic-exception
 function/src/test/java/io/micronaut/function/executor/FunctionInitializerTest.java:30 constructor-calls-overridable-method
 http-client-core/src/main/java/io/micronaut/http/client/ElementsStages.java:151 catch-throwable
@@ -715,11 +694,6 @@ http-client/src/main/java/io/micronaut/http/client/netty/Pool40.java:183 cogniti
 http-client/src/main/java/io/micronaut/http/client/netty/Pool40.java:315 todo-comment
 http-client/src/main/java/io/micronaut/http/client/netty/Pool40.java:321 collapsible-if
 http-client/src/main/java/io/micronaut/http/client/netty/Pool40.java:393 volatile-array-or-collection
-http-client/src/main/java/io/micronaut/http/client/netty/Pool40.java:462 non-serializable-field
-http-client/src/main/java/io/micronaut/http/client/netty/Pool40.java:463 non-serializable-field
-http-client/src/main/java/io/micronaut/http/client/netty/Pool49.java:1050 non-serializable-field
-http-client/src/main/java/io/micronaut/http/client/netty/Pool49.java:1058 non-serializable-field
-http-client/src/main/java/io/micronaut/http/client/netty/Pool49.java:1068 non-serializable-field
 http-client/src/main/java/io/micronaut/http/client/netty/Pool49.java:1206 cognitive-complexity
 http-client/src/main/java/io/micronaut/http/client/netty/Pool49.java:134 todo-comment
 http-client/src/main/java/io/micronaut/http/client/netty/Pool49.java:240 cognitive-complexity
@@ -787,7 +761,6 @@ http-netty/src/main/java/io/micronaut/http/netty/channel/loom/LoomCarrierGroup.j
 http-netty/src/main/java/io/micronaut/http/netty/channel/loom/LoomCarrierGroup.java:534 volatile-increment
 http-netty/src/main/java/io/micronaut/http/netty/channel/loom/LoomCarrierGroup.java:592 cognitive-complexity
 http-netty/src/main/java/io/micronaut/http/netty/channel/loom/LoomCarrierGroup.java:624 volatile-increment
-http-netty/src/main/java/io/micronaut/http/netty/channel/loom/LoomCarrierGroup.java:731 identical-branches
 http-netty/src/main/java/io/micronaut/http/netty/content/HttpContentUtil.java:35 public-static-mutable-container
 http-netty/src/main/java/io/micronaut/http/netty/content/HttpContentUtil.java:36 public-static-mutable-container
 http-netty/src/main/java/io/micronaut/http/netty/content/HttpContentUtil.java:37 public-static-mutable-container
@@ -810,7 +783,6 @@ http-netty/src/main/java/io/micronaut/http/netty/websocket/NettyServerWebSocketB
 http-netty/src/test/java/io/micronaut/http/netty/NettyMutableHttpResponseAttributesConcurrencyTest.java:108 complex-boolean-expression
 http-netty/src/test/java/io/micronaut/http/netty/NettyMutableHttpResponseAttributesConcurrencyTest.java:157 complex-boolean-expression
 http-netty/src/test/java/io/micronaut/http/netty/NettyMutableHttpResponseAttributesConcurrencyTest.java:180 complex-boolean-expression
-http-netty/src/test/java/io/micronaut/http/netty/body/SharedBufferOrderingTest.java:75 resource-leak
 http-netty/src/test/java/io/micronaut/http/netty/channel/loom/LoomCarrierGroupTest.java:162 throw-generic-exception
 http-netty/src/test/java/io/micronaut/http/netty/channel/loom/LoomCarrierGroupTest.java:320 thread-sleep-in-test
 http-server-netty/src/main/java/io/micronaut/http/server/netty/DefaultNettyEmbeddedServerFactory.java:117 too-many-parameters
@@ -854,12 +826,10 @@ http-server-netty/src/main/java/io/micronaut/http/server/netty/handler/Compresso
 http-server-netty/src/main/java/io/micronaut/http/server/netty/handler/Compressor.java:218 complex-boolean-expression
 http-server-netty/src/main/java/io/micronaut/http/server/netty/handler/MultiplexedServerHandler.java:258 cognitive-complexity
 http-server-netty/src/main/java/io/micronaut/http/server/netty/handler/MultiplexedServerHandler.java:59 field-naming
-http-server-netty/src/main/java/io/micronaut/http/server/netty/handler/PieceAccumulator.java:190 identical-branches
 http-server-netty/src/main/java/io/micronaut/http/server/netty/handler/PipeliningServerHandler.java:1138 cognitive-complexity
 http-server-netty/src/main/java/io/micronaut/http/server/netty/handler/PipeliningServerHandler.java:1170 complex-boolean-expression
 http-server-netty/src/main/java/io/micronaut/http/server/netty/handler/PipeliningServerHandler.java:1283 cognitive-complexity
 http-server-netty/src/main/java/io/micronaut/http/server/netty/handler/PipeliningServerHandler.java:594 cognitive-complexity
-http-server-netty/src/main/java/io/micronaut/http/server/netty/handler/PipeliningServerHandler.java:618 identical-branches
 http-server-netty/src/main/java/io/micronaut/http/server/netty/handler/PipeliningServerHandler.java:725 cognitive-complexity
 http-server-netty/src/main/java/io/micronaut/http/server/netty/handler/PipeliningServerHandler.java:993 collapsible-if
 http-server-netty/src/main/java/io/micronaut/http/server/netty/handler/accesslog/Http2AccessLogConnectionEncoder.java:84 throw-generic-exception
@@ -942,8 +912,6 @@ http-server-tck/src/main/java/io/micronaut/http/server/tck/tests/constraintshand
 http-server-tck/src/main/java/io/micronaut/http/server/tck/tests/constraintshandler/ControllerConstraintHandlerTest.java:164 empty-method
 http-server-tck/src/main/java/io/micronaut/http/server/tck/tests/constraintshandler/ControllerConstraintHandlerTest.java:170 empty-method
 http-server-tck/src/main/java/io/micronaut/http/server/tck/tests/constraintshandler/ControllerConstraintHandlerTest.java:176 empty-method
-http-server-tck/src/main/java/io/micronaut/http/server/tck/tests/constraintshandler/ControllerConstraintHandlerTest.java:191 identical-branches
-http-server-tck/src/main/java/io/micronaut/http/server/tck/tests/constraintshandler/ControllerConstraintHandlerTest.java:193 identical-branches
 http-server-tck/src/main/java/io/micronaut/http/server/tck/tests/cors/CorsDisabledByDefaultTest.java:80 empty-method
 http-server-tck/src/main/java/io/micronaut/http/server/tck/tests/cors/CorsSimpleRequestTest.java:321 throw-generic-exception
 http-server-tck/src/main/java/io/micronaut/http/server/tck/tests/cors/CorsSimpleRequestTest.java:381 singleton-mutable-state
@@ -1176,8 +1144,6 @@ http/src/main/java/io/micronaut/http/filter/MethodFilter.java:300 deep-nesting
 http/src/main/java/io/micronaut/http/filter/MethodFilter.java:501 cognitive-complexity
 http/src/main/java/io/micronaut/http/filter/MutableServerRequest.java:342 reference-equality-value-type
 http/src/main/java/io/micronaut/http/multipart/StreamingFileUpload.java:169 cognitive-complexity
-http/src/main/java/io/micronaut/http/simple/SimpleHttpResponseFactory.java:40 static-member-via-instance
-http/src/main/java/io/micronaut/http/simple/SimpleHttpResponseFactory.java:45 static-member-via-instance
 http/src/main/java/io/micronaut/http/simple/cookies/SimpleCookie.java:232 optional-ispresent-then-get
 http/src/main/java/io/micronaut/http/ssl/ClientSslConfiguration.java:54 constructor-calls-overridable-method
 http/src/main/java/io/micronaut/http/ssl/ClientSslConfiguration.java:61 constructor-calls-overridable-method
@@ -1197,7 +1163,6 @@ http/src/main/java/io/micronaut/http/uri/QueryStringDecoder.java:397 cognitive-c
 http/src/main/java/io/micronaut/http/uri/QueryStringDecoder.java:437 loop-counter-modified-in-body
 http/src/main/java/io/micronaut/http/uri/QueryStringDecoder.java:439 loop-counter-modified-in-body
 http/src/main/java/io/micronaut/http/uri/UriMatchTemplate.java:175 cognitive-complexity
-http/src/main/java/io/micronaut/http/uri/UriMatchTemplate.java:182 null-dereference
 http/src/main/java/io/micronaut/http/uri/UriMatchTemplate.java:400 cognitive-complexity
 http/src/main/java/io/micronaut/http/uri/UriMatchTemplate.java:426 complex-boolean-expression
 http/src/main/java/io/micronaut/http/uri/UriTemplate.java:100 cognitive-complexity
@@ -1252,10 +1217,6 @@ inject-groovy-test/src/main/groovy/io/micronaut/ast/transform/test/MicronautAstB
 inject-groovy-test/src/main/groovy/io/micronaut/ast/transform/test/MicronautAstBuilder.java:71 local-immediately-returned
 inject-groovy/src/main/groovy/io/micronaut/ast/groovy/annotation/GroovyAnnotationMetadataBuilder.java:193 deep-nesting
 inject-groovy/src/main/groovy/io/micronaut/ast/groovy/annotation/GroovyAnnotationMetadataBuilder.java:195 catch-throwable
-inject-groovy/src/main/groovy/io/micronaut/ast/groovy/annotation/GroovyAnnotationMetadataBuilder.java:300 identical-branches
-inject-groovy/src/main/groovy/io/micronaut/ast/groovy/annotation/GroovyAnnotationMetadataBuilder.java:302 identical-branches
-inject-groovy/src/main/groovy/io/micronaut/ast/groovy/annotation/GroovyAnnotationMetadataBuilder.java:304 identical-branches
-inject-groovy/src/main/groovy/io/micronaut/ast/groovy/annotation/GroovyAnnotationMetadataBuilder.java:306 identical-branches
 inject-groovy/src/main/groovy/io/micronaut/ast/groovy/annotation/GroovyAnnotationMetadataBuilder.java:338 cognitive-complexity
 inject-groovy/src/main/groovy/io/micronaut/ast/groovy/annotation/GroovyAnnotationMetadataBuilder.java:346 deep-nesting
 inject-groovy/src/main/groovy/io/micronaut/ast/groovy/annotation/GroovyAnnotationMetadataBuilder.java:360 cognitive-complexity
@@ -1489,11 +1450,9 @@ inject-java/src/test/groovy/io/micronaut/inject/lifecycle/proxybeanwithpredestro
 inject-java/src/test/groovy/io/micronaut/inject/lifecycle/proxytargetbeanprototypewithpredestroy/B.java:33 unused-private-field
 inject-java/src/test/groovy/io/micronaut/inject/lifecycle/proxytargetbeanwithpredestroy/B.java:32 unused-private-field
 inject-java/src/test/groovy/io/micronaut/inject/parallel/BlockingParallelCondition.java:33 public-static-non-final-field
-inject-java/src/test/groovy/io/micronaut/inject/parallel/BlockingParallelCondition.java:49 ignored-status-result
 inject-java/src/test/groovy/io/micronaut/inject/parallel/FailingParallelBean.java:34 public-static-non-final-field
 inject-java/src/test/groovy/io/micronaut/inject/parallel/HangingParallelBean.java:34 public-static-non-final-field
 inject-java/src/test/groovy/io/micronaut/inject/parallel/HangingParallelBean.java:35 public-static-non-final-field
-inject-java/src/test/groovy/io/micronaut/inject/parallel/HangingParallelBean.java:41 ignored-status-result
 inject-java/src/test/groovy/io/micronaut/inject/parallel/LateFailingParallelBean.java:35 public-static-non-final-field
 inject-java/src/test/groovy/io/micronaut/inject/parallel/LateFailingParallelBean.java:36 public-static-non-final-field
 inject-java/src/test/groovy/io/micronaut/inject/parallel/LateFailingParallelBean.java:37 public-static-non-final-field
@@ -1700,7 +1659,6 @@ inject-python/src/main/java/io/micronaut/python/processing/PythonPooledStubGener
 inject-python/src/main/java/io/micronaut/python/processing/PythonPooledStubGenerator.java:704 optional-orelse-eager-call
 inject-python/src/main/java/io/micronaut/python/processing/PythonPooledStubGenerator.java:73 utility-class-instantiable
 inject-python/src/main/java/io/micronaut/python/processing/PythonPooledStubGenerator.java:767 commented-out-code
-inject-python/src/main/java/io/micronaut/python/processing/PythonStubGenerator.java:1012 null-dereference
 inject-python/src/main/java/io/micronaut/python/processing/PythonStubGenerator.java:1045 collapsible-if
 inject-python/src/main/java/io/micronaut/python/processing/PythonStubGenerator.java:1081 cognitive-complexity
 inject-python/src/main/java/io/micronaut/python/processing/PythonStubGenerator.java:1225 complex-boolean-expression
@@ -1711,7 +1669,6 @@ inject-python/src/main/java/io/micronaut/python/processing/PythonStubGenerator.j
 inject-python/src/main/java/io/micronaut/python/processing/PythonStubGenerator.java:1833 cognitive-complexity
 inject-python/src/main/java/io/micronaut/python/processing/PythonStubGenerator.java:1833 method-too-long
 inject-python/src/main/java/io/micronaut/python/processing/PythonStubGenerator.java:2006 complex-boolean-expression
-inject-python/src/main/java/io/micronaut/python/processing/PythonStubGenerator.java:2031 identical-branches
 inject-python/src/main/java/io/micronaut/python/processing/PythonStubGenerator.java:2522 nested-ternary
 inject-python/src/main/java/io/micronaut/python/processing/PythonStubGenerator.java:2549 cognitive-complexity
 inject-python/src/main/java/io/micronaut/python/processing/PythonStubGenerator.java:2615 cognitive-complexity
@@ -1735,7 +1692,6 @@ inject-python/src/main/java/io/micronaut/python/processing/PythonStubGenerator.j
 inject-python/src/main/java/io/micronaut/python/processing/PythonStubGenerator.java:458 cognitive-complexity
 inject-python/src/main/java/io/micronaut/python/processing/PythonStubGenerator.java:458 method-too-long
 inject-python/src/main/java/io/micronaut/python/processing/PythonStubGenerator.java:4812 complex-boolean-expression
-inject-python/src/main/java/io/micronaut/python/processing/PythonStubGenerator.java:4911 identical-branches
 inject-python/src/main/java/io/micronaut/python/processing/PythonStubGenerator.java:4965 complex-boolean-expression
 inject-python/src/main/java/io/micronaut/python/processing/PythonStubGenerator.java:5055 cognitive-complexity
 inject-python/src/main/java/io/micronaut/python/processing/PythonStubGenerator.java:507 deep-nesting
@@ -1769,11 +1725,9 @@ inject-python/src/main/java/io/micronaut/python/processing/annotation/PythonAnno
 inject-python/src/main/java/io/micronaut/python/processing/annotation/PythonAnnotationMetadataBuilder.java:357 redundant-if-return-boolean
 inject-python/src/main/java/io/micronaut/python/processing/annotation/PythonAnnotationMetadataBuilder.java:376 complex-boolean-expression
 inject-python/src/main/java/io/micronaut/python/processing/annotation/PythonAnnotationMetadataBuilder.java:880 null-dereference
-inject-python/src/main/java/io/micronaut/python/processing/annotation/PythonAnnotationMetadataBuilder.java:881 null-dereference
 inject-python/src/main/java/io/micronaut/python/processing/annotation/PythonAnnotationValues.java:291 cognitive-complexity
 inject-python/src/main/java/io/micronaut/python/processing/element/AbstractPythonClassElement.java:1013 cognitive-complexity
 inject-python/src/main/java/io/micronaut/python/processing/element/AbstractPythonClassElement.java:326 cognitive-complexity
-inject-python/src/main/java/io/micronaut/python/processing/element/AbstractPythonClassElement.java:360 identical-branches
 inject-python/src/main/java/io/micronaut/python/processing/element/AbstractPythonClassElement.java:388 cognitive-complexity
 inject-python/src/main/java/io/micronaut/python/processing/element/AbstractPythonClassElement.java:624 complex-boolean-expression
 inject-python/src/main/java/io/micronaut/python/processing/element/AbstractPythonClassElement.java:779 cognitive-complexity
@@ -1781,9 +1735,7 @@ inject-python/src/main/java/io/micronaut/python/processing/element/AbstractPytho
 inject-python/src/main/java/io/micronaut/python/processing/element/AbstractPythonClassElement.java:870 unused-parameter
 inject-python/src/main/java/io/micronaut/python/processing/element/PythonAnnotationElement.java:128 cognitive-complexity
 inject-python/src/main/java/io/micronaut/python/processing/element/PythonAnnotationElement.java:138 deep-nesting
-inject-python/src/main/java/io/micronaut/python/processing/element/PythonAnnotationElement.java:98 identical-branches
 inject-python/src/main/java/io/micronaut/python/processing/element/PythonClassElement.java:101 constructor-calls-overridable-method
-inject-python/src/main/java/io/micronaut/python/processing/element/PythonClassElement.java:298 identical-branches
 inject-python/src/main/java/io/micronaut/python/processing/element/PythonClassElement.java:728 complex-boolean-expression
 inject-python/src/main/java/io/micronaut/python/processing/element/PythonClassElement.java:783 complex-boolean-expression
 inject-python/src/main/java/io/micronaut/python/processing/element/PythonClassElement.java:870 cognitive-complexity
@@ -1901,10 +1853,8 @@ inject/src/main/java/io/micronaut/context/AbstractInitializableBeanDefinition.ja
 inject/src/main/java/io/micronaut/context/AbstractInitializableBeanDefinition.java:755 deep-nesting
 inject/src/main/java/io/micronaut/context/AbstractInitializableBeanDefinition.java:894 cognitive-complexity
 inject/src/main/java/io/micronaut/context/AbstractInitializableBeanDefinitionAndReference.java:130 cognitive-complexity
-inject/src/main/java/io/micronaut/context/AbstractInitializableBeanDefinitionAndReference.java:139 identical-branches
 inject/src/main/java/io/micronaut/context/AbstractInitializableBeanDefinitionAndReference.java:46 too-many-parameters
 inject/src/main/java/io/micronaut/context/AbstractInitializableBeanDefinitionAndReference.java:58 too-many-parameters
-inject/src/main/java/io/micronaut/context/AbstractInitializableBeanDefinitionReference.java:184 identical-branches
 inject/src/main/java/io/micronaut/context/AbstractInitializableBeanDefinitionReference.java:201 catch-instanceof-dispatch
 inject/src/main/java/io/micronaut/context/AbstractInitializableBeanDefinitionReference.java:201 catch-instanceof-dispatch
 inject/src/main/java/io/micronaut/context/AbstractInitializableBeanDefinitionReference.java:201 catch-instanceof-dispatch
@@ -1936,7 +1886,6 @@ inject/src/main/java/io/micronaut/context/BeanDestructionOrder.java:51 cognitive
 inject/src/main/java/io/micronaut/context/BeanDestructionOrder.java:91 cognitive-complexity
 inject/src/main/java/io/micronaut/context/BeanDisposingRegistration.java:107 useless-override
 inject/src/main/java/io/micronaut/context/BeanLocator.java:21 unused-import
-inject/src/main/java/io/micronaut/context/BeanRegistration.java:73 identical-branches
 inject/src/main/java/io/micronaut/context/ConsoleBeanResolutionTracer.java:372 system-out-println
 inject/src/main/java/io/micronaut/context/ConsoleBeanResolutionTracer.java:57 cognitive-complexity
 inject/src/main/java/io/micronaut/context/DefaultApplicationContext.java:276 unused-private-method
@@ -1949,7 +1898,6 @@ inject/src/main/java/io/micronaut/context/DefaultApplicationContext.java:611 dee
 inject/src/main/java/io/micronaut/context/DefaultApplicationContext.java:683 cognitive-complexity
 inject/src/main/java/io/micronaut/context/DefaultApplicationContextBuilder.java:26 unused-import
 inject/src/main/java/io/micronaut/context/DefaultApplicationContextBuilder.java:511 cognitive-complexity
-inject/src/main/java/io/micronaut/context/DefaultBeanContext.java:1042 lost-stack-trace
 inject/src/main/java/io/micronaut/context/DefaultBeanContext.java:1190 cognitive-complexity
 inject/src/main/java/io/micronaut/context/DefaultBeanContext.java:145 unused-import
 inject/src/main/java/io/micronaut/context/DefaultBeanContext.java:1468 cognitive-complexity
@@ -2009,7 +1957,6 @@ inject/src/main/java/io/micronaut/context/DefaultReplacesDefinition.java:101 dee
 inject/src/main/java/io/micronaut/context/DefaultReplacesDefinition.java:85 cognitive-complexity
 inject/src/main/java/io/micronaut/context/DefaultReplacesDefinition.java:98 collapsible-if
 inject/src/main/java/io/micronaut/context/DefaultRuntimeBeanDefinition.java:480 too-many-parameters
-inject/src/main/java/io/micronaut/context/DefaultRuntimeBeanDefinition.java:590 identical-branches
 inject/src/main/java/io/micronaut/context/DefaultRuntimeBeanDefinition.java:89 too-many-parameters
 inject/src/main/java/io/micronaut/context/ExecutableMethodProcessorListener.java:44 cognitive-complexity
 inject/src/main/java/io/micronaut/context/MessageSourceUtils.java:26 utility-class-instantiable
@@ -2046,7 +1993,6 @@ inject/src/main/java/io/micronaut/context/env/DefaultEnvironment.java:688 lost-s
 inject/src/main/java/io/micronaut/context/env/DefaultEnvironment.java:691 lost-stack-trace
 inject/src/main/java/io/micronaut/context/env/DefaultEnvironment.java:764 cognitive-complexity
 inject/src/main/java/io/micronaut/context/env/DefaultEnvironment.java:807 lost-stack-trace
-inject/src/main/java/io/micronaut/context/env/DefaultEnvironment.java:861 identical-branches
 inject/src/main/java/io/micronaut/context/env/DefaultEnvironment.java:956 optional-orelse-eager-call
 inject/src/main/java/io/micronaut/context/env/DefaultEnvironment.java:965 lost-stack-trace
 inject/src/main/java/io/micronaut/context/env/DefaultEnvironment.java:974 throw-generic-exception
@@ -2105,14 +2051,6 @@ inject/src/main/java/io/micronaut/inject/annotation/AbstractAnnotationMetadata.j
 inject/src/main/java/io/micronaut/inject/annotation/AbstractEnvironmentAnnotationMetadata.java:194 cognitive-complexity
 inject/src/main/java/io/micronaut/inject/annotation/AnnotationConvertersRegistrar.java:39 cognitive-complexity
 inject/src/main/java/io/micronaut/inject/annotation/AnnotationMetadataHierarchy.java:64 public-static-mutable-container
-inject/src/main/java/io/micronaut/inject/annotation/AnnotationMetadataSupport.java:620 identical-branches
-inject/src/main/java/io/micronaut/inject/annotation/AnnotationMetadataSupport.java:621 identical-branches
-inject/src/main/java/io/micronaut/inject/annotation/AnnotationMetadataSupport.java:622 identical-branches
-inject/src/main/java/io/micronaut/inject/annotation/AnnotationMetadataSupport.java:623 identical-branches
-inject/src/main/java/io/micronaut/inject/annotation/AnnotationMetadataSupport.java:624 identical-branches
-inject/src/main/java/io/micronaut/inject/annotation/AnnotationMetadataSupport.java:625 identical-branches
-inject/src/main/java/io/micronaut/inject/annotation/AnnotationMetadataSupport.java:626 identical-branches
-inject/src/main/java/io/micronaut/inject/annotation/AnnotationMetadataSupport.java:627 identical-branches
 inject/src/main/java/io/micronaut/inject/annotation/AnnotationMetadataSupport.java:676 cognitive-complexity
 inject/src/main/java/io/micronaut/inject/annotation/DefaultAnnotationMetadata.java:1200 cognitive-complexity
 inject/src/main/java/io/micronaut/inject/annotation/DefaultAnnotationMetadata.java:1216 deep-nesting
@@ -2125,7 +2063,6 @@ inject/src/main/java/io/micronaut/inject/annotation/DefaultAnnotationMetadata.ja
 inject/src/main/java/io/micronaut/inject/annotation/DefaultAnnotationMetadata.java:1539 system-out-println
 inject/src/main/java/io/micronaut/inject/annotation/DefaultAnnotationMetadata.java:1656 cognitive-complexity
 inject/src/main/java/io/micronaut/inject/annotation/DefaultAnnotationMetadata.java:197 cognitive-complexity
-inject/src/main/java/io/micronaut/inject/annotation/DefaultAnnotationMetadata.java:762 identical-branches
 inject/src/main/java/io/micronaut/inject/annotation/DefaultAnnotationMetadata.java:931 cognitive-complexity
 inject/src/main/java/io/micronaut/inject/annotation/DefaultAnnotationMetadata.java:951 deep-nesting
 inject/src/main/java/io/micronaut/inject/annotation/EnvironmentAnnotationValue.java:50 cognitive-complexity
@@ -2179,7 +2116,6 @@ inject/src/main/java/io/micronaut/inject/qualifiers/Qualifiers.java:46 utility-c
 inject/src/main/java/io/micronaut/inject/qualifiers/TypeArgumentQualifier.java:117 cognitive-complexity
 inject/src/test/java/io/micronaut/inject/annotation/PackagePrivateAnnotationTest.java:30 assert-true-with-comparison
 jackson-core/src/main/java/io/micronaut/jackson/core/parser/JacksonCoreProcessor.java:102 cognitive-complexity
-jackson-core/src/main/java/io/micronaut/jackson/core/parser/JacksonCoreProcessor.java:96 identical-branches
 jackson-core/src/main/java/io/micronaut/jackson/core/tree/JsonNodeTraversingParser.java:155 empty-method
 jackson-core/src/main/java/io/micronaut/jackson/core/tree/JsonNodeTraversingParser.java:159 empty-method
 jackson-core/src/main/java/io/micronaut/jackson/core/tree/JsonNodeTraversingParser.java:449 empty-method
@@ -2210,7 +2146,6 @@ json-core/src/main/java/io/micronaut/json/bind/JsonBeanPropertyBinder.java:145 c
 json-core/src/main/java/io/micronaut/json/bind/JsonBeanPropertyBinder.java:178 deep-nesting
 json-core/src/main/java/io/micronaut/json/convert/LazyJsonNode.java:109 complex-boolean-expression
 management/src/main/java/io/micronaut/management/endpoint/beans/impl/DefaultBeanDefinitionDataCollector.java:81 unused-pattern-variable
-management/src/main/java/io/micronaut/management/endpoint/loggers/LoggersEndpoint.java:110 lost-stack-trace
 management/src/main/java/io/micronaut/management/endpoint/processors/AbstractEndpointRouteBuilder.java:125 cognitive-complexity
 management/src/main/java/io/micronaut/management/health/indicator/jdbc/JdbcIndicator.java:110 replaceall-with-literal
 management/src/main/java/io/micronaut/management/health/indicator/service/ServiceReadyHealthIndicator.java:52 singleton-mutable-state
@@ -2434,7 +2369,6 @@ router/src/main/java/io/micronaut/web/router/version/RouteVersionFilter.java:105
 router/src/test/java/io/micronaut/web/router/AsyncErrorRoutesTest.java:167 deprecated-api-usage
 router/src/test/java/io/micronaut/web/router/HandlerRouteArgumentsTest.java:107 enum-keyed-hash-collection
 router/src/test/java/io/micronaut/web/router/LocatedRouteSpecTest.java:300 deprecated-api-usage
-router/src/test/java/io/micronaut/web/router/LocatedRoutesTableTest.java:78 ignored-status-result
 router/src/test/java/io/micronaut/web/router/RouteConstrainTest.java:179 enum-keyed-hash-collection
 router/src/test/java/io/micronaut/web/router/RouteTableFactoryLifetimeTest.java:130 thread-sleep-in-test
 router/src/test/java/io/micronaut/web/router/uri/PercentDecoder.java:19 loop-counter-modified-in-body
@@ -2551,7 +2485,6 @@ test-suite/src/test/java/io/micronaut/docs/aop/around/AroundSpec.java:34 asserti
 test-suite/src/test/java/io/micronaut/docs/client/ThirdPartyClientFilterSpec.java:89 default-charset
 test-suite/src/test/java/io/micronaut/docs/client/upload/MultipartFileUploadSpec.java:110 default-charset
 test-suite/src/test/java/io/micronaut/docs/client/upload/MultipartFileUploadSpec.java:130 default-charset
-test-suite/src/test/java/io/micronaut/docs/client/upload/MultipartFileUploadSpec.java:133 ignored-status-result
 test-suite/src/test/java/io/micronaut/docs/client/upload/MultipartFileUploadSpec.java:76 default-charset
 test-suite/src/test/java/io/micronaut/docs/config/env/DataSourceFactory.java:36 unused-private-field
 test-suite/src/test/java/io/micronaut/docs/config/itfce/VehicleSpec.java:58 unused-local-variable

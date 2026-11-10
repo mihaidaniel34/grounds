@@ -6,7 +6,6 @@ start-site/src/main/java/io/spring/start/site/extension/dependency/jooq/JooqVers
 start-site/src/main/java/io/spring/start/site/extension/dependency/mongodb/MongoDbProjectGenerationConfiguration.java:70 complex-boolean-expression
 start-site/src/main/java/io/spring/start/site/extension/dependency/solace/SolaceBinderBuildCustomizer.java:49 catch-return-null
 start-site/src/main/java/io/spring/start/site/extension/dependency/springcloud/SpringCloudFunctionHelpDocumentCustomizer.java:107 enum-keyed-hash-collection
-start-site/src/main/java/io/spring/start/site/extension/dependency/springcloud/SpringCloudFunctionHelpDocumentCustomizer.java:143 mutable-enum-field
 start-site/src/main/java/io/spring/start/site/extension/dependency/springcloud/SpringCloudFunctionHelpDocumentCustomizer.java:79 log-string-concatenation
 start-site/src/main/java/io/spring/start/site/extension/dependency/springcloud/SpringCloudFunctionHelpDocumentCustomizer.java:84 log-string-concatenation
 start-site/src/main/java/io/spring/start/site/extension/dependency/springcloud/SpringCloudProjectVersionResolver.java:73 log-string-concatenation

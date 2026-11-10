@@ -15,7 +15,6 @@ api/src/main/java/run/halo/app/extension/Watcher.java:48 todo-comment
 api/src/main/java/run/halo/app/extension/Watcher.java:54 todo-comment
 api/src/main/java/run/halo/app/extension/controller/DefaultController.java:103 too-many-parameters
 api/src/main/java/run/halo/app/extension/controller/DefaultController.java:163 cognitive-complexity
-api/src/main/java/run/halo/app/extension/controller/DefaultController.java:189 catch-instanceof-dispatch
 api/src/main/java/run/halo/app/extension/controller/DefaultController.java:193 log-string-concatenation
 api/src/main/java/run/halo/app/extension/controller/DefaultController.java:214 deep-nesting
 api/src/main/java/run/halo/app/extension/controller/DefaultController.java:215 todo-comment
@@ -213,7 +212,6 @@ application/src/main/java/run/halo/app/infra/utils/SortUtils.java:11 constant-na
 application/src/main/java/run/halo/app/infra/utils/SystemConfigUtils.java:168 deprecated-api-usage
 application/src/main/java/run/halo/app/infra/utils/SystemConfigUtils.java:29 deprecated-api-usage
 application/src/main/java/run/halo/app/infra/utils/UserAgentUtils.java:25 throw-generic-exception
-application/src/main/java/run/halo/app/infra/utils/YamlUnstructuredLoader.java:46 deprecated-api-usage
 application/src/main/java/run/halo/app/migration/BackupReconciler.java:30 singleton-mutable-state
 application/src/main/java/run/halo/app/migration/BackupReconciler.java:48 cognitive-complexity
 application/src/main/java/run/halo/app/migration/MigrationEndpoint.java:143 deprecated-api-usage
@@ -285,7 +283,6 @@ application/src/main/java/run/halo/app/security/authentication/rememberme/Persis
 application/src/main/java/run/halo/app/security/authentication/rememberme/PersistentTokenBasedRememberMeServices.java:91 constructor-calls-overridable-method
 application/src/main/java/run/halo/app/security/authentication/rememberme/TokenBasedRememberMeServices.java:307 default-charset
 application/src/main/java/run/halo/app/security/authentication/rememberme/TokenBasedRememberMeServices.java:307 default-charset
-application/src/main/java/run/halo/app/security/authentication/rememberme/TokenBasedRememberMeServices.java:309 lost-stack-trace
 application/src/main/java/run/halo/app/security/authentication/rememberme/TokenBasedRememberMeServices.java:333 default-charset
 application/src/main/java/run/halo/app/security/authentication/rememberme/TokenBasedRememberMeServices.java:333 default-charset
 application/src/main/java/run/halo/app/security/authentication/rememberme/TokenBasedRememberMeServices.java:345 default-charset

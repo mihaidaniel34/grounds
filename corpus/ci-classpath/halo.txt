@@ -10,10 +10,6 @@ api/src/main/java/run/halo/app/core/extension/Role.java:98 constructor-calls-ove
 api/src/main/java/run/halo/app/core/extension/Role.java:99 constructor-calls-overridable-method
 api/src/main/java/run/halo/app/core/extension/content/Comment.java:187 deprecated-api-usage
 api/src/main/java/run/halo/app/core/user/service/SignUpData.java:64 private-constructor-class-not-final
-api/src/main/java/run/halo/app/event/post/PostDeletedEvent.java:9 non-serializable-field
-api/src/main/java/run/halo/app/event/user/UserConnectionDisconnectedEvent.java:18 non-serializable-field
-api/src/main/java/run/halo/app/event/user/UserLoginEvent.java:17 non-serializable-field
-api/src/main/java/run/halo/app/event/user/UserLogoutEvent.java:17 non-serializable-field
 api/src/main/java/run/halo/app/extension/MetadataOperator.java:93 complex-boolean-expression
 api/src/main/java/run/halo/app/extension/PageRequestImpl.java:90 deprecated-api-usage
 api/src/main/java/run/halo/app/extension/Scheme.java:46 todo-comment
@@ -112,7 +108,6 @@ application/src/main/java/run/halo/app/content/stats/VisitedEventReconciler.java
 application/src/main/java/run/halo/app/content/stats/VotedEventReconciler.java:48 constructor-calls-overridable-method
 application/src/main/java/run/halo/app/content/stats/VotedEventReconciler.java:58 deprecated-api-usage
 application/src/main/java/run/halo/app/content/stats/VotedEventReconciler.java:61 deprecated-api-usage
-application/src/main/java/run/halo/app/core/attachment/AttachmentChangedEvent.java:15 non-serializable-field
 application/src/main/java/run/halo/app/core/attachment/PolicyConfigChangeDetector.java:93 constructor-calls-overridable-method
 application/src/main/java/run/halo/app/core/attachment/endpoint/AttachmentEndpoint.java:165 missing-override
 application/src/main/java/run/halo/app/core/attachment/endpoint/AttachmentEndpoint.java:172 missing-override
@@ -223,13 +218,7 @@ application/src/main/java/run/halo/app/core/user/service/impl/UserConnectionServ
 application/src/main/java/run/halo/app/core/user/service/impl/UserServiceImpl.java:386 todo-comment
 application/src/main/java/run/halo/app/core/user/service/impl/UserServiceImpl.java:421 trim-isempty
 application/src/main/java/run/halo/app/core/user/service/impl/UserServiceImpl.java:89 singleton-mutable-state
-application/src/main/java/run/halo/app/event/post/CategoryUpdatedEvent.java:10 non-serializable-field
-application/src/main/java/run/halo/app/event/post/CommentCreatedEvent.java:16 non-serializable-field
-application/src/main/java/run/halo/app/event/post/PostStatsChangedEvent.java:12 non-serializable-field
 application/src/main/java/run/halo/app/event/post/PostStatsChangedEvent.java:21 deprecated-api-usage
-application/src/main/java/run/halo/app/event/post/ReplyEvent.java:11 non-serializable-field
-application/src/main/java/run/halo/app/event/post/SinglePageUpdatedEvent.java:10 non-serializable-field
-application/src/main/java/run/halo/app/event/post/TagUpdatedEvent.java:10 non-serializable-field
 application/src/main/java/run/halo/app/extension/DefaultSchemeManager.java:64 private-constructor-class-not-final
 application/src/main/java/run/halo/app/extension/JSONExtensionConverter.java:127 deprecated-api-usage
 application/src/main/java/run/halo/app/extension/JSONExtensionConverter.java:48 constructor-calls-overridable-method
@@ -246,9 +235,6 @@ application/src/main/java/run/halo/app/extension/ReactiveExtensionClientImpl.jav
 application/src/main/java/run/halo/app/extension/ReactiveExtensionClientImpl.java:49 singleton-mutable-state
 application/src/main/java/run/halo/app/extension/ReactiveExtensionClientImpl.java:51 singleton-mutable-state
 application/src/main/java/run/halo/app/extension/controller/DefaultControllerManager.java:71 catch-throwable
-application/src/main/java/run/halo/app/extension/event/IndexerBuiltEvent.java:11 non-serializable-field
-application/src/main/java/run/halo/app/extension/event/SchemeAddedEvent.java:15 non-serializable-field
-application/src/main/java/run/halo/app/extension/event/SchemeRemovedEvent.java:15 non-serializable-field
 application/src/main/java/run/halo/app/extension/exception/ExtensionNotFoundException.java:15 constructor-calls-overridable-method
 application/src/main/java/run/halo/app/extension/gc/GcReconciler.java:100 todo-comment
 application/src/main/java/run/halo/app/extension/gc/GcSynchronizer.java:69 todo-comment
@@ -384,9 +370,6 @@ application/src/main/java/run/halo/app/plugin/UiPluginBundleServiceImpl.java:251
 application/src/main/java/run/halo/app/plugin/UiPluginBundleServiceImpl.java:465 todo-comment
 application/src/main/java/run/halo/app/plugin/UiPluginBundleServiceImpl.java:68 singleton-mutable-state
 application/src/main/java/run/halo/app/plugin/UiPluginBundleServiceImpl.java:92 todo-comment
-application/src/main/java/run/halo/app/plugin/event/HaloPluginBeforeStopEvent.java:11 non-serializable-field
-application/src/main/java/run/halo/app/plugin/event/HaloPluginStartedEvent.java:16 non-serializable-field
-application/src/main/java/run/halo/app/plugin/event/HaloPluginStoppedEvent.java:15 non-serializable-field
 application/src/main/java/run/halo/app/plugin/extensionpoint/DefaultExtensionGetter.java:107 catch-throwable
 application/src/main/java/run/halo/app/plugin/extensionpoint/DefaultExtensionGetter.java:67 todo-comment
 application/src/main/java/run/halo/app/plugin/resources/BundleResourceUtils.java:188 deprecated-api-usage
@@ -421,7 +404,6 @@ application/src/main/java/run/halo/app/security/authentication/rememberme/Persis
 application/src/main/java/run/halo/app/security/authentication/rememberme/PersistentTokenBasedRememberMeServices.java:91 constructor-calls-overridable-method
 application/src/main/java/run/halo/app/security/authentication/rememberme/TokenBasedRememberMeServices.java:307 default-charset
 application/src/main/java/run/halo/app/security/authentication/rememberme/TokenBasedRememberMeServices.java:307 default-charset
-application/src/main/java/run/halo/app/security/authentication/rememberme/TokenBasedRememberMeServices.java:309 lost-stack-trace
 application/src/main/java/run/halo/app/security/authentication/rememberme/TokenBasedRememberMeServices.java:333 default-charset
 application/src/main/java/run/halo/app/security/authentication/rememberme/TokenBasedRememberMeServices.java:333 default-charset
 application/src/main/java/run/halo/app/security/authentication/rememberme/TokenBasedRememberMeServices.java:345 default-charset
@@ -450,7 +432,6 @@ application/src/main/java/run/halo/app/security/authorization/RbacRequestEvaluat
 application/src/main/java/run/halo/app/security/authorization/RbacRequestEvaluation.java:99 deprecated-api-usage
 application/src/main/java/run/halo/app/security/authorization/RequestInfo.java:40 too-many-parameters
 application/src/main/java/run/halo/app/security/authorization/RequestInfoFactory.java:88 cognitive-complexity
-application/src/main/java/run/halo/app/security/device/NewDeviceLoginEvent.java:9 non-serializable-field
 application/src/main/java/run/halo/app/security/jackson2/HaloSecurityJackson2Module.java:24 deprecated-api-usage
 application/src/main/java/run/halo/app/security/preauth/EmailPasswordResetAvailabilityProvider.java:18 todo-comment
 application/src/main/java/run/halo/app/security/preauth/EmailProfileCompletionEndpoint.java:172 deprecated-api-usage

@@ -148,11 +148,9 @@ ai/src/main/java/com/alibaba/nacos/ai/service/a2a/migration/A2aMigrationMetrics.
 ai/src/main/java/com/alibaba/nacos/ai/service/a2a/migration/A2aMigrationProgress.java:22 todo-comment
 ai/src/main/java/com/alibaba/nacos/ai/service/a2a/migration/A2aMigrationQuiescingGeneration.java:24 todo-comment
 ai/src/main/java/com/alibaba/nacos/ai/service/a2a/migration/A2aMigrationQuiescingTask.java:175 cognitive-complexity
-ai/src/main/java/com/alibaba/nacos/ai/service/a2a/migration/A2aMigrationQuiescingTask.java:237 close-in-finally-unguarded
 ai/src/main/java/com/alibaba/nacos/ai/service/a2a/migration/A2aMigrationQuiescingTask.java:39 todo-comment
 ai/src/main/java/com/alibaba/nacos/ai/service/a2a/migration/A2aMigrationQuiescingTask.java:84 singleton-mutable-state
 ai/src/main/java/com/alibaba/nacos/ai/service/a2a/migration/A2aMigrationReconciliationTask.java:137 todo-comment
-ai/src/main/java/com/alibaba/nacos/ai/service/a2a/migration/A2aMigrationReconciliationTask.java:205 close-in-finally-unguarded
 ai/src/main/java/com/alibaba/nacos/ai/service/a2a/migration/A2aMigrationReconciliationTask.java:214 cognitive-complexity
 ai/src/main/java/com/alibaba/nacos/ai/service/a2a/migration/A2aMigrationReconciliationTask.java:384 complex-boolean-expression
 ai/src/main/java/com/alibaba/nacos/ai/service/a2a/migration/A2aMigrationReconciliationTask.java:48 todo-comment
@@ -378,7 +376,6 @@ ai/src/test/java/com/alibaba/nacos/ai/config/AgentSpecDataBootstrapInitializerTe
 ai/src/test/java/com/alibaba/nacos/ai/config/AiResourceIndexTaskConsumerTest.java:90 test-without-assertion
 ai/src/test/java/com/alibaba/nacos/ai/config/McpLifecycleReconciliationTaskTest.java:692 collection-method-returns-null
 ai/src/test/java/com/alibaba/nacos/ai/config/PipelineConfigurationTest.java:60 assert-true-with-comparison
-ai/src/test/java/com/alibaba/nacos/ai/config/PromptDataMigrationTaskTest.java:185 ignored-status-result
 ai/src/test/java/com/alibaba/nacos/ai/config/PromptDataMigrationTaskTest.java:502 identical-branches
 ai/src/test/java/com/alibaba/nacos/ai/controller/AgentAdminControllerTest.java:131 complex-boolean-expression
 ai/src/test/java/com/alibaba/nacos/ai/controller/AgentAdminControllerTest.java:81 complex-boolean-expression
@@ -487,7 +484,6 @@ ai/src/test/java/com/alibaba/nacos/ai/service/mcp/LegacyMcpOperationServiceTest.
 ai/src/test/java/com/alibaba/nacos/ai/service/mcp/McpLifecycleManagementStateServiceTest.java:343 synchronized-on-non-final-field
 ai/src/test/java/com/alibaba/nacos/ai/service/mcp/McpLifecycleOperationServiceTest.java:533 assert-true-with-comparison
 ai/src/test/java/com/alibaba/nacos/ai/service/prompt/PromptDownloadCountManagerTest.java:180 constant-assertion
-ai/src/test/java/com/alibaba/nacos/ai/service/resource/AiResourceManagerTest.java:1142 test-without-assertion
 ai/src/test/java/com/alibaba/nacos/ai/service/resource/DefaultAiResourceClusterChangePublisherTest.java:67 assert-true-with-comparison
 ai/src/test/java/com/alibaba/nacos/ai/service/resource/DefaultAiResourceClusterChangePublisherTest.java:68 assert-true-with-comparison
 ai/src/test/java/com/alibaba/nacos/ai/service/search/AgentAiResourceSearchTypeHandlerTest.java:171 assert-true-with-comparison
@@ -646,7 +642,6 @@ api/src/main/java/com/alibaba/nacos/api/ai/utils/AgentDiscoveryCanonicalizer.jav
 api/src/main/java/com/alibaba/nacos/api/ai/utils/AgentDiscoveryCanonicalizer.java:302 collection-method-returns-null
 api/src/main/java/com/alibaba/nacos/api/ai/utils/AgentDiscoveryCanonicalizer.java:323 cognitive-complexity
 api/src/main/java/com/alibaba/nacos/api/ai/utils/AgentDiscoveryCanonicalizer.java:600 loop-counter-modified-in-body
-api/src/main/java/com/alibaba/nacos/api/ai/utils/AgentDiscoveryCanonicalizer.java:604 identical-branches
 api/src/main/java/com/alibaba/nacos/api/ai/utils/AgentModelValidator.java:318 too-many-parameters
 api/src/main/java/com/alibaba/nacos/api/ai/utils/AgentModelValidator.java:367 complex-boolean-expression
 api/src/main/java/com/alibaba/nacos/api/ai/utils/AgentModelValidator.java:421 cognitive-complexity
@@ -911,7 +906,6 @@ api/src/test/java/com/alibaba/nacos/client/lock/NacosLockService.java:48 boolean
 api/src/test/java/com/alibaba/nacos/client/lock/NacosLockService.java:53 boolean-method-returns-null
 api/src/test/java/com/alibaba/nacos/client/lock/NacosLockService.java:58 boolean-method-returns-null
 api/src/test/java/com/alibaba/nacos/client/lock/NacosLockService.java:63 boolean-method-returns-null
-auth/src/main/java/com/alibaba/nacos/auth/parser/grpc/AiGrpcResourceParser.java:118 identical-branches
 auth/src/main/java/com/alibaba/nacos/auth/serveridentity/ServerIdentityCheckerHolder.java:31 private-constructor-class-not-final
 auth/src/main/java/com/alibaba/nacos/auth/serveridentity/ServerIdentityCheckerHolder.java:75 getclass-on-class
 auth/src/main/java/com/alibaba/nacos/auth/serveridentity/ServerIdentityResult.java:24 private-constructor-class-not-final
@@ -992,9 +986,6 @@ client-basic/src/test/java/com/alibaba/nacos/client/utils/TenantUtilTest.java:57
 client/src/main/java/com/alibaba/nacos/client/ability/ClientAbilityControlManager.java:39 enum-keyed-hash-collection
 client/src/main/java/com/alibaba/nacos/client/ai/A2aEndpointIntent.java:164 complex-boolean-expression
 client/src/main/java/com/alibaba/nacos/client/ai/A2aEndpointIntent.java:51 cognitive-complexity
-client/src/main/java/com/alibaba/nacos/client/ai/AgentEndpointPublicationManager.java:140 lost-stack-trace
-client/src/main/java/com/alibaba/nacos/client/ai/AgentEndpointPublicationManager.java:183 null-dereference
-client/src/main/java/com/alibaba/nacos/client/ai/AgentEndpointPublicationManager.java:246 identical-branches
 client/src/main/java/com/alibaba/nacos/client/ai/AgentEndpointPublicationManager.java:255 complex-boolean-expression
 client/src/main/java/com/alibaba/nacos/client/ai/McpEndpointPublicationManager.java:157 cognitive-complexity
 client/src/main/java/com/alibaba/nacos/client/ai/cache/NacosAgentCardCacheHolder.java:214 catch-instanceof-dispatch
@@ -1090,7 +1081,6 @@ client/src/main/java/com/alibaba/nacos/client/config/impl/ClientWorker.java:763 
 client/src/main/java/com/alibaba/nacos/client/config/impl/ConfigChangeHandler.java:35 private-constructor-class-not-final
 client/src/main/java/com/alibaba/nacos/client/config/impl/ConfigChangeHandler.java:37 private-constructor-class-not-final
 client/src/main/java/com/alibaba/nacos/client/config/impl/ConfigChangeHandler.java:37 utility-class-instantiable
-client/src/main/java/com/alibaba/nacos/client/config/impl/ConfigFuzzyWatchContext.java:250 null-dereference
 client/src/main/java/com/alibaba/nacos/client/config/impl/ConfigFuzzyWatchContext.java:273 catch-throwable
 client/src/main/java/com/alibaba/nacos/client/config/impl/ConfigFuzzyWatchContext.java:538 missing-override
 client/src/main/java/com/alibaba/nacos/client/config/impl/ConfigFuzzyWatchContext.java:542 wait-not-in-loop
@@ -1254,7 +1244,6 @@ client/src/test/java/com/alibaba/nacos/client/config/impl/CacheDataTest.java:183
 client/src/test/java/com/alibaba/nacos/client/config/impl/CacheDataTest.java:380 cognitive-complexity
 client/src/test/java/com/alibaba/nacos/client/config/impl/CacheDataTest.java:82 new-date-gettime
 client/src/test/java/com/alibaba/nacos/client/config/impl/ClientWorkerTest.java:129 throw-generic-exception
-client/src/test/java/com/alibaba/nacos/client/config/impl/ClientWorkerTest.java:480 ignored-status-result
 client/src/test/java/com/alibaba/nacos/client/config/impl/ClientWorkerTest.java:499 throw-generic-exception
 client/src/test/java/com/alibaba/nacos/client/config/impl/ConfigFuzzyWatchContextTest.java:74 thread-sleep-in-test
 client/src/test/java/com/alibaba/nacos/client/config/impl/ConfigFuzzyWatchGroupKeyHolderTest.java:148 constant-assertion
@@ -1271,25 +1260,6 @@ client/src/test/java/com/alibaba/nacos/client/config/impl/ConfigFuzzyWatchGroupK
 client/src/test/java/com/alibaba/nacos/client/config/impl/ConfigFuzzyWatchGroupKeyHolderTest.java:400 throw-generic-exception
 client/src/test/java/com/alibaba/nacos/client/config/impl/ConfigFuzzyWatchGroupKeyHolderTest.java:515 test-without-assertion
 client/src/test/java/com/alibaba/nacos/client/config/impl/ConfigFuzzyWatcherWrapperTest.java:43 assert-true-with-comparison
-client/src/test/java/com/alibaba/nacos/client/config/impl/LocalConfigInfoProcessorTest.java:108 ignored-status-result
-client/src/test/java/com/alibaba/nacos/client/config/impl/LocalConfigInfoProcessorTest.java:170 ignored-status-result
-client/src/test/java/com/alibaba/nacos/client/config/impl/LocalConfigInfoProcessorTest.java:180 ignored-status-result
-client/src/test/java/com/alibaba/nacos/client/config/impl/LocalConfigInfoProcessorTest.java:191 ignored-status-result
-client/src/test/java/com/alibaba/nacos/client/config/impl/LocalConfigInfoProcessorTest.java:200 ignored-status-result
-client/src/test/java/com/alibaba/nacos/client/config/impl/LocalConfigInfoProcessorTest.java:216 ignored-status-result
-client/src/test/java/com/alibaba/nacos/client/config/impl/LocalConfigInfoProcessorTest.java:233 ignored-status-result
-client/src/test/java/com/alibaba/nacos/client/config/impl/LocalConfigInfoProcessorTest.java:259 ignored-status-result
-client/src/test/java/com/alibaba/nacos/client/config/impl/LocalConfigInfoProcessorTest.java:70 ignored-status-result
-client/src/test/java/com/alibaba/nacos/client/config/impl/LocalConfigInfoProcessorTest.java:79 ignored-status-result
-client/src/test/java/com/alibaba/nacos/client/config/impl/LocalConfigInfoProcessorTest.java:99 ignored-status-result
-client/src/test/java/com/alibaba/nacos/client/config/impl/LocalEncryptedDataKeyProcessorTest.java:121 ignored-status-result
-client/src/test/java/com/alibaba/nacos/client/config/impl/LocalEncryptedDataKeyProcessorTest.java:130 ignored-status-result
-client/src/test/java/com/alibaba/nacos/client/config/impl/LocalEncryptedDataKeyProcessorTest.java:167 ignored-status-result
-client/src/test/java/com/alibaba/nacos/client/config/impl/LocalEncryptedDataKeyProcessorTest.java:185 ignored-status-result
-client/src/test/java/com/alibaba/nacos/client/config/impl/LocalEncryptedDataKeyProcessorTest.java:202 ignored-status-result
-client/src/test/java/com/alibaba/nacos/client/config/impl/LocalEncryptedDataKeyProcessorTest.java:219 ignored-status-result
-client/src/test/java/com/alibaba/nacos/client/config/impl/LocalEncryptedDataKeyProcessorTest.java:89 ignored-status-result
-client/src/test/java/com/alibaba/nacos/client/config/impl/LocalEncryptedDataKeyProcessorTest.java:98 ignored-status-result
 client/src/test/java/com/alibaba/nacos/client/lock/NacosLockInterruptTest.java:101 thread-sleep-in-test
 client/src/test/java/com/alibaba/nacos/client/lock/NacosLockInterruptTest.java:73 thread-sleep-in-test
 client/src/test/java/com/alibaba/nacos/client/lock/NacosLockInterruptTest.java:93 interrupted-exception-swallowed
@@ -1329,10 +1299,6 @@ client/src/test/java/com/alibaba/nacos/client/naming/cache/NamingFuzzyWatchServi
 client/src/test/java/com/alibaba/nacos/client/naming/cache/NamingFuzzyWatchServiceListHolderTest.java:320 thread-sleep-in-test
 client/src/test/java/com/alibaba/nacos/client/naming/cache/NamingFuzzyWatchServiceListHolderTest.java:330 thread-sleep-in-test
 client/src/test/java/com/alibaba/nacos/client/naming/cache/NamingFuzzyWatchServiceListHolderTest.java:367 throw-generic-exception
-client/src/test/java/com/alibaba/nacos/client/naming/cache/ServiceInfoDiskCacheRefresherTest.java:205 ignored-status-result
-client/src/test/java/com/alibaba/nacos/client/naming/cache/ServiceInfoDiskCacheRefresherTest.java:216 ignored-status-result
-client/src/test/java/com/alibaba/nacos/client/naming/cache/ServiceInfoDiskCacheRefresherTest.java:229 ignored-status-result
-client/src/test/java/com/alibaba/nacos/client/naming/cache/ServiceInfoDiskCacheRefresherTest.java:243 ignored-status-result
 client/src/test/java/com/alibaba/nacos/client/naming/core/BalancerTest.java:62 assertthrows-multiple-calls
 client/src/test/java/com/alibaba/nacos/client/naming/core/ServiceInfoUpdateServiceTest.java:109 thread-sleep-in-test
 client/src/test/java/com/alibaba/nacos/client/naming/core/ServiceInfoUpdateServiceTest.java:122 thread-sleep-in-test
@@ -1411,7 +1377,6 @@ common/src/main/java/com/alibaba/nacos/common/http/AbstractHttpClientFactory.jav
 common/src/main/java/com/alibaba/nacos/common/http/AbstractHttpClientFactory.java:133 empty-method
 common/src/main/java/com/alibaba/nacos/common/http/AbstractHttpClientFactory.java:138 empty-method
 common/src/main/java/com/alibaba/nacos/common/http/AbstractHttpClientFactory.java:190 throw-generic-exception
-common/src/main/java/com/alibaba/nacos/common/http/BaseHttpMethod.java:146 mutable-enum-field
 common/src/main/java/com/alibaba/nacos/common/http/HttpClientBeanHolder.java:35 utility-class-instantiable
 common/src/main/java/com/alibaba/nacos/common/http/HttpClientConfig.java:85 too-many-parameters
 common/src/main/java/com/alibaba/nacos/common/http/HttpRestResult.java:31 non-serializable-field
@@ -1480,8 +1445,6 @@ common/src/main/java/com/alibaba/nacos/common/packagescan/resource/PathMatchingR
 common/src/main/java/com/alibaba/nacos/common/packagescan/resource/PathMatchingResourcePatternResolver.java:831 utility-class-instantiable
 common/src/main/java/com/alibaba/nacos/common/packagescan/resource/PathResource.java:216 lost-stack-trace
 common/src/main/java/com/alibaba/nacos/common/packagescan/resource/PathResource.java:230 lost-stack-trace
-common/src/main/java/com/alibaba/nacos/common/packagescan/resource/UrlResource.java:303 url-equals-hashcode
-common/src/main/java/com/alibaba/nacos/common/packagescan/resource/UrlResource.java:311 url-equals-hashcode
 common/src/main/java/com/alibaba/nacos/common/packagescan/util/AbstractObjectUtils.java:359 cognitive-complexity
 common/src/main/java/com/alibaba/nacos/common/packagescan/util/AbstractObjectUtils.java:408 cognitive-complexity
 common/src/main/java/com/alibaba/nacos/common/packagescan/util/AbstractObjectUtils.java:686 cognitive-complexity
@@ -1570,7 +1533,6 @@ common/src/main/java/com/alibaba/nacos/common/tls/TlsSystemConfig.java:83 public
 common/src/main/java/com/alibaba/nacos/common/tls/TlsSystemConfig.java:88 public-static-non-final-field
 common/src/main/java/com/alibaba/nacos/common/tls/TlsSystemConfig.java:93 public-static-non-final-field
 common/src/main/java/com/alibaba/nacos/common/tls/TlsSystemConfig.java:98 public-static-non-final-field
-common/src/main/java/com/alibaba/nacos/common/trace/HealthCheckType.java:43 mutable-enum-field
 common/src/main/java/com/alibaba/nacos/common/trace/event/ai/AiResourceTraceEvent.java:48 too-many-parameters
 common/src/main/java/com/alibaba/nacos/common/trace/event/naming/BatchRegisterInstanceTraceEvent.java:26 too-many-parameters
 common/src/main/java/com/alibaba/nacos/common/trace/event/naming/DeregisterInstanceTraceEvent.java:64 too-many-parameters
@@ -1587,11 +1549,8 @@ common/src/main/java/com/alibaba/nacos/common/utils/ClassUtils.java:154 lost-sta
 common/src/main/java/com/alibaba/nacos/common/utils/ClassUtils.java:249 cognitive-complexity
 common/src/main/java/com/alibaba/nacos/common/utils/ClassUtils.java:348 catch-throwable
 common/src/main/java/com/alibaba/nacos/common/utils/ClassUtils.java:358 catch-throwable
-common/src/main/java/com/alibaba/nacos/common/utils/CollectionUtils.java:121 lost-stack-trace
-common/src/main/java/com/alibaba/nacos/common/utils/CollectionUtils.java:170 lost-stack-trace
 common/src/main/java/com/alibaba/nacos/common/utils/CollectionUtils.java:192 boolean-literal-comparison
 common/src/main/java/com/alibaba/nacos/common/utils/CollectionUtils.java:194 boolean-literal-comparison
-common/src/main/java/com/alibaba/nacos/common/utils/CollectionUtils.java:201 lost-stack-trace
 common/src/main/java/com/alibaba/nacos/common/utils/CollectionUtils.java:78 cognitive-complexity
 common/src/main/java/com/alibaba/nacos/common/utils/ConnLabelsUtils.java:105 map-contains-then-put
 common/src/main/java/com/alibaba/nacos/common/utils/ConnLabelsUtils.java:33 utility-class-instantiable
@@ -1732,9 +1691,7 @@ common/src/test/java/com/alibaba/nacos/common/http/client/NacosRestTemplateTest.
 common/src/test/java/com/alibaba/nacos/common/http/client/handler/ByteArrayResponseHandlerTest.java:61 default-charset
 common/src/test/java/com/alibaba/nacos/common/http/client/handler/ByteArrayResponseHandlerTest.java:77 default-charset
 common/src/test/java/com/alibaba/nacos/common/http/client/request/JdkHttpClientRequestTest.java:177 test-without-assertion
-common/src/test/java/com/alibaba/nacos/common/http/client/request/JdkHttpClientRequestTest.java:185 test-without-assertion
 common/src/test/java/com/alibaba/nacos/common/http/client/request/JdkHttpClientRequestTest.java:191 test-without-assertion
-common/src/test/java/com/alibaba/nacos/common/http/client/request/JdkHttpClientRequestTest.java:198 test-without-assertion
 common/src/test/java/com/alibaba/nacos/common/http/client/request/JdkHttpClientRequestTest.java:237 ignored-status-result
 common/src/test/java/com/alibaba/nacos/common/http/client/request/JdkHttpClientRequestTest.java:344 close-in-finally-unguarded
 common/src/test/java/com/alibaba/nacos/common/http/client/response/DefaultClientHttpResponseTest.java:81 assert-true-with-comparison
@@ -1751,10 +1708,6 @@ common/src/test/java/com/alibaba/nacos/common/notify/DefaultPublisherTest.java:1
 common/src/test/java/com/alibaba/nacos/common/notify/DefaultPublisherTest.java:73 assertthrows-multiple-calls
 common/src/test/java/com/alibaba/nacos/common/notify/DefaultSharePublisherTest.java:110 thread-sleep-in-test
 common/src/test/java/com/alibaba/nacos/common/notify/DefaultSharePublisherTest.java:116 thread-sleep-in-test
-common/src/test/java/com/alibaba/nacos/common/notify/NotifyCenterTest.java:120 ignored-status-result
-common/src/test/java/com/alibaba/nacos/common/notify/NotifyCenterTest.java:136 ignored-status-result
-common/src/test/java/com/alibaba/nacos/common/notify/NotifyCenterTest.java:156 ignored-status-result
-common/src/test/java/com/alibaba/nacos/common/notify/NotifyCenterTest.java:172 ignored-status-result
 common/src/test/java/com/alibaba/nacos/common/notify/NotifyCenterTest.java:222 assertthrows-multiple-calls
 common/src/test/java/com/alibaba/nacos/common/notify/NotifyCenterTest.java:96 assert-true-with-comparison
 common/src/test/java/com/alibaba/nacos/common/paramcheck/ParamCheckerManagerTest.java:27 assert-true-with-comparison
@@ -1777,7 +1730,6 @@ common/src/test/java/com/alibaba/nacos/common/remote/client/RpcClientTest.java:1
 common/src/test/java/com/alibaba/nacos/common/remote/client/RpcClientTest.java:1122 assert-true-with-comparison
 common/src/test/java/com/alibaba/nacos/common/remote/client/RpcClientTest.java:1123 thread-sleep-in-test
 common/src/test/java/com/alibaba/nacos/common/remote/client/RpcClientTest.java:1136 assert-true-with-comparison
-common/src/test/java/com/alibaba/nacos/common/remote/client/RpcClientTest.java:1376 ignored-status-result
 common/src/test/java/com/alibaba/nacos/common/remote/client/RpcClientTest.java:413 assert-true-with-comparison
 common/src/test/java/com/alibaba/nacos/common/remote/client/RpcClientTest.java:460 assertthrows-multiple-calls
 common/src/test/java/com/alibaba/nacos/common/remote/client/RpcClientTest.java:469 assertthrows-multiple-calls
@@ -1812,10 +1764,8 @@ common/src/test/java/com/alibaba/nacos/common/task/engine/NacosDelayTaskExecuteE
 common/src/test/java/com/alibaba/nacos/common/task/engine/NacosDelayTaskExecuteEngineTest.java:92 thread-sleep-in-test
 common/src/test/java/com/alibaba/nacos/common/task/engine/NacosExecuteTaskExecuteEngineTest.java:68 thread-sleep-in-test
 common/src/test/java/com/alibaba/nacos/common/task/engine/NacosExecuteTaskExecuteEngineTest.java:95 thread-sleep-in-test
-common/src/test/java/com/alibaba/nacos/common/task/engine/TaskExecuteWorkerTest.java:112 ignored-status-result
 common/src/test/java/com/alibaba/nacos/common/tls/SelfTrustManagerTest.java:52 assert-true-with-comparison
 common/src/test/java/com/alibaba/nacos/common/tls/SelfTrustManagerTest.java:66 assert-true-with-comparison
-common/src/test/java/com/alibaba/nacos/common/tls/TlsFileWatcherTest.java:89 ignored-status-result
 common/src/test/java/com/alibaba/nacos/common/utils/CollectionUtilsTest.java:201 legacy-synchronized-collection
 common/src/test/java/com/alibaba/nacos/common/utils/CollectionUtilsTest.java:397 assertthrows-multiple-calls
 common/src/test/java/com/alibaba/nacos/common/utils/CollectionUtilsTest.java:73 assertthrows-multiple-calls
@@ -1828,7 +1778,6 @@ common/src/test/java/com/alibaba/nacos/common/utils/ConvertUtilsTest.java:93 met
 common/src/test/java/com/alibaba/nacos/common/utils/IoUtilsTest.java:100 test-without-assertion
 common/src/test/java/com/alibaba/nacos/common/utils/IoUtilsTest.java:121 assertthrows-multiple-calls
 common/src/test/java/com/alibaba/nacos/common/utils/IoUtilsTest.java:133 deprecated-api-usage
-common/src/test/java/com/alibaba/nacos/common/utils/IoUtilsTest.java:136 ignored-status-result
 common/src/test/java/com/alibaba/nacos/common/utils/IoUtilsTest.java:152 assertthrows-multiple-calls
 common/src/test/java/com/alibaba/nacos/common/utils/IoUtilsTest.java:160 assertthrows-multiple-calls
 common/src/test/java/com/alibaba/nacos/common/utils/IoUtilsTest.java:169 assertthrows-multiple-calls
@@ -1925,8 +1874,6 @@ config/src/main/java/com/alibaba/nacos/config/server/controller/v3/ConfigOpsCont
 config/src/main/java/com/alibaba/nacos/config/server/controller/v3/HistoryControllerV3.java:121 lost-stack-trace
 config/src/main/java/com/alibaba/nacos/config/server/controller/v3/HistoryControllerV3.java:146 lost-stack-trace
 config/src/main/java/com/alibaba/nacos/config/server/controller/v3/MetricsControllerV3.java:165 too-many-parameters
-config/src/main/java/com/alibaba/nacos/config/server/enums/FileTypeEnum.java:78 mutable-enum-field
-config/src/main/java/com/alibaba/nacos/config/server/enums/FileTypeEnum.java:83 mutable-enum-field
 config/src/main/java/com/alibaba/nacos/config/server/enums/OperationType.java:44 mutable-enum-field
 config/src/main/java/com/alibaba/nacos/config/server/filter/CircuitFilter.java:106 empty-method
 config/src/main/java/com/alibaba/nacos/config/server/filter/CircuitFilter.java:61 field-injection
@@ -2009,12 +1956,9 @@ config/src/main/java/com/alibaba/nacos/config/server/remote/ConfigRemoveRequestH
 config/src/main/java/com/alibaba/nacos/config/server/remote/RpcConfigChangeNotifier.java:73 field-injection
 config/src/main/java/com/alibaba/nacos/config/server/remote/RpcConfigChangeNotifier.java:76 field-injection
 config/src/main/java/com/alibaba/nacos/config/server/remote/RpcConfigChangeNotifier.java:79 field-injection
-config/src/main/java/com/alibaba/nacos/config/server/result/code/ResultCodeEnum.java:53 mutable-enum-field
-config/src/main/java/com/alibaba/nacos/config/server/result/code/ResultCodeEnum.java:55 mutable-enum-field
 config/src/main/java/com/alibaba/nacos/config/server/service/ClientIpWhiteList.java:58 redundant-if-return-boolean
 config/src/main/java/com/alibaba/nacos/config/server/service/ClientTrackService.java:29 utility-class-instantiable
 config/src/main/java/com/alibaba/nacos/config/server/service/ConfigCacheService.java:200 too-many-parameters
-config/src/main/java/com/alibaba/nacos/config/server/service/ConfigCacheService.java:461 null-dereference
 config/src/main/java/com/alibaba/nacos/config/server/service/ConfigCacheService.java:577 nested-ternary
 config/src/main/java/com/alibaba/nacos/config/server/service/ConfigCacheService.java:605 nested-ternary
 config/src/main/java/com/alibaba/nacos/config/server/service/ConfigCacheService.java:692 cognitive-complexity
@@ -2022,7 +1966,6 @@ config/src/main/java/com/alibaba/nacos/config/server/service/ConfigCacheService.
 config/src/main/java/com/alibaba/nacos/config/server/service/ConfigCacheService.java:84 too-many-parameters
 config/src/main/java/com/alibaba/nacos/config/server/service/ConfigChangePublisher.java:29 utility-class-instantiable
 config/src/main/java/com/alibaba/nacos/config/server/service/ConfigCloneService.java:79 cognitive-complexity
-config/src/main/java/com/alibaba/nacos/config/server/service/ConfigDetailService.java:101 infinite-loop
 config/src/main/java/com/alibaba/nacos/config/server/service/ConfigDetailService.java:119 exception-message-only-logged
 config/src/main/java/com/alibaba/nacos/config/server/service/ConfigDetailService.java:141 wait-not-in-loop
 config/src/main/java/com/alibaba/nacos/config/server/service/ConfigDetailService.java:145 exception-message-only-logged
@@ -2456,7 +2399,6 @@ consistency/src/test/java/com/alibaba/nacos/consistency/ProtoMessageUtilTest.jav
 consistency/src/test/java/com/alibaba/nacos/consistency/ProtocolMetaDataTest.java:108 test-without-assertion
 consistency/src/test/java/com/alibaba/nacos/consistency/ProtocolMetaDataTest.java:123 test-without-assertion
 consistency/src/test/java/com/alibaba/nacos/consistency/ProtocolMetaDataTest.java:48 unused-local-variable
-consistency/src/test/java/com/alibaba/nacos/consistency/ProtocolMetaDataTest.java:68 ignored-status-result
 consistency/src/test/java/com/alibaba/nacos/consistency/RequestProcessorTest.java:32 test-without-assertion
 consistency/src/test/java/com/alibaba/nacos/consistency/SerializeFactoryTest.java:35 test-without-assertion
 consistency/src/test/java/com/alibaba/nacos/consistency/SerializeFactoryTest.java:84 assert-true-with-comparison
@@ -2602,7 +2544,6 @@ core/src/main/java/com/alibaba/nacos/core/control/remote/TpsControlRequestFilter
 core/src/main/java/com/alibaba/nacos/core/control/remote/TpsControlRequestFilter.java:49 cognitive-complexity
 core/src/main/java/com/alibaba/nacos/core/control/remote/TpsControlRequestFilter.java:55 catch-return-null
 core/src/main/java/com/alibaba/nacos/core/control/remote/TpsControlRequestFilter.java:98 catch-throwable
-core/src/main/java/com/alibaba/nacos/core/controller/v3/NacosClusterControllerV3.java:95 lost-stack-trace
 core/src/main/java/com/alibaba/nacos/core/controller/v3/NamespaceControllerV3.java:127 todo-comment
 core/src/main/java/com/alibaba/nacos/core/distributed/ProtocolExecutor.java:29 utility-class-instantiable
 core/src/main/java/com/alibaba/nacos/core/distributed/distro/DistroConfig.java:27 private-constructor-class-not-final
@@ -2667,13 +2608,6 @@ core/src/main/java/com/alibaba/nacos/core/persistence/DistributedDatabaseOperate
 core/src/main/java/com/alibaba/nacos/core/persistence/DistributedDatabaseOperateImpl.java:493 lost-stack-trace
 core/src/main/java/com/alibaba/nacos/core/persistence/DistributedDatabaseOperateImpl.java:611 lost-stack-trace
 core/src/main/java/com/alibaba/nacos/core/plugin/PluginManager.java:134 singleton-mutable-state
-core/src/main/java/com/alibaba/nacos/core/plugin/PluginManager.java:249 lost-stack-trace
-core/src/main/java/com/alibaba/nacos/core/plugin/PluginManager.java:265 lost-stack-trace
-core/src/main/java/com/alibaba/nacos/core/plugin/PluginManager.java:312 lost-stack-trace
-core/src/main/java/com/alibaba/nacos/core/plugin/PluginManager.java:328 lost-stack-trace
-core/src/main/java/com/alibaba/nacos/core/plugin/PluginManager.java:344 lost-stack-trace
-core/src/main/java/com/alibaba/nacos/core/plugin/PluginManager.java:891 lost-stack-trace
-core/src/main/java/com/alibaba/nacos/core/plugin/PluginManager.java:904 lost-stack-trace
 core/src/main/java/com/alibaba/nacos/core/plugin/PluginStateProcessor.java:112 catch-instanceof-dispatch
 core/src/main/java/com/alibaba/nacos/core/plugin/PluginStateProcessor.java:114 catch-instanceof-dispatch
 core/src/main/java/com/alibaba/nacos/core/plugin/config/AbstractMapPluginConfigSourceResolver.java:34 volatile-array-or-collection
@@ -2835,7 +2769,6 @@ core/src/test/java/com/alibaba/nacos/core/auth/RemoteRequestAuthFilterTest.java:
 core/src/test/java/com/alibaba/nacos/core/cluster/MemberTest.java:126 assert-true-with-comparison
 core/src/test/java/com/alibaba/nacos/core/cluster/MemberTest.java:131 assert-true-with-comparison
 core/src/test/java/com/alibaba/nacos/core/cluster/MemberTest.java:132 assert-true-with-comparison
-core/src/test/java/com/alibaba/nacos/core/cluster/MemberUtilTest.java:147 ignored-status-result
 core/src/test/java/com/alibaba/nacos/core/cluster/MemberUtilTest.java:151 default-charset
 core/src/test/java/com/alibaba/nacos/core/cluster/MemberUtilTest.java:161 ignored-status-result
 core/src/test/java/com/alibaba/nacos/core/cluster/ServerMemberManagerTest.java:282 test-without-assertion
@@ -2930,7 +2863,6 @@ core/src/test/java/com/alibaba/nacos/core/plugin/PreContextPluginInitializerTest
 core/src/test/java/com/alibaba/nacos/core/plugin/PreContextPluginInitializerTest.java:467 collection-method-returns-null
 core/src/test/java/com/alibaba/nacos/core/plugin/config/PluginConfigApplierTest.java:45 test-without-assertion
 core/src/test/java/com/alibaba/nacos/core/plugin/config/storage/LocalFilePluginConfigStorageTest.java:65 assert-true-with-comparison
-core/src/test/java/com/alibaba/nacos/core/plugin/storage/FilePluginStatePersistenceImplTest.java:73 negated-compareto
 core/src/test/java/com/alibaba/nacos/core/plugin/sync/DelegatingPluginStateSynchronizerTest.java:339 inner-class-could-be-static
 core/src/test/java/com/alibaba/nacos/core/plugin/sync/RaftPluginStateSynchronizerTest.java:94 assert-true-with-comparison
 core/src/test/java/com/alibaba/nacos/core/remote/ClientConnectionEventListenerRegistryTest.java:62 test-without-assertion
@@ -3210,7 +3142,6 @@ naming/src/main/java/com/alibaba/nacos/naming/cluster/ServerStatusManager.java:4
 naming/src/main/java/com/alibaba/nacos/naming/consistency/ephemeral/distro/v2/DistroClientTransportAgent.java:273 private-constructor-class-not-final
 naming/src/main/java/com/alibaba/nacos/naming/consistency/persistent/impl/AbstractSnapshotOperation.java:72 catch-throwable
 naming/src/main/java/com/alibaba/nacos/naming/controllers/v3/HealthControllerV3.java:52 field-injection
-naming/src/main/java/com/alibaba/nacos/naming/controllers/v3/OperatorControllerV3.java:84 lost-stack-trace
 naming/src/main/java/com/alibaba/nacos/naming/core/ClientServiceImpl.java:197 cognitive-complexity
 naming/src/main/java/com/alibaba/nacos/naming/core/DistroMapper.java:117 catch-throwable
 naming/src/main/java/com/alibaba/nacos/naming/core/DistroMapper.java:48 volatile-array-or-collection
@@ -3281,7 +3212,6 @@ naming/src/main/java/com/alibaba/nacos/naming/healthcheck/v2/processor/MysqlHeal
 naming/src/main/java/com/alibaba/nacos/naming/healthcheck/v2/processor/NoneHealthCheckProcessor.java:35 empty-method
 naming/src/main/java/com/alibaba/nacos/naming/healthcheck/v2/processor/TcpHealthCheckProcessor.java:103 todo-comment
 naming/src/main/java/com/alibaba/nacos/naming/healthcheck/v2/processor/TcpHealthCheckProcessor.java:132 use-isempty
-naming/src/main/java/com/alibaba/nacos/naming/healthcheck/v2/processor/TcpHealthCheckProcessor.java:141 infinite-loop
 naming/src/main/java/com/alibaba/nacos/naming/healthcheck/v2/processor/TcpHealthCheckProcessor.java:172 cognitive-complexity
 naming/src/main/java/com/alibaba/nacos/naming/healthcheck/v2/processor/TcpHealthCheckProcessor.java:53 todo-comment
 naming/src/main/java/com/alibaba/nacos/naming/healthcheck/v2/processor/TcpHealthCheckProcessor.java:92 lost-stack-trace
@@ -3357,7 +3287,6 @@ naming/src/main/java/com/alibaba/nacos/naming/pojo/Subscriber.java:144 complex-b
 naming/src/main/java/com/alibaba/nacos/naming/pojo/Subscriber.java:58 too-many-parameters
 naming/src/main/java/com/alibaba/nacos/naming/pojo/instance/BeatInfoInstanceBuilder.java:32 private-constructor-class-not-final
 naming/src/main/java/com/alibaba/nacos/naming/pojo/instance/HttpRequestInstanceBuilder.java:48 private-constructor-class-not-final
-naming/src/main/java/com/alibaba/nacos/naming/push/NamingFuzzyWatchChangeNotifier.java:88 null-dereference
 naming/src/main/java/com/alibaba/nacos/naming/push/NamingSubscriberService.java:33 todo-comment
 naming/src/main/java/com/alibaba/nacos/naming/push/NamingSubscriberService.java:43 todo-comment
 naming/src/main/java/com/alibaba/nacos/naming/push/NamingSubscriberService.java:54 todo-comment
@@ -3665,7 +3594,6 @@ plugin-default-impl/nacos-default-auth-plugin/src/main/java/com/alibaba/nacos/pl
 plugin-default-impl/nacos-default-auth-plugin/src/main/java/com/alibaba/nacos/plugin/auth/impl/utils/Base64Decode.java:52 cognitive-complexity
 plugin-default-impl/nacos-default-auth-plugin/src/main/java/com/alibaba/nacos/plugin/auth/impl/utils/Base64Decode.java:55 equals-empty-string
 plugin-default-impl/nacos-default-auth-plugin/src/main/java/com/alibaba/nacos/plugin/auth/impl/utils/Base64Decode.java:80 nested-ternary
-plugin-default-impl/nacos-default-auth-plugin/src/main/java/com/alibaba/nacos/plugin/auth/impl/visibility/DefaultVisibilityGrantService.java:264 lost-stack-trace
 plugin-default-impl/nacos-default-auth-plugin/src/main/java/com/alibaba/nacos/plugin/auth/impl/visibility/RemoteVisibilityGrantService.java:78 lost-stack-trace
 plugin-default-impl/nacos-default-auth-plugin/src/main/java/com/alibaba/nacos/plugin/auth/impl/visibility/RemoteVisibilityGrantService.java:96 lost-stack-trace
 plugin-default-impl/nacos-default-auth-plugin/src/test/java/com/alibaba/nacos/plugin/auth/impl/DefaultVisibilityServiceTest.java:584 constructor-calls-overridable-method
@@ -3819,10 +3747,8 @@ plugin/config/src/main/java/com/alibaba/nacos/plugin/config/ConfigChangePluginMa
 plugin/control/src/main/java/com/alibaba/nacos/plugin/control/ControlPluginAdapter.java:49 volatile-array-or-collection
 plugin/control/src/main/java/com/alibaba/nacos/plugin/control/Loggers.java:27 utility-class-instantiable
 plugin/control/src/main/java/com/alibaba/nacos/plugin/control/connection/ConnectionControlManager.java:62 constructor-calls-overridable-method
-plugin/control/src/main/java/com/alibaba/nacos/plugin/control/rule/storage/LocalDiskRuleStorage.java:101 ignored-status-result
 plugin/control/src/main/java/com/alibaba/nacos/plugin/control/rule/storage/LocalDiskRuleStorage.java:48 ignored-status-result
 plugin/control/src/main/java/com/alibaba/nacos/plugin/control/rule/storage/LocalDiskRuleStorage.java:65 ignored-status-result
-plugin/control/src/main/java/com/alibaba/nacos/plugin/control/rule/storage/LocalDiskRuleStorage.java:79 ignored-status-result
 plugin/control/src/main/java/com/alibaba/nacos/plugin/control/rule/storage/RuleStorageProxy.java:34 private-constructor-class-not-final
 plugin/control/src/main/java/com/alibaba/nacos/plugin/control/spi/ControlPluginRegistry.java:89 utility-class-instantiable
 plugin/control/src/main/java/com/alibaba/nacos/plugin/control/tps/DefaultTpsControlManager.java:103 missing-override
@@ -3837,15 +3763,11 @@ plugin/control/src/main/java/com/alibaba/nacos/plugin/control/tps/TpsControlMana
 plugin/control/src/main/java/com/alibaba/nacos/plugin/control/tps/TpsMetrics.java:57 local-immediately-returned
 plugin/control/src/main/java/com/alibaba/nacos/plugin/control/tps/barrier/DefaultNacosTpsBarrier.java:43 missing-override
 plugin/control/src/main/java/com/alibaba/nacos/plugin/control/tps/barrier/DefaultNacosTpsBarrier.java:57 missing-override
-plugin/control/src/main/java/com/alibaba/nacos/plugin/control/tps/barrier/LocalSimpleCountRateCounter.java:51 identical-branches
 plugin/control/src/main/java/com/alibaba/nacos/plugin/control/tps/barrier/LocalSimpleCountRateCounter.java:77 missing-override
 plugin/control/src/main/java/com/alibaba/nacos/plugin/control/tps/barrier/LocalSimpleCountRuleBarrier.java:32 missing-override
 plugin/control/src/main/java/com/alibaba/nacos/plugin/control/tps/barrier/SimpleCountRuleBarrier.java:106 missing-override
 plugin/control/src/main/java/com/alibaba/nacos/plugin/control/tps/barrier/SimpleCountRuleBarrier.java:42 constructor-calls-overridable-method
-plugin/control/src/main/java/com/alibaba/nacos/plugin/control/tps/barrier/SimpleCountRuleBarrier.java:80 identical-branches
-plugin/control/src/main/java/com/alibaba/nacos/plugin/control/tps/rule/RuleModel.java:36 mutable-enum-field
 plugin/control/src/main/java/com/alibaba/nacos/plugin/control/tps/rule/RuleModel.java:36 unused-private-field
-plugin/control/src/main/java/com/alibaba/nacos/plugin/control/tps/rule/RuleModel.java:38 mutable-enum-field
 plugin/control/src/main/java/com/alibaba/nacos/plugin/control/tps/rule/RuleModel.java:38 unused-private-field
 plugin/control/src/main/java/com/alibaba/nacos/plugin/control/utils/DiskUtils.java:116 system-exit
 plugin/control/src/main/java/com/alibaba/nacos/plugin/control/utils/DiskUtils.java:40 utility-class-instantiable
@@ -3919,9 +3841,7 @@ sys/src/main/java/com/alibaba/nacos/sys/utils/DiskUtils.java:185 catch-return-nu
 sys/src/main/java/com/alibaba/nacos/sys/utils/DiskUtils.java:228 catch-return-null
 sys/src/main/java/com/alibaba/nacos/sys/utils/DiskUtils.java:245 collection-method-returns-null
 sys/src/main/java/com/alibaba/nacos/sys/utils/DiskUtils.java:281 system-exit
-sys/src/main/java/com/alibaba/nacos/sys/utils/DiskUtils.java:370 ignored-status-result
 sys/src/main/java/com/alibaba/nacos/sys/utils/DiskUtils.java:374 ignored-status-result
-sys/src/main/java/com/alibaba/nacos/sys/utils/DiskUtils.java:380 ignored-status-result
 sys/src/main/java/com/alibaba/nacos/sys/utils/DiskUtils.java:383 throw-generic-exception
 sys/src/main/java/com/alibaba/nacos/sys/utils/DiskUtils.java:564 catch-return-null
 sys/src/main/java/com/alibaba/nacos/sys/utils/InetUtils.java:147 collapsible-if
@@ -3946,10 +3866,8 @@ sys/src/test/java/com/alibaba/nacos/sys/env/OriginTrackedPropertiesLoaderTest.ja
 sys/src/test/java/com/alibaba/nacos/sys/env/OriginTrackedPropertiesLoaderTest.java:251 default-charset
 sys/src/test/java/com/alibaba/nacos/sys/env/OriginTrackedPropertiesLoaderTest.java:261 default-charset
 sys/src/test/java/com/alibaba/nacos/sys/file/WatchFileCenterTest.java:101 test-without-assertion
-sys/src/test/java/com/alibaba/nacos/sys/file/WatchFileCenterTest.java:148 ignored-status-result
 sys/src/test/java/com/alibaba/nacos/sys/file/WatchFileCenterTest.java:154 test-without-assertion
 sys/src/test/java/com/alibaba/nacos/sys/file/WatchFileCenterTest.java:169 catch-throwable
-sys/src/test/java/com/alibaba/nacos/sys/file/WatchFileCenterTest.java:176 ignored-status-result
 sys/src/test/java/com/alibaba/nacos/sys/file/WatchFileCenterTest.java:304 test-without-assertion
 sys/src/test/java/com/alibaba/nacos/sys/file/WatchFileCenterTest.java:360 throw-generic-exception
 sys/src/test/java/com/alibaba/nacos/sys/file/WatchFileCenterTest.java:530 catch-throwable
@@ -4003,8 +3921,6 @@ test/lock-test/src/test/java/com/alibaba/nacos/test/lock/ClusterJucLockITCase.ja
 test/lock-test/src/test/java/com/alibaba/nacos/test/lock/ClusterJucLockITCase.java:202 deep-nesting
 test/lock-test/src/test/java/com/alibaba/nacos/test/lock/ConcurrentLockITCase.java:115 thread-sleep-in-test
 test/lock-test/src/test/java/com/alibaba/nacos/test/lock/ConcurrentLockITCase.java:158 thread-sleep-in-test
-test/lock-test/src/test/java/com/alibaba/nacos/test/lock/ConcurrentLockITCase.java:174 ignored-status-result
-test/lock-test/src/test/java/com/alibaba/nacos/test/lock/ConcurrentLockITCase.java:90 ignored-status-result
 test/lock-test/src/test/java/com/alibaba/nacos/test/lock/JucLockITCase.java:101 test-without-assertion
 test/lock-test/src/test/java/com/alibaba/nacos/test/lock/JucLockITCase.java:194 unused-parameter
 test/lock-test/src/test/java/com/alibaba/nacos/test/lock/JucLockITCase.java:273 thread-sleep-in-test
@@ -4016,7 +3932,6 @@ test/lock-test/src/test/java/com/alibaba/nacos/test/lock/JucLockITCase.java:432 
 test/lock-test/src/test/java/com/alibaba/nacos/test/lock/JucLockITCase.java:574 thread-sleep-in-test
 test/lock-test/src/test/java/com/alibaba/nacos/test/lock/JucLockITCase.java:606 thread-sleep-in-test
 test/lock-test/src/test/java/com/alibaba/nacos/test/lock/JucLockITCase.java:651 thread-sleep-in-test
-test/lock-test/src/test/java/com/alibaba/nacos/test/lock/JucLockITCase.java:671 ignored-status-result
 test/lock-test/src/test/java/com/alibaba/nacos/test/lock/JucLockITCase.java:710 thread-sleep-in-test
 test/lock-test/src/test/java/com/alibaba/nacos/test/lock/JucLockITCase.java:822 thread-sleep-in-test
 test/lock-test/src/test/java/com/alibaba/nacos/test/lock/JucLockITCase.java:894 thread-sleep-in-test
@@ -4037,15 +3952,11 @@ test/lock-test/src/test/java/com/alibaba/nacos/test/lock/LockFifoITCase.java:251
 test/lock-test/src/test/java/com/alibaba/nacos/test/lock/LockFifoITCase.java:319 interrupted-exception-swallowed
 test/lock-test/src/test/java/com/alibaba/nacos/test/lock/LockFifoITCase.java:332 thread-sleep-in-test
 test/lock-test/src/test/java/com/alibaba/nacos/test/lock/LockFifoITCase.java:340 thread-sleep-in-test
-test/lock-test/src/test/java/com/alibaba/nacos/test/lock/LockFifoITCase.java:401 ignored-status-result
 test/lock-test/src/test/java/com/alibaba/nacos/test/lock/WaitQueueLockITCase.java:148 thread-sleep-in-test
 test/lock-test/src/test/java/com/alibaba/nacos/test/lock/WaitQueueLockITCase.java:160 thread-sleep-in-test
-test/lock-test/src/test/java/com/alibaba/nacos/test/lock/WaitQueueLockITCase.java:169 ignored-status-result
 test/lock-test/src/test/java/com/alibaba/nacos/test/lock/WaitQueueLockITCase.java:205 thread-sleep-in-test
 test/lock-test/src/test/java/com/alibaba/nacos/test/lock/WaitQueueLockITCase.java:235 thread-sleep-in-test
-test/lock-test/src/test/java/com/alibaba/nacos/test/lock/WaitQueueLockITCase.java:245 ignored-status-result
 test/lock-test/src/test/java/com/alibaba/nacos/test/lock/WaitQueueLockITCase.java:69 thread-sleep-in-test
-test/lock-test/src/test/java/com/alibaba/nacos/test/lock/WaitQueueLockITCase.java:80 ignored-status-result
 test/maintainer-sdk-test/src/test/java/com/alibaba/nacos/test/maintainer/naming/NamingMaintainerServiceMaintainerSdkITCase.java:213 complex-boolean-expression
 test/openapi-test/src/test/java/com/alibaba/nacos/test/adminapi/ai/a2a/A2aMigrationAdminApiOpenApiITCase.java:461 complex-boolean-expression
 test/openapi-test/src/test/java/com/alibaba/nacos/test/adminapi/ai/agent/AgentVersionAdminApiOpenApiITCase.java:254 assert-true-with-comparison
