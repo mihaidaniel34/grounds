@@ -150,9 +150,20 @@ class RequestIdentifiers {
     void handler(java.sql.Connection c, String table) throws java.sql.SQLException {
         c.prepareStatement("DELETE FROM " + table + " WHERE id = ?"); // expect
     }
+    // the request held in a field
+    javax.servlet.http.HttpServletRequest request;
+    void injected(java.sql.Connection c, java.sql.Statement st) throws java.sql.SQLException {
+        c.prepareStatement("SELECT * FROM " + request.getParameter("table") + " WHERE id = ?"); // expect
+        st.executeQuery("SELECT * FROM t WHERE name = '" + request.getParameter("name") + "'"); // expect
+    }
     // the caller chose the name: nothing here says it is the request's
-    void helper(java.sql.Connection c, String table, UnknownRequest other) throws java.sql.SQLException {
+    void helper(java.sql.Connection c, String table, UnknownRequest other, Settings settings) throws java.sql.SQLException {
         c.prepareStatement("UPDATE " + table + " SET seen = ? WHERE id = ?");
         c.prepareStatement("SELECT * FROM " + other.getParameter("table") + " WHERE id = ?");
+        c.prepareStatement("SELECT * FROM " + settings.getParameter("table") + " WHERE id = ?");
     }
+}
+// a getter of the same name on a class that is no request
+class Settings {
+    String getParameter(String key) { return key; }
 }

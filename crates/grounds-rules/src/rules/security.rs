@@ -674,8 +674,11 @@ impl Rule for SqlInjection {
         }
         let Some(q) = cx.fm.args_of(n).first().copied() else { return };
         // only text the caller supplies can inject; identifiers taken from
-        // fields and constants (`"delete from " + table + " where id = ?"`) cannot
-        if !dynamically_built(q, cx) || !from_parameter(q, cx, &mut Vec::new()) {
+        // fields and constants (`"delete from " + table + " where id = ?"`) cannot.
+        // The request is the caller's text wherever it is held: a parameter,
+        // or an injected field (`@Autowired HttpServletRequest request`)
+        let supplied = |e: Node<'t>| from_parameter(e, cx, &mut Vec::new()) || from_request(e, cx, &mut Vec::new());
+        if !dynamically_built(q, cx) || !supplied(q) {
             return;
         }
         let mut parts = Vec::new();
@@ -691,7 +694,7 @@ impl Rule for SqlInjection {
                 match p {
                     SqlPart::Text(t) => before.push_str(t),
                     SqlPart::Dynamic(d) => {
-                        if from_parameter(*d, cx, &mut Vec::new()) {
+                        if supplied(*d) {
                             if !identifier_position(&before) {
                                 only_identifiers = false;
                                 break;
