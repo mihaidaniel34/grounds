@@ -1097,3 +1097,67 @@ fn unknown_arguments_may_be_raw() {
     );
     assert_eq!(t, vec!["java.util.List<?unknown>", "?unknown"]);
 }
+
+#[test]
+fn overloads_alike_in_result_with_unknown_argument_types_stay_ambiguous() {
+    // `RC`, `M` are not on the classpath: javac calls (Ctx, RC), (Ctx, byte)
+    // and (Ctx, M), which the model cannot tell
+    let c = calls_of(
+        "package p; import io.netty.M; import io.netty.RC; import io.netty.Ctx;
+         class H {
+           void go(Ctx ctx, RC rc) { /*C*/ closeCtx(ctx, rc); }
+           private void closeCtx(Ctx ctx, RC rc) { /*C*/ closeCtx(ctx, R.get(rc).byteValue()); }
+           private void closeCtx(Ctx ctx, byte b) { /*C*/ closeCtx(ctx, createMsg(b)); }
+           private void closeCtx(Ctx ctx, M msg) { }
+           private static M createMsg(byte b) { return null; }
+         }",
+    );
+    assert_eq!(c, vec!["H.closeCtx(?unknown,byte)?", "H.closeCtx(?unknown,byte)?", "H.closeCtx(?unknown,byte)?"]);
+}
+
+#[test]
+fn unknown_types_that_decide_nothing_leave_the_choice_sure() {
+    let c = calls_of(
+        "package p; import missing.Key; import missing.Other;
+         class H {
+           void put(Key k, String v) { }
+           void put(Key k, Integer v) { }
+           void put(Key k, String v, int n) { }
+           void one(Key k) { }
+           void two(Key k, int n) { }
+           void two(Other k, String s) { }
+           StringBuilder sb(StringBuilder b, Key k) { return /*C*/ b.append(k); }
+           void go(Key k) {
+             // the other positions rule the rest out
+             /*C*/ put(k, \"a\"); /*C*/ put(k, \"a\", 1); /*C*/ two(k, 1);
+             // a single candidate
+             /*C*/ one(k);
+             /*C*/ two(k, null);
+           }
+         }",
+    );
+    assert_eq!(
+        c,
+        vec![
+            "StringBuilder.append(java.lang.Object)?",
+            "H.put(?unknown,java.lang.String)",
+            "H.put(?unknown,java.lang.String,int)",
+            "H.two(?unknown,int)",
+            "H.one(?unknown)",
+            "H.two(?unknown,java.lang.String)",
+        ]
+    );
+}
+
+#[test]
+fn a_guess_among_overloads_alike_in_result_keeps_the_result() {
+    let t = types_of(
+        "package p; import missing.Key;
+         class H {
+           String name(Key k) { return null; }
+           String name(int n) { return null; }
+           void go(Key k) { Object o = /*T*/ name(k); }
+         }",
+    );
+    assert_eq!(t, vec!["java.lang.String"]);
+}

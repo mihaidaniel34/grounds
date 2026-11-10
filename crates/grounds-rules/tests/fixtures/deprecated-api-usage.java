@@ -23,6 +23,10 @@ class A {
         int y = d.getYear(); // expect
         o.fresh();
     }
+    // `Charsets` comes from a missing jar: `String(byte[], Charset)` as likely
+    // as the deprecated `String(byte[], int)`
+    String text(byte[] b) { return new String(b, com.unknown.Charsets.UTF_8); }
+    String high(byte[] b) { return new String(b, 0); } // expect
     @Deprecated void alsoOld(Old o, Date d) { o.legacy(); o.gone(); d.getYear(); }
 }
 @Deprecated
