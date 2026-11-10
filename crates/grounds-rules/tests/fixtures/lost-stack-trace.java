@@ -87,6 +87,15 @@ class InputErrors {
     void withPlainHelper(String name) {
         try { java.security.MessageDigest.getInstance("SHA-256"); plainHelper(name); } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException("failed"); }
     }
+    // a call in a lambda the try only creates does not run there
+    java.util.concurrent.Callable<java.security.Key> deferred(String name) {
+        try { java.security.MessageDigest.getInstance("SHA-256"); return () -> loadKey(name); } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException("failed"); }
+    }
+    interface Codec { byte[] getBytes(String charset) throws java.io.UnsupportedEncodingException; }
+    // still lost: a getBytes of an unknown receiver is not String's
+    byte[] custom(missing.Codec codec) {
+        try { return codec.getBytes("UTF-8"); } catch (java.io.UnsupportedEncodingException e) { throw new IllegalStateException("no UTF-8"); } // expect
+    }
     // still lost: another call in the try declares the caught exception
     void withKey(String name) {
         try { java.security.MessageDigest.getInstance("SHA-256"); loadKey(name); } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException("failed"); } // expect

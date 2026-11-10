@@ -60,3 +60,11 @@ class BuildsItself implements Serializable {
     @jakarta.inject.Inject
     BuildsItself(Probe injected) { built = new Probe(); checked = java.util.Objects.requireNonNull(injected); given = injected; made = new Probe(); }
 }
+// a parameter assigned to itself, or replaced before it is stored: no proxy is kept
+@jakarta.faces.view.ViewScoped
+class Shadowed implements Serializable {
+    private Probe probe; // expect
+    private Probe replaced; // expect
+    @jakarta.inject.Inject
+    Shadowed(Probe probe, Probe other) { probe = probe; other = new Probe(); this.replaced = other; }
+}

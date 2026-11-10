@@ -52,3 +52,13 @@ class ScannerOnlyObserved {
         }
     }
 }
+class OwnCursor {
+    interface Cursor { boolean hasNextAndAdvance(); }
+    void m(Cursor c) {
+        int seen = 0;
+        // not a Scanner: a hasNext... method of another type may move it
+        for (Cursor cur = c; cur.hasNextAndAdvance(); seen++) {
+            if (cur.hasNextAndAdvance()) System.out.println(seen);
+        }
+    }
+}

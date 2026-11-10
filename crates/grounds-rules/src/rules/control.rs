@@ -1338,7 +1338,8 @@ impl Rule for ForLoopWrongVariable {
                     // queries that do not move it
                     && !cx.fm.call_name(d).is_some_and(|m| {
                         // `hasNext`, and Scanner's `hasNextInt`, `hasNextLine`, ...
-                        m.starts_with("hasNext")
+                        matches!(m, "hasNext" | "hasNextLine" | "hasNextInt")
+                            || m.starts_with("hasNext") && d.field("object").is_some_and(|o| cx.type_of(o).class_name() == Some("java.util.Scanner"))
                             || matches!(m, "hasPrevious" | "nextIndex" | "previousIndex" | "hasMoreElements" | "hasMoreTokens" | "countTokens" | "isEmpty" | "size" | "toString" | "hashCode" | "equals")
                     })
             })

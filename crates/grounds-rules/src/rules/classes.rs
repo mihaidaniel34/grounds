@@ -932,6 +932,15 @@ fn from_injected_parameter<'t>(ctor: Node<'t>, value: Node<'t>, cx: &Ctx<'_, 't>
         .field("parameters")
         .map(|ps| ps.kids().into_iter().filter(|p| p.kind() == "formal_parameter").filter_map(|p| p.field("name")).map(|x| cx.text(x)).collect())
         .unwrap_or_default();
+    // a parameter the constructor reassigns no longer holds what was injected
+    let reassigned: Vec<&str> = ctor
+        .descendants()
+        .filter(|x| x.kind() == "assignment_expression")
+        .filter_map(|x| x.field("left").map(|l| l.unparen()))
+        .filter(|l| l.kind() == "identifier")
+        .map(|l| cx.text(l))
+        .collect();
+    let params: Vec<&str> = params.into_iter().filter(|p| !reassigned.contains(p)).collect();
     let v = value.unparen();
     match v.kind() {
         "identifier" => params.contains(&cx.text(v)),
@@ -1059,8 +1068,14 @@ impl Rule for NonSerializableField {
                             // every field of the declaration (`Probe a, b;`)
                             && names.iter().all(|name| {
                                 m.descendants().filter(|x| x.kind() == "assignment_expression").any(|x| {
-                                    x.field("left").is_some_and(|l| {
+                                    // the field itself: not a parameter of the same name
+                                    // (`service = service`), nor a nested class's
+                                    !x.ancestors().take_while(|a| a != m).any(|a| matches!(a.kind(), "lambda_expression" | "class_body"))
+                                    && x.field("left").is_some_and(|l| {
                                         let l = l.unparen();
+                                        if l.kind() == "identifier" && cx.fm.local_ref(l).is_some() {
+                                            return false;
+                                        }
                                         let target = if l.kind() == "field_access" { l.field("field") } else { Some(l) };
                                         target.is_some_and(|t| cx.text(t) == *name)
                                     }) && x.field("right").is_some_and(|r| from_injected_parameter(*m, r, cx))

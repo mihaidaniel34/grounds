@@ -454,11 +454,14 @@ impl Rule for LostStackTrace {
                     let names_charset = args.iter().skip(if c.kind() == "method_invocation" { 0 } else { 1 }).any(|a| cx.type_of(*a).is_string());
                     match c.kind() {
                         "method_invocation" => {
-                            let owner = cx.fm.select_method(*c).map(|m| m.owner.to_string());
+                            // unresolved: only a `getBytes` on a String receiver
+                            let owner = cx.fm.select_method(*c).map(|m| m.owner.to_string()).or_else(|| {
+                                c.field("object").filter(|o| cx.type_of(*o).is_string()).map(|_| "java.lang.String".to_string())
+                            });
                             names_charset
                                 && matches!(
                                     (cx.fm.call_name(*c), owner.as_deref()),
-                                    (Some("getBytes"), None | Some("java.lang.String"))
+                                    (Some("getBytes"), Some("java.lang.String"))
                                         | (Some("encode"), Some("java.net.URLEncoder"))
                                         | (Some("decode"), Some("java.net.URLDecoder"))
                                         | (Some("toString"), Some("java.io.ByteArrayOutputStream"))
@@ -491,7 +494,9 @@ impl Rule for LostStackTrace {
             // (or a supertype or subtype of it); an unresolved one may
             let others_may_throw = |caught: &str| {
                 calls.iter().any(|c| {
-                    !charset_calls.contains(c)
+                    // a lambda or a local class runs at another time
+                    !c.ancestors().take_while(|a| *a != t).any(|a| matches!(a.kind(), "lambda_expression" | "class_body"))
+                        && !charset_calls.contains(c)
                         && !digest_calls.contains(c)
                         && match cx.fm.select_method(*c) {
                             None => true,

@@ -251,9 +251,11 @@ fn guava_tester<'t>(cx: &Ctx<'_, 't>, c: Node<'t>) -> bool {
             // without Guava's jar the type stays unresolved: go by the name
             // written or imported
             let written = cx.text(t).split('<').next().unwrap_or("");
-            return cx.fm.resolve_type_node(t).class_name().is_some_and(guava)
-                || guava(written)
-                || written.ends_with("Tester")
+            let resolved = cx.fm.resolve_type_node(t);
+            return resolved.class_name().is_some_and(guava)
+                || resolved.is_unknown() && guava(written)
+                || resolved.is_unknown()
+                    && written.ends_with("Tester")
                     && !written.contains('.')
                     && cx.fm.stub.imports.iter().any(|i| !i.is_static && (i.on_demand && &*i.path == "com.google.common.testing" || !i.on_demand && &*i.path == format!("com.google.common.testing.{written}")));
         }
