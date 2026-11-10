@@ -1023,7 +1023,17 @@ impl<'a> Builder<'a> {
                     }
                 }
             }
-            for (name, ty) in mocks {
+            // Micronaut's @MockBean on a method of a test class: a factory
+            // method whose result replaces the bean in that test
+            // (io.micronaut.test.annotation.MockBean is @Bean @Replaces)
+            let mut method_mocks: Vec<(String, Ty)> = Vec::new();
+            for m in &c.methods {
+                let micronaut_mock = m.annotations.iter().any(|a| a.is("io.micronaut.test.annotation.MockBean") && (a.name.starts_with("io.micronaut") || !a.resolved));
+                if micronaut_mock && !m.is_constructor() && m.ret != Ty::Void && !m.ret.is_unknown() {
+                    method_mocks.push((m.name.to_string(), m.ret.clone()));
+                }
+            }
+            for (name, ty, micronaut) in mocks.into_iter().map(|(n, t)| (n, t, false)).chain(method_mocks.into_iter().map(|(n, t)| (n, t, true))) {
                 self.add_bean(Bean {
                     name,
                     aliases: Vec::new(),
@@ -1036,9 +1046,9 @@ impl<'a> Builder<'a> {
                     file: file.clone(),
                     is_test: true,
                     autowire_candidate: true,
-                    framework: Framework::Spring,
+                    framework: if micronaut { Framework::Micronaut } else { Framework::Spring },
                     dynamic_names: false,
-                    replaces: false,
+                    replaces: micronaut,
                     static_factory: false,
                 });
             }
@@ -2153,5 +2163,23 @@ mod tests {
         let remote = m.beans.iter().position(|b| b.declaring_class.ends_with("RemoteHandler")).unwrap();
         assert_eq!(point_resolution(&idx, &m, "handler"), Resolution::Unique(remote));
         assert_eq!(point_resolution(&idx, &m, "noop"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn a_micronaut_mock_bean_method_provides_the_bean_in_tests() {
+        let (idx, m) = model(&[
+            JSR330[0], JSR330[1], JSR330[2],
+            ("src/main/java/app/Listener.java", "package app; public interface Listener { void on(String event); }"),
+            ("src/test/java/app/HandlerTest.java", "package app; import jakarta.inject.Inject; import io.micronaut.test.annotation.MockBean;
+             @io.micronaut.context.annotation.Factory class HandlerTest {
+               @Inject Listener listener;
+               @MockBean(Listener.class) Listener listener() { return null; }
+             }"),
+            ("src/test/java/app/OtherTest.java", "package app; import jakarta.inject.*; @Singleton class OtherTest { @Inject OtherTest(Listener otherListener) {} }"),
+            ("src/main/java/app/Uses.java", "package app; import jakarta.inject.*; @Singleton class Uses { @Inject Uses(Listener mainListener) {} }"),
+        ]);
+        assert!(matches!(point_resolution(&idx, &m, "listener"), Resolution::Unique(_)));
+        // main code never sees a test's mock
+        assert_eq!(point_resolution(&idx, &m, "mainListener"), Resolution::NotFound);
     }
 }
