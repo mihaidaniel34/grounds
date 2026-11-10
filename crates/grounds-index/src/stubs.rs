@@ -299,6 +299,9 @@ pub struct FileStub {
     /// edits keep this stable.
     pub signature_hash: u64,
     pub has_syntax_errors: bool,
+    /// The `lombok.config` settings the file was extracted with, when not
+    /// the defaults: local classes are extracted later, with the same.
+    pub lombok: Option<crate::lombok::LombokConfig>,
 }
 
 pub fn extract(file: &ParsedFile) -> FileStub {
@@ -350,6 +353,9 @@ pub fn extract_with(file: &ParsedFile, lombok: &crate::lombok::LombokConfig) -> 
     }
     stub.classes = ex.classes;
     crate::lombok::apply_all_with(&mut stub.classes, &stub.imports, lombok);
+    if *lombok != crate::lombok::LombokConfig::default() {
+        stub.lombok = Some(lombok.clone());
+    }
     // referenced names
     let mut names: Vec<Name> = Vec::new();
     let mut seen = rustc_hash::FxHashSet::default();
@@ -1424,13 +1430,14 @@ pub fn implicit_method(name: &str, flags: Flags, params: Vec<RawParam>, ret: Typ
     }
 }
 
-/// Extract a single (possibly local or anonymous-body) type declaration node.
-/// Used by the semantic layer for local classes.
-pub fn extract_class_node(node: Node, src: &str, pkg: &str, outer: Option<&Name>) -> Vec<RawClass> {
+/// Extract a single (possibly local or anonymous-body) type declaration node
+/// and the classes nested in it, with Lombok's members under the file's
+/// imports and `lombok.config`. Used by the semantic layer for local classes.
+pub fn extract_class_node(node: Node, src: &str, pkg: &str, outer: Option<&Name>, imports: &[Import], lombok: &crate::lombok::LombokConfig) -> Vec<RawClass> {
     let mut ex = Extractor { src, classes: Vec::new() };
     let o = outer.map(|o| (o, ClassKind::Class));
     ex.class(node, pkg, o, true);
-    crate::lombok::apply_all(&mut ex.classes, &[]);
+    crate::lombok::apply_all_with(&mut ex.classes, imports, lombok);
     ex.classes
 }
 

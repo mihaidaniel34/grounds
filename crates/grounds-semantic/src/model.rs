@@ -148,7 +148,8 @@ impl<'t> FileModel<'t> {
                     let c = anon.entry(o.clone()).or_insert(0);
                     *c += 1;
                     let nm: Name = Arc::from(format!("{}${}{}", o, c, simple).as_str());
-                    let raws = stubs::extract_class_node(n, src, pkg, Some(&o));
+                    let lombok = m.stub.lombok.clone().unwrap_or_default();
+                    let raws = stubs::extract_class_node(n, src, pkg, Some(&o), &m.stub.imports, &lombok);
                     // extract_class_node names it Outer$Simple; rename the root
                     for mut r in raws {
                         if r.decl_range == (n.start_byte() as u32, n.end_byte() as u32) {

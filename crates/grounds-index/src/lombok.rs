@@ -9,7 +9,7 @@ use std::sync::Arc;
 const LOMBOK: &str = "lombok";
 
 /// Settings from `lombok.config` files that change generated signatures.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct LombokConfig {
     /// `lombok.accessors.fluent`: getters/setters named like the field
     pub fluent: bool,
