@@ -1056,12 +1056,15 @@ impl Rule for NonSerializableField {
                     members(d).iter().any(|m| {
                         m.kind() == "constructor_declaration"
                             && cx.fm.annotations_of(*m).iter().any(|a| a.is("jakarta.inject.Inject") || a.is("javax.inject.Inject"))
-                            && m.descendants().filter(|x| x.kind() == "assignment_expression").any(|x| {
-                                x.field("left").is_some_and(|l| {
-                                    let l = l.unparen();
-                                    let target = if l.kind() == "field_access" { l.field("field") } else { Some(l) };
-                                    target.is_some_and(|t| names.contains(&cx.text(t)))
-                                }) && x.field("right").is_some_and(|r| from_injected_parameter(*m, r, cx))
+                            // every field of the declaration (`Probe a, b;`)
+                            && names.iter().all(|name| {
+                                m.descendants().filter(|x| x.kind() == "assignment_expression").any(|x| {
+                                    x.field("left").is_some_and(|l| {
+                                        let l = l.unparen();
+                                        let target = if l.kind() == "field_access" { l.field("field") } else { Some(l) };
+                                        target.is_some_and(|t| cx.text(t) == *name)
+                                    }) && x.field("right").is_some_and(|r| from_injected_parameter(*m, r, cx))
+                                })
                             })
                     })
                 });
