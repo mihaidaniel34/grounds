@@ -350,7 +350,7 @@ impl Session {
         if trace {
             for (e, b) in extra.iter().zip(&sigs) {
                 let now = std::fs::metadata(e).and_then(|m| m.modified()).ok();
-                let text = std::fs::read_to_string(e).ok().map(|t| format!("{:016x}", crate::cache::content_hash(&t))).unwrap_or_else(|| "-".into());
+                let text = crate::fsutil::read_text(e).ok().map(|t| format!("{:016x}", crate::cache::content_hash(&t))).unwrap_or_else(|| "-".into());
                 crate::trace::log(|| format!("sync: checked {} stub {} -> {} recorded {} now {} content {}", e.display(), b, sig(self, e), crate::trace::time(self.stamps.get(e).map(|s| s.mtime)), crate::trace::time(now), text));
             }
         }

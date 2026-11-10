@@ -7,6 +7,7 @@ pub mod classpath;
 pub mod config;
 pub mod daemon;
 pub mod dump;
+pub mod fsutil;
 pub mod git;
 pub mod java_release;
 pub mod project;
