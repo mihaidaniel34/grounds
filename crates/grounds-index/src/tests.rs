@@ -293,3 +293,18 @@ fn a_receiver_parameter_is_not_a_parameter() {
     let i = idx.class("p.R$I").unwrap();
     assert_eq!(i.methods_named("<init>").next().map(|m| m.params.len()), Some(1));
 }
+
+#[test]
+fn manifold_runtime_imports_mark_their_module_as_extended() {
+    let mut idx = index_of(&[
+        ("/r/a/src/test/java/p/A.java", "package p; import manifold.ext.rt.api.Jailbreak; class A {}"),
+        ("/r/a/src/main/java/p/B.java", "package p; class B {}"),
+        ("/r/b/src/main/java/q/C.java", "package q; import manifold.ext.Other; class C {}"),
+    ]);
+    assert!(idx.language_extended("/r/a/src/main/java/p/B.java"));
+    assert!(!idx.language_extended("/r/b/src/main/java/q/C.java"), "no runtime API import in module b");
+    // an extension class adds methods in every module
+    let pf = ParsedFile::parse("package e; import manifold.ext.rt.api.Extension; @Extension public class MyStringExt {}");
+    idx.set_file(Arc::from("/r/c/src/main/java/e/MyStringExt.java"), Arc::new(extract(&pf)));
+    assert!(idx.language_extended("/r/b/src/main/java/q/C.java"));
+}

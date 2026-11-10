@@ -229,6 +229,9 @@ pub struct Index {
     resolved_at: AtomicU64,
     // the groups resolve_ordered last used; None: the next fill resolves everything
     plan: parking_lot::Mutex<Option<Plan>>,
+    // see `language_extended`: the generation it was computed at, the module
+    // directories, and whether the whole project is affected
+    extended: parking_lot::Mutex<Option<(u64, Arc<(FxHashSet<String>, bool)>)>>,
 }
 
 // file groups in dependency order, and the files edited since without a declaration change
@@ -307,7 +310,7 @@ impl Drop for Resolving<'_> {
 
 impl Index {
     pub fn new(classpath: Arc<Classpath>) -> Index {
-        Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), copies: FxHashMap::default(), generation: 0, resolved_at: AtomicU64::new(u64::MAX), plan: parking_lot::Mutex::new(None) }
+        Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), copies: FxHashMap::default(), generation: 0, resolved_at: AtomicU64::new(u64::MAX), plan: parking_lot::Mutex::new(None), extended: parking_lot::Mutex::new(None) }
     }
 
     pub fn set_file(&mut self, path: Arc<str>, stub: Arc<FileStub>) {
@@ -450,6 +453,39 @@ impl Index {
         let stub = self.files.get(&**pick)?;
         let raw = stub.classes.iter().find(|c| &*c.name == name)?;
         Some((stub, raw, pick))
+    }
+
+    /// Whether the file at `path` is compiled with a javac plugin that
+    /// changes the language, so members, access and types may be other than
+    /// the Java the model reads. Manifold (`-Xplugin:Manifold`) adds extension
+    /// methods, `@Jailbreak` access to private members, properties, `auto`
+    /// types, structural interfaces and delegation; code using them is valid
+    /// only with the plugin. Its evidence in the sources: a file of the module
+    /// imports a package of its runtime API (`manifold.*.rt.api`). Extension
+    /// classes (`manifold.ext.rt.api.Extension`) add methods to classes used
+    /// in any module, so one of those makes the whole project extended.
+    pub fn language_extended(&self, path: &str) -> bool {
+        let mut cached = self.extended.lock();
+        let sets = match &*cached {
+            Some((g, sets)) if *g == self.generation => sets.clone(),
+            _ => {
+                let mut modules = FxHashSet::default();
+                let mut everywhere = false;
+                for (p, stub) in &self.files {
+                    for imp in stub.imports.iter() {
+                        let api = imp.path.strip_prefix("manifold.").is_some_and(|rest| rest.starts_with("rt.api") || rest.contains(".rt.api"));
+                        if api {
+                            modules.insert(module_dir(p).to_string());
+                            everywhere |= imp.path.starts_with("manifold.ext.rt.api") && (&*imp.path == "manifold.ext.rt.api.Extension" || imp.on_demand);
+                        }
+                    }
+                }
+                let sets = Arc::new((modules, everywhere));
+                *cached = Some((self.generation, sets.clone()));
+                sets
+            }
+        };
+        sets.1 || sets.0.contains(module_dir(path))
     }
 
     pub fn is_source_class(&self, name: &str) -> bool {

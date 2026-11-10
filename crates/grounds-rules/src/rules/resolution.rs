@@ -22,6 +22,11 @@ fn closed_class<'t>(cx: &Ctx<'_, 't>, name: &str) -> Option<std::sync::Arc<Class
     if cx.fm.stub.classes.iter().any(|k| k.annotations.iter().any(|a| lombok::processor_annotation(a, &cx.fm.stub.imports).as_deref() == Some("lombok.experimental.ExtensionMethod"))) {
         return None;
     }
+    // a javac plugin that changes the language (Manifold) compiles this file:
+    // members, access and types are not the ones the model reads
+    if cx.fm.index.language_extended(&cx.fm.path) {
+        return None;
+    }
     // a file that does not parse as Java (a template, a file mid-edit) is no
     // ground for a claim that code does not compile
     if cx.fm.file.has_errors() {
