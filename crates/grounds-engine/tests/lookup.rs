@@ -64,3 +64,25 @@ fn a_source_file_declaring_a_jdk_class_does_not_replace_the_jdks() {
     );
     assert_eq!(findings(&dir), vec![format!("{}:13 unresolved-method", "src/main/java/app/Visitor.java")]);
 }
+
+#[test]
+fn a_copy_outside_a_source_root_is_never_the_certain_one() {
+    let dir = project(
+        "duplicate-copy",
+        &[
+            // guava: plain `src` trees and a GWT super-source copy without the field
+            ("core/src/p/Cache.java", "package p;\npublic class Cache {\n    int[] segments;\n}\n"),
+            ("gwt/src-super/p/Cache.java", "package p;\npublic class Cache {\n}\n"),
+            ("tests/bench/p/Bench.java", "package p;\nclass Bench {\n    int n(Cache c) { return c.segments.length; }\n}\n"),
+            // javaparser: old copies of the sources kept as test data
+            ("core/src/main/java/q/Config.java", "package q;\npublic class Config {\n    public Config setResolver(Object r) { return this; }\n}\n"),
+            ("solver/src/test/test_sourcecode/q/Config.java", "package q;\npublic class Config {\n}\n"),
+            ("solver/src/test/java/t/UseTest.java", "package t;\n\nimport q.Config;\n\nclass UseTest {\n    void f() { new Config().setResolver(null); }\n}\n"),
+            // still judged: the copy of the file's own module and source set
+            ("app/src/main/java/r/Model.java", "package r;\npublic class Model {\n    public void save() {}\n}\n"),
+            ("lib/src/main/java/r/Model.java", "package r;\npublic class Model {\n    public void store() {}\n}\n"),
+            ("app/src/main/java/r/Service.java", "package r;\nclass Service {\n    void run(Model m) { m.save(); m.store(); }\n}\n"),
+        ],
+    );
+    assert_eq!(findings(&dir), vec!["app/src/main/java/r/Service.java:3 unresolved-method".to_string()]);
+}

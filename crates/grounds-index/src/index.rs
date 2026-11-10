@@ -489,16 +489,20 @@ impl Index {
     /// build's module dependencies: the copy in the file's own module and
     /// source set, else the only copy in its module when that one is main
     /// code and the file a test (tests see their module's main classes).
-    /// None for a class declared once, or when the choice would be a guess.
+    /// Only files under a source root of a module count (see `source_root`):
+    /// elsewhere (`guava/src/com/...`, a GWT `src-super` copy, test data
+    /// under `src/test/test_sourcecode`) neither the module nor the source
+    /// set is known. None for a class declared once, or when the choice
+    /// would be a guess.
     pub fn certain_copy(&self, name: &str, from: &str) -> Option<(&Arc<FileStub>, &RawClass, &Arc<str>)> {
-        use crate::sources::{is_test_set, source_set_of};
-        let set = |p: &str| source_set_of(std::path::Path::new(p)).map(str::to_string);
+        use crate::sources::is_test_set;
         let files = self.copies.get(name)?;
-        let mine: Vec<&Arc<str>> = files.iter().filter(|f| module_dir(f) == module_dir(from)).collect();
-        let same_set: Vec<&Arc<str>> = mine.iter().copied().filter(|f| set(f) == set(from)).collect();
+        let (module, set) = source_root(from)?;
+        let mine: Vec<(&Arc<str>, &str)> = files.iter().filter_map(|f| source_root(f).filter(|r| r.0 == module).map(|r| (f, r.1))).collect();
+        let same_set: Vec<&Arc<str>> = mine.iter().filter(|f| f.1 == set).map(|f| f.0).collect();
         let pick = match (same_set.as_slice(), mine.as_slice()) {
             ([one], _) => *one,
-            ([], [one]) if set(from).is_some_and(|s| is_test_set(&s)) && set(one).as_deref() == Some("main") => *one,
+            ([], [(one, "main")]) if is_test_set(set) => *one,
             _ => return None,
         };
         let stub = self.files.get(&**pick)?;
@@ -1160,6 +1164,18 @@ pub fn module_dir(path: &str) -> &str {
     }
 }
 
+/// The module directory and source set of a file under a source root of a
+/// module, `<module>/src/<set>/<java|kotlin|groovy|scala>/...` (the last such
+/// root: the checkout itself may sit below a directory named `src`). None
+/// for a file anywhere else.
+pub fn source_root(path: &str) -> Option<(&str, &str)> {
+    const LANGS: &[&str] = &["java", "kotlin", "groovy", "scala"];
+    let starts = path.match_indices("src/").map(|(i, _)| i).filter(|&i| i == 0 || path[..i].ends_with('/'));
+    let i = starts.filter(|&i| path[i + 4..].split('/').nth(1).is_some_and(|l| LANGS.contains(&l)) && path[i + 4..].split('/').count() > 2).last()?;
+    let set = path[i + 4..].split('/').next()?;
+    Some((path[..i].trim_end_matches('/'), set))
+}
+
 /// Convert a folded constant to the representation of the declared type.
 pub fn coerce_constant(v: Constant, ty: &Ty) -> Option<Constant> {
     Some(match ty {
@@ -1253,6 +1269,35 @@ mod resolving_tests {
         idx.set_file(Arc::from("/w/src/r/b/src/main/java/p/B.java"), stub(b));
         assert_eq!(pick(&idx, "/w/src/r/b/src/test/java/p/T.java").as_deref(), Some("/w/src/r/b/src/main/java/p/B.java"));
         assert_eq!(pick(&idx, "/w/src/r/c/src/test/java/p/T.java"), None);
+    }
+
+    #[test]
+    fn copies_outside_source_roots_are_never_certain() {
+        use crate::stubs::extract;
+        use grounds_syntax::ParsedFile;
+        let stub = |src: &str| Arc::new(extract(&ParsedFile::parse(src)));
+        let pick = |idx: &Index, from: &str| idx.certain_copy("p.C", from).map(|(_, _, f)| f.to_string());
+        let c = "package p; public class C {}";
+        // guava: plain `src/` and `test/` trees, a GWT super-source copy
+        let mut idx = Index::new(Arc::new(Classpath::empty()));
+        idx.set_file(Arc::from("/r/core/src/p/C.java"), stub(c));
+        idx.set_file(Arc::from("/r/gwt/src-super/p/C.java"), stub(c));
+        assert_eq!(pick(&idx, "/r/tests/bench/p/B.java"), None);
+        assert_eq!(pick(&idx, "/r/core/src/p/B.java"), None);
+        // javaparser: test data under src/test/ next to the module's tests
+        let mut idx = Index::new(Arc::new(Classpath::empty()));
+        idx.set_file(Arc::from("/r/core/src/main/java/p/C.java"), stub(c));
+        idx.set_file(Arc::from("/r/solver/src/test/test_sourcecode/p/C.java"), stub(c));
+        assert_eq!(pick(&idx, "/r/solver/src/test/java/t/T.java"), None);
+        assert_eq!(pick(&idx, "/r/solver/src/test/test_sourcecode/t/T.java"), None);
+        // still certain: the own module's source set, or its main code for a test
+        idx.set_file(Arc::from("/r/solver/src/main/java/p/C.java"), stub(c));
+        assert_eq!(pick(&idx, "/r/solver/src/test/java/t/T.java").as_deref(), Some("/r/solver/src/main/java/p/C.java"));
+        assert_eq!(pick(&idx, "/r/core/src/main/java/t/M.java").as_deref(), Some("/r/core/src/main/java/p/C.java"));
+        assert_eq!(source_root("/w/src/r/a/src/test/java/p/B.java"), Some(("/w/src/r/a", "test")));
+        assert_eq!(source_root("src/main/kotlin/p/B.java"), Some(("", "main")));
+        assert_eq!(source_root("/r/a/src/main/java"), None);
+        assert_eq!(source_root("/r/a/src/p/B.java"), None);
     }
 
     #[test]
