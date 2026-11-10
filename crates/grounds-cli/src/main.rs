@@ -165,6 +165,11 @@ enum Cmd {
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    // Parsing, indexing and the rules recurse along the syntax tree; rayon's
+    // default 2 MiB stacks overflowed on code that is deeply nested but under
+    // the analysis limit (grounds_engine::analyze::MAX_TREE_DEPTH). Unused
+    // stack is only reserved address space.
+    let _ = rayon::ThreadPoolBuilder::new().stack_size(64 << 20).build_global();
     let style = grounds_engine::report::Style::detect(&cli.color);
     match cli.cmd {
         Cmd::Index { root, groups } => {

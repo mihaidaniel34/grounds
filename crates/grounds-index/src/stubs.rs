@@ -107,7 +107,25 @@ pub enum ConstExpr {
     Ternary(Box<ConstExpr>, Box<ConstExpr>, Box<ConstExpr>),
 }
 
+/// `const_expr` gives up on initializers nested deeper than this: the index
+/// evaluates no deeper than 32 levels (`eval_const_expr`), and recursing
+/// further only risked the stack (a generated 20,000-term string
+/// concatenation overflowed it while the project loaded).
+const MAX_CONST_EXPR_DEPTH: u32 = 64;
+
+/// Recursion limit of `literal_constant` (the left operands of a chain like
+/// `"a" + "b" + ...` are folded in a loop and do not count).
+const MAX_LITERAL_DEPTH: u32 = 256;
+
 pub fn const_expr(n: Node, src: &str) -> Option<ConstExpr> {
+    const_expr_at(n, src, 0)
+}
+
+fn const_expr_at(n: Node, src: &str, depth: u32) -> Option<ConstExpr> {
+    if depth > MAX_CONST_EXPR_DEPTH {
+        return None;
+    }
+    let const_expr = |n: Node, src: &str| const_expr_at(n, src, depth + 1);
     let n = n.unparen();
     if let Some(c) = literal_constant(n, src) {
         return Some(ConstExpr::Lit(c));
@@ -529,6 +547,14 @@ fn const_or_expr(n: Node, src: &str) -> RawAnnValue {
 
 /// Evaluate constant expressions built only from literals.
 pub fn literal_constant(n: Node, src: &str) -> Option<Constant> {
+    literal_constant_at(n, src, 0)
+}
+
+fn literal_constant_at(n: Node, src: &str, depth: u32) -> Option<Constant> {
+    if depth > MAX_LITERAL_DEPTH {
+        return None;
+    }
+    let literal_constant = |n: Node, src: &str| literal_constant_at(n, src, depth + 1);
     let n = n.unparen();
     match n.kind() {
         "string_literal" => grounds_syntax::string_literal_value(n, src).map(|s| Constant::Str(Arc::from(s.as_str()))),
@@ -552,10 +578,21 @@ pub fn literal_constant(n: Node, src: &str) -> Option<Constant> {
             fold_unary(op, v)
         }
         "binary_expression" => {
-            let op = n.field("operator")?.kind();
-            let l = literal_constant(n.field("left")?, src)?;
-            let r = literal_constant(n.field("right")?, src)?;
-            fold_binary(op, &l, &r)
+            // `a + b + c` nests to the left: walk down that spine in a loop
+            // and fold upwards, so a long chain costs no stack
+            let mut spine = vec![n];
+            let mut leftmost = n.field("left")?.unparen();
+            while leftmost.kind() == "binary_expression" {
+                spine.push(leftmost);
+                leftmost = leftmost.field("left")?.unparen();
+            }
+            let mut acc = literal_constant(leftmost, src)?;
+            for b in spine.iter().rev() {
+                let op = b.field("operator")?.kind();
+                let r = literal_constant(b.field("right")?, src)?;
+                acc = fold_binary(op, &acc, &r)?;
+            }
+            Some(acc)
         }
         _ => None,
     }
@@ -1288,7 +1325,10 @@ fn opens_resource(body: Node, src: &str) -> bool {
             "field_declaration" => m.kids_of_kind("variable_declarator").into_iter().filter_map(|d| d.field("value")).collect(),
             _ => Vec::new(),
         };
-        init.into_iter().flat_map(|n| std::iter::once(n).chain(n.descendants())).filter(|d| !d.parent().is_some_and(|p| p.kind() == "resource" && p.field("value") == Some(*d))).any(|d| match d.kind() {
+        // the kind first: `parent()` walks down from the root, too slow to ask
+        // of every node in a 20,000-term generated concatenation
+        let creates = |d: &Node| matches!(d.kind(), "object_creation_expression" | "method_invocation");
+        init.into_iter().flat_map(|n| std::iter::once(n).chain(n.descendants())).filter(|d| creates(d) && !d.parent().is_some_and(|p| p.kind() == "resource" && p.field("value") == Some(*d))).any(|d| match d.kind() {
             "object_creation_expression" => d.field("type").is_some_and(|t| {
                 let name = t.text(src).rsplit('.').next().unwrap_or("");
                 matches!(name, "FileInputStream" | "FileOutputStream" | "FileReader" | "FileWriter" | "RandomAccessFile" | "Socket" | "ServerSocket" | "ZipFile" | "JarFile")

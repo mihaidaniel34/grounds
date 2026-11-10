@@ -133,6 +133,26 @@ impl ParsedFile {
         self.root().has_error()
     }
 
+    /// How deeply the syntax tree nests (the root alone is 0), without
+    /// recursion. A 10,000-term string concatenation is 10,000 deep.
+    pub fn depth(&self) -> usize {
+        let mut c = self.root().walk();
+        let (mut d, mut max) = (0usize, 0usize);
+        loop {
+            if c.goto_first_child() {
+                d += 1;
+                max = max.max(d);
+                continue;
+            }
+            while !c.goto_next_sibling() {
+                if !c.goto_parent() {
+                    return max;
+                }
+                d -= 1;
+            }
+        }
+    }
+
     /// Collect ERROR / MISSING nodes as syntax errors.
     pub fn syntax_errors(&self) -> Vec<SyntaxError> {
         let mut out = Vec::new();
@@ -593,6 +613,16 @@ mod tests {
             WalkControl::Continue
         });
         assert_eq!(n, kinds.len());
+    }
+
+    #[test]
+    fn depth_counts_nesting_without_recursion() {
+        assert_eq!(ParsedFile::parse("").depth(), 0);
+        let shallow = ParsedFile::parse("class A { int x = 1; }").depth();
+        // a left-nested concatenation adds one level per `+`
+        let deep = |n: usize| ParsedFile::parse(format!("class A {{ String s = \"a\"{}; }}", " + \"b\"".repeat(n))).depth();
+        assert_eq!(deep(1000) - deep(500), 500);
+        assert!(deep(100_000) > 100_000 && shallow < 10, "{shallow}");
     }
 
     #[test]
