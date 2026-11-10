@@ -86,3 +86,22 @@ fn a_copy_outside_a_source_root_is_never_the_certain_one() {
     );
     assert_eq!(findings(&dir), vec!["app/src/main/java/r/Service.java:3 unresolved-method".to_string()]);
 }
+
+#[test]
+fn member_types_of_a_class_declared_twice_come_from_the_copy_read() {
+    let dir = project(
+        "duplicate-member-types",
+        &[
+            // glassfish: default-package WebTest classes, one nesting an HttpClient
+            ("a/WebTest.java", "public class WebTest {\n    private static final class HttpClient { }\n}\n"),
+            ("b/WebTest.java", "import p.*;\npublic class WebTest {\n    void run() { HttpClient.builder(); HttpClient.noSuchMethod(); }\n}\n"),
+            ("lib/p/HttpClient.java", "package p;\npublic class HttpClient { public static HttpClient builder() { return new HttpClient(); } }\n"),
+            // micronaut-data: two example.Pet, one with a nested PetType, the
+            // other next to a top-level one
+            ("one/src/main/java/example/Pet.java", "package example;\npublic class Pet {\n    enum PetType { DOG }\n    public void setType(PetType t) {}\n}\n"),
+            ("two/src/main/java/example/Pet.java", "package example;\npublic class Pet {\n    public void setType(PetType t) {}\n}\nenum PetType { CAT }\n"),
+            ("two/src/test/java/example/PetTest.java", "package example;\nclass PetTest {\n    void f(Pet p) { p.setType(PetType.CAT); p.setKind(PetType.CAT); }\n}\n"),
+        ],
+    );
+    assert_eq!(findings(&dir), vec!["b/WebTest.java:3 unresolved-method".to_string(), "two/src/test/java/example/PetTest.java:3 unresolved-method".to_string()]);
+}

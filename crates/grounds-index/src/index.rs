@@ -228,6 +228,14 @@ impl Classpath {
     }
 }
 
+/// The answer of a member type lookup.
+enum Lookup {
+    Found(Name),
+    Absent,
+    /// Copies of a class declared in several files disagree.
+    Unknown,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SourceClassRef {
     pub idx: u32,
@@ -965,7 +973,20 @@ impl Index {
     }
 
     /// Member type `simple` of class `owner`, including inherited member types.
+    /// None also when that is unknown (see `member_lookup`).
     pub fn member_type(&self, owner: &str, simple: &str) -> Option<Name> {
+        match self.member_lookup(owner, simple, None) {
+            Lookup::Found(n) => Some(n),
+            Lookup::Absent | Lookup::Unknown => None,
+        }
+    }
+
+    /// Member type `simple` of class `owner`, including inherited ones. For
+    /// a class declared in several files the index holds one copy, which need
+    /// not be the one a file reads: when the copies disagree about the member
+    /// the answer is unknown. `scope`, when `owner` encloses it, narrows the
+    /// copies to those with the scope's package and imports (the file's own).
+    fn member_lookup(&self, owner: &str, simple: &str, scope: Option<&Scope>) -> Lookup {
         // Resolving a supertype resolves names, which can come back here for
         // the same lookup (classes nested in and extending each other): a
         // re-entrant lookup is "not found" instead of unbounded recursion.
@@ -980,7 +1001,7 @@ impl Index {
             }
         });
         if !entered {
-            return None;
+            return Lookup::Absent;
         }
         struct Pop;
         impl Drop for Pop {
@@ -992,20 +1013,60 @@ impl Index {
         }
         let _pop = Pop;
         let mut seen = FxHashSet::default();
-        self.member_type_rec(owner, simple, &mut seen, 0)
+        self.member_type_rec(owner, simple, &mut seen, 0, scope)
     }
 
-    fn member_type_rec(&self, owner: &str, simple: &str, seen: &mut FxHashSet<Name>, depth: u32) -> Option<Name> {
+    /// The copies of a class declared in several files that code in `scope`
+    /// may read: those with the scope's package and imports when `owner`
+    /// encloses the scope and some do, else all. Empty for a class declared once.
+    fn copies_read(&self, owner: &str, scope: Option<&Scope>) -> Vec<(&Arc<FileStub>, &RawClass)> {
+        let Some(files) = self.copies.get(owner) else { return Vec::new() };
+        let all: Vec<(&Arc<FileStub>, &RawClass)> = files.iter().filter_map(|f| self.files.get(f)).filter_map(|st| st.classes.iter().find(|c| &*c.name == owner).map(|c| (st, c))).collect();
+        if let Some(scope) = scope.filter(|s| s.enclosing.iter().any(|e| &**e == owner)) {
+            let own: Vec<(&Arc<FileStub>, &RawClass)> = all.iter().copied().filter(|(st, _)| *st.package == *scope.package && st.imports.iter().eq(scope.imports.iter())).collect();
+            if !own.is_empty() {
+                return own;
+            }
+        }
+        all
+    }
+
+    fn member_type_rec(&self, owner: &str, simple: &str, seen: &mut FxHashSet<Name>, depth: u32, scope: Option<&Scope>) -> Lookup {
         if depth > 20 || !seen.insert(Arc::from(owner)) {
-            return None;
+            return Lookup::Absent;
         }
         let direct = format!("{owner}${simple}");
-        if self.class_exists(&direct) {
-            return Some(Arc::from(direct.as_str()));
+        let copies = self.copies_read(owner, scope);
+        // the copies' supertypes may differ: then what they provide is unknown
+        let mut headers_agree = true;
+        if copies.is_empty() {
+            if self.class_exists(&direct) {
+                return Lookup::Found(Arc::from(direct.as_str()));
+            }
+        } else {
+            let declaring = copies.iter().filter(|(st, _)| st.classes.iter().any(|c| *c.name == *direct)).count();
+            if declaring == copies.len() {
+                return Lookup::Found(Arc::from(direct.as_str()));
+            }
+            if declaring > 0 {
+                return Lookup::Unknown;
+            }
+            headers_agree = copies.windows(2).all(|w| w[0].1.superclass == w[1].1.superclass && w[0].1.interfaces == w[1].1.interfaces);
         }
         let mut sups: Vec<Name> = Vec::new();
-        match self.class(owner) {
-            Some(c) => {
+        let header = |sups: &mut Vec<Name>, stub: &FileStub, raw: &RawClass| {
+            let mut scope = self.scope_for_raw(stub, raw);
+            scope.enclosing.remove(0);
+            for ts in raw.superclass.iter().chain(raw.interfaces.iter()) {
+                if let Ty::Class { name, .. } = self.resolve_type(ts, &scope) {
+                    sups.push(name);
+                }
+            }
+        };
+        match (copies.as_slice(), self.class(owner)) {
+            // the one copy read, which need not be the index's
+            ([(stub, raw)], _) => header(&mut sups, stub, raw),
+            (_, Some(c)) => {
                 if let Some(Ty::Class { name, .. }) = &c.superclass {
                     sups.push(name.clone());
                 }
@@ -1015,24 +1076,20 @@ impl Index {
                     }
                 }
             }
-            None => {
+            (_, None) => {
                 // the class is being lowered right now: resolve its header from the stub
-                let (stub, raw) = self.raw_class(owner)?;
-                let mut scope = self.scope_for_raw(stub, raw);
-                scope.enclosing.remove(0);
-                for ts in raw.superclass.iter().chain(raw.interfaces.iter()) {
-                    if let Ty::Class { name, .. } = self.resolve_type(ts, &scope) {
-                        sups.push(name);
-                    }
-                }
+                let Some((stub, raw)) = self.raw_class(owner) else { return Lookup::Absent };
+                header(&mut sups, stub, raw);
             }
         }
         for s in sups {
-            if let Some(n) = self.member_type_rec(&s, simple, seen, depth + 1) {
-                return Some(n);
+            match self.member_type_rec(&s, simple, seen, depth + 1, None) {
+                Lookup::Found(n) if headers_agree => return Lookup::Found(n),
+                Lookup::Found(_) | Lookup::Unknown => return Lookup::Unknown,
+                Lookup::Absent => {}
             }
         }
-        None
+        Lookup::Absent
     }
 
     pub fn resolve_simple_type(&self, simple: &str, scope: &Scope) -> Option<Name> {
@@ -1046,12 +1103,11 @@ impl Index {
             if simple_name_of(e) == simple && !e.contains("$$") {
                 return Some(e.clone());
             }
-            let direct = format!("{e}${simple}");
-            if self.class_exists(&direct) {
-                return Some(Arc::from(direct.as_str()));
-            }
-            if let Some(n) = self.member_type(e, simple) {
-                return Some(n);
+            match self.member_lookup(e, simple, Some(scope)) {
+                Lookup::Found(n) => return Some(n),
+                // copies of a class declared twice disagree: not an import's class either
+                Lookup::Unknown => return None,
+                Lookup::Absent => {}
             }
         }
         // single-type imports
