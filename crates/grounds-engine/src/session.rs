@@ -172,11 +172,21 @@ pub const CROSS_FILE_RULES: &[&str] = &[
     "circular-constructor-dependency",
 ];
 
-/// Whether `rule` is a compile-break or wiring rule, whose findings
-/// `grounds changed` reports only when new with the change and then as
-/// stable (`grounds_rules::STABLE_IN_CHANGED`).
+/// Whether `rule` is a compile-break rule whose findings `grounds changed`
+/// holds to the stable promise when they are new with the change
+/// (`grounds_rules::STABLE_IN_CHANGED`).
 pub fn stable_in_changed(rule: &str) -> bool {
     grounds_rules::STABLE_IN_CHANGED.contains(&rule)
+}
+
+/// Whether `rule` claims that code would not compile or an application would
+/// not start, so that `grounds changed` reports its findings on changed lines
+/// only when the project before the change did not get the same claim. That
+/// comparison only removes reports, so it runs for the wiring rules too; they
+/// are not stable (their claims depend on the order of maps and annotations
+/// in the wiring model), so their findings stay preview.
+pub fn compared_in_changed(rule: &str) -> bool {
+    stable_in_changed(rule) || CROSS_FILE_RULES.contains(&rule)
 }
 
 /// What a compile-break or wiring finding claims, independent of where it
@@ -199,11 +209,14 @@ pub fn stable_in_changed(rule: &str) -> bool {
 /// | `ambiguous-bean` | qualified type, injection point and owner, and every candidate (name, qualified class, factory method), sorted | their count, the first 5 shown, `; add a @Qualifier or @Primary` |
 /// | `qualifier-not-found` | the qualified type and the qualifier | `; available: <beans>` (first 5) |
 /// | `bean-name-conflict` | the bean name, both definitions (qualified) and the exception | none |
-/// | `circular-constructor-dependency` | the qualified members of the cycle, sorted (the rule picks the cycle from the graph alone) | where the cycle is entered |
+/// | `circular-constructor-dependency` | the message: the cycle as the search meets it | none |
 ///
-/// Without a claim on the diagnostic (findings of older baselines aside,
-/// only `missing-jdk-import`, whose message is already qualified), the
-/// message less its recognised presentation suffixes is the claim.
+/// The last five (wiring) rows are compared too, but those rules are not
+/// stable: which pair, qualifier or cycle they report depends on the order of
+/// maps and annotations in the wiring model, so their findings stay preview.
+/// Without a claim on the diagnostic (`missing-jdk-import`, whose message is
+/// already qualified, and the cycle rule), the message less its recognised
+/// presentation suffixes is the claim.
 fn claim_key(f: &Finding) -> (&'static str, String) {
     if let Some(c) = &f.claim {
         return (f.rule, c.clone());
@@ -299,7 +312,7 @@ impl Session {
     }
 
     pub fn from_project(project: Project) -> Session {
-        // the rules `grounds changed` runs: there the compile-break and wiring
+        // the rules `grounds changed` runs: there the compile-break
         // rules are stable, so `preview = false` keeps them
         let (all_rules, options) = build_ruleset_for(&project, true);
         // same configuration as full checks, narrowed to edit-tier rules
@@ -570,10 +583,11 @@ impl Session {
         // A compile-break or wiring finding on a changed line is a claim about
         // the change only if the project before the change did not get the
         // same claim: a gap in the model is there before and after alike.
-        // Those that are new are stable; on unchanged lines (`--all-lines`)
-        // they stay what they are in a whole-project check.
+        // Those that are new are stable when the rule is one of the promised
+        // compile-break rules; on unchanged lines (`--all-lines`) they stay
+        // what they are in a whole-project check.
         if repo {
-            let claims: Vec<usize> = (0..findings.len()).filter(|&i| stable_in_changed(findings[i].rule) && on_changed_line(&findings[i])).collect();
+            let claims: Vec<usize> = (0..findings.len()).filter(|&i| compared_in_changed(findings[i].rule) && on_changed_line(&findings[i])).collect();
             let mut drop: FxHashSet<usize> = FxHashSet::default();
             if !claims.is_empty() {
                 let touched = self.touched(opts, &files, &deleted, rev);
@@ -581,7 +595,9 @@ impl Session {
                 drop = claims.iter().copied().filter(|&i| before.contains(&claim_key(&findings[i])) || gap_key(&findings[i]).is_some_and(|g| before.contains(&g))).collect();
             }
             for &i in &claims {
-                findings[i].maturity = Maturity::Stable;
+                if stable_in_changed(findings[i].rule) {
+                    findings[i].maturity = Maturity::Stable;
+                }
             }
             let mut i = 0;
             findings.retain(|_| {
@@ -628,8 +644,9 @@ impl Session {
                     now.into_iter().filter(|f| !before.contains(&place_claim(f))).collect()
                 }
             };
-            // the promise covers the compile-break and wiring rules; the per-turn
-            // scan also runs `unresolved-static-import`, which stays preview
+            // the promise covers the compile-break rules: places broken by a
+            // missing or ambiguous bean, and `unresolved-static-import` from the
+            // per-turn scan, stay preview
             for f in pending.iter_mut().filter(|f| stable_in_changed(f.rule)) {
                 f.maturity = Maturity::Stable;
             }
@@ -663,7 +680,7 @@ impl Session {
     /// before the change (which compiled) is one it cannot back: the same
     /// gap, whether the line holding it was edited, moved or newly written.
     fn claims_before(&mut self, findings: &[Finding], claims: &[usize], files: &[PathBuf], touched: &[PathBuf], rev: &str) -> FxHashSet<(&'static str, String)> {
-        let rules = RuleSet::new(crate::analyze::selected_rules_for(&self.project, true).into_iter().filter(|r| stable_in_changed(r.meta().id)).collect());
+        let rules = RuleSet::new(crate::analyze::selected_rules_for(&self.project, true).into_iter().filter(|r| compared_in_changed(r.meta().id)).collect());
         // a finding's path is relative to the root, as `analyze_text` makes it
         let paths: FxHashSet<&str> = claims.iter().map(|&i| findings[i].path.as_str()).collect();
         let in_files: Vec<PathBuf> = files.iter().filter(|f| paths.contains(f.strip_prefix(self.root()).unwrap_or(f).to_string_lossy().as_ref())).cloned().collect();

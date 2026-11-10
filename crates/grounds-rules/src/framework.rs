@@ -130,23 +130,22 @@ pub struct RuleMeta {
     pub default_enabled: bool,
 }
 
-/// The rules that say code would not compile or an application would not
-/// start, whose findings `grounds changed` holds to the stable promise: there
-/// it reports only what is new with the change (a finding on a changed line
-/// that the version before the change does not have, a place in another file
-/// that the change broke), and a gap in the model is there before and after
-/// the change alike. Run over a whole project (`grounds check`) the same rules
-/// are preview: each unseen project has framework features the model lacks
-/// (docs/holdout). A rule joins this list only with that evidence; the
-/// `stable_rules_are_exactly_the_intended_set` test makes it deliberate.
+/// The rules that say code would not compile, whose findings `grounds
+/// changed` holds to the stable promise: there it reports only what is new
+/// with the change (a finding on a changed line whose claim the project
+/// before the change did not get, a place in another file that the change
+/// broke), and a gap in the model is there before and after the change alike.
+/// Run over a whole project (`grounds check`) the same rules are preview:
+/// each unseen project has features the model lacks (docs/holdout). The
+/// wiring rules (`bean-not-found` and the rest) are compared the same way but
+/// are not here: which claim they make depends on the order of maps and
+/// annotations in the wiring model, so a claim before and after a change can
+/// differ with nothing changed. A rule joins this list only with that
+/// evidence; the `stable_rules_are_exactly_the_intended_set` test makes it
+/// deliberate.
 pub const STABLE_IN_CHANGED: &[&str] = &[
-    "ambiguous-bean",
-    "bean-name-conflict",
-    "bean-not-found",
-    "circular-constructor-dependency",
     "missing-jdk-import",
     "override-matches-nothing",
-    "qualifier-not-found",
     "unimplemented-abstract-method",
     "unresolved-constructor",
     "unresolved-field",

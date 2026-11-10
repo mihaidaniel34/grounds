@@ -806,57 +806,34 @@ impl Rule for CircularDependency {
         for (a, b, pi) in edges.iter() {
             adj.entry(a).or_default().push((b, *pi));
         }
-        // the cycle reported depends on the graph, not on the order of
-        // parameters or declarations
-        for v in adj.values_mut() {
-            v.sort();
-        }
         for (decl, name) in &classes {
-            // Breadth first from this class, up to 8 classes on a path, looking
-            // for an edge back to it: every class within the bound is reached
-            // whatever the order of parameters and declarations, the cycle found
-            // is a shortest one, and ties go to the first in name order
-            // (adjacency lists and each level are sorted).
+            // DFS from this class looking for a path back to it
             let start: &str = name;
-            let mut parent: rustc_hash::FxHashMap<&str, &str> = Default::default();
+            let mut stack: Vec<(&str, Vec<&str>)> = vec![(start, vec![start])];
             let mut seen = rustc_hash::FxHashSet::default();
-            seen.insert(start);
-            let mut level: Vec<&str> = vec![start];
             let mut found: Option<Vec<&str>> = None;
-            'search: for depth in 1..=8 {
-                let mut next: Vec<&str> = Vec::new();
-                for &cur in &level {
-                    for (nx, _) in adj.get(cur).map(|v| v.as_slice()).unwrap_or(&[]) {
-                        if *nx == start {
-                            let mut path = vec![cur];
-                            while let Some(&p) = parent.get(path[path.len() - 1]) {
-                                path.push(p);
-                            }
-                            path.reverse();
-                            path.push(start);
-                            found = Some(path);
-                            break 'search;
-                        }
-                        if depth < 8 && seen.insert(*nx) {
-                            parent.insert(nx, cur);
-                            next.push(nx);
-                        }
+            while let Some((cur, path)) = stack.pop() {
+                for (next, _) in adj.get(cur).map(|v| v.as_slice()).unwrap_or(&[]) {
+                    if *next == start {
+                        let mut p = path.clone();
+                        p.push(start);
+                        found = Some(p);
+                        break;
+                    }
+                    if seen.insert(*next) && path.len() < 8 {
+                        let mut p = path.clone();
+                        p.push(next);
+                        stack.push((next, p));
                     }
                 }
-                next.sort_unstable();
-                if next.is_empty() {
+                if found.is_some() {
                     break;
                 }
-                level = next;
             }
             if let Some(cycle) = found {
                 if let Some(nm) = decl.field("name") {
                     let chain: Vec<&str> = cycle.iter().map(|c| simple_name_of(c)).collect();
-                    // the claim is the cycle's members, wherever it is entered
-                    let mut members: Vec<&str> = cycle.clone();
-                    members.sort_unstable();
-                    members.dedup();
-                    cx.report_claim(nm, format!("Circular constructor dependency: {}", chain.join(" -> ")), format!("constructor cycle through {}", members.join(", ")));
+                    cx.report(nm, format!("Circular constructor dependency: {}", chain.join(" -> ")));
                 }
             }
         }

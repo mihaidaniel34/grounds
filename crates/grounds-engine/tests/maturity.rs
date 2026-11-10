@@ -120,8 +120,14 @@ fn the_break_rules_are_stable_in_changed_and_preview_in_check() {
     let mut expected: Vec<_> = grounds_rules::STABLE_IN_CHANGED.iter().copied().filter(|id| grounds_rules::meta_of(id).unwrap().default_enabled).collect();
     expected.sort();
     assert_eq!(changed, expected);
-    // the rules `changed --base` runs over unchanged files are among them
-    assert!(grounds_engine::session::CROSS_FILE_RULES.iter().all(|id| grounds_rules::STABLE_IN_CHANGED.contains(id)));
+    // every stable rule is compared with the base; the wiring rules are
+    // compared too, but are not stable (and so do not run with `preview = false`)
+    use grounds_engine::session::{compared_in_changed, stable_in_changed};
+    assert!(grounds_rules::STABLE_IN_CHANGED.iter().all(|id| compared_in_changed(id)));
+    for id in ["bean-not-found", "ambiguous-bean", "qualifier-not-found", "bean-name-conflict", "circular-constructor-dependency"] {
+        assert!(compared_in_changed(id) && !stable_in_changed(id), "{id}");
+        assert!(!changed.contains(&id), "{id}");
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 

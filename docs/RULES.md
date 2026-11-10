@@ -4,7 +4,7 @@
 
 Tier `edit` rules run after every edit; all rules run at checkpoints. Rules marked *off* are disabled by default (enable in `grounds.toml`).
 
-Maturity: 0 rules are `stable` (held to the project's precision promise). 11 are `stable in changed`: the compile-break and wiring rules, whose findings `grounds changed` reports only when they are new with the change (on a changed line, or a place in another file the change broke); those findings are stable, while the same rules run over a whole project with `grounds check` are preview. The other 307 are `preview` (still being measured). Preview rules run by default for now; `preview = false` under `[rules]` in `grounds.toml` turns them off, except those named by id in `enable` or `--rules`; it keeps the `stable in changed` rules in `grounds changed`, and they run in `grounds check` only when named by id. See the README.
+Maturity: 0 rules are `stable` (held to the project's precision promise). 6 are `stable in changed`: the compile-break rules, whose findings `grounds changed` reports only when they are new with the change (on a changed line, or a place in another file the change broke); those findings are stable, while the same rules run over a whole project with `grounds check` are preview. The other 312 are `preview` (still being measured). Preview rules run by default for now; `preview = false` under `[rules]` in `grounds.toml` turns them off, except those named by id in `enable` or `--rules`; it keeps the `stable in changed` rules in `grounds changed`, and they run in `grounds check` only when named by id. The wiring rules are preview in both: their claims depend on order in the wiring model. See the README.
 
 ## bad-practice (38)
 
@@ -211,9 +211,9 @@ Maturity: 0 rules are `stable` (held to the project's precision promise). 11 are
 
 | id | severity | maturity | tier | origin |
 |---|---|---|---|---|
-| `bean-not-found` | error | stable in changed | edit | intellij:SpringJavaInjectionPointsAutowiringInspection, spring:NoSuchBeanDefinitionException |
-| `ambiguous-bean` | error | stable in changed | edit | intellij:SpringJavaInjectionPointsAutowiringInspection, spring:NoUniqueBeanDefinitionException |
-| `qualifier-not-found` | error | stable in changed | edit | intellij:SpringQualifierInjectionInspection, spring:NoSuchBeanDefinitionException |
+| `bean-not-found` | error | preview | edit | intellij:SpringJavaInjectionPointsAutowiringInspection, spring:NoSuchBeanDefinitionException |
+| `ambiguous-bean` | error | preview | edit | intellij:SpringJavaInjectionPointsAutowiringInspection, spring:NoUniqueBeanDefinitionException |
+| `qualifier-not-found` | error | preview | edit | intellij:SpringQualifierInjectionInspection, spring:NoSuchBeanDefinitionException |
 | `lombok-constructor-drops-qualifier` | warning | preview | edit | lombok:copyableAnnotations, intellij:SpringJavaInjectionPointsAutowiringInspection |
 | `field-injection` | info | preview | checkpoint | sonar:S6813, intellij:SpringJavaAutowiredFieldsWarningInspection |
 | `inject-static-field` | error | preview | edit | intellij:SpringJavaStaticMembersAutowiringInspection, sonar:S3749 |
@@ -226,9 +226,9 @@ Maturity: 0 rules are `stable` (held to the project's precision promise). 11 are
 | `component-on-abstract-type` | warning | preview | checkpoint | intellij:SpringJavaComponentInspection |
 | `bean-method-call-in-lite-mode` | warning | preview | checkpoint | intellij:SpringConfigurationProxyMethods, sonar:S6838 |
 | `path-variable-mismatch` | error | preview | edit | sonar:S6856, intellij:MVCPathVariableInspection |
-| `circular-constructor-dependency` | error | stable in changed | checkpoint | spring:BeanCurrentlyInCreationException, intellij:SpringJavaInjectionPointsAutowiringInspection |
+| `circular-constructor-dependency` | error | preview | checkpoint | spring:BeanCurrentlyInCreationException, intellij:SpringJavaInjectionPointsAutowiringInspection |
 | `invalid-value-placeholder` | error | preview | edit | intellij:SpringPlaceholdersInspection, sonar:S6857 |
-| `bean-name-conflict` | error | stable in changed | checkpoint | spring:ConflictingBeanDefinitionException, intellij:SpringJavaBeanNameConflict |
+| `bean-name-conflict` | error | preview | checkpoint | spring:ConflictingBeanDefinitionException, intellij:SpringJavaBeanNameConflict |
 | `final-configuration-class` | error | preview | edit | intellij:SpringFacetCodeInspection, spring:BeanDefinitionParsingException |
 | `injection-in-non-bean` | warning | preview | checkpoint | intellij:SpringJavaAutowiredMembersInspection, sonar:S3749 |
 

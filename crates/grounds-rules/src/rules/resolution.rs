@@ -799,7 +799,10 @@ impl Rule for UnimplementedAbstractMethod {
             if let Some(nm) = n.field("name") {
                 let more = if missing.len() > 3 { format!(" and {} more", missing.len() - 3) } else { String::new() };
                 // the claim is every missing method, whatever the message shows
+                // two supertypes may require one signature (`<T> f(T)` and
+                // `f(Object)` erase alike): each requirement once
                 missing_ids.sort();
+                missing_ids.dedup();
                 cx.report_claim(nm, format!("`{}` does not implement {}{more}", cls.simple_name(), missing.iter().take(3).cloned().collect::<Vec<_>>().join(", ")), format!("`{}` does not implement {}", cls.name, missing_ids.join(", ")));
             }
         }

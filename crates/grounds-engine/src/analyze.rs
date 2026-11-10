@@ -26,7 +26,7 @@ pub struct Finding {
     pub message: String,
     /// Whether the project's stable promise covers this finding. The rule's
     /// own maturity, except that `grounds changed` makes the findings it
-    /// holds to the promise stable: compile-break and wiring findings new
+    /// holds to the promise stable: compile-break findings new
     /// with the change, and the places in other files the change broke
     /// (`RuleMeta::maturity_in`).
     pub maturity: Maturity,

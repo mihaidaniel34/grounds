@@ -821,7 +821,7 @@ fn base_check(dir: &std::path::Path) -> grounds_engine::session::Report {
 }
 
 fn rules_of(r: &grounds_engine::session::Report) -> Vec<(String, &'static str)> {
-    let mut v: Vec<_> = r.findings.iter().chain(&r.pending).filter(|f| grounds_engine::session::stable_in_changed(f.rule)).map(|f| (f.path.rsplit('/').next().unwrap().to_string(), f.rule)).collect();
+    let mut v: Vec<_> = r.findings.iter().chain(&r.pending).filter(|f| grounds_engine::session::compared_in_changed(f.rule)).map(|f| (f.path.rsplit('/').next().unwrap().to_string(), f.rule)).collect();
     v.sort();
     v
 }
@@ -862,14 +862,19 @@ fn other_ambiguous_candidates_are_a_new_claim() {
     let _ = std::fs::remove_dir_all(&repo);
 }
 
-/// S8: the same dependency graph with A's parameters swapped.
+/// S8, by decision: which cycle the rule reports can depend on the order of
+/// parameters (the wiring rules' claims depend on order in the model), so the
+/// cycle rule is not stable: whatever it reports after the change is preview.
 #[test]
-fn the_same_cycle_through_reordered_parameters_is_the_old_claim() {
+fn a_cycle_found_after_reordered_parameters_is_preview() {
     let c = |n: &str, ps: &str| format!("package demo;\n@org.springframework.stereotype.Component public class {n} {{ {n}({ps}) {{}} }}\n");
     let (repo, dir) = spring_project("cycle", &[("A.java", &c("A", "B b, C c")), ("B.java", &c("B", "A a")), ("C.java", &c("C", "A a"))]);
     write(&dir, "src/main/java/demo/A.java", &c("A", "C c, B b"));
     let r = base_check(&dir);
-    assert_eq!(rules_of(&r), vec![], "{:?} {:?}", r.findings, r.pending);
+    for f in r.findings.iter().chain(&r.pending).filter(|f| f.rule == "circular-constructor-dependency") {
+        assert_eq!(f.maturity, grounds_rules::Maturity::Preview, "{f:?}");
+    }
+    assert!(r.breaks.iter().all(|b| b.finding.maturity == grounds_rules::Maturity::Preview || b.broken.iter().all(|&i| r.pending[i].rule != "circular-constructor-dependency")));
     let _ = std::fs::remove_dir_all(&repo);
 }
 

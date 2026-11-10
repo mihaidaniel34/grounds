@@ -164,19 +164,16 @@ fn every_rule_has_a_fixture_and_valid_metadata() {
 const STABLE: &[&str] = &[];
 
 /// The rules stable in `grounds changed` only, where their findings are
-/// reported when new with the change: the compile-break and wiring rules.
-/// A replay of 514 commits of the 40 hold-out projects
-/// (docs/holdout/2026-11-replay.md) got no break report from them, against
-/// 246 false ones from a whole-project run of the same projects. Like
-/// `STABLE`, this list changes only with such evidence.
+/// reported when new with the change: the compile-break rules. A replay of
+/// 514 commits of the 40 hold-out projects (docs/holdout/2026-11-replay.md)
+/// got no break report from them, against 246 false compile-break and wiring
+/// findings from a whole-project run of the same projects. The wiring rules
+/// are left out: their claims depend on the order of maps and annotations in
+/// the wiring model (review of #74). Like `STABLE`, this list changes only
+/// with evidence.
 const STABLE_IN_CHANGED: &[&str] = &[
-    "ambiguous-bean",
-    "bean-name-conflict",
-    "bean-not-found",
-    "circular-constructor-dependency",
     "missing-jdk-import",
     "override-matches-nothing",
-    "qualifier-not-found",
     "unimplemented-abstract-method",
     "unresolved-constructor",
     "unresolved-field",

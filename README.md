@@ -7,8 +7,8 @@ Maven or a JVM.
 
 **Status: experimental.** The rules were tuned on the open-source codebases
 listed below and measured on 40 more they had never seen. One thing is
-promised: what `grounds changed` reports as broken by a change, which on 514
-commits of those 40 projects reported nothing false (see
+promised: what `grounds changed` reports as no longer compiling because of a
+change, which on 514 commits of those 40 projects reported nothing false (see
 [Stable and preview rules](#stable-and-preview-rules)). Everything else is
 preview: expect false positives on code that looks different from the
 corpus, most of all from `grounds check` over a whole project, and
@@ -439,25 +439,35 @@ and uses the release before it, with the same silence about JDK subclasses.
 
 ### Stable and preview rules
 
-**The promise: what `grounds changed` reports as broken by a change is
-stable.** That is a place in another file that the change broke, or a
-compile-break or wiring finding on a changed line that is new with the
+**The promise: what `grounds changed` reports as no longer compiling because
+of a change is stable.** That is a place in another file that the change
+broke, or a compile-break finding on a changed line that is new with the
 change. Run over a whole project with `grounds check`, the same rules are
-preview, and so is every other rule.
+preview, and so is every other rule, the wiring rules included.
 
 Stable means that a false report is a bug in grounds, to be fixed, and that
 the rate of false reports is measured on projects the rules were never tuned
 on. Preview means that the findings are often right but not held to that.
 
-"Broken" is what eleven rules claim: that the code would not compile
-(`unresolved-method`, `unresolved-constructor`, `unresolved-field`,
-`override-matches-nothing`, `unimplemented-abstract-method`,
-`missing-jdk-import`) or that the application would not start
-(`bean-not-found`, `ambiguous-bean`, `qualifier-not-found`,
-`bean-name-conflict`, `circular-constructor-dependency`). `grounds rules`,
+"No longer compiling" is what six rules claim: `unresolved-method`,
+`unresolved-constructor`, `unresolved-field`, `override-matches-nothing`,
+`unimplemented-abstract-method` and `missing-jdk-import`. `grounds rules`,
 `grounds explain <id>` and [docs/RULES.md](docs/RULES.md) list them as
-`stable in changed`. Add `breaks-other-files` and `removed-class-still-used`,
-which only `grounds changed --base` reports. "New with the change" means:
+`stable in changed`. Add `removed-class-still-used`, which only
+`grounds changed --base` reports, and `breaks-other-files` when every place
+it lists is stable.
+
+The wiring rules, which claim that the application would not start
+(`bean-not-found`, `ambiguous-bean`, `qualifier-not-found`,
+`bean-name-conflict`, `circular-constructor-dependency`), are compared with
+the base in the same way, which only removes reports, but stay preview in
+`grounds changed` too. Which claim they make depends on the order of maps
+and annotations in the wiring model: which pair a name conflict reports, the
+first of several qualifier annotations, which cycle a search meets first. So
+a claim can differ before and after a change that does not touch it, and the
+comparison cannot tell such a claim from a new one. They can join the
+promise once the model makes those choices independent of order, and the
+comparison is measured for them. "New with the change" means:
 
 - **In other files:** grounds analyzes them against the current and the base
   version of the changed files and keeps what is new. With `--base` that is
@@ -469,7 +479,8 @@ which only `grounds changed --base` reports. "New with the change" means:
   version, or in an untouched file that mentions the names the claim quotes.
   A claim is what the message asserts: the types, members, argument types,
   the full set of missing methods or candidate beans (sorted), the members
-  of a cycle. What is presentation is left out: a "did you mean" hint, the
+  of a cycle, with qualified names. What is presentation is left out: a
+  "did you mean" hint, the
   `available:` overloads, constructors or beans, a list cut to a few
   entries, the order of declarations. So a finding that was there before is
   not reported when the change edits or moves its line. One decision goes
@@ -506,8 +517,9 @@ The evidence, all on projects the rules were never tuned on
   commit renaming a parameter on the line of a false
   `override-matches-nothing` (`AbstractSession.java:371`), and on mall4j one
   adding a comment to the line of a false `bean-not-found`
-  (`AreaServiceImpl.java:36`, a finding #70 has since removed), were each
-  reported before, with `--base` and per turn, and are not now; a call to a
+  (`AreaServiceImpl.java:36`, a wiring finding, so preview; #70 has since
+  removed it), were each reported before, with `--base` and per turn, and are
+  not now; a call to a
   missing method added to that maven line is still reported. A replay of 222
   commits on 16 projects (6 corpus, 10 hold-out, among them maven, pig,
   mall4j and kestra) with this comparison: no compile-break or wiring finding
@@ -518,8 +530,11 @@ The evidence, all on projects the rules were never tuned on
 
 What is not promised:
 
-- **`grounds check` over a whole project.** The eleven rules are preview
+- **`grounds check` over a whole project.** The six rules are preview
   there, for the numbers above.
+- **The wiring rules**, in either mode, for the reason above. In the replay
+  of 514 commits they reported nothing on changed lines either, but their
+  comparison is not reliable enough to promise.
 - **Every other rule**, in either mode. In the replay, the findings of the
   other rules on changed lines were 22 true of 73 (warnings 20 of 68, errors
   2 of 5).
@@ -552,10 +567,11 @@ choose now, set `preview` under `[rules]` in `grounds.toml`:
 preview = false   # only what is stable (true runs preview rules too)
 ```
 
-With `preview = false`, `grounds changed` and the hooks run only the eleven
-compile-break and wiring rules, so in a git repository they report only what
-a change broke (with `--all-lines` or outside git, findings of those rules
-that cannot be compared with a base are reported as preview), and
+With `preview = false`, `grounds changed` and the hooks run only the six
+compile-break rules, so in a git repository they report only what a change
+broke so that it no longer compiles (with `--all-lines` or outside git,
+findings of those rules that cannot be compared with a base are reported as
+preview), and
 `grounds check` runs no rule, since none is stable over a whole project. A rule named by its id (or one of its source ids, such as
 `sonar:S2259`) in `enable` or in `check --rules` runs whatever its maturity,
 so `grounds check --rules null-dereference` works with `preview = false`.

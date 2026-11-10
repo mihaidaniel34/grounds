@@ -167,7 +167,7 @@ impl SarifDoc {
     }
 
     /// The rule's descriptor. Its `maturity` is that of the run's findings:
-    /// the compile-break and wiring rules are `stable` in `grounds changed`
+    /// the compile-break rules are `stable` in `grounds changed`
     /// and `preview` in `grounds check` (each result carries its own too).
     fn rule(&mut self, id: &'static str, severity: Severity, maturity: grounds_rules::Maturity) -> usize {
         use serde_json::json;
