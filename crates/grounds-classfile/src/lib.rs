@@ -113,12 +113,15 @@ impl ClassContainer {
             ClassContainer::JImage(j) => j.class_names().filter(|n| keep(n)).map(str::to_string).collect(),
             ClassContainer::Dir(root) => {
                 let mut out = Vec::new();
-                let mut stack = vec![root.clone()];
-                // symlinked directories are followed (build tools link output
-                // directories), each real directory once: a link to a parent
-                // (or `/proc/self/root` under `/`) looped forever
+                // real directories first, then symlinked ones (build tools
+                // link output directories), each real directory once: a link
+                // to a parent (or `/proc/self/root` under `/`) looped forever,
+                // and walking real paths first keeps an alias of a directory
+                // from listing its classes under the alias's package
+                let mut real = vec![root.clone()];
+                let mut linked: Vec<PathBuf> = Vec::new();
                 let mut visited = std::collections::HashSet::new();
-                while let Some(d) = stack.pop() {
+                while let Some(d) = real.pop().or_else(|| linked.pop()) {
                     if !visited.insert(d.canonicalize().unwrap_or_else(|_| d.clone())) {
                         continue;
                     }
@@ -126,7 +129,11 @@ impl ClassContainer {
                     for e in rd.flatten() {
                         let p = e.path();
                         if p.is_dir() {
-                            stack.push(p);
+                            if e.file_type().is_ok_and(|t| t.is_symlink()) {
+                                linked.push(p);
+                            } else {
+                                real.push(p);
+                            }
                         } else if p.extension().is_some_and(|x| x == "class") {
                             if let Ok(rel) = p.strip_prefix(root) {
                                 let s = rel.with_extension("").to_string_lossy().replace('\\', "/");
@@ -252,6 +259,10 @@ mod tests {
         std::fs::write(dir.join("p/A.class"), b"").unwrap();
         std::os::unix::fs::symlink("..", dir.join("p/up")).unwrap();
         std::os::unix::fs::symlink(".", dir.join("self")).unwrap();
+        // an alias of a package directory, whichever read_dir lists first
+        for alias in ["a", "z"] {
+            std::os::unix::fs::symlink("p", dir.join(alias)).unwrap();
+        }
         let names = super::ClassContainer::open_dir(&dir).class_names();
         assert_eq!(names, vec!["p/A".to_string()]);
         let _ = std::fs::remove_dir_all(&dir);

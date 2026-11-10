@@ -8,11 +8,18 @@ use std::path::Path;
 /// The text of a regular file (following symlinks); an error for a named
 /// pipe, a device, a socket or a directory.
 pub fn read_text(path: impl AsRef<Path>) -> io::Result<String> {
+    use std::io::Read;
+    use std::os::unix::fs::OpenOptionsExt;
     let path = path.as_ref();
-    if !std::fs::metadata(path)?.is_file() {
+    // opened without blocking (a pipe with no writer would block in open),
+    // then checked and read through the same handle
+    let mut f = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(path)?;
+    if !f.metadata()?.is_file() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{} is not a regular file", path.display())));
     }
-    std::fs::read_to_string(path)
+    let mut text = String::new();
+    f.read_to_string(&mut text)?;
+    Ok(text)
 }
 
 #[cfg(test)]

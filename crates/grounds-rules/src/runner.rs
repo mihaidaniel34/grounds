@@ -133,17 +133,10 @@ impl RuleSet {
         }
         // code the parser could not read is not judged: drop findings that
         // overlap a syntax error
-        // in file order, without duplicates (the first of identical ones),
-        // and at most MAX_PER_RULE per rule
+        // in file order, without duplicates (the first of identical ones)
         let mut seen = FxHashSet::default();
         out.retain(|d| seen.insert((d.rule, d.range.start, d.range.end)));
         out.sort_by_key(|d| (d.range.start, d.rule));
-        let mut per_rule: rustc_hash::FxHashMap<&str, usize> = Default::default();
-        out.retain(|d| {
-            let n = per_rule.entry(d.rule).or_default();
-            *n += 1;
-            *n <= MAX_PER_RULE
-        });
         if fm.root().has_error() {
             // the unparseable parts: tokens directly inside an ERROR node and
             // MISSING nodes. Well-formed named nodes inside an ERROR (a whole
@@ -181,11 +174,19 @@ impl RuleSet {
                 !merged.get(i).is_some_and(|(s, _)| *s <= d.range.end)
             });
         }
+        // unsuppressed findings, the first MAX_PER_RULE of each rule; once a
+        // rule has its share, the rest are dropped without the suppression
+        // check, which costs a walk up the tree each
         let sup = Suppressions::new(fm);
         let metas: rustc_hash::FxHashMap<&str, &RuleMeta> = self.rules.iter().rev().map(|r| (r.meta().id, r.meta())).collect();
+        let mut kept: rustc_hash::FxHashMap<&str, usize> = Default::default();
         out.retain(|d| {
-            let meta = metas.get(d.rule).copied();
-            !sup.is_suppressed(fm, d, meta)
+            let n = kept.entry(d.rule).or_default();
+            if *n >= MAX_PER_RULE || sup.is_suppressed(fm, d, metas.get(d.rule).copied()) {
+                return false;
+            }
+            *n += 1;
+            true
         });
         out
     }

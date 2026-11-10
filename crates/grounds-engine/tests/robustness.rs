@@ -88,13 +88,15 @@ fn a_class_body_of_a_million_members_is_checked_in_time_and_suppressions_hold() 
     // every ancestor of every finding for its modifiers, which scanned all
     // members of the class body
     let semis = ";".repeat(300_000);
-    let src = format!("package p;\nclass A {{ int x; {semis} }}\n@SuppressWarnings(\"stray-semicolon\") class B {{ int y;; @SuppressWarnings(\"unused\") void m() {{ ;; }} }}\n");
+    // the suppressed findings come first in the file: they must not take
+    // the place of the others under the cap
+    let src = format!("package p;\n@SuppressWarnings(\"stray-semicolon\") class B {{ int y; {semis} }}\nclass A {{ int x; {semis} }}\n");
     let dir = project("wide", &[("src/main/java/p/A.java", &src)]);
     let t = Instant::now();
     let fs = check(&dir, &["stray-semicolon"]);
     assert!(t.elapsed() < Duration::from_secs(30), "{:?}", t.elapsed());
     assert_eq!(fs.len(), grounds_rules::runner::MAX_PER_RULE);
-    assert!(fs.iter().all(|f| f.line == 2), "B's findings are suppressed");
+    assert!(fs.iter().all(|f| f.line == 3), "B's findings are suppressed, A's are kept");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

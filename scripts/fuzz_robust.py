@@ -881,11 +881,13 @@ def run_case(exe, i, case, a, tmp_root):
         code, out, err, secs = run([exe, "check", "--root", d, "--format", "json"], a.timeout, env)
         res["seconds"] = secs
         why = judge(code, out, err, (0, 1))
-        if why is None and code == 0 and out.strip():
+        # a report (exit 0, or 1 for error findings) is always a JSON array
+        if why is None and code in (0, 1) and not (code == 1 and "Error:" in err):
             try:
-                json.loads(out)
+                if not isinstance(json.loads(out), list):
+                    why = "check printed JSON that is not a list of findings"
             except json.JSONDecodeError:
-                why = "check printed JSON that does not parse"
+                why = "check printed no JSON, or JSON that does not parse"
         if why:
             res["failures"].append(("check", why))
         if a.daemon_every and daemon_roll < 1.0 / a.daemon_every and not res["failures"]:
@@ -943,9 +945,10 @@ def daemon_path(exe, d, spec, a, env):
                 fails.append((f"changed#{attempt + 1}", why))
                 break
             if attempt == 0:
-                # wait for the daemon the first run started
-                for _ in range(100):
-                    c, o, _, _ = run([exe, "daemon", "--status", "--root", d], 10, env)
+                # wait for the daemon the first run started, 10 s in all
+                deadline = time.monotonic() + 10
+                while (left := deadline - time.monotonic()) > 0:
+                    c, o, _, _ = run([exe, "daemon", "--status", "--root", d], max(left, 0.1), env)
                     if o.startswith("running"):
                         served = True
                         break
