@@ -50,7 +50,7 @@ leaves tests for the end of the task.
   a servlet initializer's sources), holding what that class imports and
   what its scans cover in its own module and in the modules that module
   depends on (as its imports show: grounds does not read module
-  dependencies from build files). Code in no such context (a library, a sample nothing starts, a
+  dependencies from build files). Code in no such context (a library, a sample that is never started, a
   context only tests assemble; auto-configurations scanning their own
   packages count as library code) is not judged: the application using
   it wires its beans. Two beans clash or compete only when both are in

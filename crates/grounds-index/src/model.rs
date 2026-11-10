@@ -591,7 +591,10 @@ impl AnnotationInfo {
         if self.resolved || &*self.name == fqn {
             &*self.name == fqn
         } else if self.name.contains('.') {
-            fqn.len() > self.name.len() && fqn.ends_with(&*self.name) && fqn.as_bytes()[fqn.len() - self.name.len() - 1] == b'.'
+            // written from an outer class (`ComponentScan.Filter`): a suffix;
+            // from a package (`inject.Inject`): the whole name, compared above
+            let outer = self.name.starts_with(|c: char| c.is_uppercase());
+            outer && fqn.len() > self.name.len() && fqn.ends_with(&*self.name) && fqn.as_bytes()[fqn.len() - self.name.len() - 1] == b'.'
         } else {
             simple_name_of(&self.name) == simple_name_of(fqn)
         }
@@ -768,6 +771,8 @@ mod tests {
         // partly qualified through an outer class
         assert!(ann("ComponentScan.Filter", false).is("org.springframework.context.annotation.ComponentScan.Filter"));
         assert!(!ann("Scan.Filter", false).is("org.springframework.context.annotation.ComponentScan.Filter"));
+        // a package-qualified name is the whole name, not a suffix
+        assert!(!ann("inject.Inject", false).is("jakarta.inject.Inject"));
     }
 
     #[test]

@@ -1690,7 +1690,10 @@ impl<'a> Builder<'a> {
                 if !self.index.is_source_class(&q) || self.index.source_file_of(&q).is_some_and(|f| is_test_path(f)) {
                     continue;
                 }
-                if self.class(&q).is_some_and(|rc| !rc.is_interface() && self.configuration_like(&rc)) {
+                // (a component declared in the starting file itself is the
+                // class it starts from: `new AnnotationConfigApplicationContext(Main.class)`)
+                let own_file = self.index.source_file_of(&q).is_some_and(|qf| **qf == *f);
+                if self.class(&q).is_some_and(|rc| !rc.is_interface() && (self.configuration_like(&rc) || (own_file && rc.annotations.iter().any(|a| self.stereotype(a, 0) == Some(Framework::Spring))))) {
                     roots.push(q);
                 }
             }
@@ -1700,12 +1703,13 @@ impl<'a> Builder<'a> {
         roots
     }
 
-    /// Would Spring process the class as a configuration when handed to it:
-    /// a Spring stereotype, a scan, an import, or factory methods?
+    /// Is the class a configuration a context is started from: a
+    /// @Configuration, a scan, an import, or factory methods? (A file that
+    /// starts a context names other classes too, `ctx.getBean(Service.class)`:
+    /// a plain component is not taken for a root.)
     fn configuration_like(&mut self, c: &ClassInfo) -> bool {
         c.annotations.iter().any(|a| {
-            matches!(a.simple_name(), "ComponentScan" | "ComponentScans" | "Import" | "ImportResource" | "SpringBootApplication" | "SpringBootConfiguration" | "EnableAutoConfiguration")
-                || self.stereotype(a, 0) == Some(Framework::Spring)
+            matches!(a.simple_name(), "Configuration" | "ComponentScan" | "ComponentScans" | "Import" | "ImportResource" | "SpringBootApplication" | "SpringBootConfiguration" | "EnableAutoConfiguration")
         }) || c.methods.iter().any(|m| self.is_factory_method(m))
     }
 
@@ -1794,12 +1798,16 @@ impl<'a> Builder<'a> {
             let Some(rf) = self.index.source_file_of(&root).cloned() else { continue };
             let root_module = module_of(&rf).to_string();
             let mut visible: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
-            let mut stack = vec![root_module.clone()];
-            while let Some(m) = stack.pop() {
-                if visible.insert(m.clone()) {
-                    stack.extend(deps.get(&m).into_iter().flatten().cloned());
+            // a module and the modules it depends on are on the classpath
+            let reach = |visible: &mut rustc_hash::FxHashSet<String>, from: &str| {
+                let mut stack = vec![from.to_string()];
+                while let Some(m) = stack.pop() {
+                    if visible.insert(m.clone()) {
+                        stack.extend(deps.get(&m).into_iter().flatten().cloned());
+                    }
                 }
-            }
+            };
+            reach(&mut visible, &root_module);
             let mut ctx = AppContext { root: root.clone(), ..Default::default() };
             ctx.members.insert(root.clone());
             let mut scans: Vec<(String, bool)> = Vec::new();
@@ -1815,6 +1823,10 @@ impl<'a> Builder<'a> {
                                 if let Some(t) = t.class_name().filter(|t| self.index.is_source_class(t)) {
                                     let t: Name = Arc::from(t);
                                     if ctx.members.insert(t.clone()) {
+                                        // (an imported class's module is on the classpath too)
+                                        if let Some(f) = self.index.source_file_of(&t).filter(|f| !is_test_path(f)) {
+                                            reach(&mut visible, module_of(f));
+                                        }
                                         work.push(t);
                                     }
                                 }
@@ -3495,5 +3507,25 @@ mod tests {
         let annotated = controller("new org.springframework.context.annotation.AnnotationConfigApplicationContext(Controller.class);");
         let (idx, m) = model(&[("src/main/java/agent/Controller.java", &annotated), rest[0], rest[1]]);
         assert_eq!(point_resolution(&idx, &m, "registry"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn roots_and_modules_come_from_what_spring_is_handed() {
+        // a component the starting file names (ctx.getBean) is not a root
+        let main = ("src/main/java/a/Main.java", "package a; import org.springframework.context.annotation.*;
+             public class Main { public static void main(String[] args) { new AnnotationConfigApplicationContext(Config.class).getBean(Worker.class); } }");
+        let config = ("src/main/java/a/Config.java", "package a; @org.springframework.context.annotation.Configuration class Config {}");
+        let worker = ("src/main/java/a/Worker.java", "package a; interface Missing {} @org.springframework.stereotype.Service class Worker { Worker(Missing m) {} }");
+        let (idx, m) = model(&[main, config, worker]);
+        assert_eq!(m.contexts.iter().map(|c| simple_name_of(&c.root)).collect::<Vec<_>>(), vec!["Config"]);
+        assert_eq!(point_resolution(&idx, &m, "m"), Resolution::Unknown);
+        // an @Import (here fully qualified, no import edge) puts the imported
+        // class's module on the classpath: what that class scans is judged
+        let app = ("app/src/main/java/a/App.java", "package a; @org.springframework.boot.autoconfigure.SpringBootApplication @org.springframework.context.annotation.Import(b.LibConfig.class)
+             public class App { public static void main(String[] args) {} }");
+        let lib = ("lib/src/main/java/b/LibConfig.java", "package b; @org.springframework.context.annotation.Configuration @org.springframework.context.annotation.ComponentScan public class LibConfig {}");
+        let svc = ("lib/src/main/java/b/Svc.java", "package b; interface Missing {} @org.springframework.stereotype.Service class Svc { Svc(Missing m) {} }");
+        let (idx, m) = model(&[app, lib, svc]);
+        assert_eq!(point_resolution(&idx, &m, "m"), Resolution::NotFound);
     }
 }
