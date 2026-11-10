@@ -153,3 +153,34 @@ fn every_rule_has_a_fixture_and_valid_metadata() {
     }
     assert!(missing.is_empty(), "rules without fixtures: {missing:?}");
 }
+
+/// The rules that are `Stable`: those whose findings claim the code would not
+/// compile or the application would not start. Each already has a
+/// zero-tolerance gate in CI (`hard_rules` in scripts/corpus.sh, and the
+/// cross-file rules of `grounds changed`). Every other rule is `Preview`. A
+/// rule moves here only with evidence that it meets the stable bar; this
+/// list makes that a deliberate change.
+const STABLE: &[&str] = &[
+    "ambiguous-bean",
+    "bean-name-conflict",
+    "bean-not-found",
+    "circular-constructor-dependency",
+    "missing-jdk-import",
+    "override-matches-nothing",
+    "qualifier-not-found",
+    "unimplemented-abstract-method",
+    "unresolved-constructor",
+    "unresolved-field",
+    "unresolved-method",
+];
+
+#[test]
+fn stable_rules_are_exactly_the_intended_set() {
+    use grounds_rules::Maturity;
+    // `maturity` is a required field of `declare_rule!`, so every rule has one
+    let mut stable: Vec<_> = all_rules().iter().map(|r| r.meta()).filter(|m| m.maturity == Maturity::Stable).map(|m| m.id).collect();
+    stable.sort();
+    assert_eq!(stable, STABLE, "the set of stable rules changed; update STABLE (and the README) only with evidence");
+    let preview = all_rules().iter().filter(|r| r.meta().maturity == Maturity::Preview).count();
+    assert_eq!(preview + STABLE.len(), all_rules().len());
+}
