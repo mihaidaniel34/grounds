@@ -8,8 +8,9 @@
 #   scripts/corpus.sh baseline   accept the last snapshot as the new baseline
 #
 # Hard checks fail the run: zero parse errors, zero findings from rules that
-# claim the code would not compile or the Spring context would not start, and
-# every planted bug still reported. Everything else is a snapshot diff to read.
+# claim the code would not compile or the Spring context would not start, the
+# same findings (every field) on one thread and on many, and every planted
+# bug still reported. Everything else is a snapshot diff to read.
 #
 # CORPUS_DIR (default ~/grounds-testbed) holds the checkouts; GROUNDS points at
 # the binary (default target/release/grounds, built if missing).
@@ -35,6 +36,13 @@ findings() {
   { "$grounds" check --root "$1" --format json ${2:+--rules "$2"} 2>/dev/null < /dev/null || true; } |
     python3 -c 'import json,sys
 for f in json.load(sys.stdin): print("%s:%s %s" % (f["path"], f["line"], f["rule"]))' | LC_ALL=C sort
+}
+
+# every field of every finding, one JSON object per line, sorted; $2 threads
+all_fields() {
+  { RAYON_NUM_THREADS=$2 "$grounds" check --root "$1" --format json 2>/dev/null < /dev/null || true; } |
+    python3 -c 'import json,sys
+for f in json.load(sys.stdin): print(json.dumps(f, sort_keys=True))' | LC_ALL=C sort
 }
 
 selected() { [ -z "${CORPUS_ONLY:-}" ] || [[ ",$CORPUS_ONLY," == *",$1,"* ]]; }
@@ -101,11 +109,24 @@ check() {
     parse=$(cd "$dir" && find . -name '*.java' -not -path '*/.grounds/*' -print0 | xargs -0 "$errors")
     calls=$("$grounds" type-stats "$dir" --color never 2>/dev/null < /dev/null | sed -n 's/^calls resolved //p')
     echo "$name	$calls" >> "$out/current/stats.tsv"
+    # Classes are resolved and files analyzed on all cores: what is reported
+    # must not depend on how many there are or on which thread got there
+    # first. One thread against more threads than a runner has cores, and
+    # both against the run above on the default number.
+    all_fields "$dir" 1 > "$out/threads-1.txt"
+    all_fields "$dir" 16 > "$out/threads-16.txt"
+    threads=$(diff "$out/threads-1.txt" "$out/threads-16.txt" | sed -n 's/^[<>] //p' | head -20 || true)
+    [ -n "$threads" ] || threads=$(python3 -c 'import json,sys
+for l in sys.stdin:
+    f = json.loads(l); print("%s:%s %s" % (f["path"], f["line"], f["rule"]))' < "$out/threads-1.txt" | LC_ALL=C sort | diff - "$out/current/$name.txt" | sed -n 's/^[<>] //p' | head -20 || true)
+    [ -z "$threads" ] || diff -u "$out/threads-1.txt" "$out/threads-16.txt" > "$out/threads-$name.diff" || true
+    rm -f "$out/threads-1.txt" "$out/threads-16.txt"
     printf '%-28s %6d findings, calls resolved %s' "$name" "$(wc -l < "$out/current/$name.txt")" "$calls"
-    if [ -n "$hard" ] || [ -n "$parse" ]; then
+    if [ -n "$hard" ] || [ -n "$parse" ] || [ -n "$threads" ]; then
       echo "  FAIL"; failed=1
       [ -n "$hard" ] && sed 's/^/    /' <<< "$hard" | head -20
       [ -n "$parse" ] && sed 's/^/    parse: /' <<< "$parse" | head -20
+      [ -n "$threads" ] && sed 's/^/    differs with the number of threads: /' <<< "$threads"
     else
       echo
     fi
