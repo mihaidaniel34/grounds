@@ -577,7 +577,9 @@ impl<'a> Builder<'a> {
     /// method (`@Exported` meta-annotated `@Bean("special") @Primary`), so
     /// the bean's name, qualifiers, primary, conditions and the rest come
     /// from the same place whether written directly or composed. Direct
-    /// annotations come first and win.
+    /// annotations come first and win. An element of a composed annotation
+    /// declared `@AliasFor(annotation = Bean.class, attribute = "name")`
+    /// passes the value written where it is used (`@NamedBean("foo")`).
     fn factory_method_annotations(&mut self, anns: &[AnnotationInfo]) -> Vec<AnnotationInfo> {
         let mut out: Vec<AnnotationInfo> = anns.to_vec();
         let mut seen: rustc_hash::FxHashSet<Name> = anns.iter().map(|a| a.name.clone()).collect();
@@ -591,7 +593,16 @@ impl<'a> Builder<'a> {
             let Some(c) = self.index.class(&a.name).filter(|c| c.kind == ClassKind::Annotation) else { continue };
             for m in c.annotations.iter() {
                 if !m.name.starts_with("java.lang.annotation.") && seen.insert(m.name.clone()) {
-                    out.push(m.clone());
+                    let mut m = m.clone();
+                    for el in &c.methods {
+                        let Some(alias) = el.annotations.iter().find(|x| x.simple_name() == "AliasFor") else { continue };
+                        let targets = matches!(alias.arg("annotation"), Some(AnnotationValue::Class(t)) if t.class_name().is_some_and(|n| n == &*m.name || simple_name_of(n) == m.simple_name()));
+                        let Some(v) = a.arg(&el.name).filter(|_| targets) else { continue };
+                        let attribute = first_string(alias, &["attribute"]).unwrap_or_else(|| el.name.to_string());
+                        m.args.retain(|(k, _)| **k != *attribute);
+                        m.args.push((Arc::from(attribute.as_str()), v.clone()));
+                    }
+                    out.push(m);
                 }
             }
         }
@@ -1461,8 +1472,11 @@ impl<'a> Builder<'a> {
             let file = c.source_file().unwrap_or("");
             let module = module_of(file).to_string();
             let class_conditional = self.conditional_meta(&c.annotations);
+            // (a method's annotations as factory methods read them: a composed
+            // annotation may carry @Replaces)
+            let method_anns: Vec<Vec<AnnotationInfo>> = c.methods.iter().map(|m| self.factory_method_annotations(&m.annotations)).collect();
             let sites: Vec<(&[AnnotationInfo], bool)> =
-                std::iter::once((c.annotations.as_slice(), false)).chain(c.methods.iter().map(|m| (m.annotations.as_slice(), self.conditional_meta(&m.annotations)))).collect();
+                std::iter::once((c.annotations.as_slice(), false)).chain(method_anns.iter().map(|anns| (anns.as_slice(), self.conditional_meta(anns)))).collect();
             for (anns, site_conditional) in sites {
                 for a in anns.iter().filter(|a| a.simple_name() == "Replaces") {
                     for k in ["value", "bean"] {
@@ -2903,5 +2917,39 @@ mod tests {
         }
         // a mapper with a container model is a bean
         assert!(matches!(resolution(&[("src/main/java/app/Port.java", "package app; import org.mapstruct.Mapper; @Mapper(componentModel = \"spring\") public interface Port {}")]), Resolution::Unique(_)));
+    }
+
+    #[test]
+    fn a_composed_factory_annotation_applies_its_aliases_and_replacements() {
+        // @AliasFor(annotation = Bean.class, attribute = "name") on an
+        // element passes the value written where the annotation is used
+        let (idx, m) = model(&[
+            ("src/main/java/app/NamedBean.java", "package app; import org.springframework.core.annotation.AliasFor; import org.springframework.context.annotation.Bean;
+             @Bean public @interface NamedBean { @AliasFor(annotation = Bean.class, attribute = \"name\") String[] value() default {}; }"),
+            ("src/main/java/app/SameBean.java", "package app; import org.springframework.core.annotation.AliasFor; import org.springframework.context.annotation.Bean;
+             @Bean public @interface SameBean { @AliasFor(annotation = Bean.class) String[] name() default {}; String note() default \"\"; }"),
+            ("src/main/java/app/A.java", "package app; import org.springframework.stereotype.*; import org.springframework.context.annotation.*; import org.springframework.beans.factory.annotation.Qualifier;
+             interface Pipe {} interface Hose {}
+             @Configuration class Parts { @NamedBean(\"foo\") Pipe pipe() { return null; } @SameBean(name = \"bar\", note = \"x\") Hose hose() { return null; } }
+             @Service class Uses { Uses(@Qualifier(\"foo\") Pipe foo, @Qualifier(\"bar\") Hose bar, @Qualifier(\"x\") Hose x) {} }
+             @org.springframework.boot.autoconfigure.SpringBootApplication class App {}"),
+        ]);
+        assert!(matches!(point_resolution(&idx, &m, "foo"), Resolution::Unique(i) if m.beans[i].name == "foo"));
+        assert!(matches!(point_resolution(&idx, &m, "bar"), Resolution::Unique(i) if m.beans[i].name == "bar"));
+        // an element that is no alias passes nothing
+        assert!(matches!(point_resolution(&idx, &m, "x"), Resolution::QualifierNotFound { .. }));
+        // a composed @Replaces on a factory method replaces, as a direct one does
+        for swap in ["@Swap", "@io.micronaut.context.annotation.Bean @io.micronaut.context.annotation.Replaces(DefaultPort.class)"] {
+            let (_, m) = model(&[
+                JSR330[0], JSR330[1], JSR330[2],
+                ("src/main/java/app/Swap.java", "package app; @io.micronaut.context.annotation.Bean @io.micronaut.context.annotation.Replaces(DefaultPort.class) public @interface Swap {}"),
+                ("src/main/java/app/A.java", &*Box::leak(format!("package app; import jakarta.inject.*;
+                 interface Port {{}}
+                 @Singleton class DefaultPort implements Port {{}}
+                 @io.micronaut.context.annotation.Factory class Ports {{ {swap} Port remote() {{ return null; }} }}").into_boxed_str())),
+            ]);
+            let default = m.beans.iter().find(|b| b.declaring_class.ends_with("DefaultPort")).unwrap();
+            assert!(!default.autowire_candidate, "{swap}");
+        }
     }
 }
