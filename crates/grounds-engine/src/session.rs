@@ -16,7 +16,32 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
+
+/// How long a file's time stays in doubt. A time names a tick of the file
+/// system's clock (seconds, on some), and a write later in the same tick
+/// leaves the time as it was: a file read during the tick of its own time
+/// may be written again without showing it. The tick is over once the time is
+/// this old by our clock, or once it has been seen unchanged for this long
+/// (which holds whatever the file system's clock says).
+const MARGIN: Duration = Duration::from_secs(2);
+
+/// Whether a write after `read_began` could still leave a file's time at `time`.
+fn recent(time: SystemTime, read_began: SystemTime) -> bool {
+    time >= read_began.checked_sub(MARGIN).unwrap_or(SystemTime::UNIX_EPOCH)
+}
+
+/// Whether the loaded project still matches its configuration files.
+#[derive(Clone, Copy)]
+enum ConfigTrust {
+    Sure,
+    /// The files' times were noted after the load had read them: one written
+    /// in between has its new time and its old content. Load again.
+    Unread,
+    /// Read at their noted times, first seen at this moment, but a write may
+    /// yet share one of those times. Load once more when the margin is over.
+    Shared(Instant),
+}
 
 pub struct Session {
     pub project: Project,
@@ -25,9 +50,13 @@ pub struct Session {
     pub resolution_rules: RuleSet,
     pub options: RuleOptions,
     mtimes: FxHashMap<PathBuf, SystemTime>,
+    /// Source files whose noted time a later write may yet share, with when
+    /// that time was first seen: read again at every sync until it cannot.
+    pending: FxHashMap<PathBuf, Instant>,
     /// Build and configuration files the project was loaded from (and the
     /// places one may appear), with their modification times.
     config: Vec<(PathBuf, Option<SystemTime>)>,
+    config_trust: ConfigTrust,
     /// Classpath warnings already shown in this session.
     warned: bool,
 }
@@ -176,10 +205,22 @@ impl Session {
         // same configuration as full checks, narrowed to edit-tier rules
         let edit_rules = RuleSet::new(crate::analyze::selected_rules(&project).into_iter().filter(|r| r.meta().tier == Tier::Edit).collect());
         let resolution_rules = RuleSet::new(crate::analyze::selected_rules(&project).into_iter().filter(|r| r.meta().id.starts_with("unresolved-")).collect());
+        // The project's files were read some time ago, during the load, and
+        // their times are only read now. A file written in between (an edit
+        // while a daemon was starting) is noted with its new time and held
+        // with its old content. So a time that is recent as of the start of
+        // the load is not trusted: a source file is read again at the next
+        // sync, and for a configuration file the project is loaded again.
+        let began = project.load_began;
         let config = config_files(&project);
-        let mut s = Session { project, all_rules, edit_rules, resolution_rules, options, mtimes: FxHashMap::default(), config, warned: false };
+        let config_trust = if config.iter().any(|(_, m)| m.is_some_and(|m| recent(m, began))) { ConfigTrust::Unread } else { ConfigTrust::Sure };
+        let mut s = Session { project, all_rules, edit_rules, resolution_rules, options, mtimes: FxHashMap::default(), pending: FxHashMap::default(), config, config_trust, warned: false };
         for f in &s.project.workspace.files {
             if let Ok(m) = std::fs::metadata(&f.path).and_then(|m| m.modified()) {
+                if recent(m, began) {
+                    // seen now, not when the walk began: the margin counts from the look that found this time
+                    s.pending.insert(f.path.clone(), Instant::now());
+                }
                 s.mtimes.insert(f.path.clone(), m);
             }
         }
@@ -208,10 +249,37 @@ impl Session {
         // load it. (Without
         // this a daemon kept the layout it started with: after a module was
         // added or renamed its files counted as the root module's.)
-        if self.config.iter().any(|(p, old)| std::fs::metadata(p).and_then(|m| m.modified()).ok() != *old) {
+        let time_of = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+        // one look at the files' times decides both whether to load and what
+        // the load is compared with: a write between two looks would count
+        // as seen all along
+        let now: Vec<Option<SystemTime>> = self.config.iter().map(|(p, _)| time_of(p)).collect();
+        let differs = self.config.iter().zip(&now).any(|((_, old), now)| now != old);
+        let due = match self.config_trust {
+            ConfigTrust::Sure => false,
+            ConfigTrust::Unread => true,
+            ConfigTrust::Shared(seen) => seen.elapsed() >= MARGIN,
+        };
+        if differs || due {
             let root = self.root().to_path_buf();
+            let began = Instant::now();
+            // the files' times before the load begins: one that is the same
+            // afterwards was not written during the load, unless a write
+            // shared its time
+            let before: FxHashMap<PathBuf, Option<SystemTime>> = self.config.iter().zip(now).map(|((p, _), now)| (p.clone(), now)).collect();
             if let Ok(project) = Project::load(&root) {
+                // warnings already shown are not shown again for the same state
+                let shown = self.warned.then(|| self.project.classpath_warnings.clone());
+                // times seen unchanged for the whole margin: no write shares them any more
+                let confirmed = !differs && matches!(self.config_trust, ConfigTrust::Shared(_));
                 *self = Session::from_project(project);
+                self.warned = shown.is_some_and(|w| w == self.project.classpath_warnings);
+                // (a recent time left as unread would load the project again
+                // at every request within the margin)
+                let read_as_noted = self.config.iter().all(|(p, noted)| before.get(p) == Some(noted));
+                if matches!(self.config_trust, ConfigTrust::Unread) && read_as_noted {
+                    self.config_trust = if confirmed { ConfigTrust::Sure } else { ConfigTrust::Shared(began) };
+                }
             }
         }
         let mut stale: Vec<PathBuf> = Vec::new();
@@ -219,6 +287,7 @@ impl Session {
             match std::fs::metadata(p).and_then(|m| m.modified()) {
                 Ok(m) if m != *old => stale.push(p.clone()),
                 Err(_) => stale.push(p.clone()),
+                _ if self.pending.contains_key(p) => stale.push(p.clone()),
                 _ => {}
             }
         }
@@ -239,6 +308,11 @@ impl Session {
             let key = path_key(&p);
             let old = self.project.index.file(&key).map(|s| s.signature_hash);
             if exists {
+                // the time first, then the content: a write in between is
+                // then seen as a change at the next sync, not missed
+                let (began, clock) = (Instant::now(), SystemTime::now());
+                let noted = std::fs::metadata(&p).and_then(|m| m.modified()).ok();
+                let looked = Instant::now();
                 if let Ok(text) = std::fs::read_to_string(&p) {
                     let pf = ParsedFile::parse(text);
                     let stub = Arc::new(self.project.extract(&p, &pf));
@@ -254,12 +328,22 @@ impl Session {
                         changed.push(p.clone());
                     }
                 }
-                if let Ok(m) = std::fs::metadata(&p).and_then(|m| m.modified()) {
+                if let Some(m) = noted {
+                    // a write that shares this time is caught by reading
+                    // again, until the time is too old to be shared
+                    // (a time new at this look has been seen for no time at all)
+                    let seen = self.pending.get(&p).filter(|_| self.mtimes.get(&p) == Some(&m)).copied().unwrap_or(looked);
+                    if recent(m, clock) && began.saturating_duration_since(seen) < MARGIN {
+                        self.pending.insert(p.clone(), seen);
+                    } else {
+                        self.pending.remove(&p);
+                    }
                     self.mtimes.insert(p.clone(), m);
                 }
             } else {
                 self.project.index.remove_file(&key);
                 self.mtimes.remove(&p);
+                self.pending.remove(&p);
                 any_decl_change = true;
                 changed.push(p.clone());
             }

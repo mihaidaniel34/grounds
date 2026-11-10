@@ -34,7 +34,7 @@ pub fn infer(ws: &Workspace) -> Option<u32> {
             BuildSystem::Maven => note(poms.release(&m.dir.join("pom.xml"))),
             BuildSystem::Gradle => {
                 for f in ["build.gradle", "build.gradle.kts"] {
-                    note(std::fs::read_to_string(m.dir.join(f)).ok().and_then(|t| gradle_release(&t)));
+                    note(crate::fsutil::read_text(m.dir.join(f)).ok().and_then(|t| gradle_release(&t)));
                 }
             }
             BuildSystem::None => {}
@@ -45,7 +45,7 @@ pub fn infer(ws: &Workspace) -> Option<u32> {
         let mut scripts = Vec::new();
         gradle_scripts(&ws.root.join(dir), 0, &mut scripts);
         for s in scripts {
-            note(std::fs::read_to_string(&s).ok().and_then(|t| gradle_release(&t)));
+            note(crate::fsutil::read_text(&s).ok().and_then(|t| gradle_release(&t)));
         }
     }
     found
@@ -209,7 +209,7 @@ impl PomCache {
     fn load(&mut self, path: &Path) -> Option<&Pom> {
         let path = path.canonicalize().ok()?;
         if !self.poms.contains_key(&path) {
-            let pom = std::fs::read_to_string(&path).ok().map(|t| parse_pom(&t, &path));
+            let pom = crate::fsutil::read_text(&path).ok().map(|t| parse_pom(&t, &path));
             self.poms.insert(path.clone(), pom);
         }
         self.poms.get(&path)?.as_ref()

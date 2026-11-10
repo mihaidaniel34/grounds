@@ -45,7 +45,7 @@ allprojects { p ->
 fn merge(root: &Path, files: &[PathBuf]) -> Result<usize> {
     let mut all = std::collections::BTreeSet::new();
     for f in files {
-        if let Ok(t) = std::fs::read_to_string(f) {
+        if let Ok(t) = crate::fsutil::read_text(f) {
             for l in t.lines().flat_map(|l| l.split(':')) {
                 let l = l.trim();
                 if !l.is_empty() && Path::new(l).exists() {
@@ -88,7 +88,7 @@ pub fn gradle(root: &Path) -> Result<usize> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(&dir).map(|rd| rd.flatten().map(|e| e.path()).collect()).unwrap_or_default();
     files.sort();
     // source set map: module dir, source set, test tasks running it
-    let sets: Vec<String> = files.iter().filter(|f| f.extension().is_some_and(|x| x == "sets")).filter_map(|f| std::fs::read_to_string(f).ok()).filter(|t| !t.trim().is_empty()).collect();
+    let sets: Vec<String> = files.iter().filter(|f| f.extension().is_some_and(|x| x == "sets")).filter_map(|f| crate::fsutil::read_text(f).ok()).filter(|t| !t.trim().is_empty()).collect();
     std::fs::write(root.join(".grounds/source-sets.txt"), sets.join("\n"))?;
     files.retain(|f| f.extension().is_some_and(|x| x == "txt"));
     merge(root, &files)
