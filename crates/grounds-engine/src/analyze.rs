@@ -39,10 +39,10 @@ pub struct Finding {
 
 /// Maturity of the rule that reported a finding. Findings that only `grounds
 /// changed --base` makes (`removed-class-still-used`, `breaks-other-files`)
-/// have no catalog entry; they report code that no longer compiles or wires,
-/// like the stable cross-file rules they are built from.
+/// have no catalog entry; they are built from the cross-file rules and are
+/// as proven as those: preview, for now.
 pub fn maturity_of(rule: &str) -> Maturity {
-    grounds_rules::meta_of(rule).map_or(Maturity::Stable, |m| m.maturity)
+    grounds_rules::meta_of(rule).map_or(Maturity::Preview, |m| m.maturity)
 }
 
 impl Serialize for Finding {

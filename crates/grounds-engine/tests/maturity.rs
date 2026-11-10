@@ -48,7 +48,7 @@ fn preview_false_turns_preview_rules_off() {
     let p = Project::load(&dir).unwrap();
     assert!(!p.config.rules.preview);
     let expected: Vec<_> = grounds_rules::catalog().iter().filter(|m| m.default_enabled && m.maturity == Maturity::Stable).map(|m| m.id).collect();
-    assert!(!expected.is_empty());
+    // (no rule is stable yet, so this is the empty list for now)
     assert_eq!(ids(&p), expected);
     assert!(rules_found(&p).is_empty());
     let _ = std::fs::remove_dir_all(&dir);
@@ -78,7 +78,8 @@ fn a_category_does_not_name_its_preview_rules() {
     let dir = project("category", Some("[rules]\npreview = false\nenable = [\"bug\"]\n"));
     let p = Project::load(&dir).unwrap();
     let got = ids(&p);
-    assert!(got.contains(&"unresolved-method"), "{got:?}");
+    // `string-reference-equality` is a bug rule, and preview
+    assert!(!got.contains(&"string-reference-equality"), "{got:?}");
     assert!(got.iter().all(|id| grounds_rules::meta_of(id).unwrap().maturity == Maturity::Stable), "{got:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }

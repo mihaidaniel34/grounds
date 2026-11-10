@@ -420,20 +420,19 @@ Every rule is either **stable** or **preview**; `grounds rules`,
 
 - **Stable** rules are covered by the project's promise about precision:
   a false positive from a stable rule is a bug in grounds, to be fixed, and
-  stable rules are held to a false-positive rate measured on the corpus.
-  That bar is still being measured; it will be stated here, with its
-  number, when it is. Today the 11 stable rules are those that say the
-  code would not compile or the application would not start: the
-  compile-break rules (`unresolved-method`,
-  `unresolved-constructor`, `unresolved-field`, `override-matches-nothing`,
-  `unimplemented-abstract-method`, `missing-jdk-import`) and the
-  dependency-injection rules (`bean-not-found`, `ambiguous-bean`,
-  `qualifier-not-found`, `bean-name-conflict`,
-  `circular-constructor-dependency`). CI already fails on any finding of
-  theirs on the corpus.
+  stable rules are held to a false-positive rate measured on projects the
+  rules were not tuned on. That bar is still being measured; it will be
+  stated here, with its number, when it is.
 - **Preview** rules are still being proven. They are often right, but they
-  are not held to that promise yet. A rule becomes stable once it is shown
-  to meet the bar.
+  are not held to that promise yet. A rule becomes stable once a
+  measurement shows that it meets the bar.
+
+**Today every rule is preview.** The rules that say the code would not
+compile or the application would not start were the first candidates: CI
+fails on any finding of theirs on the corpus. But on 20 projects they had
+never seen, most of what they reported was wrong
+([docs/holdout/2026-11.md](docs/holdout/2026-11.md)), so they stay preview
+until that is fixed and measured again.
 
 Preview rules run by default for now, so the same findings are reported
 after an upgrade (JSON and SARIF only gain a `maturity` field).

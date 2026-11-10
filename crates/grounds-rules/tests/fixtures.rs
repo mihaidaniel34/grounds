@@ -154,25 +154,14 @@ fn every_rule_has_a_fixture_and_valid_metadata() {
     assert!(missing.is_empty(), "rules without fixtures: {missing:?}");
 }
 
-/// The rules that are `Stable`: those whose findings claim the code would not
-/// compile or the application would not start. Each already has a
-/// zero-tolerance gate in CI (`hard_rules` in scripts/corpus.sh, and the
-/// cross-file rules of `grounds changed`). Every other rule is `Preview`. A
-/// rule moves here only with evidence that it meets the stable bar; this
-/// list makes that a deliberate change.
-const STABLE: &[&str] = &[
-    "ambiguous-bean",
-    "bean-name-conflict",
-    "bean-not-found",
-    "circular-constructor-dependency",
-    "missing-jdk-import",
-    "override-matches-nothing",
-    "qualifier-not-found",
-    "unimplemented-abstract-method",
-    "unresolved-constructor",
-    "unresolved-field",
-    "unresolved-method",
-];
+/// The stable rules: none yet. The first candidates were the rules that say
+/// code would not compile or the application would not start, which have a
+/// zero-tolerance gate on the corpus. A measurement on 20 projects the rules
+/// were never tuned on (docs/holdout/2026-11.md) found 298 of their 313
+/// findings there false, so they stay preview until the causes are fixed and
+/// a fresh measurement shows it. A rule moves here only with such evidence;
+/// this list makes that a deliberate change.
+const STABLE: &[&str] = &[];
 
 #[test]
 fn stable_rules_are_exactly_the_intended_set() {
