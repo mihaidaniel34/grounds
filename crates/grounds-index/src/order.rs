@@ -1,5 +1,4 @@
 use crate::index::Index;
-use crate::model::simple_name_of;
 use crate::stubs::{ConstExpr, FileStub, RawAnnValue, RawAnnotation, TypeSyntax};
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
@@ -19,11 +18,21 @@ pub fn file_graph(index: &Index) -> (Vec<Arc<str>>, Vec<Vec<u32>>) {
     let mut files: Vec<(&Arc<str>, &Arc<FileStub>)> = index.files().collect();
     files.sort_by(|a, b| a.0.cmp(b.0));
 
-    // simple class name
+    // simple class name. A binary name does not say whether `A$B` is the nested
+    // class B of A or a top-level class named `A$B` (legal, and common in
+    // generated code), so a class is listed under each name it may be written
+    // as: `A$B` and `B`. An edge too many only orders two files that did not need it
     let mut declared_in: FxHashMap<&str, Vec<u32>> = FxHashMap::default();
     for (i, (_, stub)) in files.iter().enumerate() {
         for c in &stub.classes {
-            declared_in.entry(simple_name_of(&c.name)).or_default().push(i as u32);
+            let mut written = c.name.rsplit('.').next().unwrap_or(&c.name);
+            loop {
+                declared_in.entry(written).or_default().push(i as u32);
+                match written.split_once('$') {
+                    Some((_, rest)) if !rest.is_empty() => written = rest,
+                    _ => break,
+                }
+            }
         }
     }
 
@@ -385,6 +394,20 @@ mod tests {
             }
         }
         assert!(checked, "the index never kept the copy without the nested class");
+    }
+
+    #[test]
+    fn a_class_with_a_dollar_in_its_name_is_found_by_that_name() {
+        // `A$B` is a legal name for a top-level class (generated code uses
+        // such names), and reads as the nested class B of A
+        let idx = index(&[
+            ("a/A$B.java", "package a; class A$B extends Base { static final int X = C$D.VALUE; }"),
+            ("a/Base.java", "package a; class Base { static final int VALUE = 32; }"),
+            ("a/C$D.java", "package a; class C$D extends Base { static final int Y = A$B.VALUE; }"),
+        ]);
+        let (_, edges) = file_graph(&idx);
+        assert_eq!(edges, [vec![1, 2], vec![], vec![0, 1]]);
+        assert_eq!(idx.resolve_ordered().outside, 0);
     }
 
     #[test]
