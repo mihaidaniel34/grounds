@@ -433,3 +433,17 @@ fn a_wildcard_for_a_parameter_with_several_bounds_is_unknown() {
     let root = Ty::Wildcard(Some(Box::new(WildcardBound::Super(Ty::class("p.Root")))));
     assert!(idx.methods_named(&Ty::class_with("p.Nodes", vec![root]), "get")[0].method.ret.is_known());
 }
+
+#[test]
+fn lombok_required_fields_follow_its_non_null_annotations() {
+    let idx = index_of(&[(
+        "q/R.java",
+        "package q; import lombok.*; import javax.annotation.*; import com.example.NotNull;
+         @RequiredArgsConstructor class R { @Nonnull String a; @NotNull String b; @javax.annotation.Nonnull String c; String d; }
+         @AllArgsConstructor class S { String a; String $b; }",
+    )]);
+    let ctor = |c: &str| idx.class(c).unwrap().methods_named("<init>").map(|m| m.params.len()).collect::<Vec<_>>();
+    // com.example.NotNull is not one Lombok knows
+    assert_eq!(ctor("q.R"), vec![2]);
+    assert_eq!(ctor("q.S"), vec![1]);
+}
