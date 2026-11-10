@@ -114,7 +114,14 @@ impl ClassContainer {
             ClassContainer::Dir(root) => {
                 let mut out = Vec::new();
                 let mut stack = vec![root.clone()];
+                // symlinked directories are followed (build tools link output
+                // directories), each real directory once: a link to a parent
+                // (or `/proc/self/root` under `/`) looped forever
+                let mut visited = std::collections::HashSet::new();
                 while let Some(d) = stack.pop() {
+                    if !visited.insert(d.canonicalize().unwrap_or_else(|_| d.clone())) {
+                        continue;
+                    }
                     let Ok(rd) = std::fs::read_dir(&d) else { continue };
                     for e in rd.flatten() {
                         let p = e.path();
@@ -236,6 +243,20 @@ pub fn find_java_home() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_class_directory_with_a_symlink_loop_is_listed_once() {
+        // found by scripts/fuzz_robust.py: `[classpath] entries = ["/"]` never ended
+        let dir = std::env::temp_dir().join(format!("grounds-classdir-loop-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("p")).unwrap();
+        std::fs::write(dir.join("p/A.class"), b"").unwrap();
+        std::os::unix::fs::symlink("..", dir.join("p/up")).unwrap();
+        std::os::unix::fs::symlink(".", dir.join("self")).unwrap();
+        let names = super::ClassContainer::open_dir(&dir).class_names();
+        assert_eq!(names, vec!["p/A".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::*;
 
     #[test]
