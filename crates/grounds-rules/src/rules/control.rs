@@ -674,7 +674,7 @@ declare_rule!(InfiniteLoop {
     maturity: Preview,
     sources: ["sonar:S2189", "spotbugs:IL_INFINITE_LOOP"],
     kinds: ["while_statement", "for_statement", "do_statement"],
-    description: "A `while (true)`/`for (;;)` loop with no break, return, throw or exit never terminates; the code after it is unreachable and the thread hangs. So does a `while`/`do` loop whose condition reads only local variables that nothing in the loop changes.",
+    description: "A `while`/`do` loop whose condition reads only local variables that nothing in the loop changes never terminates once entered, and the thread hangs. (An explicit `while (true)`/`for (;;)` is taken as meant to run forever and not reported.)",
 });
 
 impl Rule for InfiniteLoop {
@@ -688,18 +688,10 @@ impl Rule for InfiniteLoop {
             self.stuck_condition(n, cx);
             return;
         }
-        let Some(body) = n.field("body") else { return };
-        // loops inside try/catch are commonly ended by an exception (server accept loops)
-        if n.ancestors().take_while(|a| !matches!(a.kind(), "method_declaration" | "lambda_expression")).any(|a| matches!(a.kind(), "try_statement" | "try_with_resources_statement") && !a.kids_of_kind("catch_clause").is_empty()) {
-            return;
-        }
-        if !loop_has_exit(body, cx.src) {
-            // methods that are meant to run forever (thread loops) usually catch InterruptedException
-            if cx.text(body).contains("InterruptedException") || cx.text(body).contains("isInterrupted") {
-                return;
-            }
-            cx.report(n.child(0).unwrap_or(n), "This loop has no break, return or throw; it never terminates");
-        }
+        // An explicit `while (true)` / `for (;;)` says the loop is meant to
+        // run forever: a worker taking from a queue, a server loop, a
+        // benchmark or stress `main`. Only a loop whose condition looks like
+        // it ends but cannot (above) is a mistake.
     }
 }
 
