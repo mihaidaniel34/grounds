@@ -115,6 +115,10 @@ fn severity_override(project: &Project, rule: &str, sev: Severity) -> Severity {
     project.config.rules.severity.get(rule).and_then(|s| Severity::parse(s)).unwrap_or(sev)
 }
 
+/// Syntax trees nested deeper than this are not analyzed. Hand-written Java
+/// stays far below it.
+pub const MAX_TREE_DEPTH: usize = 1000;
+
 /// Analyze one file whose current text is `text`.
 pub fn analyze_text(project: &Project, rules: &RuleSet, options: &RuleOptions, path: &Path, text: &str) -> Vec<Finding> {
     // fixtures under src/*/resources are data, also when checked by name
@@ -122,6 +126,13 @@ pub fn analyze_text(project: &Project, rules: &RuleSet, options: &RuleOptions, p
         return Vec::new();
     }
     let pf = ParsedFile::parse(text);
+    // The model and the rules walk the tree recursively; a file nested
+    // deeper than this (generated lexers, a 13,000-term string concatenation
+    // in a test input) overflowed the stack and killed the whole run. Like
+    // code the parser could not read, it is not judged.
+    if pf.depth() > MAX_TREE_DEPTH {
+        return Vec::new();
+    }
     let key = path_key(path);
     let fm = FileModel::new(&pf, &project.index, key.clone());
     let kind = classify(path);

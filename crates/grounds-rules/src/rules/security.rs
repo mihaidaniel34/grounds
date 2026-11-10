@@ -404,10 +404,14 @@ fn dynamically_built<'t>(e: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
             // local built by concatenation: the last assignment before this use
             if let Some(i) = cx.fm.local_ref(e) {
                 let d = &cx.fm.binder.decls[i];
+                // an assignment or initializer that contains this use (`q = q;`)
+                // reads the value from before it: skipping it keeps every
+                // recursion on an earlier node, so it ends
+                let around_e = |n: &Node<'t>| n.byte_range().contains(&e.start_byte());
                 let last_assign = cx.fm.binder.uses[i]
                     .iter()
                     .filter(|u| u.start_byte() < e.start_byte())
-                    .filter_map(|u| u.parent().filter(|p| p.kind() == "assignment_expression" && p.field("left").map(|l| l.unparen()) == Some(*u)))
+                    .filter_map(|u| u.parent().filter(|p| p.kind() == "assignment_expression" && p.field("left").map(|l| l.unparen()) == Some(*u) && !around_e(p)))
                     .last();
                 // the last assignment decides only if it surely runs before the use
                 // (a statement of a block that encloses the use); otherwise any
@@ -419,9 +423,9 @@ fn dynamically_built<'t>(e: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
                 if let (true, Some(a)) = (unconditional, last_assign) {
                     return a.field("right").is_some_and(|v| dynamically_built(v, cx));
                 }
-                let init_dynamic = d.decl_node.field("value").is_some_and(|v| dynamically_built(v, cx));
+                let init_dynamic = d.decl_node.field("value").is_some_and(|v| !around_e(&v) && dynamically_built(v, cx));
                 let any_assign_dynamic = cx.fm.binder.uses[i].iter().filter(|u| u.start_byte() < e.start_byte()).any(|u| {
-                    u.parent().filter(|p| p.kind() == "assignment_expression" && p.field("left").map(|l| l.unparen()) == Some(*u)).and_then(|p| p.field("right")).is_some_and(|v| dynamically_built(v, cx))
+                    u.parent().filter(|p| p.kind() == "assignment_expression" && p.field("left").map(|l| l.unparen()) == Some(*u) && !around_e(p)).and_then(|p| p.field("right")).is_some_and(|v| dynamically_built(v, cx))
                 });
                 return init_dynamic || any_assign_dynamic;
             }

@@ -10,6 +10,8 @@ use crate::stubs::fold_binary;
 thread_local! {
     /// (class, simple name) member-type lookups in progress on this thread
     static MEMBER_LOOKUPS: std::cell::RefCell<Vec<(Name, Name)>> = const { std::cell::RefCell::new(Vec::new()) };
+    /// (class, field) constant initializers being evaluated on this thread
+    static CONSTANTS_IN_PROGRESS: std::cell::RefCell<Vec<(Name, Name)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 use dashmap::DashMap;
 use grounds_classfile::ClassContainer;
@@ -259,6 +261,27 @@ impl Drop for InGroup {
     fn drop(&mut self) {
         GROUP.with(|g| *g.borrow_mut() = None);
     }
+}
+
+/// Evaluate the initializer of `owner.field` with `f`, or `None` if it is
+/// already being evaluated further up on this thread: initializers that refer
+/// to each other (`A.X = B.Y; B.Y = A.X + 1;` compiles, and neither is a
+/// constant) would otherwise recurse until the stack overflows.
+fn evaluating_constant<T>(owner: &str, field: &Name, f: impl FnOnce() -> Option<T>) -> Option<T> {
+    let key: (Name, Name) = (Arc::from(owner), field.clone());
+    if CONSTANTS_IN_PROGRESS.with(|c| c.borrow().contains(&key)) {
+        return None;
+    }
+    CONSTANTS_IN_PROGRESS.with(|c| c.borrow_mut().push(key));
+    // leave also when `f` panics (the rule runner catches panics)
+    struct Leave;
+    impl Drop for Leave {
+        fn drop(&mut self) {
+            CONSTANTS_IN_PROGRESS.with(|c| c.borrow_mut().pop());
+        }
+    }
+    let _leave = Leave;
+    f()
 }
 
 /// Marks a class as being resolved on this thread for as long as it lives,
@@ -672,12 +695,12 @@ impl Index {
                             return Some(c.clone());
                         }
                         if let Some(ie) = &f.init {
-                            return self.eval_const_expr(ie, scope, done, raw, depth + 1);
+                            return evaluating_constant(&raw.name, &f.name, || self.eval_const_expr(ie, scope, done, raw, depth + 1));
                         }
                         return None;
                     }
                 }
-                match self.resolve_constant_name(n, scope)? {
+                match self.resolve_constant_name_at(n, scope, depth + 1)? {
                     AnnotationValue::Const(c) => Some(c),
                     _ => None,
                 }
@@ -725,6 +748,11 @@ impl Index {
 
     /// Resolve `CONST`, `Type.CONST` or a static import to an annotation value.
     pub fn resolve_constant_name(&self, n: &str, scope: &Scope) -> Option<AnnotationValue> {
+        self.resolve_constant_name_at(n, scope, 0)
+    }
+
+    /// `depth`: how deep in constant evaluation this lookup is.
+    fn resolve_constant_name_at(&self, n: &str, scope: &Scope, depth: u32) -> Option<AnnotationValue> {
         let segs: Vec<&str> = n.split('.').collect();
         // constants of source classes are read from raw stubs, which also works
         // while the class itself is being lowered
@@ -739,7 +767,7 @@ impl Index {
             }
             let init = f.init.as_ref()?;
             let owner_scope = self.scope_for_class(owner)?;
-            self.eval_const_expr(init, &owner_scope, &[], raw, 0).map(AnnotationValue::Const)
+            evaluating_constant(owner, &f.name, || self.eval_const_expr(init, &owner_scope, &[], raw, depth + 1)).map(AnnotationValue::Const)
         };
         if segs.len() == 1 {
             for e in &scope.enclosing {
