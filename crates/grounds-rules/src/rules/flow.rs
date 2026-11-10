@@ -159,7 +159,7 @@ fn maybe_null_unknown<'t>(cx: &Ctx<'_, 't>, callable: Node<'t>, i: usize, deref:
                 a.kind() == "argument_list"
                     && a.parent().is_some_and(|call| {
                         !call.descendants().any(|d| d == deref)
-                            && runs_on_every_path_to(call, deref, &null_branch)
+                            && runs_on_every_path_to(call, deref, null_branch)
                             && !(call.kind() == "method_invocation"
                                 && (super::exceptions::is_log_like(call, cx) || matches!(cx.fm.call_name(call), Some("println" | "print" | "printf" | "format" | "valueOf"))))
                     })

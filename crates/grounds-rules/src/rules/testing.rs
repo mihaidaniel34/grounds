@@ -257,7 +257,7 @@ fn guava_tester<'t>(cx: &Ctx<'_, 't>, c: Node<'t>) -> bool {
                 || resolved.is_unknown()
                     && written.ends_with("Tester")
                     && !written.contains('.')
-                    && cx.fm.stub.imports.iter().any(|i| !i.is_static && (i.on_demand && &*i.path == "com.google.common.testing" || !i.on_demand && &*i.path == format!("com.google.common.testing.{written}")));
+                    && cx.fm.stub.imports.iter().any(|i| !i.is_static && (i.on_demand && &*i.path == "com.google.common.testing" || !i.on_demand && *i.path == format!("com.google.common.testing.{written}")));
         }
         return cx.type_of(r).class_name().is_some_and(guava);
     }
