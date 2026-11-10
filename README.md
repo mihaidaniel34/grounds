@@ -465,15 +465,19 @@ which only `grounds changed --base` reports. "New with the change" means:
   against HEAD) the files that mention a changed name.
 - **On changed lines:** grounds analyzes each changed file's base version, with
   the other changed files at their base version too, and drops a finding when
-  the project before the change made the same claim: the same rule and the
-  same message (which names types and members, not positions), less what
-  depends on the order of declarations (a "did you mean" hint, the list of
-  overloads, beans or unimplemented methods offered, where a cycle starts), in the file's
-  base version, or in an untouched file that mentions every name the message
-  quotes. A finding that was there before is therefore not reported when the
-  change edits or moves its line, and neither is a new call that the model
-  already got wrong in untouched code. A new file has no base version: what
-  is claimed in it is new unless an untouched file got the same claim.
+  the project before the change made the same claim in the file's base
+  version, or in an untouched file that mentions the names the claim quotes.
+  A claim is what the message asserts: the types, members, argument types,
+  the full set of missing methods or candidate beans (sorted), the members
+  of a cycle. What is presentation is left out: a "did you mean" hint, the
+  `available:` overloads, constructors or beans, a list cut to a few
+  entries, the order of declarations. So a finding that was there before is
+  not reported when the change edits or moves its line. One decision goes
+  further, for limit (b) below: a missing or ambiguous bean is a fact about
+  the type, so when untouched code got "no bean of type `T`" (or the same
+  candidates for `T`) before the change, a new injection point of `T` is not
+  reported either. A new file has no base version: what is claimed in it is
+  new unless an untouched file got the same claim.
 
 The evidence, all on projects the rules were never tuned on
 ([corpus/holdout.tsv](corpus/holdout.tsv)):

@@ -143,7 +143,11 @@ impl Rule for AmbiguousBean {
     fn check_file<'t>(&self, cx: &mut Ctx<'_, 't>) {
         for_each_point(cx, |cx, node, p, res, di| {
             if let Resolution::Ambiguous(c) = res {
-                cx.report(node, format!("{} beans of type `{}` match `{}`: {}; add a @Qualifier or @Primary", c.len(), p.ty.display_simple(), p.name, bean_list(di, &c)));
+                // the claim is every candidate, whatever the message shows
+                let mut all: Vec<String> = c.iter().map(|&i| di.beans[i].display()).collect();
+                all.sort();
+                let claim = format!("beans of type `{}` match `{}`: {}", p.ty.display_simple(), p.name, all.join(", "));
+                cx.report_claim(node, format!("{} beans of type `{}` match `{}`: {}; add a @Qualifier or @Primary", c.len(), p.ty.display_simple(), p.name, bean_list(di, &c)), claim);
             }
         });
     }
@@ -793,6 +797,11 @@ impl Rule for CircularDependency {
         for (a, b, pi) in edges.iter() {
             adj.entry(a).or_default().push((b, *pi));
         }
+        // the cycle reported depends on the graph, not on the order of
+        // parameters or declarations
+        for v in adj.values_mut() {
+            v.sort();
+        }
         for (decl, name) in &classes {
             // DFS from this class looking for a path back to it
             let start: &str = name;
@@ -820,7 +829,11 @@ impl Rule for CircularDependency {
             if let Some(cycle) = found {
                 if let Some(nm) = decl.field("name") {
                     let chain: Vec<&str> = cycle.iter().map(|c| simple_name_of(c)).collect();
-                    cx.report(nm, format!("Circular constructor dependency: {}", chain.join(" -> ")));
+                    // the claim is the cycle's members, wherever it is entered
+                    let mut members: Vec<&str> = cycle.clone();
+                    members.sort_unstable();
+                    members.dedup();
+                    cx.report_claim(nm, format!("Circular constructor dependency: {}", chain.join(" -> ")), format!("constructor cycle through {}", members.join(", ")));
                 }
             }
         }

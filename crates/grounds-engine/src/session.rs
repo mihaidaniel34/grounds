@@ -180,47 +180,59 @@ pub fn stable_in_changed(rule: &str) -> bool {
 }
 
 /// What a compile-break or wiring finding claims, independent of where it
-/// is: the rule and the message, which names the types and members involved
-/// but no position. The fingerprint is no use here: it hashes the text of the
-/// line, which an edit to that line changes.
+/// is: the rule and the assertion. The fingerprint is no use here: it hashes
+/// the text of the line, which an edit to that line changes. Per rule, the
+/// assertion (kept whole, sets sorted) and the presentation (left out):
+///
+/// | rule | asserted | presentation |
+/// |---|---|---|
+/// | `unresolved-method` | receiver type, member, arity or argument types, or that it is private / an instance method | `; did you mean ...?`, `; available: <overloads>` |
+/// | `unresolved-constructor` | class and arity | `; available: <constructors>` (first 4) |
+/// | `unresolved-field` | receiver type and field | none |
+/// | `override-matches-nothing` | the method's signature | none |
+/// | `missing-jdk-import` | the import and the release | none |
+/// | `unimplemented-abstract-method` | the class and every missing method, sorted (`Diagnostic::claim`) | the first 3 shown and "and N more" |
+/// | `bean-not-found` | the type and the injection point | none |
+/// | `ambiguous-bean` | type, injection point and every candidate, sorted (`Diagnostic::claim`) | their count, the first 5 shown, `; add a @Qualifier or @Primary` |
+/// | `qualifier-not-found` | the type and the qualifier | `; available: <beans>` (first 5) |
+/// | `bean-name-conflict` | the bean name, the other definition and the exception | none |
+/// | `circular-constructor-dependency` | the members of the cycle, sorted (`Diagnostic::claim`; the rule picks the cycle from the graph alone) | where the cycle is entered |
 fn claim_key(f: &Finding) -> (&'static str, String) {
-    (f.rule, canonical_claim(f.rule, &f.message))
+    if let Some(c) = &f.claim {
+        return (f.rule, c.clone());
+    }
+    let mut m = f.message.as_str();
+    let presentation: &[&str] = match f.rule {
+        "unresolved-method" => &["; did you mean `", "; available: "],
+        "unresolved-constructor" | "qualifier-not-found" => &["; available: "],
+        _ => &[],
+    };
+    for p in presentation {
+        if let Some(i) = m.find(p) {
+            m = &m[..i];
+        }
+    }
+    (f.rule, m.to_string())
 }
 
-/// A message reduced to what it claims. What depends on order or on
-/// unrelated declarations is left out, so that reordering or adding
-/// declarations elsewhere does not make an old claim look new: everything
-/// after the first `; ` (a "did you mean" hint, the `available:` overloads,
-/// constructors or beans, in declaration order and cut to a few), the list of
-/// ambiguous beans (their number stays), the methods left unimplemented (the
-/// class and how many stay), and where a cycle starts (its members stay).
-fn canonical_claim(rule: &str, message: &str) -> String {
-    let head = message.split("; ").next().unwrap_or(message);
-    match rule {
-        // "2 beans of type `X` match `y`: 'a' (A), 'b' (B)"
-        "ambiguous-bean" => head.split(": ").next().unwrap_or(head).to_string(),
-        // "`T` does not implement `A.x()`, `A.y()` and 2 more"
-        "unimplemented-abstract-method" => match head.split_once(" does not implement ") {
-            Some((class, list)) => {
-                let (shown, more) = match list.rsplit_once(" and ") {
-                    Some((l, m)) if m.ends_with(" more") => (l, m.trim_end_matches(" more").parse::<usize>().unwrap_or(0)),
-                    _ => (list, 0),
-                };
-                format!("{class} does not implement {} method(s)", shown.split("`, `").count() + more)
-            }
-            None => head.to_string(),
-        },
-        // "Circular constructor dependency: A -> B -> A"
-        "circular-constructor-dependency" => match head.split_once(": ") {
-            Some((what, chain)) => {
-                let mut members: Vec<&str> = chain.split(" -> ").collect();
-                members.sort_unstable();
-                members.dedup();
-                format!("{what}: {}", members.join(", "))
-            }
-            None => head.to_string(),
-        },
-        _ => head.to_string(),
+/// The gap in the model a claim stands for, where that is less than the
+/// claim: a decision for limit (b), not for comparing places. A missing or
+/// ambiguous bean is a fact about the type (and its candidates), whichever
+/// injection point asks for it; when untouched code that ran before the
+/// change already got it, a new injection point of the same type meets the
+/// same gap, so it is not reported either. For every other rule the claim
+/// itself names no place, so it is its own gap.
+fn gap_key(f: &Finding) -> Option<(&'static str, String)> {
+    match f.rule {
+        // "No bean of type `T` is defined; injection of `p` fails at startup"
+        "bean-not-found" => f.message.split_once("; injection of ").map(|(t, _)| (f.rule, t.to_string())),
+        // claim: "beans of type `T` match `p`: <candidates>"
+        "ambiguous-bean" => f.claim.as_deref().and_then(|c| {
+            let (ty, rest) = c.split_once(" match `")?;
+            let (_, candidates) = rest.split_once("`: ")?;
+            Some((f.rule, format!("{ty}: {candidates}")))
+        }),
+        _ => None,
     }
 }
 
@@ -559,7 +571,7 @@ impl Session {
             if !claims.is_empty() {
                 let touched = self.touched(opts, &files, &deleted, rev);
                 let before = self.claims_before(&findings, &claims, &files, &touched, rev);
-                drop = claims.iter().copied().filter(|&i| before.contains(&claim_key(&findings[i]))).collect();
+                drop = claims.iter().copied().filter(|&i| before.contains(&claim_key(&findings[i])) || gap_key(&findings[i]).is_some_and(|g| before.contains(&g))).collect();
             }
             for &i in &claims {
                 findings[i].maturity = Maturity::Stable;
@@ -651,7 +663,10 @@ impl Session {
         let skip: FxHashSet<&PathBuf> = touched.iter().collect();
         let mut elsewhere: FxHashSet<PathBuf> = FxHashSet::default();
         for &i in claims {
-            let names = quoted_names(&findings[i].message);
+            // the names of the gap where it is less than the claim: another
+            // injection point of the type, not of the same name
+            let f = &findings[i];
+            let names = quoted_names(&gap_key(f).map(|g| g.1).unwrap_or_else(|| f.message.clone()));
             if names.is_empty() {
                 continue;
             }
@@ -671,7 +686,7 @@ impl Session {
             v.extend(s.analyze(&rules, &elsewhere));
             v
         });
-        found.iter().map(claim_key).collect()
+        found.iter().flat_map(|f| std::iter::once(claim_key(f)).chain(gap_key(f))).collect()
     }
 
     /// Run `f` on the project as it was at `rev` for the `touched` files
@@ -884,6 +899,7 @@ impl Session {
                 fingerprint,
                 legacy_fingerprint: None,
                 fix: None,
+                claim: None,
                 start: node.start_byte() as u32,
                 end: node.end_byte() as u32,
             });
@@ -995,7 +1011,7 @@ impl Session {
                 let fingerprint = format!("{:016x}", xxhash_rust::xxh3::xxh3_64(format!("breaks-other-files|{path}|{}", broken.iter().map(|&i| pending[i].fingerprint.as_str()).collect::<Vec<_>>().join(",")).as_bytes()));
                 // as mature as the weakest place it stands for
                 let maturity = if broken.iter().all(|&i| pending[i].maturity == Maturity::Stable) { Maturity::Stable } else { Maturity::Preview };
-                let finding = Finding { path, line, col: 1, end_line: line, end_col: 1, rule: "breaks-other-files", severity, category: "bug", message, maturity, fingerprint, legacy_fingerprint: None, fix: None, start: 0, end: 0 };
+                let finding = Finding { path, line, col: 1, end_line: line, end_col: 1, rule: "breaks-other-files", severity, category: "bug", message, maturity, fingerprint, legacy_fingerprint: None, fix: None, claim: None, start: 0, end: 0 };
                 Break { finding, broken }
             })
             .collect()
@@ -1146,22 +1162,59 @@ mod tests {
         assert!(ok, "git {args:?}");
     }
 
+    fn finding(rule: &'static str, message: &str, claim: Option<&str>) -> Finding {
+        Finding { path: "A.java".into(), line: 1, col: 1, end_line: 1, end_col: 1, rule, severity: Severity::Error, category: "bug", message: message.into(), maturity: Maturity::Preview, fingerprint: String::new(), legacy_fingerprint: None, fix: None, claim: claim.map(str::to_string), start: 0, end: 0 }
+    }
+
+    /// Per rule, both sides: what the message asserts tells claims apart,
+    /// and what is presentation (hint, candidates, truncation, order) does not.
     #[test]
-    fn claims_leave_out_what_depends_on_order() {
-        let c = canonical_claim;
-        // the overloads offered, in declaration order
-        assert_eq!(c("unresolved-method", "No `f` in `Lib` accepts (String); available: f(int), f(int, int)"), c("unresolved-method", "No `f` in `Lib` accepts (String); available: f(int, int), f(int)"));
-        assert_eq!(c("unresolved-method", "`Lib` has no method `fo`; did you mean `foo`?"), "`Lib` has no method `fo`");
-        // what is claimed stays: the receiver, the arguments
-        assert_ne!(c("unresolved-method", "`Old` has no method `missing`"), c("unresolved-method", "`New` has no method `missing`"));
-        assert_ne!(c("unresolved-method", "No `f` in `Lib` accepts (String); available: f(int)"), c("unresolved-method", "No `f` in `Lib` accepts (long); available: f(int)"));
-        assert_eq!(c("unresolved-constructor", "No constructor of `A` takes 3 argument(s); available: A(int), A()"), "No constructor of `A` takes 3 argument(s)");
-        assert_eq!(c("qualifier-not-found", "No `Api` bean is qualified `x`; available: 'a' (A), 'b' (B)"), "No `Api` bean is qualified `x`");
-        assert_eq!(c("ambiguous-bean", "2 beans of type `Api` match `api`: 'a' (A), 'b' (B); add a @Qualifier or @Primary"), c("ambiguous-bean", "2 beans of type `Api` match `api`: 'b' (B), 'a' (A); add a @Qualifier or @Primary"));
-        assert_ne!(c("ambiguous-bean", "2 beans of type `Api` match `api`: 'a' (A), 'b' (B)"), c("ambiguous-bean", "3 beans of type `Api` match `api`: 'a' (A), 'b' (B), 'c' (C)"));
-        assert_eq!(c("unimplemented-abstract-method", "`C` does not implement `I.a()`, `I.b()`, `I.c()` and 2 more"), c("unimplemented-abstract-method", "`C` does not implement `I.e()`, `I.d()`, `I.a()` and 2 more"));
-        assert_ne!(c("unimplemented-abstract-method", "`C` does not implement `I.a()`"), c("unimplemented-abstract-method", "`C` does not implement `I.a()`, `I.b()`"));
-        assert_eq!(c("circular-constructor-dependency", "Circular constructor dependency: A -> B -> A"), c("circular-constructor-dependency", "Circular constructor dependency: B -> A -> B"));
+    fn a_claim_is_what_the_message_asserts() {
+        let key = |rule, m: &str| claim_key(&finding(rule, m, None)).1;
+        let same = |rule, a: &str, b: &str| assert_eq!(key(rule, a), key(rule, b), "{rule}: {a} | {b}");
+        let differ = |rule, a: &str, b: &str| assert_ne!(key(rule, a), key(rule, b), "{rule}: {a} | {b}");
+        let r = "unresolved-method";
+        same(r, "`Lib` has no method `fo`; did you mean `foo`?", "`Lib` has no method `fo`; did you mean `fob`?");
+        same(r, "No `f` in `Lib` accepts (String); available: f(int), f(int,int)", "No `f` in `Lib` accepts (String); available: f(int,int), f(int)");
+        same(r, "No `f` in `Lib` takes 3 argument(s); available: f(int)", "No `f` in `Lib` takes 3 argument(s); available: f(long)");
+        differ(r, "`Old` has no method `missing`", "`New` has no method `missing`");
+        differ(r, "`Lib` has no method `a`", "`Lib` has no method `b`");
+        differ(r, "No `f` in `Lib` accepts (String); available: f(int)", "No `f` in `Lib` accepts (long); available: f(int)");
+        differ(r, "No `f` in `Lib` takes 3 argument(s); available: f(int)", "No `f` in `Lib` takes 2 argument(s); available: f(int)");
+        differ(r, "`f(int)` is private in `Lib`", "`f(int)` is private in `Other`");
+        let r = "unresolved-constructor";
+        same(r, "No constructor of `A` takes 3 argument(s); available: A(int), A()", "No constructor of `A` takes 3 argument(s); available: A(), A(long)");
+        differ(r, "No constructor of `A` takes 3 argument(s); available: A()", "No constructor of `B` takes 3 argument(s); available: A()");
+        differ(r, "No constructor of `A` takes 3 argument(s); available: A()", "No constructor of `A` takes 2 argument(s); available: A()");
+        differ("unresolved-field", "`A` has no field `x`", "`A` has no field `y`");
+        differ("override-matches-nothing", "`f(int)` is marked @Override but overrides no supertype method", "`f(long)` is marked @Override but overrides no supertype method");
+        differ("missing-jdk-import", "`java.util.SequencedCollection` is not public API in Java 17", "`java.util.SequencedCollection` is not public API in Java 11");
+        let r = "qualifier-not-found";
+        same(r, "No `Api` bean is qualified `x`; available: 'a' (A), 'b' (B)", "No `Api` bean is qualified `x`; available: 'b' (B)");
+        differ(r, "No `Api` bean is qualified `x`; available: 'a' (A)", "No `Api` bean is qualified `y`; available: 'a' (A)");
+        // the part after `;` is asserted here: kept
+        let r = "bean-not-found";
+        differ(r, "No bean of type `Api` is defined; injection of `old` fails at startup", "No bean of type `Api` is defined; injection of `fresh` fails at startup");
+        differ(r, "No bean of type `Api` is defined; injection of `a` fails at startup", "No bean of type `Other` is defined; injection of `a` fails at startup");
+        let r = "bean-name-conflict";
+        differ(r, "Bean name 'a' is also used by x.A; Spring fails at startup (ConflictingBeanDefinitionException). Give one an explicit name", "Bean name 'a' is also used by @Bean x.Cfg.a(); Spring Boot fails at startup (BeanDefinitionOverrideException) unless bean overriding is enabled. Give one an explicit name");
+        // the rules that pass the whole claim: the message may show less
+        let with = |rule, m: &str, c: &str| claim_key(&finding(rule, m, Some(c))).1;
+        let r = "unimplemented-abstract-method";
+        assert_ne!(with(r, "`C` does not implement `I.old()`", "`C` does not implement `I.old()`"), with(r, "`C` does not implement `I.fresh()`", "`C` does not implement `I.fresh()`"));
+        assert_eq!(with(r, "`C` does not implement `I.a()`, `I.b()`, `I.c()` and 1 more", "`C` does not implement `I.a()`, `I.b()`, `I.c()`, `I.d()`"), with(r, "`C` does not implement `I.d()`, `I.c()`, `I.b()` and 1 more", "`C` does not implement `I.a()`, `I.b()`, `I.c()`, `I.d()`"));
+        let r = "ambiguous-bean";
+        assert_ne!(with(r, "2 beans of type `Api` match `api`: 'one' (One), 'two' (Two); add a @Qualifier or @Primary", "beans of type `Api` match `api`: 'one' (One), 'two' (Two)"), with(r, "2 beans of type `Api` match `api`: 'three' (Three), 'four' (Four); add a @Qualifier or @Primary", "beans of type `Api` match `api`: 'four' (Four), 'three' (Three)"));
+        let r = "circular-constructor-dependency";
+        assert_eq!(with(r, "Circular constructor dependency: A -> B -> A", "constructor cycle through a.A, a.B"), with(r, "Circular constructor dependency: B -> A -> B", "constructor cycle through a.A, a.B"));
+        assert_ne!(with(r, "Circular constructor dependency: A -> B -> A", "constructor cycle through a.A, a.B"), with(r, "Circular constructor dependency: A -> C -> A", "constructor cycle through a.A, a.C"));
+        // the gap: a missing or ambiguous bean is about the type, not the point
+        let gap = |rule, m: &str, c: Option<&str>| gap_key(&finding(rule, m, c));
+        assert_eq!(gap("bean-not-found", "No bean of type `Api` is defined; injection of `old` fails at startup", None), gap("bean-not-found", "No bean of type `Api` is defined; injection of `fresh` fails at startup", None));
+        assert_ne!(gap("bean-not-found", "No bean of type `Api` is defined; injection of `a` fails at startup", None), gap("bean-not-found", "No bean of type `Other` is defined; injection of `a` fails at startup", None));
+        assert_eq!(gap("ambiguous-bean", "", Some("beans of type `Api` match `x`: 'a' (A), 'b' (B)")), gap("ambiguous-bean", "", Some("beans of type `Api` match `y`: 'a' (A), 'b' (B)")));
+        assert_ne!(gap("ambiguous-bean", "", Some("beans of type `Api` match `x`: 'a' (A), 'b' (B)")), gap("ambiguous-bean", "", Some("beans of type `Api` match `x`: 'a' (A), 'c' (C)")));
+        assert_eq!(gap("unresolved-method", "`Lib` has no method `gap`", None), None);
     }
 
     /// A panic while the project is in its base state (the daemon catches it

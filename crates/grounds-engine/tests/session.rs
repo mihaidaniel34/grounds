@@ -793,3 +793,96 @@ fn reordered_declarations_do_not_make_an_old_claim_new() {
     assert!(r.pending.is_empty() && r.breaks.is_empty(), "per turn: {:?}", r.pending);
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+/// A Spring application in a repository, for the wiring claims.
+fn spring_project(name: &str, files: &[(&str, &str)]) -> (std::path::PathBuf, std::path::PathBuf) {
+    let repo = std::env::temp_dir().join(format!("grounds-claim-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&repo);
+    let dir = repo.join("app");
+    write(&dir, "settings.gradle", "rootProject.name = 'demo'\n");
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    for a in ["Service", "Component"] {
+        write(&dir, &format!("src/main/java/org/springframework/stereotype/{a}.java"), &format!("package org.springframework.stereotype;\npublic @interface {a} {{}}\n"));
+    }
+    write(&dir, "src/main/java/org/springframework/boot/autoconfigure/SpringBootApplication.java", "package org.springframework.boot.autoconfigure;\npublic @interface SpringBootApplication {}\n");
+    write(&dir, "src/main/java/demo/App.java", "package demo;\n@org.springframework.boot.autoconfigure.SpringBootApplication\npublic class App {}\n");
+    for (f, t) in files {
+        write(&dir, &format!("src/main/java/demo/{f}"), t);
+    }
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "init"]);
+    (repo, dir)
+}
+
+fn base_check(dir: &std::path::Path) -> grounds_engine::session::Report {
+    let mut s = Session::open(dir).unwrap();
+    s.check(&CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: Some("HEAD".into()) })
+}
+
+fn rules_of(r: &grounds_engine::session::Report) -> Vec<(String, &'static str)> {
+    let mut v: Vec<_> = r.findings.iter().chain(&r.pending).filter(|f| grounds_engine::session::stable_in_changed(f.rule)).map(|f| (f.path.rsplit('/').next().unwrap().to_string(), f.rule)).collect();
+    v.sort();
+    v
+}
+
+/// S5: what an unchanged class is missing changes; the number does not.
+#[test]
+fn a_different_missing_method_is_a_new_claim() {
+    let (repo, dir) = spring_project("unimpl", &[("I.java", "package demo;\npublic interface I {\n    void old();\n}\n"), ("C.java", "package demo;\npublic class C implements I {}\n")]);
+    assert_eq!(rules_of(&base_check(&dir)), vec![], "nothing changed yet");
+    write(&dir, "src/main/java/demo/I.java", "package demo;\npublic interface I {\n    void fresh();\n}\n");
+    let r = base_check(&dir);
+    assert_eq!(rules_of(&r), vec![("C.java".into(), "unimplemented-abstract-method")], "{:?}", r.pending);
+    assert!(r.pending[0].message.contains("I.fresh()"), "{:?}", r.pending);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// S7: other candidates for the same ambiguous injection point.
+#[test]
+fn other_ambiguous_candidates_are_a_new_claim() {
+    let bean = |n: &str| format!("package demo;\n@org.springframework.stereotype.Service\npublic class {n} implements Api {{}}\n");
+    let (repo, dir) = spring_project(
+        "ambiguous",
+        &[("Api.java", "package demo;\npublic interface Api {}\n"), ("One.java", &bean("One")), ("Two.java", &bean("Two")), ("Vet.java", "package demo;\n@org.springframework.stereotype.Component\npublic class Vet {\n    Vet(Api api) {}\n}\n")],
+    );
+    std::fs::remove_file(dir.join("src/main/java/demo/One.java")).unwrap();
+    std::fs::remove_file(dir.join("src/main/java/demo/Two.java")).unwrap();
+    write(&dir, "src/main/java/demo/Three.java", &bean("Three"));
+    write(&dir, "src/main/java/demo/Four.java", &bean("Four"));
+    let r = base_check(&dir);
+    assert_eq!(rules_of(&r), vec![("Vet.java".into(), "ambiguous-bean")], "{:?}", r.pending);
+    // the same candidates in another order of declaration are the old claim
+    write(&dir, "src/main/java/demo/Api.java", "package demo;\n// reordered\npublic interface Api {}\n");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "three and four"]);
+    std::fs::remove_file(dir.join("src/main/java/demo/Four.java")).unwrap();
+    write(&dir, "src/main/java/demo/Four.java", &format!("package demo;\n\n{}", &bean("Four")["package demo;\n".len()..]));
+    assert_eq!(rules_of(&base_check(&dir)), vec![]);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// S8: the same dependency graph with A's parameters swapped.
+#[test]
+fn the_same_cycle_through_reordered_parameters_is_the_old_claim() {
+    let c = |n: &str, ps: &str| format!("package demo;\n@org.springframework.stereotype.Component public class {n} {{ {n}({ps}) {{}} }}\n");
+    let (repo, dir) = spring_project("cycle", &[("A.java", &c("A", "B b, C c")), ("B.java", &c("B", "A a")), ("C.java", &c("C", "A a"))]);
+    write(&dir, "src/main/java/demo/A.java", &c("A", "C c, B b"));
+    let r = base_check(&dir);
+    assert_eq!(rules_of(&r), vec![], "{:?} {:?}", r.findings, r.pending);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// S6, decided: a new injection point of a type whose bean untouched code
+/// already missed before the change is the model's gap (limit b), not
+/// reported; a missing bean of another type is.
+#[test]
+fn a_new_injection_point_of_a_type_already_missing_is_the_same_gap() {
+    let comp = |n: &str, ps: &str| format!("package demo;\n@org.springframework.stereotype.Component\npublic class {n} {{\n    {n}({ps}) {{}}\n}}\n");
+    let (repo, dir) = spring_project("gap", &[("Api.java", "package demo;\npublic interface Api {}\n"), ("Other.java", "package demo;\npublic interface Other {}\n"), ("Old.java", &comp("Old", "Api old"))]);
+    write(&dir, "src/main/java/demo/Fresh.java", &comp("Fresh", "Api fresh"));
+    assert_eq!(rules_of(&base_check(&dir)), vec![]);
+    write(&dir, "src/main/java/demo/Fresh.java", &comp("Fresh", "Other fresh"));
+    assert_eq!(rules_of(&base_check(&dir)), vec![("Fresh.java".into(), "bean-not-found")]);
+    let _ = std::fs::remove_dir_all(&repo);
+}

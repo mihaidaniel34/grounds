@@ -211,6 +211,12 @@ pub struct Diagnostic {
     pub range: TextRange,
     pub message: String,
     pub fix: Option<Fix>,
+    /// What the finding asserts, when the message shows only part of it (a
+    /// list cut to a few entries) or in an order that is not part of the
+    /// claim. `grounds changed` compares claims to tell a finding that is new
+    /// with a change from one that was there before; without this the message,
+    /// less its hint and candidate list, is the claim.
+    pub claim: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -246,15 +252,21 @@ impl<'a, 't> Ctx<'a, 't> {
     }
 
     pub fn report_range(&mut self, range: TextRange, message: impl Into<String>) {
-        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range, message: message.into(), fix: None });
+        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range, message: message.into(), fix: None, claim: None });
     }
 
     pub fn report_fix(&mut self, node: Node<'t>, message: impl Into<String>, fix: Fix) {
-        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range: TextRange::of(node), message: message.into(), fix: Some(fix) });
+        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range: TextRange::of(node), message: message.into(), fix: Some(fix), claim: None });
     }
 
     pub fn report_with_severity(&mut self, node: Node<'t>, severity: Severity, message: impl Into<String>) {
-        self.out.push(Diagnostic { rule: self.rule.id, severity, range: TextRange::of(node), message: message.into(), fix: None });
+        self.out.push(Diagnostic { rule: self.rule.id, severity, range: TextRange::of(node), message: message.into(), fix: None, claim: None });
+    }
+
+    /// Report with the full claim behind a message that shows only part of
+    /// it (see [`Diagnostic::claim`]).
+    pub fn report_claim(&mut self, node: Node<'t>, message: impl Into<String>, claim: String) {
+        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range: TextRange::of(node), message: message.into(), fix: None, claim: Some(claim) });
     }
 
     pub fn text(&self, n: Node<'t>) -> &'t str {

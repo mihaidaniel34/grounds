@@ -38,6 +38,9 @@ pub struct Finding {
     pub legacy_fingerprint: Option<String>,
     /// Serialized only when present.
     pub fix: Option<Fix>,
+    /// What the finding asserts, when the message shows only part of it
+    /// (`Diagnostic::claim`). Not serialized.
+    pub claim: Option<String>,
     /// Byte range, for fix application (not serialized).
     pub start: u32,
     pub end: u32,
@@ -202,6 +205,7 @@ fn to_finding(project: &Project, pf: &ParsedFile, fm: &FileModel, rel: &str, d: 
         fingerprint: fp,
         legacy_fingerprint,
         fix: d.fix,
+        claim: d.claim,
         start: d.range.start,
         end: d.range.end,
     }

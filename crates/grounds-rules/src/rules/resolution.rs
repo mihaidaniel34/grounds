@@ -790,7 +790,10 @@ impl Rule for UnimplementedAbstractMethod {
         if !missing.is_empty() {
             if let Some(nm) = n.field("name") {
                 let more = if missing.len() > 3 { format!(" and {} more", missing.len() - 3) } else { String::new() };
-                cx.report(nm, format!("`{}` does not implement {}{more}", cls.simple_name(), missing.iter().take(3).cloned().collect::<Vec<_>>().join(", ")));
+                // the claim is every missing method, whatever the message shows
+                let mut all = missing.clone();
+                all.sort();
+                cx.report_claim(nm, format!("`{}` does not implement {}{more}", cls.simple_name(), missing.iter().take(3).cloned().collect::<Vec<_>>().join(", ")), format!("`{}` does not implement {}", cls.simple_name(), all.join(", ")));
             }
         }
     }
