@@ -791,7 +791,11 @@ impl<'a> Builder<'a> {
             let test_scan = if c.is_interface() { self.unexpanded_mapper_scan_in_tests } else { self.opaque_filter_in_tests };
             let concrete = !c.is_interface() && !c.is_abstract();
             let assignable: Vec<bool> = if concrete { self.filter_types.iter().filter(|(t, _)| self.index.is_subclass(n, t).is_yes()).map(|(_, t)| *t).collect() } else { Vec::new() };
-            if unknown || stereotyped || main_scan || (!is_test && assignable.iter().any(|t| !t)) {
+            // an interface extending a type the model cannot resolve (a
+            // store module's repository base, a client library's interface):
+            // the library defining that type may implement it at runtime
+            let opaque_base = c.is_interface() && self.unresolved_supertype(n);
+            if unknown || stereotyped || main_scan || opaque_base || (!is_test && assignable.iter().any(|t| !t)) {
                 unseen.push((n.clone(), is_test));
             } else if (test_scan && (c.is_interface() || concrete)) || !assignable.is_empty() {
                 unseen.push((n.clone(), true));
@@ -831,6 +835,28 @@ impl<'a> Builder<'a> {
         producers.dedup();
         self.model.unseen = unseen;
         self.model.unseen_producers = producers;
+    }
+
+    /// Does the class's hierarchy reach, through project types, a supertype
+    /// the model cannot resolve (its jar is missing)?
+    fn unresolved_supertype(&self, n: &str) -> bool {
+        let mut stack: Vec<Name> = vec![Arc::from(n)];
+        let mut seen: rustc_hash::FxHashSet<Name> = rustc_hash::FxHashSet::default();
+        while let Some(x) = stack.pop() {
+            if !seen.insert(x.clone()) {
+                continue;
+            }
+            let Some(c) = self.class(&x) else { return true };
+            for t in c.superclass.iter().chain(&c.interfaces) {
+                match t.class_name() {
+                    None => return true,
+                    Some(sn) if self.class(sn).is_none() => return true,
+                    Some(sn) if self.index.is_source_class(sn) => stack.push(Arc::from(sn)),
+                    Some(_) => {}
+                }
+            }
+        }
+        false
     }
 
     fn add_bean(&mut self, b: Bean) -> usize {
@@ -3212,5 +3238,27 @@ mod tests {
         let (idx, m) = model(&files);
         assert!(m.points.iter().filter(|p| p.name == "ejb").all(|p| m.resolve(&idx, p, false) == Resolution::Unknown));
         assert_eq!(point_resolution(&idx, &m, "missing"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn an_interface_extending_an_unresolved_type_may_be_implemented_by_its_library() {
+        let app = ("src/main/java/com/x/App.java", "package com.x; @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] a) {} }");
+        let files = [
+            app,
+            ("src/main/java/com/x/Employee.java", "package com.x; public class Employee {}"),
+            // a store module's base and one reached through a project @NoRepositoryBean interface
+            ("src/main/java/com/x/EmployeeRepository.java", "package com.x; import org.springframework.data.cassandra.repository.ReactiveCassandraRepository;
+             public interface EmployeeRepository extends ReactiveCassandraRepository<Employee, Integer> {}"),
+            ("src/main/java/com/x/BaseRepository.java", "package com.x; import org.springframework.data.jpa.repository.JpaRepository; import org.springframework.data.repository.NoRepositoryBean;
+             @NoRepositoryBean public interface BaseRepository<T, I> extends JpaRepository<T, I> {}"),
+            ("src/main/java/com/x/ArticleRepository.java", "package com.x; public interface ArticleRepository extends BaseRepository<Employee, Long> {}"),
+            // project interfaces all the way down: nothing implements it
+            ("src/main/java/com/x/Port.java", "package com.x; public interface Port extends Base {} interface Base extends java.io.Serializable {}"),
+            ("src/main/java/com/x/Service.java", "package com.x; @org.springframework.stereotype.Component public class Service { Service(EmployeeRepository employees, ArticleRepository articles, Port port) {} }"),
+        ];
+        let (idx, m) = model(&files);
+        assert_eq!(point_resolution(&idx, &m, "employees"), Resolution::Unknown);
+        assert_eq!(point_resolution(&idx, &m, "articles"), Resolution::Unknown);
+        assert_eq!(point_resolution(&idx, &m, "port"), Resolution::NotFound);
     }
 }

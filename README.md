@@ -82,8 +82,10 @@ grounds stays silent instead of guessing. It also needs evidence that the
 model has seen how beans of the type would be registered: when a class
 implementing the type, or a method producing it, carries an annotation the
 model cannot classify (a stereotype from a missing jar, an annotation a
-library scans for), is named in an `@Import` it did not follow, or a mapper
-scan cannot be expanded, or Spring XML may define beans, it stays silent.
+library scans for), is named in an `@Import` it did not follow, or is an
+interface extending a type grounds cannot resolve (a Spring Data store
+module's repository base without its jar), or a mapper scan cannot be
+expanded, or Spring XML may define beans, it stays silent.
 
 ## Numbers
 
