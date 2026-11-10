@@ -246,3 +246,15 @@ fn copies_with_different_supertypes_leave_inherited_member_types_unknown() {
     );
     assert_eq!(findings(&dir), Vec::<String>::new());
 }
+
+#[test]
+fn a_variant_class_is_seen_in_headers_of_its_own_set() {
+    let dir = project(
+        "variant-header",
+        &[
+            ("app/src/fdroid/java/p/Base.java", "package p;\n\npublic class Base { }\n"),
+            ("app/src/fdroid/java/p/Broken.java", "package p;\n\nclass Broken extends Base {\n    void f() { new Broken().missing(); }\n}\n"),
+        ],
+    );
+    assert_eq!(findings(&dir), vec!["app/src/fdroid/java/p/Broken.java:4 unresolved-method".to_string()]);
+}

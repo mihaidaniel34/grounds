@@ -1341,7 +1341,12 @@ impl Index {
             return true;
         }
         let sets: Vec<(&str, &str)> = there.iter().filter_map(|f| source_root(f)).collect();
-        let here: Vec<&Arc<str>> = scope.enclosing.last().map(|e| files(&top(e))).unwrap_or_default();
+        // in a class header the class is not yet enclosing: the file whose
+        // imports the scope reads
+        let here: Vec<&Arc<str>> = match scope.enclosing.last() {
+            Some(e) => files(&top(e)),
+            None => self.files.iter().filter(|(_, st)| std::ptr::eq(&st.imports, scope.imports)).map(|(f, _)| f).collect(),
+        };
         !here.is_empty() && here.iter().all(|f| source_root(f).is_some_and(|r| sets.contains(&r)))
     }
 
