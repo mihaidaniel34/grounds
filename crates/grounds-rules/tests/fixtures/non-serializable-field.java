@@ -11,3 +11,62 @@ class A implements Serializable {
 class Holder implements java.io.Serializable {
     private Object payload;
 }
+// Serializable only through a library superclass: not written to be serialized
+class Bag extends java.util.ArrayList<String> {
+    private NotSer helper;
+}
+// Serializable through a project superclass: the subclass's fields count
+class Base implements Serializable { }
+class Derived extends Base {
+    private NotSer bad; // expect
+}
+// CDI: a normal-scoped bean is injected as a serializable client proxy
+@jakarta.enterprise.context.ApplicationScoped
+class Probe { }
+class Plain { }
+@jakarta.faces.view.ViewScoped
+class ViewBean implements Serializable {
+    @jakarta.inject.Inject
+    private Probe probe;
+    @jakarta.inject.Inject
+    private Plain injected;
+    private Probe byConstructor;
+    private Plain notInjected; // expect
+    @jakarta.inject.Inject
+    ViewBean(Probe p) { byConstructor = p; }
+}
+// not a passivating CDI bean: nothing checks what is injected
+class Session implements Serializable {
+    @jakarta.inject.Inject
+    private Plain helper; // expect
+}
+// a normal-scoped type built directly is a plain object, not a proxy
+class DirectHolder implements Serializable {
+    private Probe probe = new Probe(); // expect
+}
+// an @Inject constructor that does not set the field: nothing injects it
+@jakarta.faces.view.ViewScoped
+class PartlyInjected implements Serializable {
+    private Probe unset; // expect
+    @jakarta.inject.Inject
+    PartlyInjected(Plain p) { }
+}
+// an @Inject constructor that builds the value itself: not what the container gave
+@jakarta.faces.view.ViewScoped
+class BuildsItself implements Serializable {
+    private Probe built; // expect
+    private Probe checked;
+    // decided per field: `given` holds the proxy, `made` does not
+    private Probe given,
+        made; // expect
+    @jakarta.inject.Inject
+    BuildsItself(Probe injected) { built = new Probe(); checked = java.util.Objects.requireNonNull(injected); given = injected; made = new Probe(); }
+}
+// a parameter assigned to itself, or replaced before it is stored: no proxy is kept
+@jakarta.faces.view.ViewScoped
+class Shadowed implements Serializable {
+    private Probe probe; // expect
+    private Probe replaced; // expect
+    @jakarta.inject.Inject
+    Shadowed(Probe probe, Probe other) { probe = probe; other = new Probe(); this.replaced = other; }
+}

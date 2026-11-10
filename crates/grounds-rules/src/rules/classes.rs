@@ -275,8 +275,105 @@ impl Rule for StaticWriteFromInstance {
         if n.ancestors().any(|a| a.kind() == "lambda_expression") {
             return;
         }
+        // a container callback that runs once, at startup or shutdown, of a
+        // singleton: publishing it (or a setting) into a static accessor
+        // (`SpringContextHolder.context = ctx`) is the usual idiom
+        if is_lifecycle_callback(m, cx) {
+            return;
+        }
         cx.report(n, format!("Static field `{}` is written from an instance method", f.field.name));
     }
+}
+
+/// Is the method a callback a container runs once in a bean's life: JSR-250
+/// `@PostConstruct`/`@PreDestroy`, setter injection (`@Autowired`, `@Inject`,
+/// `@Value`, `@Resource`), a `@Bean` factory, a CDI or Spring startup
+/// observer, or a Spring `*Aware`/`InitializingBean`/`DisposableBean`/
+/// `BeanFactoryPostProcessor` callback?
+fn is_lifecycle_callback<'t>(m: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+    const ONCE: &[&str] = &[
+        "jakarta.annotation.PostConstruct",
+        "javax.annotation.PostConstruct",
+        "jakarta.annotation.PreDestroy",
+        "javax.annotation.PreDestroy",
+        "org.springframework.beans.factory.annotation.Autowired",
+        "jakarta.inject.Inject",
+        "javax.inject.Inject",
+        "org.springframework.beans.factory.annotation.Value",
+        "jakarta.annotation.Resource",
+        "javax.annotation.Resource",
+        "org.springframework.context.annotation.Bean",
+    ];
+    if cx.fm.annotations_of(m).iter().any(|a| ONCE.iter().any(|f| a.is(f))) {
+        return true;
+    }
+    // `void onStart(@Observes StartupEvent e)`,
+    // `@Observes @Initialized(ApplicationScoped.class) Object o`: container
+    // lifecycle events only, not application events
+    let observer = m.field("parameters").is_some_and(|ps| {
+        ps.kids().iter().any(|p| {
+            (has_annotation_named(*p, cx.src, "Observes") || has_annotation_named(*p, cx.src, "ObservesAsync"))
+                && (has_annotation_named(*p, cx.src, "Initialized")
+                    || has_annotation_named(*p, cx.src, "Destroyed")
+                    || p.field("type").is_some_and(|t| matches!(cx.text(t).rsplit('.').next(), Some("StartupEvent" | "ShutdownEvent" | "ServerStartupEvent"))))
+        })
+    });
+    let name = m.field("name").map(|x| cx.text(x)).unwrap_or("");
+    // each callback with the interface that declares it and its parameter
+    let callback = match name {
+        "setApplicationContext" => Some(("org.springframework.context.ApplicationContextAware", Some("ApplicationContext"))),
+        "setBeanFactory" => Some(("org.springframework.beans.factory.BeanFactoryAware", Some("BeanFactory"))),
+        "setEnvironment" => Some(("org.springframework.context.EnvironmentAware", Some("Environment"))),
+        "setServletContext" => Some(("org.springframework.web.context.ServletContextAware", Some("ServletContext"))),
+        "setEmbeddedValueResolver" => Some(("org.springframework.context.EmbeddedValueResolverAware", Some("StringValueResolver"))),
+        "setResourceLoader" => Some(("org.springframework.context.ResourceLoaderAware", Some("ResourceLoader"))),
+        "afterPropertiesSet" => Some(("org.springframework.beans.factory.InitializingBean", None)),
+        "destroy" => Some(("org.springframework.beans.factory.DisposableBean", None)),
+        "afterSingletonsInstantiated" => Some(("org.springframework.beans.factory.SmartInitializingSingleton", None)),
+        "postProcessBeanFactory" => Some(("org.springframework.beans.factory.config.BeanFactoryPostProcessor", Some("ConfigurableListableBeanFactory"))),
+        _ => None,
+    };
+    let aware = callback.is_some_and(|(iface, param)| {
+        let params: Vec<Node<'t>> = m.field("parameters").map(|ps| ps.kids().into_iter().filter(|p| p.kind() == "formal_parameter").collect()).unwrap_or_default();
+        // a type written with this simple name that is Spring's: resolved to
+        // `fqn`, or unresolved (the jar is missing) and so not another class
+        let springs = |ty: Node<'t>, fqn: &str| {
+            let written = cx.text(ty).split('<').next().unwrap_or("");
+            written.rsplit('.').next() == fqn.rsplit('.').next()
+                && match cx.fm.resolve_type_node(ty).class_name() {
+                    Some(n) => n == fqn || cx.fm.class(n).is_none() && !n.contains('.'),
+                    None => true,
+                }
+        };
+        let param_fqn = |t: &str| match t {
+            "ApplicationContext" => "org.springframework.context.ApplicationContext",
+            "BeanFactory" => "org.springframework.beans.factory.BeanFactory",
+            "Environment" => "org.springframework.core.env.Environment",
+            "ServletContext" => "jakarta.servlet.ServletContext",
+            "StringValueResolver" => "org.springframework.util.StringValueResolver",
+            "ResourceLoader" => "org.springframework.core.io.ResourceLoader",
+            _ => "org.springframework.beans.factory.config.ConfigurableListableBeanFactory",
+        };
+        let signature = match param {
+            Some(t) => {
+                params.len() == 1
+                    && params[0].field("type").is_some_and(|ty| {
+                        springs(ty, param_fqn(t)) || t == "ServletContext" && springs(ty, "javax.servlet.ServletContext")
+                    })
+            }
+            None => params.is_empty(),
+        };
+        // the class implements that interface: known from the hierarchy, or
+        // named (and not resolved to another class) in its own declaration
+        signature
+            && owning_type_decl(m).is_some_and(|d| {
+                cx.fm.class_of_decl(d).is_some_and(|c| cx.fm.is_subclass(&c.name, iface).is_yes())
+                    || d.field("interfaces").or_else(|| d.kid_of_kind("super_interfaces")).is_some_and(|i| {
+                        i.descendants().filter(|x| matches!(x.kind(), "type_identifier" | "scoped_type_identifier") && x.parent().is_some_and(|p| p.kind() != "scoped_type_identifier")).any(|x| springs(x, iface))
+                    })
+            })
+    });
+    observer || aware
 }
 
 declare_rule!(ConstructorCallsOverridable {
@@ -814,6 +911,102 @@ impl Rule for SerialVersionUidModifiers {
     }
 }
 
+/// Annotations whose field a dependency-injection container fills; in a
+/// passivating CDI bean the value is serializable or deployment fails.
+const INJECTED_BY_CONTAINER: &[&str] = &[
+    "jakarta.inject.Inject",
+    "javax.inject.Inject",
+    "jakarta.ejb.EJB",
+    "javax.ejb.EJB",
+    "jakarta.persistence.PersistenceContext",
+    "javax.persistence.PersistenceContext",
+    "jakarta.persistence.PersistenceUnit",
+    "javax.persistence.PersistenceUnit",
+];
+
+/// Is `value` a parameter of the constructor `ctor`, as given or through a
+/// null check (`Objects.requireNonNull(p)`, `checkNotNull(p)`)? What the
+/// container injects; `new Probe()` is a plain object.
+fn from_injected_parameter<'t>(ctor: Node<'t>, value: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+    let params: Vec<&str> = ctor
+        .field("parameters")
+        .map(|ps| ps.kids().into_iter().filter(|p| p.kind() == "formal_parameter").filter_map(|p| p.field("name")).map(|x| cx.text(x)).collect())
+        .unwrap_or_default();
+    // a parameter the constructor reassigns no longer holds what was injected
+    let reassigned: Vec<&str> = ctor
+        .descendants()
+        .filter(|x| x.kind() == "assignment_expression")
+        .filter_map(|x| x.field("left").map(|l| l.unparen()))
+        .filter(|l| l.kind() == "identifier")
+        .map(|l| cx.text(l))
+        .collect();
+    let params: Vec<&str> = params.into_iter().filter(|p| !reassigned.contains(p)).collect();
+    let v = value.unparen();
+    match v.kind() {
+        "identifier" => params.contains(&cx.text(v)),
+        "method_invocation" if matches!(cx.fm.call_name(v), Some("requireNonNull" | "checkNotNull")) => {
+            cx.fm.args_of(v).first().is_some_and(|a| a.unparen().kind() == "identifier" && params.contains(&cx.text(a.unparen())))
+        }
+        _ => false,
+    }
+}
+
+/// CDI scopes whose beans may be passivated: the container checks at
+/// deployment that every injected dependency is passivation capable.
+const CDI_PASSIVATING_SCOPES: &[&str] = &[
+    "jakarta.enterprise.context.SessionScoped",
+    "javax.enterprise.context.SessionScoped",
+    "jakarta.enterprise.context.ConversationScoped",
+    "javax.enterprise.context.ConversationScoped",
+    "jakarta.faces.view.ViewScoped",
+    "javax.faces.view.ViewScoped",
+    "jakarta.faces.flow.FlowScoped",
+    "javax.faces.flow.FlowScoped",
+];
+
+/// CDI normal scopes (and the JSF and JTA ones built on them): their beans
+/// are injected as client proxies.
+const CDI_NORMAL_SCOPES: &[&str] = &[
+    "jakarta.enterprise.context.ApplicationScoped",
+    "javax.enterprise.context.ApplicationScoped",
+    "jakarta.enterprise.context.RequestScoped",
+    "javax.enterprise.context.RequestScoped",
+    "jakarta.enterprise.context.SessionScoped",
+    "javax.enterprise.context.SessionScoped",
+    "jakarta.enterprise.context.ConversationScoped",
+    "javax.enterprise.context.ConversationScoped",
+    "jakarta.faces.view.ViewScoped",
+    "javax.faces.view.ViewScoped",
+    "jakarta.faces.flow.FlowScoped",
+    "javax.faces.flow.FlowScoped",
+    "jakarta.transaction.TransactionScoped",
+    "javax.transaction.TransactionScoped",
+];
+
+/// Does the class, or a superclass declared in the project, implement a
+/// Serializable interface itself? A class that is Serializable only because
+/// a library superclass is (`JPanel`, `JsonFactory`) was not written to be
+/// serialized, and its fields say nothing about a bug.
+fn serializable_by_declaration<'t>(cx: &Ctx<'_, 't>, cls: &ClassInfo) -> bool {
+    let mut cur = Some(cls.name.clone());
+    let mut depth = 0;
+    while let Some(name) = cur.take() {
+        let Some(c) = cx.fm.class(&name) else { return false };
+        if !c.is_source() {
+            return false;
+        }
+        if c.interfaces.iter().filter_map(|i| i.class_name()).any(|i| cx.fm.is_subclass(i, "java.io.Serializable").is_yes()) {
+            return true;
+        }
+        depth += 1;
+        if depth > 32 {
+            return false;
+        }
+        cur = c.superclass.as_ref().and_then(|s| s.class_name()).map(|s| s.into());
+    }
+    false
+}
+
 declare_rule!(NonSerializableField {
     id: "non-serializable-field",
     name: "Non-transient non-serializable field in a Serializable class",
@@ -839,6 +1032,19 @@ impl Rule for NonSerializableField {
         if cls.methods.iter().any(|m| matches!(&*m.name, "writeObject" | "writeReplace" | "writeExternal")) {
             return;
         }
+        // Serializable only through a library superclass (a Swing component,
+        // a Jackson factory): nothing says the class is ever serialized
+        if !serializable_by_declaration(cx, &cls) {
+            return;
+        }
+        // a container fills injected fields: CDI injects serializable client
+        // proxies of normal-scoped beans and refuses to deploy a passivating
+        // bean with a dependency that is not passivation capable; EJB and
+        // persistence-context references are serializable proxies too
+        let passivating = cls.annotations.iter().any(|a| CDI_PASSIVATING_SCOPES.iter().any(|f| a.is(f)));
+        if passivating && cx.fm.annotations_of(n).iter().any(|a| INJECTED_BY_CONTAINER.iter().any(|f| a.is(f))) {
+            return;
+        }
         let Some(t) = n.field("type") else { return };
         let ty = cx.fm.resolve_type_node(t);
         let Some(tn) = ty.class_name() else { return };
@@ -847,6 +1053,44 @@ impl Rule for NonSerializableField {
             return;
         }
         let Some(tc) = cx.fm.class(tn) else { return };
+        // a normal-scoped CDI bean is only ever referenced through its
+        // container-made client proxy, which is serializable
+        // (when the container provides it: an injected field, or a field set
+        // by an @Inject constructor; `new Probe()` is a plain object)
+        // (an @Inject constructor that assigns this field)
+        // decided per field of the declaration (`Probe a, b;`)
+        let annotated = cx.fm.annotations_of(n).iter().any(|a| INJECTED_BY_CONTAINER.iter().any(|f| a.is(f)));
+        let normal_scoped = tc.annotations.iter().any(|a| CDI_NORMAL_SCOPES.iter().any(|f| a.is(f)));
+        let injected = |d: Node<'t>| {
+            annotated
+                || d.field("value").is_none()
+                    && d.field("name").map(|x| cx.text(x)).is_some_and(|name| {
+                        owning_type_decl(n).is_some_and(|decl| {
+                            members(decl).iter().any(|m| {
+                                m.kind() == "constructor_declaration"
+                                    && cx.fm.annotations_of(*m).iter().any(|a| a.is("jakarta.inject.Inject") || a.is("javax.inject.Inject"))
+                                    && m.descendants().filter(|x| x.kind() == "assignment_expression").any(|x| {
+                                        // the field itself: not a parameter of the same name
+                                        // (`service = service`), nor a nested class's
+                                        !x.ancestors().take_while(|a| a != m).any(|a| matches!(a.kind(), "lambda_expression" | "class_body"))
+                                            && x.field("left").is_some_and(|l| {
+                                                let l = l.unparen();
+                                                if l.kind() == "identifier" && cx.fm.local_ref(l).is_some() {
+                                                    return false;
+                                                }
+                                                let target = if l.kind() == "field_access" { l.field("field") } else { Some(l) };
+                                                target.is_some_and(|t| cx.text(t) == name)
+                                            })
+                                            && x.field("right").is_some_and(|r| from_injected_parameter(*m, r, cx))
+                                    })
+                            })
+                        })
+                    })
+        };
+        let reported: Vec<Node<'t>> = n.fields("declarator").into_iter().filter(|d| !(normal_scoped && injected(*d))).collect();
+        if reported.is_empty() {
+            return;
+        }
         // interfaces and non-final classes may have serializable implementations
         if tc.is_interface() || (!tc.flags.is_final() && !tc.is_enum() && !tc.is_record() && tc.is_abstract()) {
             return;
@@ -858,7 +1102,7 @@ impl Rule for NonSerializableField {
             }
         }
         if cx.fm.is_subclass(tn, "java.io.Serializable").is_no() && cx.fm.hierarchy_complete(tn) {
-            for d in n.fields("declarator") {
+            for d in reported {
                 cx.report(d, format!("Field of non-serializable type `{}` in a Serializable class; make it transient", ty.display_simple()));
             }
         }
@@ -1122,7 +1366,23 @@ impl Rule for MutableEnumField {
         }
         let in_enum = n.parent().is_some_and(|p| p.kind() == "enum_body_declarations");
         if in_enum {
+            let Some(decl) = owning_type_decl(n) else { return };
+            // a private field that only the constructors assign, with no
+            // Lombok setter, cannot change after the constants are built: at
+            // most `final` is missing
+            let setter = has_annotation_named(n, cx.src, "Setter") || has_annotation_named(decl, cx.src, "Setter") || has_annotation_named(decl, cx.src, "Data");
+            let open = !n.has_modifier("private") || setter;
+            let cls = cx.fm.class_of_decl(decl);
             for d in n.fields("declarator") {
+                let Some(name) = d.field("name").map(|x| cx.text(x)) else { continue };
+                let written = decl.descendants().filter(|a| matches!(a.kind(), "assignment_expression" | "update_expression")).any(|a| {
+                    let t = if a.kind() == "assignment_expression" { a.field("left") } else { a.kids().into_iter().find(|k| k.is_named()) };
+                    let ours = t.and_then(|t| cx.fm.field_ref(t.unparen())).is_some_and(|f| cls.as_ref().is_some_and(|c| f.owner == c.name) && &*f.field.name == name);
+                    ours && !a.ancestors().take_while(|x| *x != decl).any(|x| x.kind() == "constructor_declaration")
+                });
+                if !open && !written {
+                    continue;
+                }
                 cx.report(d, format!("Enum field `{}` is mutable; make it final", d.field("name").map(|x| cx.text(x)).unwrap_or("")));
             }
         }

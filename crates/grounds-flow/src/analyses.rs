@@ -1445,7 +1445,30 @@ impl<'a, 't> OptionalPresence<'a, 't> {
                     (Some("orElse"), [a]) => truth && a.unparen().kind() == "false",
                     _ => false,
                 };
-                if proves { self.chain_root(e.field("object")).into_iter().collect() } else { Vec::new() }
+                if !proves {
+                    return Vec::new();
+                }
+                let mut out: Vec<usize> = self.chain_root(e.field("object")).into_iter().collect();
+                // an Optional derived from another one (`b = a.map(f)`,
+                // `a.flatMap(g).filter(p)`) is empty when that one is: both
+                // effectively final, a present `b` proves `a`
+                let mut k = 0;
+                while k < out.len() {
+                    let i = out[k];
+                    k += 1;
+                    let d = &self.fm.binder.decls[i];
+                    if d.kind != LocalKind::Local || !is_effectively_final(self.fm, i) {
+                        continue;
+                    }
+                    let Some(init) = d.decl_node.field("value").map(|v| v.unparen()) else { continue };
+                    if init.kind() != "method_invocation" {
+                        continue;
+                    }
+                    if let Some(j) = self.chain_root(Some(init)).filter(|j| *j != i && is_effectively_final(self.fm, *j) && !out.contains(j)) {
+                        out.push(j);
+                    }
+                }
+                out
             }
             // no alias chains; the Optional must still hold the tested value
             "identifier" if follow_alias => {

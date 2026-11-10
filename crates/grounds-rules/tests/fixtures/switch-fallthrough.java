@@ -49,3 +49,33 @@ class NestedDefault {
     }
     void work() {}
 }
+class ConditionalExit {
+    String m(int kind, Object value, StringBuilder out) {
+        switch (kind) {
+            case 0:
+                // leaves the switch when done, falls through otherwise: deliberate
+                if (value == null) {
+                    return null;
+                }
+            case 1:
+                out.append(value);
+                if (out.length() > 10) break;
+            case 2:
+                out.append('.');
+                break;
+            case 3:
+                out.append("three");
+            case 4: // expect
+                out.append("four");
+                break;
+            case 5:
+                for (int i = 0; i < 2; i++) { if (i == 1) break; }
+            case 6: // expect
+                for (int i = 0; i < 2; i++) { if (i == 1) continue; out.append(i); }
+                out.append("a jump of the nested loop does not leave the switch");
+            default: // expect
+                out.append('?');
+        }
+        return out.toString();
+    }
+}

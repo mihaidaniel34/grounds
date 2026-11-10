@@ -39,3 +39,93 @@ class AliasCleared {
     }
     void work() throws java.io.IOException {}
 }
+class InputErrors {
+    // invalid input translated into an error that names the input or carries the parser's message
+    Mode mode(String value) {
+        try { return Mode.valueOf(value.toUpperCase()); } catch (IllegalArgumentException e) { throw new BadFlag("Not a valid mode: " + value); }
+    }
+    java.util.regex.Pattern pattern(String regex) {
+        try { return java.util.regex.Pattern.compile(regex); } catch (java.util.regex.PatternSyntaxException e) { throw new BadFlag("Pattern syntax error: " + e.getMessage()); }
+    }
+    long when(String text) {
+        try { return java.time.Instant.parse(text).toEpochMilli(); } catch (java.time.format.DateTimeParseException e) { throw new BadFlag("Expected a timestamp but got: " + text); }
+    }
+    // still lost: the message names neither the input nor the parser's error
+    Mode lineMode(String[] values, int line) {
+        try { return Mode.valueOf(values[1]); } catch (IllegalArgumentException e) { throw new BadFlag("Error parsing mode in line " + line); } // expect
+    }
+    // still lost: an I/O failure is not invalid input
+    void read(java.io.File f) {
+        try { new java.io.FileReader(f).close(); } catch (java.io.IOException e) { throw new BadFlag("Cannot read " + f); } // expect
+    }
+    // a charset or digest every Java platform supports cannot be missing
+    byte[] utf8(String s) {
+        try { return s.getBytes("UTF-8"); } catch (java.io.UnsupportedEncodingException e) { throw new AssertionError("UTF-8 is not supported"); }
+    }
+    java.security.MessageDigest sha1() {
+        try { return java.security.MessageDigest.getInstance("SHA-1"); } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException("no SHA-1"); }
+    }
+    byte[] encoded(String s, String charset) {
+        try { return s.getBytes(charset); } catch (java.io.UnsupportedEncodingException e) { throw new IllegalStateException("bad charset"); } // expect
+    }
+    java.security.MessageDigest digest() {
+        try { return java.security.MessageDigest.getInstance("WHIRLPOOL"); } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException("no digest"); } // expect
+    }
+    byte[] parenthesized(String s) {
+        try { return s.getBytes(("UTF-8")); } catch (java.io.UnsupportedEncodingException e) { throw new IllegalStateException("no UTF-8"); }
+    }
+    byte[] withOtherCalls(String s, byte[] b) {
+        // neither takes a charset name: only getBytes("UTF-8") can throw
+        try { java.nio.charset.StandardCharsets.UTF_8.encode(s); new String(b, 0, b.length); return s.getBytes("UTF-8"); } catch (java.io.UnsupportedEncodingException e) { throw new IllegalStateException("no UTF-8"); }
+    }
+    // a call that takes a string but no charset name does not count
+    byte[] number(int value) {
+        try { return Integer.toString(value).getBytes("UTF-8"); } catch (java.io.UnsupportedEncodingException e) { throw new IllegalStateException("no UTF-8"); }
+    }
+    java.security.Key loadKey(String name) throws java.security.NoSuchAlgorithmException { return null; }
+    void plainHelper(String name) { }
+    void withPlainHelper(String name) {
+        try { java.security.MessageDigest.getInstance("SHA-256"); plainHelper(name); } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException("failed"); }
+    }
+    // a call in a lambda the try only creates does not run there
+    java.util.concurrent.Callable<java.security.Key> deferred(String name) {
+        try { java.security.MessageDigest.getInstance("SHA-256"); return () -> loadKey(name); } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException("failed"); }
+    }
+    interface Codec { byte[] getBytes(String charset) throws java.io.UnsupportedEncodingException; }
+    // still lost: a getBytes of an unknown receiver is not String's
+    byte[] custom(missing.Codec codec) {
+        try { return codec.getBytes("UTF-8"); } catch (java.io.UnsupportedEncodingException e) { throw new IllegalStateException("no UTF-8"); } // expect
+    }
+    // still lost: another call in the try declares the caught exception
+    void withKey(String name) {
+        try { java.security.MessageDigest.getInstance("SHA-256"); loadKey(name); } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException("failed"); } // expect
+    }
+    // still lost: a call the analysis cannot resolve may throw it too
+    void withUnknown(String name) {
+        try { java.security.MessageDigest.getInstance("SHA-256"); missing.Keys.load(name); } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException("failed"); } // expect
+    }
+    // still lost: SHA-256 is guaranteed for MessageDigest, not for Mac
+    javax.crypto.Mac mac() {
+        try { java.security.MessageDigest.getInstance("SHA-256"); return javax.crypto.Mac.getInstance("SHA-256"); } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException("failed"); } // expect
+    }
+    // still lost: the second call names its algorithm at run time
+    java.security.MessageDigest pair(String algorithm) {
+        try { java.security.MessageDigest.getInstance("SHA-256"); return java.security.MessageDigest.getInstance(algorithm); } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException("failed"); } // expect
+    }
+    // still lost: the literal is not what the call was given
+    byte[] encodedLabel(String s, String charset) {
+        try { String label = "UTF-8"; return s.getBytes(charset); } catch (java.io.UnsupportedEncodingException e) { throw new IllegalStateException("bad charset"); } // expect
+    }
+    // still lost: the message names a local the try only read, not the input it parsed
+    Mode tagged(String[] values, String tag) {
+        try { String seen = tag; return Mode.valueOf(values[0]); } catch (IllegalArgumentException e) { throw new BadFlag("bad mode for " + tag); } // expect
+    }
+    // still lost inside a lambda: the try is in an argument list, the tag is not the input
+    void each(java.util.List<String[]> rows, String tag) {
+        rows.forEach(values -> {
+            try { String seen = tag; Mode.valueOf(values[0]); } catch (IllegalArgumentException e) { throw new BadFlag("bad mode for " + tag); } // expect
+        });
+    }
+    enum Mode { A, B }
+}
+class BadFlag extends RuntimeException { BadFlag(String m) { super(m); } }
