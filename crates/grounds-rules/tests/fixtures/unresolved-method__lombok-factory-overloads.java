@@ -1,0 +1,38 @@
+import lombok.AllArgsConstructor;
+import lombok.RequiredArgsConstructor;
+import java.util.Map;
+
+// the generated `of(String, String, Object)` sits beside hand-written
+// overloads, one of them with the same number of parameters
+@AllArgsConstructor(staticName = "of")
+class Message {
+    private String type;
+    private String text;
+    private Object data;
+
+    static Message of(Session session) { return of("open", "opened", session); }
+    static Message of(Session session, Topic topic, int qos) { return of("subscribe", topic.name, session); }
+}
+
+@RequiredArgsConstructor(staticName = "create")
+class Pair {
+    private final String left;
+    private final String right;
+
+    static Pair create(String both) { return new Pair(both, both); }
+}
+
+class Session {}
+class Topic { String name; }
+
+class Use {
+    void m(Map<String, Object> data, Session s, Topic t) {
+        Message a = Message.of("connection", "connected", data);
+        Message b = Message.of(s);
+        Message c = Message.of(s, t, 1);
+        Pair p = Pair.create("l", "r");
+        Pair q = Pair.create("both");
+        Message.of("a", "b"); // expect
+        Pair.create(1, 2, 3); // expect
+    }
+}
