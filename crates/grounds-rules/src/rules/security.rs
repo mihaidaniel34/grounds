@@ -57,7 +57,9 @@ fn looks_like_secret_value(v: &str) -> bool {
     }
     // a query-string or form fragment ("&client_secret=", "?grant_type="), or
     // an i18n label ("$t('password')")
-    if v.ends_with('=') || v.starts_with('&') || v.starts_with('?') || v.starts_with("$t(") {
+    // (not a Base64 value, which ends in padding: "c2VjcmV0LWtleS0xMjM0NTY3ODk=")
+    let base64 = v.len() >= 16 && v.len() % 4 == 0 && v.trim_end_matches('=').chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '/');
+    if v.ends_with('=') && !base64 || v.starts_with('&') || v.starts_with('?') || v.starts_with("$t(") {
         return false;
     }
     let humps = v.chars().zip(v.chars().skip(1)).filter(|(a, b)| a.is_ascii_lowercase() && b.is_ascii_uppercase()).count();
@@ -575,6 +577,10 @@ fn format_parts<'t>(fmt: &str, args: &[Node<'t>], out: &mut Vec<SqlPart<'t>>) ->
 /// Does the SQL so far end where a table or column name goes: after `from`,
 /// `into`, `update`, `join`, `table`, or after a qualifier (`t.`)?
 fn identifier_position(before: &str) -> bool {
+    // inside a quoted literal (`host = 'www.` + host): a value
+    if before.matches('\'').count() % 2 == 1 {
+        return false;
+    }
     if before.ends_with('.') {
         return true;
     }

@@ -130,6 +130,7 @@ class IdentifiersFromFields {
         c.prepareStatement("SELECT * FROM " + table + " WHERE id = ? AND name = '" + name + "'"); // expect
         c.prepareStatement(String.format("SELECT * FROM %2$s WHERE id = ? AND name = '%1$s'", name, table)); // expect
         c.prepareStatement("SELECT * FROM t WHERE id = ? ORDER BY " + name); // expect
+        c.prepareStatement("SELECT * FROM t WHERE id = ? AND host = 'www." + name + "'"); // expect
     }
     void getter(java.sql.Statement st, javax.servlet.http.HttpServletRequest req) throws java.sql.SQLException {
         st.executeQuery("SELECT * FROM " + table + " WHERE name = '" + req.getParameter("name") + "'"); // expect

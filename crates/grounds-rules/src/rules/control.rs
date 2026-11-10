@@ -602,6 +602,8 @@ fn loop_has_exit(body: Node, src: &str) -> bool {
         for k in n.kids() {
             match k.kind() {
                 "return_statement" | "throw_statement" => return true,
+                // `continue outer;` goes on with an enclosing loop
+                "continue_statement" if k.kids().iter().any(|x| x.kind() == "identifier") => return true,
                 "break_statement" => {
                     let labeled = k.kids().iter().any(|x| x.kind() == "identifier");
                     if labeled || depth == 0 {
@@ -1298,7 +1300,7 @@ impl Rule for LoopBoundOffByOne {
                 _ => false,
             };
             // a catch around the access may be the intended way out
-            if hit && !d.ancestors().take_while(|a| *a != n).any(|a| matches!(a.kind(), "try_statement" | "lambda_expression" | "class_body")) {
+            if hit && !d.ancestors().take_while(|a| *a != n).any(|a| matches!(a.kind(), "try_statement" | "try_with_resources_statement" | "lambda_expression" | "class_body")) {
                 cx.report(d, format!("`{}` is out of bounds on the last iteration: `{}` lets `{i}` reach `{}`", cx.text(d), cx.text(cond), cx.text(bound)));
                 return;
             }

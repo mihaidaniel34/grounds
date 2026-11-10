@@ -20,5 +20,7 @@ class Keys {
     static final String LLM_API_KEY = "SKILL_SCANNER_LLM_API_KEY";
     static final String GRANT_TOKEN = "client_credentials";
     static final String SECRET_PARAM_TOKEN = "&client_secret=";
+    static final String PASSWORD_PARAM = "password=";
+    static final String SIGNING_SECRET = "c2VjcmV0LWtleS0xMjM0NTY3ODk="; // expect
     static final String DING_TALK_PASSWORD = "$t('password')";
 }
