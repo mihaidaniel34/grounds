@@ -568,9 +568,12 @@ struct Pom {
     parent: Option<PathBuf>,
     /// The major version of a Spring Boot parent (0 when unread).
     spring_boot_parent: Option<u32>,
-    /// A profile sets the release, source or target: what applies depends
-    /// on conditions grounds cannot evaluate (the JDK running Maven, a flag).
-    profile_sets_release: bool,
+    /// A profile configures the compiler plugin's release, source or
+    /// target: what applies depends on conditions grounds cannot evaluate
+    /// (the JDK running Maven, a flag).
+    profile_configures_compiler: bool,
+    /// The properties profiles set: a value read from one of them is unknown.
+    profile_props: Vec<String>,
 }
 
 #[derive(Default)]
@@ -613,6 +616,28 @@ impl PomCache {
         self.compiler(&parent, key, depth + 1)
     }
 
+    /// Whether resolving `value` reads one of `props`, directly or through
+    /// other properties.
+    fn reads(&mut self, path: &Path, value: &str, props: &[String]) -> bool {
+        let mut pending = vec![value.to_string()];
+        for _ in 0..20 {
+            let Some(v) = pending.pop() else { return false };
+            let mut rest = v.as_str();
+            while let Some(i) = rest.find("${") {
+                let Some(e) = rest[i..].find('}') else { break };
+                let name = &rest[i + 2..i + e];
+                if props.iter().any(|p| p == name) {
+                    return true;
+                }
+                if let Some(sub) = self.property(path, name, 0) {
+                    pending.push(sub);
+                }
+                rest = &rest[i + e..];
+            }
+        }
+        false
+    }
+
     /// The in-repository parent pom of a pom.
     pub(crate) fn parent_of(&mut self, path: &Path) -> Option<PathBuf> {
         self.load(path)?.parent.clone()
@@ -634,17 +659,27 @@ impl PomCache {
     /// The evidence of a pom with its parents in the repository.
     fn evidence(&mut self, path: &Path) -> Evidence {
         // a profile of the pom or a parent in the repository may set it otherwise
+        let mut profile_props: Vec<String> = Vec::new();
         let mut cur = Some(path.to_path_buf());
         for _ in 0..10 {
             let Some(p) = cur.take() else { break };
             let Some(pom) = self.load(&p) else { break };
-            if pom.profile_sets_release {
+            if pom.profile_configures_compiler {
                 return Evidence::Unknown;
             }
+            profile_props.extend(pom.profile_props.iter().cloned());
             cur = pom.parent.clone();
         }
+        // a value a profile may change: the property itself, or one it reads
         let value = |c: &mut PomCache, param: &str, prop: &str| -> Option<Option<u32>> {
-            let raw = c.compiler(path, param, 0).or_else(|| c.property(path, prop, 0))?;
+            let raw = match c.compiler(path, param, 0) {
+                Some(raw) => raw,
+                None if profile_props.iter().any(|p| p == prop) => return Some(None),
+                None => c.property(path, prop, 0)?,
+            };
+            if c.reads(path, &raw, &profile_props) {
+                return Some(None);
+            }
             Some(c.resolve(path, &raw).and_then(|r| parse_version(&r)))
         };
         // the plugin's configuration wins over the property it defaults to
@@ -663,6 +698,10 @@ impl PomCache {
         // Spring Boot's parent compiles for `java.version`: with `--release`
         // since Boot 3, with source and target before
         if let Some(major) = self.spring_boot_parent(path) {
+            let raw = self.property(path, "java.version", 0).unwrap_or_default();
+            if profile_props.iter().any(|p| p == "java.version") || self.reads(path, &raw, &profile_props) {
+                return Evidence::Unknown;
+            }
             return match self.property(path, "java.version", 0).and_then(|r| self.resolve(path, &r)).and_then(|r| parse_version(&r)) {
                 Some(r) if major >= 3 => Evidence::Exact(r),
                 Some(r) => Evidence::AtLeast(r),
@@ -706,7 +745,9 @@ impl PomCache {
 fn parse_pom(text: &str, path: &Path) -> Pom {
     let text = strip_comments(text, "", "<!--", "-->");
     // profiles switch settings on conditions we cannot evaluate
-    let profile_sets_release = elements(&text, "profiles").iter().any(|p| ["maven.compiler.release", "maven.compiler.source", "maven.compiler.target", "<release>", "<source>", "<target>"].iter().any(|k| p.contains(k)) && (p.contains("maven.compiler") || p.contains("maven-compiler-plugin")));
+    let profiles = elements(&text, "profiles");
+    let profile_configures_compiler = profiles.iter().flat_map(|p| elements(p, "plugin")).any(|pl| element(pl, "artifactId") == Some("maven-compiler-plugin") && ["<release>", "<source>", "<target>", "<compilerArgs>"].iter().any(|k| pl.contains(k)));
+    let profile_props = profiles.iter().flat_map(|p| elements(p, "properties")).flat_map(children).map(|(k, _)| k).collect();
     let mut main = text.clone();
     while let (Some(s), Some(e)) = (main.find("<profiles>"), main.find("</profiles>")) {
         if e < s {
@@ -753,7 +794,7 @@ fn parse_pom(text: &str, path: &Path) -> Pom {
         p.exists().then_some(p)
     });
     let spring_boot_parent = parent_block.filter(|p| element(p, "groupId") == Some("org.springframework.boot")).map(|p| element(p, "version").and_then(|v| v.split('.').next()?.parse().ok()).unwrap_or(0));
-    Pom { props, compiler, parent, spring_boot_parent, profile_sets_release }
+    Pom { props, compiler, parent, spring_boot_parent, profile_configures_compiler, profile_props }
 }
 
 #[cfg(test)]
@@ -914,6 +955,20 @@ mod tests {
             ],
         );
         assert_eq!(evidence_of(&dir), vec![(":".into(), Unknown), ("a".into(), Unknown), ("b".into(), Exact(11))]);
+        // a literal release on the compiler plugin wins over a profile's
+        // property; a profile that sets what the plugin reads, or configures
+        // the plugin itself, still decides
+        let plugin = |conf: &str| format!("<build><plugins><plugin><artifactId>maven-compiler-plugin</artifactId><configuration>{conf}</configuration></plugin></plugins></build>");
+        let profile = |inner: &str| format!("<profiles><profile><id>p</id>{inner}</profile></profiles>");
+        let dir = temp(
+            "profile-plugin",
+            &[
+                ("literal/pom.xml", &format!("<project>{}{}</project>", plugin("<release>17</release>"), profile("<properties><maven.compiler.release>21</maven.compiler.release></properties>"))),
+                ("read/pom.xml", &format!("<project><properties><jdk>17</jdk></properties>{}{}</project>", plugin("<release>${jdk}</release>"), profile("<properties><jdk>21</jdk></properties>"))),
+                ("configures/pom.xml", &format!("<project>{}{}</project>", plugin("<release>17</release>"), profile(&plugin("<release>21</release>")))),
+            ],
+        );
+        assert_eq!(evidence_of(&dir), vec![("configures".into(), Unknown), ("literal".into(), Exact(17)), ("read".into(), Unknown), (":".into(), Unknown)]);
         // a toolchain decides the API unless a release is set; Kotlin's languageVersion is not Java's
         let dir = temp(
             "toolchain",
