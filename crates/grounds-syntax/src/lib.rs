@@ -391,12 +391,19 @@ impl<'t> NodeExt<'t> for Node<'t> {
     }
     fn modifiers(&self) -> Option<Node<'t>> {
         // the grammar puts `modifiers` first: looking no further than the
-        // first named child that is not a comment keeps this constant on a
-        // class body of a million members (suppression checks ask it of
-        // every ancestor of every finding)
+        // first child that is not a comment keeps this constant on a class
+        // body of a million members or a block of a million `;` (suppression
+        // checks ask it of every ancestor of every finding)
         let mut c = self.walk();
-        let first = self.named_children(&mut c).find(|n| !is_comment_node(n));
-        first.filter(|n| n.kind() == "modifiers")
+        if !c.goto_first_child() {
+            return None;
+        }
+        while is_comment_node(&c.node()) {
+            if !c.goto_next_sibling() {
+                return None;
+            }
+        }
+        Some(c.node()).filter(|n| n.kind() == "modifiers")
     }
     fn has_modifier(&self, keyword: &str) -> bool {
         match self.modifiers() {

@@ -97,3 +97,17 @@ fn a_class_body_of_a_million_members_is_checked_in_time_and_suppressions_hold() 
     assert!(fs.iter().all(|f| f.line == 2), "B's findings are suppressed");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_run_of_semicolons_left_in_an_error_node_is_checked_in_time() {
+    // reduced from a fuzzed file (17 s for 100,000 `;`): the parser leaves the
+    // semicolons as unnamed tokens of one node, and looking for that node's
+    // modifiers skipped over all of them, once per finding
+    let src = format!("Boolean m(int x) {{{}) {{}} }}\n", ";".repeat(100_000));
+    let dir = project("error-semicolons", &[("src/main/java/p/A.java", &src)]);
+    let t = Instant::now();
+    let fs = check(&dir, &["stray-semicolon"]);
+    assert!(t.elapsed() < Duration::from_secs(10), "{:?}", t.elapsed());
+    assert_eq!(fs.len(), grounds_rules::runner::MAX_PER_RULE);
+    let _ = std::fs::remove_dir_all(&dir);
+}
