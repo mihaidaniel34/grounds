@@ -42,6 +42,7 @@ pub fn rules() -> Vec<Box<dyn Rule>> {
         Box::new(StreamSortedFindFirst),
         Box::new(CollectionToArrayZero),
         Box::new(StreamCountComparison),
+        Box::new(StreamConsumedTwice),
     ]
 }
 
@@ -1348,6 +1349,82 @@ impl Rule for StreamCountComparison {
         let bounded = l.field("object").is_some_and(|o| is_call_named(o.unparen(), cx.src, &["limit"]));
         if existence && !bounded && is_call_named(l, cx.src, &["count"]) && l.field("object").is_some_and(|o| is_subtype_any(cx.fm, &cx.type_of(o), &["java.util.stream.BaseStream"])) {
             cx.report(n, "Use `anyMatch()`/`findAny()` instead of counting the whole stream");
+        }
+    }
+}
+
+declare_rule!(StreamConsumedTwice {
+    id: "stream-consumed-twice",
+    name: "Stream used after it was already consumed",
+    category: Bug,
+    severity: Warning,
+    sources: ["sonar:S3959"],
+    kinds: ["<file>"],
+    description: "A stream can be operated on once. `s.count(); s.count();` (or `s.filter(..)` whose result is dropped, then `s.collect(..)`) throws IllegalStateException: stream has already been operated upon or closed. Build a new stream for the second use, or collect to a list first.",
+});
+
+impl Rule for StreamConsumedTwice {
+    rule_meta!();
+    fn check_file<'t>(&self, cx: &mut Ctx<'_, 't>) {
+        use grounds_flow::EdgeKind;
+        let mut found: Vec<(Node<'t>, String)> = Vec::new();
+        for (idx, d) in cx.fm.binder.decls.iter().enumerate() {
+            let uses = cx.fm.binder.uses(idx);
+            if uses.len() < 2 || !is_subtype_any(cx.fm, &cx.fm.local_type(idx), &["java.util.stream.BaseStream"]) {
+                continue;
+            }
+            let Some(owner) = d.owner else { continue };
+            // `s = s.filter(..)` starts a new pipeline under the same name, and a
+            // use inside a lambda runs at a time the method's flow does not show
+            let reassigned = uses.iter().any(|u| u.parent().is_some_and(|p| p.kind() == "assignment_expression" && p.field("left") == Some(*u)));
+            if reassigned || uses.iter().any(|u| cx.owning_callable(*u) != Some(owner)) {
+                continue;
+            }
+            // operations on the stream; `close`/`isParallel` do not consume it and
+            // `onClose`/`parallel`/.. return the receiver itself
+            let ops: Vec<Node<'t>> = uses
+                .iter()
+                .filter_map(|u| u.parent().filter(|p| p.kind() == "method_invocation" && p.field("object") == Some(*u)))
+                .filter(|c| !matches!(cx.fm.call_name(*c), Some("close" | "isParallel" | "onClose" | "parallel" | "sequential" | "unordered")))
+                .collect();
+            if ops.len() < 2 {
+                continue;
+            }
+            let cfg = cx.cfg(owner);
+            let decl_pos = cfg.position(d.decl_node);
+            'pairs: for (ai, a) in ops.iter().enumerate() {
+                let Some((ab, ae)) = cfg.position(*a) else { continue };
+                // what can run after `a` without an exception and without passing
+                // the declaration again (a stream declared in a loop body): the
+                // two arms of an if/else or a switch never follow one another
+                let normal = |b: usize| cfg.blocks[b].succs.iter().filter(|(_, k)| !matches!(k, EdgeKind::Exception(_))).map(|(s, _)| *s).collect::<Vec<_>>();
+                let mut seen = vec![false; cfg.blocks.len()];
+                let mut stack = normal(ab);
+                let mut after: Vec<(usize, usize)> = Vec::new();
+                while let Some(b) = stack.pop() {
+                    if seen[b] {
+                        continue;
+                    }
+                    seen[b] = true;
+                    match decl_pos {
+                        Some((db, de)) if db == b => after.push((b, de)),
+                        _ => {
+                            after.push((b, usize::MAX));
+                            stack.extend(normal(b));
+                        }
+                    }
+                }
+                for b in &ops[ai + 1..] {
+                    let Some((bb, be)) = cfg.position(*b) else { continue };
+                    if (bb == ab && be > ae) || after.iter().any(|(blk, until)| *blk == bb && be < *until) {
+                        found.push((*b, format!("Stream `{}` was already consumed by `{}()` on line {}", d.name, cx.fm.call_name(*a).unwrap_or(""), line_of(*a) + 1)));
+                        break 'pairs;
+                    }
+                }
+            }
+        }
+        for (n, m) in found {
+            cx.report(n, m);
         }
     }
 }

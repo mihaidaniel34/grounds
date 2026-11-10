@@ -35,6 +35,8 @@ pub fn rules() -> Vec<Box<dyn Rule>> {
         Box::new(ConstantCondition),
         Box::new(InvertedBooleanCheck),
         Box::new(ForLoopWrongVariable),
+        Box::new(LoopBoundOffByOne),
+        Box::new(ContradictoryRange),
         Box::new(StraySemicolon),
         Box::new(ElseAfterReturn),
     ]
@@ -1209,6 +1211,246 @@ impl Rule for ForLoopWrongVariable {
         // the condition must test the declared counter for this to be clearly wrong
         if counters.iter().any(|c| cond_vars.contains(c)) && !counters.iter().any(|c| updated.contains(c)) {
             cx.report(updates[0], format!("The loop tests `{}` but updates `{}`", counters.iter().find(|c| cond_vars.contains(c)).unwrap(), updated.join(", ")));
+        }
+    }
+}
+
+declare_rule!(LoopBoundOffByOne {
+    id: "loop-bound-off-by-one",
+    name: "Loop runs one index past the end",
+    category: Bug,
+    severity: Error,
+    tier: Edit,
+    sources: ["sonar:S6466", "spotbugs:RANGE_ARRAY_INDEX", "intellij:DataFlowIssue"],
+    kinds: ["for_statement"],
+    description: "`for (int i = 0; i <= a.length; i++) a[i]` reads one element past the end: the last index is `length - 1`, so the final iteration throws ArrayIndexOutOfBoundsException (IndexOutOfBoundsException for `list.get(i)`, StringIndexOutOfBoundsException for `s.charAt(i)`). Use `<`.",
+});
+
+impl Rule for LoopBoundOffByOne {
+    rule_meta!();
+    fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
+        let Some(cond) = n.field("condition").map(|c| c.unparen()) else { return };
+        if cond.kind() != "binary_expression" {
+            return;
+        }
+        let Some((l, r)) = lr(cond) else { return };
+        let (var, bound) = match op(cond) {
+            "<=" => (l.unparen(), r.unparen()),
+            ">=" => (r.unparen(), l.unparen()),
+            _ => return,
+        };
+        if var.kind() != "identifier" || !for_counters(n, cx.src).contains(&var.text(cx.src)) {
+            return;
+        }
+        let i = var.text(cx.src);
+        // the bound is `a.length`, `list.size()` or `s.length()` of a plain variable or field
+        let (coll, by_call) = match bound.kind() {
+            "field_access" if bound.field("field").is_some_and(|f| f.text(cx.src) == "length") => (bound.field("object"), false),
+            "method_invocation" if matches!(cx.fm.call_name(bound), Some("size" | "length")) && cx.fm.args_of(bound).is_empty() => (bound.field("object"), true),
+            _ => return,
+        };
+        let Some(coll) = coll.map(|c| c.unparen()) else { return };
+        if !matches!(coll.kind(), "identifier" | "field_access") || has_side_effects(coll) {
+            return;
+        }
+        let steps_by_one = n.fields("update").iter().any(|u| {
+            let t = normalized(*u, cx.src).replace(' ', "");
+            t == format!("{i}++") || t == format!("++{i}") || t == format!("{i}+=1")
+        });
+        let Some(body) = n.field("body") else { return };
+        if !steps_by_one {
+            return;
+        }
+        // `for (..; i <= s.length(); i++) { char c = i < s.length() ? s.charAt(i) : EOF; }`
+        // handles the extra round itself; so does a body that moves `i` or swaps the collection
+        let tests_counter = body.descendants().any(|d| {
+            d.kind() == "binary_expression"
+                && matches!(op(d), "<" | "<=" | ">" | ">=" | "==" | "!=")
+                && lr(d).is_some_and(|(a, b)| [a, b].iter().any(|s| s.unparen().kind() == "identifier" && s.unparen().text(cx.src) == i))
+        });
+        let changed = assigned_names(body, cx.src);
+        let coll_name = if coll.kind() == "identifier" { coll.text(cx.src) } else { coll.field("field").map(|f| f.text(cx.src)).unwrap_or("") };
+        if tests_counter || changed.contains(&i) || changed.contains(&coll_name) {
+            return;
+        }
+        let coll_ty = cx.type_of(coll);
+        let same = |o: Node<'t>| normalized(o, cx.src) == normalized(coll, cx.src);
+        let plain_i = |x: Node<'t>| x.unparen().kind() == "identifier" && x.unparen().text(cx.src) == i;
+        // a list or builder the body also changes may grow under the loop
+        let mutable = by_call && !is_string_type(&coll_ty);
+        if mutable
+            && body.descendants().any(|d| d.kind() == "method_invocation" && d.field("object").is_some_and(same) && !matches!(cx.fm.call_name(d), Some("get" | "size" | "length" | "charAt" | "isEmpty")))
+        {
+            return;
+        }
+        for d in body.descendants() {
+            let hit = match d.kind() {
+                "array_access" if !by_call => matches!(coll_ty, Ty::Array(_)) && d.field("array").is_some_and(same) && d.field("index").is_some_and(plain_i),
+                "method_invocation" if by_call && d.field("object").is_some_and(same) => {
+                    let args = cx.fm.args_of(d);
+                    let supers: &[&str] = match (cx.fm.call_name(d), cx.fm.call_name(bound)) {
+                        (Some("get"), Some("size")) => &["java.util.List"],
+                        (Some("charAt"), Some("length")) => &["java.lang.CharSequence"],
+                        _ => continue,
+                    };
+                    args.len() == 1 && plain_i(args[0]) && is_subtype_any(cx.fm, &coll_ty, supers)
+                }
+                _ => false,
+            };
+            // a catch around the access may be the intended way out
+            if hit && !d.ancestors().take_while(|a| *a != n).any(|a| matches!(a.kind(), "try_statement" | "lambda_expression" | "class_body")) {
+                cx.report(d, format!("`{}` is out of bounds on the last iteration: `{}` lets `{i}` reach `{}`", cx.text(d), cx.text(cond), cx.text(bound)));
+                return;
+            }
+        }
+    }
+}
+
+/// Calls that answer the same twice when nothing in between writes.
+fn is_stable_call<'t>(d: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+    matches!(cx.fm.call_name(d), Some("size" | "length" | "ordinal")) && cx.fm.args_of(d).is_empty()
+}
+
+/// `x < 3` or `3 > x` as (x, "<", 3): a side-effect-free operand compared
+/// with an integer constant.
+fn const_comparison<'t>(e: Node<'t>, cx: &Ctx<'_, 't>) -> Option<(Node<'t>, &'static str, i64)> {
+    let e = e.unparen();
+    if e.kind() != "binary_expression" {
+        return None;
+    }
+    let (l, r) = lr(e)?;
+    let (x, o, c) = if let Some(c) = cx.fm.int_value(r) {
+        (l, op(e), c)
+    } else {
+        let c = cx.fm.int_value(l)?;
+        let flipped = match op(e) {
+            "<" => ">",
+            "<=" => ">=",
+            ">" => "<",
+            ">=" => "<=",
+            o => o,
+        };
+        (r, flipped, c)
+    };
+    let o = match o {
+        "<" => "<",
+        "<=" => "<=",
+        ">" => ">",
+        ">=" => ">=",
+        "==" => "==",
+        "!=" => "!=",
+        _ => return None,
+    };
+    let x = x.unparen();
+    let unstable = std::iter::once(x).chain(x.descendants()).any(|d| match d.kind() {
+        "method_invocation" => !is_stable_call(d, cx),
+        "object_creation_expression" | "assignment_expression" | "update_expression" | "array_creation_expression" | "lambda_expression" => true,
+        _ => false,
+    });
+    (!unstable && cx.fm.int_value(x).is_none()).then_some((x, o, c))
+}
+
+/// No value satisfies both comparisons. `scale` is 1 for integer operands
+/// and 2 for others, so that `x > 5 && x < 6` stays satisfiable for a double.
+fn range_unsatisfiable(a: (&str, i64), b: (&str, i64), scale: i128) -> bool {
+    let (mut lo, mut hi) = (i128::MIN, i128::MAX);
+    let mut excluded = Vec::new();
+    for (o, c) in [a, b] {
+        let c = c as i128 * scale;
+        match o {
+            "<" => hi = hi.min(c - 1),
+            "<=" => hi = hi.min(c),
+            ">" => lo = lo.max(c + 1),
+            ">=" => lo = lo.max(c),
+            "==" => {
+                lo = lo.max(c);
+                hi = hi.min(c);
+            }
+            _ => excluded.push(c),
+        }
+    }
+    lo > hi || (lo == hi && excluded.contains(&lo))
+}
+
+declare_rule!(ContradictoryRange {
+    id: "contradictory-range-condition",
+    name: "Range condition that is always false or always true",
+    category: Bug,
+    severity: Warning,
+    tier: Edit,
+    sources: ["sonar:S2583", "sonar:S2589", "spotbugs:UC_USELESS_CONDITION", "intellij:ConstantValue"],
+    kinds: ["binary_expression"],
+    description: "`x > 5 && x < 3` and `x == 1 && x == 2` can never be true, and `x != 1 || x != 2` can never be false: no value passes (or fails) both comparisons. Usually `&&` and `||` are swapped or a bound is mistyped.",
+});
+
+impl Rule for ContradictoryRange {
+    rule_meta!();
+    fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
+        let o = op(n);
+        if !matches!(o, "&&" | "||") {
+            return;
+        }
+        // visit a chain `a && b && c` once, from its top
+        if n.parent_unparen().is_some_and(|p| p.kind() == "binary_expression" && op(p) == o) {
+            return;
+        }
+        fn flatten<'t>(e: Node<'t>, o: &str, out: &mut Vec<Node<'t>>) {
+            let e = e.unparen();
+            if e.kind() == "binary_expression" && op(e) == o {
+                if let Some((l, r)) = lr(e) {
+                    flatten(l, o, out);
+                    flatten(r, o, out);
+                    return;
+                }
+            }
+            out.push(e);
+        }
+        let mut parts = Vec::new();
+        flatten(n, o, &mut parts);
+        // something in the chain may change the operand between the two tests
+        // (`x == 1 && x++ == 1 && x == 2`, `state == 1 && advance() && state == 2`)
+        if n.descendants().any(|d| matches!(d.kind(), "assignment_expression" | "update_expression")) {
+            return;
+        }
+        let calls = n.descendants().any(|d| matches!(d.kind(), "method_invocation" | "object_creation_expression") && !is_stable_call(d, cx));
+        let cmps: Vec<_> = parts.iter().filter_map(|p| const_comparison(*p, cx).map(|c| (*p, c))).collect();
+        for (bi, (pb, (xb, ob, cb))) in cmps.iter().enumerate() {
+            for (_, (xa, oa, ca)) in &cmps[..bi] {
+                if normalized(*xa, cx.src) != normalized(*xb, cx.src) {
+                    continue;
+                }
+                let local = xa.kind() == "identifier" && cx.fm.local_decl(*xa).is_some();
+                if calls && !local {
+                    continue;
+                }
+                let integral = matches!(cx.type_of(*xa).unboxed(), Some(Prim::Int | Prim::Long | Prim::Short | Prim::Byte | Prim::Char));
+                let scale = if integral { 1 } else { 2 };
+                let negate = |o: &'static str| match o {
+                    "<" => ">=",
+                    "<=" => ">",
+                    ">" => "<=",
+                    ">=" => "<",
+                    "==" => "!=",
+                    _ => "==",
+                };
+                let constant = if o == "&&" {
+                    range_unsatisfiable((oa, *ca), (ob, *cb), scale)
+                } else {
+                    // `a || b` is always true when `!a && !b` has no solution; with NaN
+                    // around (`d >= 0 || d < 0` is a NaN test) only `!=` pairs qualify
+                    (integral || (*oa == "!=" && *ob == "!=")) && range_unsatisfiable((negate(oa), *ca), (negate(ob), *cb), scale)
+                };
+                if constant {
+                    let x = cx.text(*xa);
+                    let msg = if o == "&&" {
+                        format!("No value of `{x}` satisfies both `{x} {oa} {ca}` and `{x} {ob} {cb}`: the condition is always false")
+                    } else {
+                        format!("Every value of `{x}` satisfies `{x} {oa} {ca}` or `{x} {ob} {cb}`: the condition is always true")
+                    };
+                    cx.report(*pb, msg);
+                    return;
+                }
+            }
         }
     }
 }
