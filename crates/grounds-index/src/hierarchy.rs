@@ -88,7 +88,12 @@ pub fn substitution(class: &ClassInfo, args: &[Ty]) -> Vec<(Name, Ty)> {
             .iter()
             .zip(args)
             .map(|(p, a)| {
+                // the capture of a wildcard is bounded by the parameter's bounds
+                // too: with several, it is their intersection (JLS 4.9, 5.1.10),
+                // which one type cannot stand for, so members of the others
+                // would look missing: unknown
                 let a = match a {
+                    Ty::Wildcard(w) if p.bounds.len() > 1 && !matches!(w.as_deref(), Some(WildcardBound::Super(_))) => Ty::Unknown,
                     Ty::Wildcard(Some(b)) => match &**b {
                         WildcardBound::Extends(t) => t.clone(),
                         WildcardBound::Super(t) => t.clone(),

@@ -417,3 +417,19 @@ fn inherited_override_equivalent_methods_keep_the_one_a_call_selects() {
     // the abstract method is still the one found once implemented
     assert_eq!(idx.all_methods(&Ty::class("p.User")).iter().filter(|m| &*m.method.name == "data").count(), 1);
 }
+
+#[test]
+fn a_wildcard_for_a_parameter_with_several_bounds_is_unknown() {
+    // JLS 4.9: the capture is an intersection, which one type cannot stand for
+    let idx = index_of(&[(
+        "p/N.java",
+        "package p; abstract class Root { } interface Code { }
+         class Nodes<N extends Root & Code> { N get() { return null; } }
+         class One<N extends Root> { N get() { return null; } }",
+    )]);
+    let wild = |c: &str| Ty::class_with(c, vec![Ty::Wildcard(None)]);
+    assert_eq!(idx.methods_named(&wild("p.Nodes"), "get")[0].method.ret, Ty::Unknown);
+    assert_eq!(idx.methods_named(&wild("p.One"), "get")[0].method.ret.to_string(), "p.Root");
+    let root = Ty::Wildcard(Some(Box::new(WildcardBound::Super(Ty::class("p.Root")))));
+    assert!(idx.methods_named(&Ty::class_with("p.Nodes", vec![root]), "get")[0].method.ret.is_known());
+}
