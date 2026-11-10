@@ -601,6 +601,8 @@ declare_rule!(UseAfterClose {
     category: Bug,
     severity: Warning,
     maturity: Preview,
+    // tests call a closed object on purpose, to check what it does then
+    scope: Main,
     sources: ["sonar:S2095", "spotbugs:OBL_UNSATISFIED_OBLIGATION_EXCEPTION_EDGE"],
     kinds: ["<file>"],
     description: "A method is called on a stream/reader/connection after it was closed on every path leading here; this throws an IOException or silently does nothing.",
