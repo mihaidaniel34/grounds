@@ -192,6 +192,12 @@ pub struct DiModel {
     pub unmodeled_container: Option<&'static str>,
     /// The same, found only in test sources: test injection points are not judged.
     pub unmodeled_container_in_tests: Option<&'static str>,
+    /// Spring component beans and the `@Bean` methods of the same name in
+    /// the same module. Spring keeps one definition per name: since 6.1 the
+    /// `@Bean` method replaces a scanned class of its return type even with
+    /// overriding disabled; otherwise the registration fails or, with
+    /// overriding enabled, the later definition wins. Never two beans.
+    same_name_factories: FxHashMap<usize, Vec<usize>>,
 }
 
 /// Imports that show wiring through a container or mechanism the model does
@@ -1075,6 +1081,7 @@ impl DiModel {
                 m.duplicated_provides.insert(n);
             }
         }
+        m.same_name_factories = m.same_name_factories();
         m.index_providers(index);
         m.ctor_edges = m.constructor_edges(index);
         m
@@ -1082,6 +1089,27 @@ impl DiModel {
 
     pub fn is_empty(&self) -> bool {
         self.beans.is_empty()
+    }
+
+    fn same_name_factories(&self) -> FxHashMap<usize, Vec<usize>> {
+        let module = |b: &Bean| b.file.as_deref().map(module_of).unwrap_or("").to_string();
+        let mut factories: FxHashMap<(String, &str), Vec<usize>> = FxHashMap::default();
+        for (i, b) in self.beans.iter().enumerate() {
+            if b.framework == Framework::Spring && matches!(b.source, BeanSource::FactoryMethod(_)) {
+                factories.entry((module(b), b.name.as_str())).or_default().push(i);
+            }
+        }
+        let mut out: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
+        for (class, &i) in &self.component_classes {
+            let b = &self.beans[i];
+            if b.framework != Framework::Spring || b.declaring_class != *class || b.source != BeanSource::Component {
+                continue;
+            }
+            if let Some(f) = factories.get(&(module(b), b.name.as_str())) {
+                out.insert(i, f.clone());
+            }
+        }
+        out
     }
 
     pub fn bean_of_class(&self, class: &str) -> Option<&Bean> {
@@ -1212,6 +1240,20 @@ impl DiModel {
                     return Resolution::Unknown;
                 }
                 return Resolution::QualifierNotFound { qualifier: q.clone(), candidates: before };
+            }
+        }
+        // a component and a @Bean method of the same name are one bean: the
+        // @Bean definition when both match, and when only the component
+        // does, whether it survives depends on the Spring version and on
+        // spring.main.allow-bean-definition-overriding
+        for &i in &cands.clone() {
+            // (a test configuration's @Bean exists only in tests)
+            if let Some(f) = self.same_name_factories.get(&i).filter(|f| f.iter().any(|&j| include_test || !self.beans[j].is_test)) {
+                if f.iter().any(|j| cands.contains(j)) {
+                    cands.retain(|&c| c != i);
+                } else {
+                    return Resolution::Unknown;
+                }
             }
         }
         // Spring skips self-references and falls back to them only when
@@ -1817,6 +1859,36 @@ mod tests {
         ]);
         assert!(matches!(point_resolution(&idx, &m, "wrapper"), Resolution::Unique(_)));
         assert!(matches!(point_resolution(&idx, &m, "tenant"), Resolution::Unique(_)));
+    }
+
+    #[test]
+    fn a_bean_method_and_a_component_of_the_same_name_are_one_bean() {
+        // ConfigurationClassBeanDefinitionReader.isOverriddenByExistingDefinition:
+        // since Spring 6.1 a @Bean method returning the scanned class replaces
+        // it even with overriding disabled; otherwise registration fails
+        // (overriding disabled) or the @Bean wins (enabled). Never two beans.
+        let (idx, m) = model(&[
+            ("src/main/java/app/A.java", "package app; import org.springframework.stereotype.*; import org.springframework.context.annotation.*;
+             @Component class Registry {}
+             @Configuration class RegistryConfig { @Bean Registry registry() { return new Registry(); } }
+             interface Store {}
+             @Component class Store1 implements Store {}
+             @Configuration class StoreConfig { @Bean Object store1() { return new Object(); } }
+             @Component class Cache {}
+             @Component class Other {}
+             @Service class Uses { Uses(Registry reg, Store1 st, Cache cache, Other o) {} }
+             @org.springframework.boot.autoconfigure.SpringBootApplication class App {}"),
+            // a test configuration's @Bean of the same name exists only in tests
+            ("src/test/java/app/TestConfig.java", "package app; import org.springframework.context.annotation.*;
+             @Configuration class TestConfig { @Bean Other other() { return new Other(); } }"),
+        ]);
+        let bean = |n: &str, factory: bool| m.beans.iter().position(|b| b.name == n && matches!(b.source, BeanSource::FactoryMethod(_)) == factory).unwrap();
+        assert_eq!(point_resolution(&idx, &m, "reg"), Resolution::Unique(bean("registry", true)));
+        // the @Bean of another type replaces the component or fails startup
+        // (bean-name-conflict), depending on a setting we may not see
+        assert_eq!(point_resolution(&idx, &m, "st"), Resolution::Unknown);
+        assert_eq!(point_resolution(&idx, &m, "cache"), Resolution::Unique(bean("cache", false)));
+        assert_eq!(point_resolution(&idx, &m, "o"), Resolution::Unique(bean("other", false)));
     }
 
 }
