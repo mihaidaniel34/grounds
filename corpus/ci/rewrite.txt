@@ -1873,12 +1873,6 @@ rewrite-java-test/src/main/java/org/openrewrite/java/JavaTypeGoat.java:31 field-
 rewrite-java-test/src/main/java/org/openrewrite/java/JavaTypeGoat.java:31 public-static-non-final-field
 rewrite-java-test/src/main/java/org/openrewrite/java/JavaTypeGoat.java:47 mutable-enum-field
 rewrite-java-test/src/main/java/org/openrewrite/java/JavaTypeGoat.java:47 unused-private-field
-rewrite-java-test/src/main/resources/JavaTypeGoat.java:30 field-naming
-rewrite-java-test/src/main/resources/JavaTypeGoat.java:30 public-static-non-final-field
-rewrite-java-test/src/main/resources/JavaTypeGoat.java:31 field-naming
-rewrite-java-test/src/main/resources/JavaTypeGoat.java:31 public-static-non-final-field
-rewrite-java-test/src/main/resources/JavaTypeGoat.java:47 mutable-enum-field
-rewrite-java-test/src/main/resources/JavaTypeGoat.java:47 unused-private-field
 rewrite-java-test/src/test/java/org/openrewrite/ResultTest.java:73 test-without-assertion
 rewrite-java-test/src/test/java/org/openrewrite/java/ChangeMethodTargetToStaticTest.java:478 disabled-test-without-reason
 rewrite-java-test/src/test/java/org/openrewrite/java/JavaParserTest.java:168 default-charset

@@ -1629,17 +1629,6 @@ langchain4j-mcp/src/test/java/dev/langchain4j/mcp/transport/stdio/JsonRpcIoHandl
 langchain4j-mcp/src/test/java/dev/langchain4j/mcp/transport/stdio/JsonRpcIoHandlerTest.java:66 resource-leak
 langchain4j-mcp/src/test/java/dev/langchain4j/mcp/transport/stdio/JsonRpcIoHandlerTest.java:83 resource-leak
 langchain4j-mcp/src/test/java/dev/langchain4j/mcp/transport/stdio/JsonRpcIoHandlerTest.java:98 resource-leak
-langchain4j-mcp/src/test/resources/listener_mcp_server.java:37 throw-generic-exception
-langchain4j-mcp/src/test/resources/listener_mcp_server.java:53 throw-generic-exception
-langchain4j-mcp/src/test/resources/listener_mcp_server.java:63 throw-generic-exception
-langchain4j-mcp/src/test/resources/roots_mcp_server.java:29 volatile-array-or-collection
-langchain4j-mcp/src/test/resources/roots_mcp_server.java:36 throw-generic-exception
-langchain4j-mcp/src/test/resources/roots_mcp_server.java:54 ignored-status-result
-langchain4j-mcp/src/test/resources/roots_mcp_server.java:60 ignored-status-result
-langchain4j-mcp/src/test/resources/roots_mcp_server.java:66 throw-generic-exception
-langchain4j-mcp/src/test/resources/roots_mcp_server.java:69 throw-generic-exception
-langchain4j-mcp/src/test/resources/roots_mcp_server.java:73 throw-generic-exception
-langchain4j-mcp/src/test/resources/tools_mcp_server.java:77 throw-generic-exception
 langchain4j-milvus-v2/src/main/java/dev/langchain4j/store/embedding/milvus/v2/CollectionOperationsExecutor.java:33 utility-class-instantiable
 langchain4j-milvus-v2/src/main/java/dev/langchain4j/store/embedding/milvus/v2/CollectionRequestBuilder.java:181 too-many-parameters
 langchain4j-milvus-v2/src/main/java/dev/langchain4j/store/embedding/milvus/v2/CollectionRequestBuilder.java:30 utility-class-instantiable
