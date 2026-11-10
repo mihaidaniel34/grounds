@@ -746,7 +746,10 @@ fn parse_pom(text: &str, path: &Path) -> Pom {
     let text = strip_comments(text, "", "<!--", "-->");
     // profiles switch settings on conditions we cannot evaluate
     let profiles = elements(&text, "profiles");
-    let profile_configures_compiler = profiles.iter().flat_map(|p| elements(p, "plugin")).any(|pl| element(pl, "artifactId") == Some("maven-compiler-plugin") && ["<release>", "<source>", "<target>", "<compilerArgs>"].iter().any(|k| pl.contains(k)));
+    let profile_configures_compiler = profiles.iter().flat_map(|p| elements(p, "plugin")).any(|pl| {
+        element(pl, "artifactId") == Some("maven-compiler-plugin")
+            && (["<release>", "<source>", "<target>"].iter().any(|k| pl.contains(k)) || elements(pl, "compilerArgs").iter().any(|a| ["--release", "-release", "-source", "-target", "--source", "--target"].iter().any(|f| a.contains(&format!(">{f}<")) || a.contains(&format!(">{f} ")) || a.contains(&format!(">{f}=")))))
+    });
     let profile_props = profiles.iter().flat_map(|p| elements(p, "properties")).flat_map(children).map(|(k, _)| k).collect();
     let mut main = text.clone();
     while let (Some(s), Some(e)) = (main.find("<profiles>"), main.find("</profiles>")) {
@@ -966,9 +969,14 @@ mod tests {
                 ("literal/pom.xml", &format!("<project>{}{}</project>", plugin("<release>17</release>"), profile("<properties><maven.compiler.release>21</maven.compiler.release></properties>"))),
                 ("read/pom.xml", &format!("<project><properties><jdk>17</jdk></properties>{}{}</project>", plugin("<release>${jdk}</release>"), profile("<properties><jdk>21</jdk></properties>"))),
                 ("configures/pom.xml", &format!("<project>{}{}</project>", plugin("<release>17</release>"), profile(&plugin("<release>21</release>")))),
+                ("args/pom.xml", &format!("<project>{}{}</project>", plugin("<release>17</release>"), profile(&plugin("<compilerArgs><arg>--release</arg><arg>21</arg></compilerArgs>")))),
+                ("checker/pom.xml", &format!("<project>{}{}</project>", plugin("<release>17</release>"), profile(&plugin("<compilerArgs><arg>-XDcompilePolicy=simple</arg><arg>-Xplugin:Checker</arg></compilerArgs>")))),
             ],
         );
-        assert_eq!(evidence_of(&dir), vec![("configures".into(), Unknown), ("literal".into(), Exact(17)), ("read".into(), Unknown), (":".into(), Unknown)]);
+        assert_eq!(
+            evidence_of(&dir),
+            vec![("args".into(), Unknown), ("checker".into(), Exact(17)), ("configures".into(), Unknown), ("literal".into(), Exact(17)), ("read".into(), Unknown), (":".into(), Unknown)]
+        );
         // a toolchain decides the API unless a release is set; Kotlin's languageVersion is not Java's
         let dir = temp(
             "toolchain",
