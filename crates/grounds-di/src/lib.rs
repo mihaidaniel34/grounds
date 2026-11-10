@@ -713,11 +713,16 @@ impl<'a> Builder<'a> {
         let mut producers: Vec<(Name, bool)> = Vec::new();
         for n in names {
             let Some(c) = self.index.class(n) else { continue };
-            let registered = self.model.component_classes.contains_key(n) || unseen.iter().any(|(u, _)| u == n);
-            if !registered {
-                continue;
-            }
-            let is_test = c.source_file().is_some_and(is_test_path);
+            // in the scope the class is (or may be) registered in: a main
+            // class registered only by a test's scan produces for tests only
+            let is_test = if self.model.component_classes.contains_key(n) {
+                c.source_file().is_some_and(is_test_path)
+            } else {
+                match unseen.iter().filter(|(u, _)| u == n).map(|(_, t)| *t).min() {
+                    Some(t) => t,
+                    None => continue,
+                }
+            };
             let stub = self.index.raw_class(n).map(|(st, _)| st.clone());
             for m in &c.methods {
                 if m.is_constructor() || m.ret == Ty::Void || self.produced.contains(&(n.clone(), m.name.clone())) {
@@ -2668,6 +2673,15 @@ mod tests {
              @Configuration @ComponentScan(includeFilters = @ComponentScan.Filter(type = FilterType.ASSIGNABLE_TYPE, classes = Port.class)) class Scan {}");
         assert_eq!(resolve(&[impl_], "port"), Resolution::NotFound);
         assert_eq!(resolve(&[impl_, filter], "port"), Resolution::Unknown);
+        // a main class registered only by a test's scan produces for tests only
+        let (idx, m) = model(&[
+            app, port,
+            ("src/main/java/app/Uses.java", "package app; import org.springframework.stereotype.*; @Service class Uses { Uses(Port port) {} }"),
+            ("src/main/java/app/Ports.java", "package app; class Ports { @com.acme.Exported Port port() { return null; } }"),
+            ("src/test/java/app/Scan.java", "package app; import org.springframework.context.annotation.*;
+             @Configuration @ComponentScan(includeFilters = @ComponentScan.Filter(type = FilterType.REGEX, pattern = \".*\")) class Scan {}"),
+        ]);
+        assert_eq!(point_resolution(&idx, &m, "port"), Resolution::NotFound);
         // a producer declared to return a supertype may return the injected subtype
         let (idx, m) = model(&[
             app,
