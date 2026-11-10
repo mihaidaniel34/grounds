@@ -8,6 +8,12 @@ use grounds_index::*;
 use grounds_syntax::{Node, NodeExt};
 use std::sync::Arc;
 
+/// Nested `constant_value` calls: operands of an operator and final locals
+/// defined by other final locals. Far above real constants (a few levels; a
+/// generated string concatenation of a few hundred parts); the CLI analyzes
+/// on threads with large stacks (see grounds-cli `STACK_SIZE`).
+const MAX_CONSTANT_NESTING: u32 = 1000;
+
 const TAG_TYPE: u8 = 1;
 const TAG_LOCAL: u8 = 2;
 const TAG_EXPECTED: u8 = 3;
@@ -632,6 +638,26 @@ impl<'t> FileModel<'t> {
     /// Compile-time constant value of an expression, if any, converted to the
     /// expression's static type (`final long n = 1` is a long constant).
     pub fn constant_value(&self, n: Node<'t>) -> Option<Constant> {
+        if let Some(c) = self.constants.borrow().get(&n.id()) {
+            return c.clone();
+        }
+        let (nesting, cutoffs) = self.const_eval.get();
+        if nesting >= MAX_CONSTANT_NESTING {
+            self.const_eval.set((nesting, cutoffs + 1));
+            return None;
+        }
+        self.const_eval.set((nesting + 1, cutoffs));
+        let cycles = self.cycle_hits.get();
+        let v = self.constant_value_uncached(n);
+        let (_, after) = self.const_eval.get();
+        self.const_eval.set((nesting, after));
+        if after == cutoffs && self.cycle_hits.get() == cycles {
+            self.constants.borrow_mut().insert(n.id(), v.clone());
+        }
+        v
+    }
+
+    fn constant_value_uncached(&self, n: Node<'t>) -> Option<Constant> {
         let v = self.constant_value_raw(n)?;
         Some(match self.type_of(n.unparen()) {
             t @ Ty::Prim(Prim::Int | Prim::Long | Prim::Short | Prim::Byte | Prim::Double | Prim::Float) if !matches!(v, Constant::Bool(_) | Constant::Str(_)) => {

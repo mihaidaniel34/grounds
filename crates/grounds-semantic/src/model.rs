@@ -80,6 +80,13 @@ pub struct FileModel<'t> {
     /// cycle are memoized as unknown, so pathological files stay polynomial.
     pub(crate) work: std::cell::Cell<u64>,
     pub(crate) symbols: RefCell<FxHashMap<usize, Option<Symbol<'t>>>>,
+    /// Constant values by expression node id (see `constant_value`): a chain
+    /// of final locals each defined twice by the previous one is evaluated
+    /// once per local, not 2^n times.
+    pub(crate) constants: RefCell<FxHashMap<usize, Option<Constant>>>,
+    /// (nesting, cut-offs) of `constant_value` in progress: nesting is
+    /// bounded, and results computed under a cut-off are not memoized.
+    pub(crate) const_eval: std::cell::Cell<(u32, u64)>,
     captures: std::cell::OnceCell<FxHashMap<usize, Vec<usize>>>,
     occurrences: std::cell::OnceCell<FxHashMap<&'t str, Vec<Node<'t>>>>,
     /// node id -> parent, built in one pass on first use: tree-sitter's
@@ -118,6 +125,8 @@ impl<'t> FileModel<'t> {
             cycle_hits: std::cell::Cell::new(0),
             work: std::cell::Cell::new(0),
             symbols: RefCell::new(FxHashMap::default()),
+            constants: RefCell::new(FxHashMap::default()),
+            const_eval: std::cell::Cell::new((0, 0)),
             captures: std::cell::OnceCell::new(),
             occurrences: std::cell::OnceCell::new(),
             parents: std::cell::OnceCell::new(),

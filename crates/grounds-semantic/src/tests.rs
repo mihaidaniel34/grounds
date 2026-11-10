@@ -1180,3 +1180,31 @@ fn a_guess_among_overloads_alike_in_result_keeps_the_result() {
     );
     assert_eq!(t, vec!["java.lang.String"]);
 }
+
+#[test]
+fn a_chain_of_final_locals_is_evaluated_once_per_local() {
+    // found by scripts/fuzz_robust.py: `final int v1 = v0 + v0; ...` was
+    // evaluated 2^n times (500 locals never finished). The CLI runs analysis
+    // on large stacks; a debug build needs more than a test thread's 2 MiB.
+    std::thread::Builder::new().stack_size(256 << 20).spawn(final_local_chain).unwrap().join().unwrap();
+}
+
+fn final_local_chain() {
+    let n = 500;
+    let mut body = String::from("final int v0 = 1;");
+    for i in 1..n {
+        body.push_str(&format!(" final int v{i} = v{p} + v{p};", p = i - 1));
+    }
+    let src = format!("class T {{ int m() {{ {body} return v{last}; }} }}", last = n - 1);
+    let pf = ParsedFile::parse(src.clone());
+    let mut idx = Index::new(jdk());
+    idx.set_file(Arc::from("T.java"), Arc::new(extract(&pf)));
+    let fm = FileModel::new(&pf, &idx, Arc::from("T.java"));
+    let t = std::time::Instant::now();
+    let ret = pf.root().descendants().find(|n| n.kind() == "return_statement").unwrap();
+    // 2^499 wraps to 0 in an int
+    assert_eq!(fm.constant_value(ret.named_child(0).unwrap()), Some(Constant::Int(0)));
+    let v10 = pf.root().descendants().filter(|n| n.kind() == "variable_declarator").nth(10).unwrap();
+    assert_eq!(fm.constant_value(v10.field("value").unwrap()), Some(Constant::Int(1024)));
+    assert!(t.elapsed() < std::time::Duration::from_secs(5), "{:?}", t.elapsed());
+}
