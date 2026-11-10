@@ -185,7 +185,35 @@ pub struct DiModel {
     incomplete: Vec<usize>,
     /// classes with an @Inject constructor: just-in-time bindable in JSR-330 containers
     jit: Vec<Name>,
+    /// A JSR-330 container or binding mechanism whose rules the model does
+    /// not implement (Guice/Sisu modules, HK2 binders, Dagger, Maven 4 DI,
+    /// Quarkus build-time beans), found in main sources: any type may be
+    /// bound there, so no JSR-330 injection point is judged.
+    pub unmodeled_container: Option<&'static str>,
+    /// The same, found only in test sources: test injection points are not judged.
+    pub unmodeled_container_in_tests: Option<&'static str>,
+    /// Spring component beans and the `@Bean` methods of the same name in
+    /// the same module. Spring keeps one definition per name: since 6.1 the
+    /// `@Bean` method replaces a scanned class of its return type even with
+    /// overriding disabled; otherwise the registration fails or, with
+    /// overriding enabled, the later definition wins. Never two beans.
+    same_name_factories: FxHashMap<usize, Vec<usize>>,
 }
+
+/// Imports that show wiring through a container or mechanism the model does
+/// not implement, by package prefix. A Guice module, an HK2 binder or a
+/// Dagger component binds types in code; Sisu and Maven 4's own DI add
+/// index-based and bridged bindings; Quarkus extensions add synthetic beans
+/// at build time (config mappings, REST and AI clients, recorder beans).
+const UNMODELED_CONTAINERS: &[(&str, &str)] = &[
+    ("com.google.inject.", "Guice"),
+    ("org.eclipse.sisu.", "Sisu"),
+    ("org.apache.maven.api.di.", "Maven DI"),
+    ("org.glassfish.hk2.", "HK2"),
+    ("org.glassfish.jersey.internal.inject.", "HK2"),
+    ("dagger.", "Dagger"),
+    ("io.quarkus.", "Quarkus"),
+];
 
 const SPRING_STEREOTYPES: &[&str] = &[
     "org.springframework.stereotype.Component",
@@ -213,6 +241,7 @@ const MICRONAUT_BEAN_ANNOTATIONS: &[&str] = &[
     "io.micronaut.http.annotation.Controller",
     "io.micronaut.runtime.context.scope.ThreadLocal",
     "io.micronaut.runtime.context.scope.Refreshable",
+    "io.micronaut.runtime.http.scope.RequestScope",
     "io.micronaut.context.annotation.ConfigurationProperties",
     "io.micronaut.context.annotation.EachProperty",
 ];
@@ -249,7 +278,7 @@ pub fn decapitalize(s: &str) -> String {
     a.to_lowercase().collect::<String>() + &s[a.len_utf8()..]
 }
 
-use grounds_index::sources::is_test_path;
+use grounds_index::sources::{is_test_code, is_test_path};
 
 /// `public static void main(String[])`, the entry point of an application.
 fn has_main(c: &ClassInfo) -> bool {
@@ -332,6 +361,24 @@ impl<'a> Builder<'a> {
                 return None;
             }
             let metas = c.annotations.clone();
+            // a JSR-330 scope (Micronaut's own scopes are meta-annotated @Scope)
+            // (an unresolved `@Scope` by the file's imports: it may be Spring's)
+            let jsr330_scope = |m: &AnnotationInfo| match (m.resolved, &*m.name) {
+                (true, name) => matches!(name, "jakarta.inject.Scope" | "javax.inject.Scope"),
+                (false, "jakarta.inject.Scope" | "javax.inject.Scope") => true,
+                (false, "Scope") => self.index.raw_class(n).is_some_and(|(stub, _)| {
+                    let single: Vec<_> = stub.imports.iter().filter(|i| !i.is_static && !i.on_demand && i.is_named("Scope")).collect();
+                    match single.as_slice() {
+                        [] => stub.imports.iter().any(|i| !i.is_static && i.on_demand && matches!(&*i.path, "jakarta.inject" | "javax.inject")),
+                        [i] => matches!(&*i.path, "jakarta.inject.Scope" | "javax.inject.Scope"),
+                        _ => false,
+                    }
+                }),
+                _ => false,
+            };
+            if metas.iter().any(jsr330_scope) {
+                return Some(if n.starts_with("io.micronaut") { Framework::Micronaut } else { Framework::Jakarta });
+            }
             metas.iter().find_map(|m| if &*m.name == n { None } else { self.stereotype(m, depth + 1) })
         });
         self.stereo.insert(ann.name.clone(), r);
@@ -421,13 +468,22 @@ impl<'a> Builder<'a> {
         let mut boot_scans: Vec<(String, String, bool)> = Vec::new();
         let mut spring = false;
         let mut micronaut = false;
-        for (_, stub) in self.index.files() {
+        for (path, stub) in self.index.files() {
             // the frameworks' own sources (vendored, or test stubs) say nothing
             // about what the project uses
             if is_framework_class(&format!("{}.X", stub.package)) {
                 continue;
             }
             for imp in &stub.imports {
+                // (`import com.google.inject.*` keeps only the package)
+                let imported = format!("{}.", imp.path);
+                if let Some((_, name)) = UNMODELED_CONTAINERS.iter().find(|(prefix, _)| imported.starts_with(prefix)) {
+                    // (the smallest name, whatever order the files come in)
+                    let slot = if is_test_code(path) { &mut self.model.unmodeled_container_in_tests } else { &mut self.model.unmodeled_container };
+                    if slot.is_none_or(|s| *name < s) {
+                        *slot = Some(name);
+                    }
+                }
                 if imp.path.starts_with("org.springframework") {
                     spring = true;
                 }
@@ -769,9 +825,21 @@ impl<'a> Builder<'a> {
                 if base_anns.iter().any(|a| self.stereotype(a, 0).is_some()) {
                     break;
                 }
+                let is_factory = |m: &MethodInfo| m.annotations.iter().any(|a| BEAN_METHOD_ANNOTATIONS.iter().any(|b| a.is(b)));
                 for m in &sc.methods {
-                    if !factory_methods.iter().any(|x| same_sig(x, m)) {
-                        factory_methods.push(m.clone());
+                    match factory_methods.iter_mut().find(|x| same_sig(x, m)) {
+                        // Spring registers the superclass's @Bean methods on the
+                        // subclass and calls the override: an override without
+                        // @Bean (of an abstract @Bean method) still defines the bean
+                        Some(x) => {
+                            // (the override's own annotations, @Primary or a
+                            // qualifier, stay)
+                            if is_factory(m) && !is_factory(x) {
+                                let missing: Vec<AnnotationInfo> = m.annotations.iter().filter(|a| !x.annotations.iter().any(|o| o.name == a.name)).cloned().collect();
+                                x.annotations.extend(missing);
+                            }
+                        }
+                        None => factory_methods.push(m.clone()),
                     }
                 }
                 sup = sc.superclass.clone();
@@ -1041,6 +1109,7 @@ impl DiModel {
                 m.duplicated_provides.insert(n);
             }
         }
+        m.same_name_factories = m.same_name_factories();
         m.index_providers(index);
         m.ctor_edges = m.constructor_edges(index);
         m
@@ -1048,6 +1117,27 @@ impl DiModel {
 
     pub fn is_empty(&self) -> bool {
         self.beans.is_empty()
+    }
+
+    fn same_name_factories(&self) -> FxHashMap<usize, Vec<usize>> {
+        let module = |b: &Bean| b.file.as_deref().map(module_of).unwrap_or("").to_string();
+        let mut factories: FxHashMap<(String, &str), Vec<usize>> = FxHashMap::default();
+        for (i, b) in self.beans.iter().enumerate() {
+            if b.framework == Framework::Spring && matches!(b.source, BeanSource::FactoryMethod(_)) {
+                factories.entry((module(b), b.name.as_str())).or_default().push(i);
+            }
+        }
+        let mut out: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
+        for (class, &i) in &self.component_classes {
+            let b = &self.beans[i];
+            if b.framework != Framework::Spring || b.declaring_class != *class || b.source != BeanSource::Component {
+                continue;
+            }
+            if let Some(f) = factories.get(&(module(b), b.name.as_str())) {
+                out.insert(i, f.clone());
+            }
+        }
+        out
     }
 
     pub fn bean_of_class(&self, class: &str) -> Option<&Bean> {
@@ -1116,6 +1206,13 @@ impl DiModel {
         if p.ty.is_unknown() || p.ty.mentions_type_var() || self.duplicated.contains(&p.owner) {
             return Resolution::Unknown;
         }
+        // JSR-330 points in a project wired (also) by a container whose
+        // bindings we cannot see: Guice resolves cycles through proxies,
+        // Sisu picks the highest-ranked of several implementations, and
+        // any module, binder or build step may bind the type
+        if p.framework == Framework::Jakarta && (self.unmodeled_container.is_some() || (self.unmodeled_container_in_tests.is_some() && p.file.as_deref().is_some_and(is_test_code))) {
+            return Resolution::Unknown;
+        }
         // a library's beans are wired by the application using it
         if p.framework == Framework::Spring && !p.file.as_deref().is_some_and(is_test_path) && !self.in_application(p.file.as_deref(), &p.owner) {
             return Resolution::Unknown;
@@ -1171,6 +1268,20 @@ impl DiModel {
                     return Resolution::Unknown;
                 }
                 return Resolution::QualifierNotFound { qualifier: q.clone(), candidates: before };
+            }
+        }
+        // a component and a @Bean method of the same name are one bean: the
+        // @Bean definition when both match, and when only the component
+        // does, whether it survives depends on the Spring version and on
+        // spring.main.allow-bean-definition-overriding
+        for &i in &cands.clone() {
+            // (a test configuration's @Bean exists only in tests)
+            if let Some(f) = self.same_name_factories.get(&i).filter(|f| f.iter().any(|&j| include_test || !self.beans[j].is_test)) {
+                if f.iter().any(|j| cands.contains(j)) {
+                    cands.retain(|&c| c != i);
+                } else {
+                    return Resolution::Unknown;
+                }
             }
         }
         // Spring skips self-references and falls back to them only when
@@ -1676,5 +1787,185 @@ mod tests {
              @org.springframework.context.annotation.ComponentScan class Main { public static void main(String[] args) {} }",
         )]);
         assert_eq!(resolution_of(&idx, &m, "app/A.java", "x"), Resolution::Unique(m.beans.iter().position(|b| b.name == "b").unwrap()));
+    }
+
+    const JSR330: [(&str, &str); 3] = [
+        ("jakarta/inject/Inject.java", "package jakarta.inject; public @interface Inject {}"),
+        ("jakarta/inject/Scope.java", "package jakarta.inject; public @interface Scope {}"),
+        ("jakarta/inject/Singleton.java", "package jakarta.inject; @Scope public @interface Singleton {}"),
+    ];
+
+    /// JSR-330 classes with a missing binding, two implementations of one
+    /// interface and a constructor cycle through interfaces, plus `extra`.
+    fn jsr330_project(extra: &[(&'static str, &'static str)]) -> (Index, DiModel) {
+        let mut files: Vec<(&str, &str)> = JSR330.to_vec();
+        files.push((
+            "src/main/java/app/A.java",
+            "package app; import jakarta.inject.*;
+             interface Store {}
+             interface Engine {}
+             @Singleton class V8 implements Engine {}
+             @Singleton class V6 implements Engine {}
+             interface Ping {} interface Pong {}
+             @Singleton class PingImpl implements Ping { @Inject PingImpl(Pong pong) {} }
+             @Singleton class PongImpl implements Pong { @Inject PongImpl(Ping ping) {} }
+             @Singleton class Uses { @Inject Uses(Store store, Engine engine) {} }",
+        ));
+        files.push(("src/test/java/app/UsesTest.java", "package app; import jakarta.inject.*; @Singleton class InTest { @Inject InTest(Store testStore) {} }"));
+        files.extend_from_slice(extra);
+        model(&files)
+    }
+
+    fn point_resolution(idx: &Index, m: &DiModel, name: &str) -> Resolution {
+        let p = m.points.iter().find(|p| p.name == name).expect("injection point");
+        m.resolve(idx, p, p.file.as_deref().is_some_and(is_test_path))
+    }
+
+    #[test]
+    fn jsr330_wiring_is_judged_when_the_model_implements_the_container() {
+        let (idx, m) = jsr330_project(&[]);
+        assert_eq!(point_resolution(&idx, &m, "store"), Resolution::NotFound);
+        assert!(matches!(point_resolution(&idx, &m, "engine"), Resolution::Ambiguous(_)));
+        assert_eq!(point_resolution(&idx, &m, "testStore"), Resolution::NotFound);
+        assert_eq!(m.ctor_edges.len(), 2);
+    }
+
+    #[test]
+    fn a_container_the_model_does_not_implement_leaves_jsr330_wiring_unknown() {
+        // a Guice/Sisu module, an HK2 binder, a Dagger module, Maven 4 DI or
+        // a Quarkus build step may bind any type: nothing missing, no
+        // ambiguity (Sisu picks the highest-ranked implementation), no
+        // cycle (Guice proxies interfaces)
+        for evidence in [
+            "package app.wiring; import com.google.inject.AbstractModule; public class Wiring extends AbstractModule {}",
+            "package app.wiring; import com.google.inject.*; public class Wiring extends AbstractModule {}",
+            "package app.wiring; import org.eclipse.sisu.space.SpaceModule; public class Wiring {}",
+            "package app.wiring; import org.glassfish.hk2.utilities.binding.AbstractBinder; public class Wiring extends AbstractBinder {}",
+            "package app.wiring; import dagger.Module; @Module public class Wiring {}",
+            "package app.wiring; import org.apache.maven.api.di.Provides; public class Wiring {}",
+            "package app.wiring; import io.quarkus.runtime.annotations.Recorder; @Recorder public class Wiring {}",
+        ] {
+            let (idx, m) = jsr330_project(&[("src/main/java/app/wiring/Wiring.java", evidence)]);
+            assert!(m.unmodeled_container.is_some(), "{evidence}");
+            for name in ["store", "engine", "testStore", "pong", "ping"] {
+                assert_eq!(point_resolution(&idx, &m, name), Resolution::Unknown, "{name}: {evidence}");
+            }
+            assert!(m.ctor_edges.is_empty(), "{evidence}");
+        }
+        // a Guice module in the tests wires the tests only
+        let (idx, m) = jsr330_project(&[("src/test/java/app/TestWiring.java", "package app; import com.google.inject.AbstractModule; class TestWiring extends AbstractModule {}")]);
+        assert_eq!(point_resolution(&idx, &m, "store"), Resolution::NotFound);
+        assert_eq!(point_resolution(&idx, &m, "testStore"), Resolution::Unknown);
+        // ... and so does one in a module that exists only for testing
+        let (idx, m) = jsr330_project(&[("tests/fixtures/src/main/java/fixture/Wiring.java", "package fixture; import com.google.inject.AbstractModule; class Wiring extends AbstractModule {}")]);
+        assert!(m.unmodeled_container.is_none());
+        assert_eq!(point_resolution(&idx, &m, "store"), Resolution::NotFound);
+        assert_eq!(point_resolution(&idx, &m, "testStore"), Resolution::Unknown);
+    }
+
+    #[test]
+    fn spring_wiring_is_judged_beside_an_unmodeled_container() {
+        // a Guice module binds nothing into a Spring context
+        let (idx, m) = model(&[
+            ("src/main/java/app/A.java", "package app; import org.springframework.stereotype.*;
+             interface Missing {}
+             @Service class Uses { Uses(Missing missing) {} }
+             @org.springframework.boot.autoconfigure.SpringBootApplication class App {}"),
+            ("src/main/java/app/Wiring.java", "package app; import com.google.inject.AbstractModule; class Wiring extends AbstractModule {}"),
+        ]);
+        assert_eq!(point_resolution(&idx, &m, "missing"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn micronaut_scopes_define_beans() {
+        // @RequestScope (from a jar that is not on the classpath) and a
+        // project scope meta-annotated @Scope make beans like @Singleton
+        let (idx, m) = model(&[
+            JSR330[0], JSR330[1], JSR330[2],
+            ("src/main/java/app/PerTenant.java", "package app; @jakarta.inject.Scope public @interface PerTenant {}"),
+            ("src/main/java/app/A.java", "package app; import jakarta.inject.*; import io.micronaut.runtime.http.scope.RequestScope;
+             abstract class Wrapper {}
+             @RequestScope class RequestWrapper extends Wrapper {}
+             interface Tenant {}
+             @PerTenant class CurrentTenant implements Tenant {}
+             @Singleton class Uses { @Inject Uses(Wrapper wrapper, Tenant tenant) {} }"),
+            ("src/main/java/app/Micronaut.java", "package app; import io.micronaut.runtime.Micronaut; class Application {}"),
+        ]);
+        assert!(matches!(point_resolution(&idx, &m, "wrapper"), Resolution::Unique(_)));
+        assert!(matches!(point_resolution(&idx, &m, "tenant"), Resolution::Unique(_)));
+        // only JSR-330's @Scope, by its full name, even when it does not
+        // resolve; an unresolved Spring @Scope on a composed annotation is
+        // not one
+        let (idx, m) = model(&[
+            ("src/main/java/app/PerTenant.java", "package app; import jakarta.inject.Scope; @Scope public @interface PerTenant {}"),
+            ("src/main/java/app/Odd.java", "package app; import org.springframework.context.annotation.Scope; @Scope(\"request\") public @interface Odd {}"),
+            ("src/main/java/app/A.java", "package app; import jakarta.inject.*;
+             interface Tenant {}
+             @PerTenant class CurrentTenant implements Tenant {}
+             interface Session {}
+             @Odd class OddSession implements Session {}
+             @Singleton class Uses { @Inject Uses(Tenant tenant, Session session) {} }"),
+        ]);
+        assert!(matches!(point_resolution(&idx, &m, "tenant"), Resolution::Unique(_)));
+        assert_eq!(point_resolution(&idx, &m, "session"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn a_bean_method_and_a_component_of_the_same_name_are_one_bean() {
+        // ConfigurationClassBeanDefinitionReader.isOverriddenByExistingDefinition:
+        // since Spring 6.1 a @Bean method returning the scanned class replaces
+        // it even with overriding disabled; otherwise registration fails
+        // (overriding disabled) or the @Bean wins (enabled). Never two beans.
+        let (idx, m) = model(&[
+            ("src/main/java/app/A.java", "package app; import org.springframework.stereotype.*; import org.springframework.context.annotation.*;
+             @Component class Registry {}
+             @Configuration class RegistryConfig { @Bean Registry registry() { return new Registry(); } }
+             interface Store {}
+             @Component class Store1 implements Store {}
+             @Configuration class StoreConfig { @Bean Object store1() { return new Object(); } }
+             @Component class Cache {}
+             @Component class Other {}
+             @Service class Uses { Uses(Registry reg, Store1 st, Cache cache, Other o) {} }
+             @org.springframework.boot.autoconfigure.SpringBootApplication class App {}"),
+            // a test configuration's @Bean of the same name exists only in tests
+            ("src/test/java/app/TestConfig.java", "package app; import org.springframework.context.annotation.*;
+             @Configuration class TestConfig { @Bean Other other() { return new Other(); } }"),
+        ]);
+        let bean = |n: &str, factory: bool| m.beans.iter().position(|b| b.name == n && matches!(b.source, BeanSource::FactoryMethod(_)) == factory).unwrap();
+        assert_eq!(point_resolution(&idx, &m, "reg"), Resolution::Unique(bean("registry", true)));
+        // the @Bean of another type replaces the component or fails startup
+        // (bean-name-conflict), depending on a setting we may not see
+        assert_eq!(point_resolution(&idx, &m, "st"), Resolution::Unknown);
+        assert_eq!(point_resolution(&idx, &m, "cache"), Resolution::Unique(bean("cache", false)));
+        assert_eq!(point_resolution(&idx, &m, "o"), Resolution::Unique(bean("other", false)));
+    }
+
+    #[test]
+    fn an_override_of_an_inherited_bean_method_defines_the_bean() {
+        // Spring registers a superclass's @Bean methods on the configuration
+        // and calls the override, which needs no @Bean of its own
+        let (idx, m) = model(&[(
+            "src/test/java/app/A.java",
+            "package app; import org.springframework.stereotype.*; import org.springframework.context.annotation.*; import org.springframework.beans.factory.annotation.Qualifier;
+             interface Props {}
+             @Component class DefaultProps implements Props {}
+             abstract class BaseConfig { @Bean(name = \"testProps\") public abstract Props props(); }
+             @Configuration class TestConfig extends BaseConfig { @Override public Props props() { return null; } }
+             @Service class Uses { Uses(@Qualifier(\"testProps\") Props p) {} }",
+        )]);
+        let test_props = m.beans.iter().position(|b| b.name == "testProps").expect("bean from the inherited @Bean method");
+        assert_eq!(point_resolution(&idx, &m, "p"), Resolution::Unique(test_props));
+        // the override keeps its own annotations
+        let (idx, m) = model(&[(
+            "src/test/java/app/A.java",
+            "package app; import org.springframework.stereotype.*; import org.springframework.context.annotation.*;
+             interface Props {}
+             @Component class DefaultProps implements Props {}
+             abstract class BaseConfig { @Bean(name = \"testProps\") public abstract Props props(); }
+             @Configuration class TestConfig extends BaseConfig { @Override @Primary public Props props() { return null; } }
+             @Service class Uses { Uses(Props p) {} }",
+        )]);
+        let test_props = m.beans.iter().position(|b| b.name == "testProps").expect("bean from the inherited @Bean method");
+        assert_eq!(point_resolution(&idx, &m, "p"), Resolution::Unique(test_props));
     }
 }
