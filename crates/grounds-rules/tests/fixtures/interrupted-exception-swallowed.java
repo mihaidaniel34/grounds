@@ -49,5 +49,17 @@ class Deferred {
         try { Thread.sleep(10); } catch (InterruptedException e) { interrupted = true; } // expect
         if (interrupted) worker.interrupt();
     }
+    void helper(Thread worker) {
+        boolean interrupted = false;
+        try { Thread.sleep(10); } catch (InterruptedException e) { interrupted = true; } // expect
+        if (interrupted) interrupt(worker);
+    }
+    void alias() {
+        Thread self = Thread.currentThread();
+        boolean interrupted = false;
+        try { Thread.sleep(10); } catch (InterruptedException e) { interrupted = true; }
+        if (interrupted) self.interrupt();
+    }
+    void interrupt(Thread t) { t.interrupt(); }
     boolean done() { return true; }
 }

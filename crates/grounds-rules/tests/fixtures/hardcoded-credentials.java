@@ -26,6 +26,7 @@ class Keys {
     static final String FORM_SECRET = "?grant_type=password&client_secret=";
     static final String DB_PASSWORD = "correct_horse_battery_staple"; // expect
     static final String ADMIN_PASSWORD = "monkey_business"; // expect
+    static final String ROOT_PASSWORD = "correct-horse-battery-staple"; // expect
     static final String SIGNING_SECRET = "c2VjcmV0LWtleS0xMjM0NTY3ODk="; // expect
     static final String DING_TALK_PASSWORD = "$t('password')";
 }

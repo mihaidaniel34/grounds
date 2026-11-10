@@ -599,9 +599,9 @@ impl Rule for TestClassWithoutTests {
         // @Test), an SPI implementation living in the test tree, or a base
         // class other test classes extend
         // (a marker interface, `Serializable`, supplies neither)
-        // an interface that is unknown or has a method somewhere up its hierarchy
+        // an interface that is unknown or hands down a method from somewhere up its hierarchy
         fn supplies(fm: &grounds_semantic::FileModel<'_>, i: &Ty, depth: u8) -> bool {
-            i.class_name().and_then(|nm| fm.class(nm)).is_none_or(|ic| depth > 8 || !ic.methods.is_empty() || ic.interfaces.iter().any(|s| supplies(fm, s, depth + 1)))
+            i.class_name().and_then(|nm| fm.class(nm)).is_none_or(|ic| depth > 8 || ic.methods.iter().any(|m| !m.flags.is_static() && !m.flags.is_private()) || ic.interfaces.iter().any(|s| supplies(fm, s, depth + 1)))
         }
         let class = cx.fm.class_of_decl(n);
         let implements = match &class {

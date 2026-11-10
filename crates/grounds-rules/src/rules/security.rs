@@ -52,13 +52,11 @@ fn looks_like_secret_value(v: &str) -> bool {
     // looks like a key name rather than a value: "db.password", "X-Api-Token",
     // "AccessKey.Create", ".certPrivateKeyPassword", "provisionDeviceSecret"
     let word_chars = v.chars().all(|c| c.is_ascii_alphabetic() || c == '.' || c == '-' || c == '_');
-    if word_chars && (v.contains('.') || v.contains('-')) {
-        return false;
-    }
-    // with underscores alone, a name when it is a constant's ("LLM_API_KEY") or
-    // says what it holds ("client_credentials", "spas_accessKey");
-    // "correct_horse_battery_staple" and "monkey_business" are passphrases
-    if word_chars && v.contains('_') && (v == v.to_ascii_uppercase() || l.split('_').any(|w| matches!(w, "key" | "keys" | "auth") || credential_name(w))) {
+    // a name when it is a constant's ("LLM_API_KEY") or one of its words says
+    // what it holds ("client_credentials", "spas_accessKey");
+    // "correct-horse-battery-staple" and "monkey_business" are passphrases
+    let separators = ['.', '-', '_'];
+    if word_chars && v.contains(separators) && (v == v.to_ascii_uppercase() || l.split(separators).any(|w| matches!(w, "key" | "keys" | "auth") || credential_name(w))) {
         return false;
     }
     // a query-string or form fragment ("&client_secret=", "?grant_type="), or

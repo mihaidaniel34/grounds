@@ -705,7 +705,7 @@ impl InfiniteLoop {
             })
         });
         // `boolean again = false; do { .. } while (again);` runs once
-        if written || known_bool(cond, cx) == Some(false) {
+        if written || known_bool(cond, cx, 0) == Some(false) {
             return;
         }
         cx.report(n.child(0).unwrap_or(n), "Nothing in this loop changes its condition or leaves it; once entered it never terminates");
@@ -714,17 +714,21 @@ impl InfiniteLoop {
 
 /// The value of a condition made of constants and locals that keep their
 /// initial value: `done`, `!done` after `boolean done = false;`.
-fn known_bool<'t>(e: Node<'t>, cx: &Ctx<'_, 't>) -> Option<bool> {
+fn known_bool<'t>(e: Node<'t>, cx: &Ctx<'_, 't>, depth: u8) -> Option<bool> {
+    // a chain of locals defined by one another is not worth following far
+    if depth > 6 {
+        return None;
+    }
     let e = e.unparen();
     if let Some(Constant::Bool(b)) = cx.fm.constant_value(e) {
         return Some(b);
     }
     match e.kind() {
-        "unary_expression" if op(e) == "!" => e.field("operand").and_then(|o| known_bool(o, cx)).map(|b| !b),
+        "unary_expression" if op(e) == "!" => e.field("operand").and_then(|o| known_bool(o, cx, depth + 1)).map(|b| !b),
         // `again == true`
         "binary_expression" if matches!(op(e), "==" | "!=") => {
             let (l, r) = lr(e)?;
-            Some((known_bool(l, cx)? == known_bool(r, cx)?) == (op(e) == "=="))
+            Some((known_bool(l, cx, depth + 1)? == known_bool(r, cx, depth + 1)?) == (op(e) == "=="))
         }
         "identifier" => {
             let i = cx.fm.local_ref(e)?;
@@ -739,7 +743,7 @@ fn known_bool<'t>(e: Node<'t>, cx: &Ctx<'_, 't>) -> Option<bool> {
             if written || !matches!(d.kind, grounds_semantic::LocalKind::Local) {
                 return None;
             }
-            known_bool(d.decl_node.field("value")?, cx)
+            known_bool(d.decl_node.field("value")?, cx, depth + 1)
         }
         _ => None,
     }
