@@ -71,6 +71,10 @@ class InputErrors {
     java.security.MessageDigest digest() {
         try { return java.security.MessageDigest.getInstance("WHIRLPOOL"); } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException("no digest"); } // expect
     }
+    // still lost: the second call names its algorithm at run time
+    java.security.MessageDigest pair(String algorithm) {
+        try { java.security.MessageDigest.getInstance("SHA-256"); return java.security.MessageDigest.getInstance(algorithm); } catch (java.security.NoSuchAlgorithmException e) { throw new IllegalStateException("failed"); } // expect
+    }
     // still lost: the literal is not what the call was given
     byte[] encodedLabel(String s, String charset) {
         try { String label = "UTF-8"; return s.getBytes(charset); } catch (java.io.UnsupportedEncodingException e) { throw new IllegalStateException("bad charset"); } // expect

@@ -72,6 +72,11 @@ class Unknown {
         item = null;
         return item.name(); // expect
     }
+    // still reported: the call does not run on the null path
+    String conditionalCall(@Nullable Item item) {
+        if (item != null) require(item, "item");
+        return item.name(); // expect
+    }
     // still reported: the variable is only logged
     String logged(@Nullable Item item, org.slf4j.Logger logger) {
         if (item == null) {

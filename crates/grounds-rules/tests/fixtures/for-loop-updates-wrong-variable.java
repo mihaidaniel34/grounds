@@ -31,3 +31,12 @@ class IteratorNotAdvanced {
         return i;
     }
 }
+class IteratorOnlyObserved {
+    void m(java.util.List<String> xs) {
+        int j = 0;
+        // nextIndex() reads the position without moving it
+        for (java.util.ListIterator<String> it = xs.listIterator(); it.hasNext(); j++) { // expect
+            System.out.println(it.nextIndex());
+        }
+    }
+}

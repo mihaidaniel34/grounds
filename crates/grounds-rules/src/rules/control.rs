@@ -159,7 +159,7 @@ impl Rule for IdenticalBranches {
         match n.kind() {
             "ternary_expression" => {
                 let (Some(a), Some(b)) = (n.field("consequence"), n.field("alternative")) else { return };
-                if normalized(a, cx.src) == normalized(b, cx.src) {
+                if normalized(a, cx.src) == normalized(b, cx.src) && !n.field("condition").is_some_and(binds_pattern) {
                     cx.report(n, "Both branches of the conditional expression are identical");
                 }
             }
@@ -172,7 +172,9 @@ impl Rule for IdenticalBranches {
                     return;
                 }
                 let texts: Vec<String> = branches.iter().map(|b| branch_text(*b, cx.src)).collect();
-                if has_else && texts.iter().all(|t| *t == texts[0]) {
+                // conditions binding pattern variables: the branches may read
+                // different variables of the same name
+                if has_else && texts.iter().all(|t| *t == texts[0]) && !conds.iter().any(|c| binds_pattern(*c)) {
                     cx.report(n.child(0).unwrap_or(n), "All branches of this if/else are identical; the condition has no effect");
                     return;
                 }
@@ -1315,7 +1317,10 @@ impl Rule for ForLoopWrongVariable {
         // i++` with `it.next()` in the body)
         let advanced_by_call = |c: &str| {
             n.field("body").into_iter().flat_map(|b| b.descendants()).any(|d| {
-                d.kind() == "method_invocation" && d.field("object").is_some_and(|o| o.unparen().kind() == "identifier" && o.unparen().text(cx.src) == c)
+                d.kind() == "method_invocation"
+                    && d.field("object").is_some_and(|o| o.unparen().kind() == "identifier" && o.unparen().text(cx.src) == c)
+                    // queries that do not move it
+                    && !matches!(cx.fm.call_name(d), Some("hasNext" | "hasPrevious" | "nextIndex" | "previousIndex" | "hasMoreElements" | "hasMoreTokens" | "countTokens" | "hasNextLine" | "hasNextInt" | "isEmpty" | "size" | "toString" | "hashCode" | "equals"))
             })
         };
         if counters.iter().any(|c| cond_vars.contains(c) && advanced_by_call(c)) {

@@ -40,3 +40,7 @@ class Session implements Serializable {
     @jakarta.inject.Inject
     private Plain helper; // expect
 }
+// a normal-scoped type built directly is a plain object, not a proxy
+class DirectHolder implements Serializable {
+    private Probe probe = new Probe(); // expect
+}

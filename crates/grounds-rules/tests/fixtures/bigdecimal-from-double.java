@@ -25,5 +25,7 @@ class Exact {
         BigDecimal third = new BigDecimal(1.0 / 3); // expect
         BigDecimal unrounded = new BigDecimal(0.1, java.math.MathContext.UNLIMITED); // expect
         BigDecimal big = new BigDecimal((double) Long.MAX_VALUE); // expect
+        BigDecimal parenthesized = new BigDecimal(0.1, (java.math.MathContext.UNLIMITED)); // expect
+        BigDecimal zeroPrecision = new BigDecimal(0.1, new java.math.MathContext(0)); // expect
     }
 }

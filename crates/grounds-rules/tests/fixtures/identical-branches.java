@@ -74,3 +74,14 @@ class PatternSwitchWithDefault {
         };
     }
 }
+class PatternShadow {
+    String text = "fallback";
+    // the branches read different variables named `text`: not identical
+    int length(Object o) {
+        if (o instanceof String text) {
+            return text.length();
+        } else {
+            return text.length();
+        }
+    }
+}

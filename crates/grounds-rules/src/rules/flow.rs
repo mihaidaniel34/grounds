@@ -75,6 +75,30 @@ impl Rule for NullDereference {
     }
 }
 
+/// Does `call` run on every path from its position to `deref`? It must not
+/// sit in a branch, loop body, case, catch block or lambda that the
+/// dereference is not also inside (`if (x != null) consume(x); x.length()`).
+fn runs_on_every_path_to<'t>(call: Node<'t>, deref: Node<'t>) -> bool {
+    let mut child = call;
+    for a in call.ancestors() {
+        if deref.ancestors().any(|d| d == a) {
+            return true;
+        }
+        let conditional = match a.kind() {
+            "if_statement" | "ternary_expression" => a.field("condition") != Some(child),
+            "binary_expression" => matches!(op(a), "&&" | "||") && a.field("right") == Some(child),
+            "while_statement" | "for_statement" | "enhanced_for_statement" | "do_statement" => a.field("body") == Some(child),
+            "switch_block_statement_group" | "switch_rule" | "catch_clause" | "lambda_expression" | "class_body" => true,
+            _ => false,
+        };
+        if conditional {
+            return false;
+        }
+        child = a;
+    }
+    false
+}
+
 /// Does a "may be null" at `deref` depend on something the nullness analysis
 /// does not know? It joins paths without correlating them, and it does not
 /// look into callees, so it stays silent when, between the last null check
@@ -110,6 +134,7 @@ fn maybe_null_unknown<'t>(cx: &Ctx<'_, 't>, callable: Node<'t>, i: usize, deref:
                 a.kind() == "argument_list"
                     && a.parent().is_some_and(|call| {
                         !call.descendants().any(|d| d == deref)
+                            && runs_on_every_path_to(call, deref)
                             && !(call.kind() == "method_invocation"
                                 && (super::exceptions::is_log_like(call, cx) || matches!(cx.fm.call_name(call), Some("println" | "print" | "printf" | "format" | "valueOf"))))
                     })
@@ -413,6 +438,19 @@ fn holds_os_resource<'t>(cx: &Ctx<'_, 't>, site: Node<'t>) -> bool {
     site.descendants().filter(|d| matches!(d.kind(), "object_creation_expression" | "method_invocation")).any(|d| {
         if d.kind() == "method_invocation" && cx.fm.select_method(d).is_some_and(|m| &*m.owner == "java.nio.file.Files" && (m.method.name.starts_with("new") || matches!(&*m.method.name, "lines" | "list" | "walk" | "find"))) {
             return true;
+        }
+        // constructors that open the file they are given: `new Scanner(file)`,
+        // `new PrintWriter("out.txt")`, `new Formatter(path)`
+        if d.kind() == "object_creation_expression" {
+            let t = cx.type_of(d);
+            let first = cx.fm.args_of(d).first().map(|a| cx.type_of(*a));
+            let file_arg = first.as_ref().is_some_and(|a| matches!(a.class_name(), Some("java.io.File" | "java.nio.file.Path")));
+            let name_arg = first.as_ref().is_some_and(|a| a.is_string());
+            match t.class_name() {
+                Some("java.util.Scanner") if file_arg => return true,
+                Some("java.io.PrintWriter" | "java.io.PrintStream" | "java.util.Formatter") if file_arg || name_arg => return true,
+                _ => {}
+            }
         }
         cx.type_of(d).class_name().is_some_and(|t| OS_RESOURCES.iter().any(|r| t == *r || cx.fm.is_subclass(t, r).is_yes()))
     })

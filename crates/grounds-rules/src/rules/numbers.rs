@@ -446,7 +446,7 @@ impl Rule for BigDecimalFromDouble {
                 return;
             }
             // rounded on purpose to an explicit precision
-            if args.len() == 2 && cx.type_of(args[1]).is_class("java.math.MathContext") && !cx.text(args[1]).ends_with("UNLIMITED") {
+            if args.len() == 2 && cx.type_of(args[1]).is_class("java.math.MathContext") && math_context_rounds(cx, args[1]) {
                 return;
             }
             let fix = if args.len() == 1 { Some(Fix::replace("Use BigDecimal.valueOf", n, format!("java.math.BigDecimal.valueOf({})", cx.text(args[0])))) } else { None };
@@ -455,6 +455,18 @@ impl Rule for BigDecimalFromDouble {
                 None => cx.report(n, "BigDecimal built from a double keeps its binary rounding error; use a String"),
             }
         }
+    }
+}
+
+/// Does a `MathContext` argument round? `UNLIMITED` and `new MathContext(0)`
+/// keep every digit; a context whose precision is not known is taken as
+/// chosen on purpose.
+fn math_context_rounds<'t>(cx: &Ctx<'_, 't>, e: Node<'t>) -> bool {
+    let e = e.unparen();
+    match e.kind() {
+        "field_access" | "identifier" => !matches!(cx.fm.symbol(e), Some(grounds_semantic::Symbol::Field(f)) if &*f.field.name == "UNLIMITED"),
+        "object_creation_expression" => cx.fm.args_of(e).first().and_then(|p| cx.fm.int_value(*p)).is_none_or(|p| p != 0),
+        _ => true,
     }
 }
 

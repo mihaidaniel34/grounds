@@ -68,6 +68,10 @@ class Directories {
         dir.mkdirs(); // expect
         java.nio.file.Files.write(other.toPath(), data);
     }
+    void unrelatedData(File dir, File marker) throws java.io.IOException {
+        dir.mkdirs(); // expect
+        java.nio.file.Files.writeString(marker.toPath(), dir.getName());
+    }
     void createOnly(File dir) {
         dir.mkdirs(); // expect
     }

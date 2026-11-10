@@ -259,23 +259,45 @@ fn writes_file_after<'t>(cx: &Ctx<'_, 't>, stmt: Node<'t>, mkdirs: Node<'t>) -> 
         root = r.field("object").map(|o| o.unparen());
     }
     let Some(root) = root.filter(|r| r.kind() == "identifier").map(|r| cx.text(r)) else { return false };
-    block.kids().into_iter().filter(|k| k.start_byte() > stmt.start_byte()).flat_map(|k| k.descendants()).any(|d| {
-        let same_path = || d.descendants().any(|x| x.kind() == "identifier" && cx.text(x) == root);
-        same_path() && match d.kind() {
-        "method_invocation" => match cx.fm.call_name(d) {
-            Some("createNewFile" | "createTempFile") => true,
-            Some("write" | "writeString" | "createFile" | "createDirectory" | "copy" | "move" | "newOutputStream" | "newBufferedWriter" | "newByteChannel") => {
-                cx.fm.select_method(d).is_some_and(|m| &*m.owner == "java.nio.file.Files")
+    // the path a later call writes to: its receiver or destination argument
+    let destination = |d: Node<'t>| -> Option<Node<'t>> {
+        let args = cx.fm.args_of(d);
+        match d.kind() {
+            "method_invocation" => match cx.fm.call_name(d) {
+                Some("createNewFile") => d.field("object"),
+                Some("createTempFile") => {
+                    if cx.fm.select_method(d).is_some_and(|m| &*m.owner == "java.nio.file.Files") {
+                        (args.len() == 3).then(|| args[0])
+                    } else {
+                        args.get(2).copied()
+                    }
+                }
+                Some("write" | "writeString" | "createFile" | "createDirectory" | "newOutputStream" | "newBufferedWriter" | "newByteChannel")
+                    if cx.fm.select_method(d).is_some_and(|m| &*m.owner == "java.nio.file.Files") =>
+                {
+                    args.first().copied()
+                }
+                Some("copy" | "move") if cx.fm.select_method(d).is_some_and(|m| &*m.owner == "java.nio.file.Files") => args.get(1).copied(),
+                _ => None,
+            },
+            "object_creation_expression"
+                if matches!(
+                    cx.type_of(d).class_name(),
+                    Some("java.io.FileOutputStream" | "java.io.FileWriter" | "java.io.RandomAccessFile" | "java.io.PrintWriter" | "java.io.PrintStream")
+                ) =>
+            {
+                args.first().copied()
             }
-            _ => false,
-        },
-        "object_creation_expression" => matches!(
-            cx.type_of(d).class_name(),
-            Some("java.io.FileOutputStream" | "java.io.FileWriter" | "java.io.RandomAccessFile" | "java.io.PrintWriter" | "java.io.PrintStream")
-        ),
-        _ => false,
+            _ => None,
         }
-    })
+    };
+    block
+        .kids()
+        .into_iter()
+        .filter(|k| k.start_byte() > stmt.start_byte())
+        .flat_map(|k| k.descendants())
+        .filter_map(destination)
+        .any(|dest| dest.descendants().any(|x| x.kind() == "identifier" && cx.text(x) == root))
 }
 
 /// `offer` on a queue without capacity never returns false: a

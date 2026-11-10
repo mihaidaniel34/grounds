@@ -14,6 +14,15 @@ class ParserTest {
         InputStream in = new BufferedInputStream(new FileInputStream(f)); // expect
         in.read();
     }
+    void scannerAndWriter(File f) throws IOException {
+        // constructors that open the file they are given
+        java.util.Scanner sc = new java.util.Scanner(f); // expect
+        sc.nextLine();
+        PrintWriter pw = new PrintWriter(f); // expect
+        pw.println("x");
+        java.util.Scanner text = new java.util.Scanner("in memory");
+        text.next();
+    }
     void lines(java.nio.file.Path p) throws IOException {
         java.util.stream.Stream<String> lines = java.nio.file.Files.lines(p); // expect
         lines.count();

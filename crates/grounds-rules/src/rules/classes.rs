@@ -307,13 +307,34 @@ fn is_lifecycle_callback<'t>(m: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
         })
     });
     let name = m.field("name").map(|x| cx.text(x)).unwrap_or("");
-    let aware = matches!(
-        name,
-        "setApplicationContext" | "setBeanFactory" | "setEnvironment" | "setServletContext" | "setEmbeddedValueResolver" | "setResourceLoader" | "afterPropertiesSet" | "afterSingletonsInstantiated" | "destroy" | "postProcessBeanFactory"
-    ) && owning_type_decl(m).and_then(|d| cx.fm.class_of_decl(d)).is_some_and(|c| {
-        ["org.springframework.beans.factory.Aware", "org.springframework.beans.factory.InitializingBean", "org.springframework.beans.factory.DisposableBean", "org.springframework.beans.factory.SmartInitializingSingleton", "org.springframework.beans.factory.config.BeanFactoryPostProcessor"]
-            .iter()
-            .any(|i| !cx.fm.is_subclass(&c.name, i).is_no())
+    // each callback with the interface that declares it and its parameter
+    let callback = match name {
+        "setApplicationContext" => Some(("org.springframework.context.ApplicationContextAware", Some("ApplicationContext"))),
+        "setBeanFactory" => Some(("org.springframework.beans.factory.BeanFactoryAware", Some("BeanFactory"))),
+        "setEnvironment" => Some(("org.springframework.context.EnvironmentAware", Some("Environment"))),
+        "setServletContext" => Some(("org.springframework.web.context.ServletContextAware", Some("ServletContext"))),
+        "setEmbeddedValueResolver" => Some(("org.springframework.context.EmbeddedValueResolverAware", Some("StringValueResolver"))),
+        "setResourceLoader" => Some(("org.springframework.context.ResourceLoaderAware", Some("ResourceLoader"))),
+        "afterPropertiesSet" => Some(("org.springframework.beans.factory.InitializingBean", None)),
+        "destroy" => Some(("org.springframework.beans.factory.DisposableBean", None)),
+        "afterSingletonsInstantiated" => Some(("org.springframework.beans.factory.SmartInitializingSingleton", None)),
+        "postProcessBeanFactory" => Some(("org.springframework.beans.factory.config.BeanFactoryPostProcessor", Some("ConfigurableListableBeanFactory"))),
+        _ => None,
+    };
+    let aware = callback.is_some_and(|(iface, param)| {
+        let params: Vec<Node<'t>> = m.field("parameters").map(|ps| ps.kids().into_iter().filter(|p| p.kind() == "formal_parameter").collect()).unwrap_or_default();
+        let signature = match param {
+            Some(t) => params.len() == 1 && params[0].field("type").is_some_and(|ty| cx.text(ty).rsplit('.').next() == Some(t)),
+            None => params.is_empty(),
+        };
+        let simple = iface.rsplit('.').next().unwrap_or(iface);
+        // the class implements that interface: known from the hierarchy, or
+        // named in its own declaration when the jar is missing
+        signature
+            && owning_type_decl(m).is_some_and(|d| {
+                cx.fm.class_of_decl(d).is_some_and(|c| cx.fm.is_subclass(&c.name, iface).is_yes())
+                    || d.field("interfaces").or_else(|| d.kid_of_kind("super_interfaces")).is_some_and(|i| i.descendants().any(|x| x.kind() == "type_identifier" && cx.text(x) == simple))
+            })
     });
     observer || aware
 }
@@ -970,7 +991,12 @@ impl Rule for NonSerializableField {
         let Some(tc) = cx.fm.class(tn) else { return };
         // a normal-scoped CDI bean is only ever referenced through its
         // container-made client proxy, which is serializable
-        if tc.annotations.iter().any(|a| CDI_NORMAL_SCOPES.iter().any(|f| a.is(f))) {
+        // (when the container provides it: an injected field, or a field set
+        // by an @Inject constructor; `new Probe()` is a plain object)
+        let injected = cx.fm.annotations_of(n).iter().any(|a| INJECTED_BY_CONTAINER.iter().any(|f| a.is(f)))
+            || n.fields("declarator").iter().all(|d| d.field("value").is_none())
+                && owning_type_decl(n).is_some_and(|d| members(d).iter().any(|m| m.kind() == "constructor_declaration" && has_annotation_named(*m, cx.src, "Inject")));
+        if injected && tc.annotations.iter().any(|a| CDI_NORMAL_SCOPES.iter().any(|f| a.is(f))) {
             return;
         }
         // interfaces and non-final classes may have serializable implementations

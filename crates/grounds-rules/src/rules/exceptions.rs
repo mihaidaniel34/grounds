@@ -431,18 +431,31 @@ impl Rule for LostStackTrace {
         // a checked exception the JDK guarantees never happens: a charset or
         // a message digest every Java platform must support, named by a literal
         if let Some(t) = try_stmt {
-            let literals: Vec<String> = t
+            // every call in the try that takes a charset or algorithm name
+            // must be given a guaranteed one as a literal
+            let calls: Vec<Node<'t>> = t
                 .kids()
                 .into_iter()
                 .filter(|k| matches!(k.kind(), "block" | "resource_specification"))
                 .flat_map(|k| k.descendants())
-                .filter(|d| d.kind() == "string_literal" && d.parent().is_some_and(|p| p.kind() == "argument_list"))
-                .map(|d| d.text(cx.src).trim_matches('"').to_ascii_uppercase())
+                .filter(|d| matches!(d.kind(), "method_invocation" | "object_creation_expression"))
                 .collect();
+            let literal_in = |call: Node<'t>, set: &[&str]| {
+                cx.fm.args_of(call).iter().any(|a| a.kind() == "string_literal" && set.contains(&a.text(cx.src).trim_matches('"').to_ascii_uppercase().as_str()))
+            };
+            let charset_calls: Vec<Node<'t>> = calls
+                .iter()
+                .copied()
+                .filter(|c| match c.kind() {
+                    "method_invocation" => matches!(cx.fm.call_name(*c), Some("getBytes" | "encode" | "decode" | "toString")) && !cx.fm.args_of(*c).is_empty(),
+                    _ => matches!(cx.type_of(*c).class_name(), Some("java.lang.String" | "java.io.InputStreamReader" | "java.io.OutputStreamWriter" | "java.io.PrintStream" | "java.io.PrintWriter" | "java.util.Scanner" | "java.util.Formatter")) && cx.fm.args_of(*c).len() >= 2,
+                })
+                .collect();
+            let digest_calls: Vec<Node<'t>> = calls.iter().copied().filter(|c| c.kind() == "method_invocation" && cx.fm.call_name(*c) == Some("getInstance")).collect();
             let impossible = !caught.is_empty()
                 && caught.iter().all(|t| match t.class_name() {
-                    Some("java.io.UnsupportedEncodingException") => literals.iter().any(|l| STANDARD_CHARSETS.contains(&l.as_str())),
-                    Some("java.security.NoSuchAlgorithmException") => literals.iter().any(|l| STANDARD_DIGESTS.contains(&l.as_str())),
+                    Some("java.io.UnsupportedEncodingException") => !charset_calls.is_empty() && charset_calls.iter().all(|c| literal_in(*c, STANDARD_CHARSETS)),
+                    Some("java.security.NoSuchAlgorithmException") => !digest_calls.is_empty() && digest_calls.iter().all(|c| literal_in(*c, STANDARD_DIGESTS)),
                     _ => false,
                 });
             if impossible {
