@@ -170,6 +170,8 @@ pub struct DiModel {
     pub spring_application: bool,
     /// The application contexts started in main sources, each from its root.
     pub contexts: Vec<AppContext>,
+    /// The classes some context holds.
+    app_classes: rustc_hash::FxHashSet<Name>,
     /// Auto-configurations: annotated `@AutoConfiguration` or listed in
     /// META-INF registration files. `@SpringBootApplication`'s scan skips
     /// them (AutoConfigurationExcludeFilter), so its packages covering one
@@ -201,6 +203,8 @@ pub struct DiModel {
     /// Constructor-injection edges (owner, dependency class, point index),
     /// computed once at build time.
     pub ctor_edges: Vec<(Name, Name, usize)>,
+    /// Same-name bean pairs in one context (see `name_conflicts`).
+    conflicts: Vec<(usize, usize)>,
     /// type name -> beans assignable to it (via the full supertype closure)
     providers: FxHashMap<Name, Vec<usize>>,
     /// beans whose supertype closure is incomplete (unknown library types)
@@ -1614,6 +1618,7 @@ impl<'a> Builder<'a> {
         }
         self.model.by_class = by_class;
         self.model.contexts = self.app_contexts(&names);
+        self.model.app_classes = self.model.contexts.iter().flat_map(|c| c.members.iter().cloned()).collect();
         self.model.spring_application = !self.model.contexts.is_empty();
         self.unseen_registrations(&names, &imported_anywhere);
     }
@@ -1748,12 +1753,28 @@ impl<'a> Builder<'a> {
                 }
             }
         }
-        // the components a scan may register: (class, bean framework, module, in tests)
-        let components: Vec<(Name, usize)> = {
-            let mut v: Vec<(Name, usize)> = self.model.component_classes.iter().map(|(k, &i)| (k.clone(), i)).collect();
-            v.sort();
-            v
-        };
+        // the components a scan may register, by module: what Spring's
+        // scanner registers (Spring stereotypes and JSR-330 @Named /
+        // @ManagedBean classes, and the repositories, clients and mappers of
+        // the scanned packages), with (class, package, in tests,
+        // auto-configuration); a test's configurations and the classes
+        // nested in tests are excluded from an application's scan
+        // (TypeExcludeFilter)
+        let mut components: FxHashMap<String, Vec<(Name, String, bool, bool)>> = FxHashMap::default();
+        let mut sorted: Vec<(Name, usize)> = self.model.component_classes.iter().map(|(k, &i)| (k.clone(), i)).collect();
+        sorted.sort();
+        for (k, bi) in sorted {
+            let b = &self.model.beans[bi];
+            let Some(file) = b.file.clone() else { continue };
+            let Some(kc) = self.class(&k) else { continue };
+            let test = is_test_path(&file);
+            let scanned_kind = b.framework == Framework::Spring || kc.annotations.iter().any(|a| matches!(a.simple_name(), "Named" | "ManagedBean"));
+            let test_excluded = test && (k.contains('$') || kc.annotations.iter().any(|a| matches!(a.simple_name(), "TestConfiguration" | "TestComponent")));
+            if scanned_kind && !test_excluded {
+                let auto = self.model.auto_configurations.contains(&k);
+                components.entry(module_of(&file).to_string()).or_default().push((k, kc.package().to_string(), test, auto));
+            }
+        }
         let mut out = Vec::new();
         for root in roots {
             let Some(rf) = self.index.source_file_of(&root).cloned() else { continue };
@@ -1788,38 +1809,24 @@ impl<'a> Builder<'a> {
                     }
                     scans.extend(self.certain_scans(&c));
                 }
+                scans.sort();
+                scans.dedup();
                 let mut grew = false;
-                for (k, bi) in &components {
-                    if ctx.members.contains(k) || ctx.test_members.contains(k) {
-                        continue;
-                    }
-                    let b = &self.model.beans[*bi];
-                    let Some(file) = b.file.as_deref() else { continue };
-                    let module = module_of(file);
-                    let test = is_test_path(file);
-                    if (test && module != root_module) || !visible.contains(module) {
-                        continue;
-                    }
-                    // what Spring's scanner registers: Spring stereotypes and
-                    // JSR-330 @Named / @ManagedBean classes, and the
-                    // repositories, clients and mappers of the scanned packages
-                    let Some(kc) = self.class(k) else { continue };
-                    let scanned_kind = b.framework == Framework::Spring || kc.annotations.iter().any(|a| matches!(a.simple_name(), "Named" | "ManagedBean"));
-                    let auto_configuration = self.model.auto_configurations.contains(k);
-                    if !scanned_kind || !scans.iter().any(|(r, boot)| !(*boot && auto_configuration) && package_covered(r, kc.package())) {
-                        continue;
-                    }
-                    if test {
-                        // a test's configurations and the classes nested in tests
-                        // are excluded from an application's scan (TypeExcludeFilter)
-                        if k.contains('$') || kc.annotations.iter().any(|a| matches!(a.simple_name(), "TestConfiguration" | "TestComponent")) {
+                for module in &visible {
+                    for (k, pkg, test, auto) in components.get(module).map(|v| v.as_slice()).unwrap_or(&[]) {
+                        if (*test && *module != root_module) || ctx.members.contains(k) || ctx.test_members.contains(k) {
                             continue;
                         }
-                        ctx.test_members.insert(k.clone());
-                    } else {
-                        ctx.members.insert(k.clone());
-                        work.push(k.clone());
-                        grew = true;
+                        if !scans.iter().any(|(r, boot)| !(*boot && *auto) && package_covered(r, pkg)) {
+                            continue;
+                        }
+                        if *test {
+                            ctx.test_members.insert(k.clone());
+                        } else {
+                            ctx.members.insert(k.clone());
+                            work.push(k.clone());
+                            grew = true;
+                        }
                     }
                 }
                 if !grew {
@@ -1946,6 +1953,7 @@ impl DiModel {
         m.same_name_factories = m.same_name_factories();
         m.index_providers(index);
         m.ctor_edges = m.constructor_edges(index);
+        m.conflicts = m.compute_name_conflicts();
         m
     }
 
@@ -2299,7 +2307,7 @@ impl DiModel {
     /// Elsewhere (a library, a context only tests or XML assemble) its
     /// dependencies are provided by a context the model cannot see.
     pub fn in_application(&self, class: &str) -> bool {
-        self.contexts.iter().any(|c| c.members.contains(class))
+        self.app_classes.contains(class)
     }
 
     /// Is the bean registered in the context (in a test run with `test`)?
@@ -2312,18 +2320,35 @@ impl DiModel {
     /// certainly registered in the same context clash: configurations that
     /// separate contexts load (one per test, one per sample) do not.
     pub fn name_conflicts(&self) -> Vec<(usize, usize)> {
+        self.conflicts.clone()
+    }
+
+    /// Computed once at build time (the rule asks for every file).
+    fn compute_name_conflicts(&self) -> Vec<(usize, usize)> {
+        let mut by_class: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
+        for (i, b) in self.beans.iter().enumerate() {
+            if b.framework == Framework::Spring && !b.conditional && !b.is_test {
+                by_class.entry(&b.declaring_class).or_default().push(i);
+            }
+        }
         let mut out: Vec<(usize, usize)> = Vec::new();
         for ctx in &self.contexts {
             let mut seen: FxHashMap<&str, usize> = FxHashMap::default();
             // the root is registered before the scan, and the scanner skips
             // a candidate whose name an explicitly registered bean already
             // has (ClassPathBeanDefinitionScanner.isCompatible): no clash
-            let root = self.component_classes.get(&ctx.root).copied().filter(|&r| self.beans[r].source == BeanSource::Component && self.beans[r].framework == Framework::Spring);
+            let root = self.component_classes.get(&ctx.root).copied().filter(|&r| {
+                let b = &self.beans[r];
+                b.source == BeanSource::Component && b.framework == Framework::Spring && !b.conditional && !b.is_test
+            });
             if let Some(r) = root {
                 seen.insert(&self.beans[r].name, r);
             }
-            for (i, b) in self.beans.iter().enumerate() {
-                if Some(i) == root || b.framework != Framework::Spring || b.conditional || b.is_test || !self.context_holds(ctx, b, false) {
+            let mut held: Vec<usize> = ctx.members.iter().filter_map(|c| by_class.get(&**c)).flatten().copied().collect();
+            held.sort_unstable();
+            for i in held {
+                let b = &self.beans[i];
+                if Some(i) == root {
                     continue;
                 }
                 match seen.get(b.name.as_str()) {
