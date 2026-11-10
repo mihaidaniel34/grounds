@@ -680,6 +680,11 @@ impl<'a> Builder<'a> {
         if QUALIFIER_ANNOTATIONS.iter().any(|q| a.is(q)) || self.is_custom_qualifier(a) {
             return false;
         }
+        // registrations discovery knows to make no bean: a MapStruct mapper
+        // with the default component model, Spring Data's @NoRepositoryBean
+        if (is_mapstruct_mapper(a) && !mapper_is_bean(a)) || a.is("org.springframework.data.repository.NoRepositoryBean") {
+            return false;
+        }
         let qualified: Option<String> = if a.resolved || a.name.contains('.') {
             Some(a.name.to_string())
         } else {
@@ -2875,5 +2880,28 @@ mod tests {
         // an @Import in main sources may register it in production
         let in_main = ("src/main/java/other/Wiring.java", "package other; @org.springframework.context.annotation.Import(app.PortImpl.class) class Wiring {}");
         assert_eq!(resolve(in_main, "port"), Resolution::Unknown);
+    }
+
+    #[test]
+    fn a_registration_known_to_make_no_bean_is_evidence_of_no_bean() {
+        let app = ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication class App {}");
+        let uses = ("src/main/java/app/Uses.java", "package app; import org.springframework.stereotype.*; @Service class Uses { Uses(Port port) {} }");
+        let resolution = |files: &[(&'static str, &'static str)]| {
+            let mut all = vec![app, uses];
+            all.extend_from_slice(files);
+            let (idx, m) = model(&all);
+            point_resolution(&idx, &m, "port")
+        };
+        // MapStruct's default component model and @NoRepositoryBean make no bean, and discovery knows it
+        let default_mapper = ("src/main/java/app/Port.java", "package app; import org.mapstruct.Mapper; @Mapper(componentModel = \"default\") public interface Port {}");
+        let constant_mapper = ("src/main/java/app/Port.java", "package app; import org.mapstruct.*; @org.mapstruct.Mapper(componentModel = MappingConstants.ComponentModel.DEFAULT) public abstract class Port {}");
+        let no_repository = ("src/main/java/app/Port.java", "package app; import org.springframework.data.repository.NoRepositoryBean; @NoRepositoryBean public interface Port {}");
+        for port in [default_mapper, constant_mapper, no_repository] {
+            assert_eq!(resolution(&[port]), Resolution::NotFound, "{}", port.1);
+            // other evidence still counts
+            assert_eq!(resolution(&[port, ("src/main/java/app/Impl.java", "package app; @com.acme.Registered class PortImpl implements Port {}")]), Resolution::Unknown, "{}", port.1);
+        }
+        // a mapper with a container model is a bean
+        assert!(matches!(resolution(&[("src/main/java/app/Port.java", "package app; import org.mapstruct.Mapper; @Mapper(componentModel = \"spring\") public interface Port {}")]), Resolution::Unique(_)));
     }
 }
