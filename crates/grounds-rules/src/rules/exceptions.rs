@@ -471,7 +471,16 @@ impl Rule for InterruptedSwallowed {
                 let deferred = ifs.iter().any(|i| {
                     i.start_byte() > n.end_byte()
                         && i.field("condition").is_some_and(|c| c.descendants().any(|d| d.kind() == "identifier" && flags.contains(&cx.text(d))))
-                        && i.field("consequence").is_some_and(|c| cx.text(c).contains("interrupt()"))
+                        && i.field("consequence").is_some_and(|c| {
+                            // on this thread: `worker.interrupt()` restores nothing here
+                            // (also `self.interrupt()` after `Thread self = Thread.currentThread();`)
+                            let current = |o: Node<'t>| {
+                                let o = o.unparen();
+                                let o = cx.fm.local_ref(o).and_then(|i| cx.fm.binder.decls[i].decl_node.field("value")).map_or(o, |v| v.unparen());
+                                cx.text(o).ends_with("currentThread()")
+                            };
+                            c.descendants().any(|d| d.kind() == "method_invocation" && cx.fm.call_name(d) == Some("interrupt") && cx.fm.args_of(d).is_empty() && d.field("object").is_none_or(current))
+                        })
                 });
                 if deferred {
                     return;

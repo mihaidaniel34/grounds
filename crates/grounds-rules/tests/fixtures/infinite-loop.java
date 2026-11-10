@@ -48,6 +48,9 @@ class StuckCondition {
         for (int k = 0; k < n; k++) {
             while (j < n) { if (total > 3) continue outer; total++; }
         }
+        boolean again = false;
+        do { total++; } while (again);
+        do { total++; } while (again == true);
         // other threads and calls can change what these read
         while (!q.isEmpty()) { total++; }
         while (total < n) { work(); }

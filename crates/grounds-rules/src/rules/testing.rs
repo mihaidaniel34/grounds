@@ -598,7 +598,17 @@ impl Rule for TestClassWithoutTests {
         // tests inherited from a contract interface (`default` methods with
         // @Test), an SPI implementation living in the test tree, or a base
         // class other test classes extend
-        if n.field("interfaces").is_some() || cx.fm.class_of_decl(n).is_some_and(|c| !cx.fm.index.direct_source_subclasses(&c.name).is_empty()) {
+        // (a marker interface, `Serializable`, supplies neither)
+        // an interface that is unknown or hands down a method from somewhere up its hierarchy
+        fn supplies(fm: &grounds_semantic::FileModel<'_>, i: &Ty, depth: u8) -> bool {
+            i.class_name().and_then(|nm| fm.class(nm)).is_none_or(|ic| depth > 8 || ic.methods.iter().any(|m| !m.flags.is_static() && !m.flags.is_private()) || ic.interfaces.iter().any(|s| supplies(fm, s, depth + 1)))
+        }
+        let class = cx.fm.class_of_decl(n);
+        let implements = match &class {
+            Some(c) => c.interfaces.iter().any(|i| supplies(cx.fm, i, 0)),
+            None => n.field("interfaces").is_some(),
+        };
+        if implements || class.is_some_and(|c| !cx.fm.index.direct_source_subclasses(&c.name).is_empty()) {
             return;
         }
         // JMH benchmarks are often named `*Test` too
