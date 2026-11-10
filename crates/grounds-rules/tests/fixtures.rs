@@ -47,7 +47,7 @@ fn base_index() -> Index {
     });
     let mut idx = Index::new(cp);
     // the fixtures compile for exactly the release whose API is loaded
-    idx.set_exact_releases(vec![("fixtures".to_string(), 21)]);
+    idx.set_exact_releases(vec![("fixtures".to_string(), Some(21))]);
     for (k, s) in stubs {
         idx.set_file(k.clone(), s.clone());
     }

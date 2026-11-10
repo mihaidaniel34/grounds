@@ -196,3 +196,20 @@ fn jdk_members_newer_than_a_source_level_are_not_taken_as_existing() {
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(found, vec!["src/main/java/a/Text.java:5 missing-override".to_string()]);
 }
+
+#[test]
+fn a_child_module_of_unknown_release_does_not_inherit_its_parents_exact_one() {
+    let Some(home) = grounds_classfile::find_java_home() else { return };
+    if !home.join("lib/ct.sym").is_file() || grounds_classfile::jdk_feature_release(&home).is_none_or(|v| v < 21) {
+        return;
+    }
+    // the root states --release 17; the child's release is an expression
+    let dir = fresh("child-unknown");
+    write(&dir, "pom.xml", "<project><groupId>g</groupId><artifactId>root</artifactId><version>1</version><properties><maven.compiler.release>17</maven.compiler.release></properties><modules><module>child</module></modules></project>");
+    write(&dir, "src/main/java/a/Root.java", "package a;\n\nimport java.util.SequencedCollection;\n\nclass Root { }\n");
+    write(&dir, "child/pom.xml", "<project><artifactId>child</artifactId><properties><maven.compiler.release>${java.next}</maven.compiler.release></properties></project>");
+    write(&dir, "child/src/main/java/b/Child.java", "package b;\n\nimport java.util.SequencedCollection;\n\nclass Child { }\n");
+    let found = project_findings(&dir, &["missing-jdk-import"]);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(found, vec!["src/main/java/a/Root.java:3 missing-jdk-import".to_string()]);
+}

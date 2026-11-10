@@ -402,8 +402,8 @@ pub struct Index {
     copies: FxHashMap<Name, Vec<Arc<str>>>,
     /// Directories (ending in `/`) of modules whose build states the release
     /// they compile for exactly, with that release.
-    exact_releases: Vec<(String, u32)>,
-    release_floors: Vec<(String, u32)>,
+    exact_releases: Vec<(String, Option<u32>)>,
+    release_floors: Vec<(String, Option<u32>)>,
     /// Number of files in a variant source set (see `in_variant_set`)
     /// declaring each class name.
     variant_defs: FxHashMap<Name, u32>,
@@ -610,33 +610,30 @@ impl Index {
         }
     }
 
-    /// The modules that compile for an exact release: (directory, release).
-    pub fn set_exact_releases(&mut self, modules: Vec<(String, u32)>) {
-        let mut modules: Vec<(String, u32)> = modules.into_iter().map(|(d, r)| (if d.ends_with('/') { d } else { format!("{d}/") }, r)).collect();
-        // the innermost module first
-        modules.sort_by_key(|(d, _)| std::cmp::Reverse(d.len()));
-        self.exact_releases = modules;
+    /// Every module with the release it compiles for exactly, None when
+    /// that is not known: (directory, release).
+    pub fn set_exact_releases(&mut self, modules: Vec<(String, Option<u32>)>) {
+        self.exact_releases = innermost_first(modules);
     }
 
     /// The release a file's module states exactly (`--release`, a
     /// toolchain), the code not contradicting it. None when its build leaves
-    /// the JDK API to the JDK running it, or grounds cannot tell.
+    /// the JDK API to the JDK running it, or grounds cannot tell; the module
+    /// nearest the file decides, not an enclosing one.
     pub fn exact_release(&self, file: &str) -> Option<u32> {
-        self.exact_releases.iter().find(|(d, _)| file.starts_with(d.as_str())).map(|(_, r)| *r)
+        self.exact_releases.iter().find(|(d, _)| file.starts_with(d.as_str()))?.1
     }
 
     /// The lowest release a file's module may compile for: its exact
     /// release, or the `source`/`target` it states. A JDK member newer than
     /// that may not exist where the code is built, though the API loaded has it.
     pub fn release_floor(&self, file: &str) -> Option<u32> {
-        self.release_floors.iter().find(|(d, _)| file.starts_with(d.as_str())).map(|(_, r)| *r)
+        self.release_floors.iter().find(|(d, _)| file.starts_with(d.as_str()))?.1
     }
 
-    /// The modules' floors (see `release_floor`): (directory, release).
-    pub fn set_release_floors(&mut self, modules: Vec<(String, u32)>) {
-        let mut modules: Vec<(String, u32)> = modules.into_iter().map(|(d, r)| (if d.ends_with('/') { d } else { format!("{d}/") }, r)).collect();
-        modules.sort_by_key(|(d, _)| std::cmp::Reverse(d.len()));
-        self.release_floors = modules;
+    /// Every module's floor (see `release_floor`): (directory, release).
+    pub fn set_release_floors(&mut self, modules: Vec<(String, Option<u32>)>) {
+        self.release_floors = innermost_first(modules);
     }
 
     /// Whether some source file is in the package (or one below it).
@@ -1513,6 +1510,13 @@ pub fn module_dir(path: &str) -> &str {
         Some(&i) => &path[..i],
         None => "",
     }
+}
+
+/// Module directories ending in `/`, the innermost first.
+fn innermost_first<T>(modules: Vec<(String, T)>) -> Vec<(String, T)> {
+    let mut modules: Vec<(String, T)> = modules.into_iter().map(|(d, r)| (if d.ends_with('/') { d } else { format!("{d}/") }, r)).collect();
+    modules.sort_by_key(|(d, _)| std::cmp::Reverse(d.len()));
+    modules
 }
 
 /// A file in a source set that is neither main code nor tests

@@ -57,11 +57,13 @@ impl Evidence {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ReleasePlan {
     pub load: u32,
-    /// (module directory, release): `missing-jdk-import` judges these only.
-    pub exact: Vec<(PathBuf, u32)>,
+    /// (module directory, release when exact) for every module: a module
+    /// with None stops the lookup of an enclosing module's release.
+    /// `missing-jdk-import` judges files of exact modules only.
+    pub exact: Vec<(PathBuf, Option<u32>)>,
     /// (module directory, lowest release it may compile for): exact ones and
-    /// `source`/`target` lower bounds.
-    pub floors: Vec<(PathBuf, u32)>,
+    /// `source`/`target` lower bounds; None when unknown.
+    pub floors: Vec<(PathBuf, Option<u32>)>,
 }
 
 /// The evidence of every module of the workspace, in `ws.modules` order.
@@ -82,13 +84,16 @@ pub fn module_evidence(ws: &Workspace) -> Vec<Evidence> {
     }
     // the root's `subprojects { }` and `allprojects { }` apply to every
     // module; the rest of the root script to the root project only
+    let mut for_subprojects = conventions;
     for f in ["build.gradle", "build.gradle.kts"] {
         if let Ok(t) = crate::fsutil::read_text(ws.root.join(f)) {
             let t = strip_script_comments(&t, false);
-            for block in ["subprojects", "allprojects"] {
-                for b in blocks(&t, block) {
-                    conventions.merge(&GradleSettings::read(b));
-                }
+            for b in blocks(&t, "subprojects") {
+                for_subprojects.merge(&GradleSettings::read(b));
+            }
+            for b in blocks(&t, "allprojects") {
+                for_subprojects.merge(&GradleSettings::read(b));
+                conventions.merge(&GradleSettings::read(b));
             }
         }
     }
@@ -104,15 +109,27 @@ pub fn module_evidence(ws: &Workspace) -> Vec<Evidence> {
                     let mut own = GradleSettings::default();
                     for f in ["build.gradle", "build.gradle.kts"] {
                         if let Ok(t) = crate::fsutil::read_text(m.dir.join(f)) {
+                            // `subprojects { }` of the root does not apply to the root
+                            let t = if m.dir == ws.root { without_blocks(&strip_script_comments(&t, false), "subprojects") } else { t };
                             own.merge(&GradleSettings::read(&t));
                         }
                     }
-                    own.or(&conventions).evidence()
+                    own.or(if m.dir == ws.root { &conventions } else { &for_subprojects }).evidence()
                 }
-                BuildSystem::None => conventions.evidence(),
+                BuildSystem::None => (if m.dir == ws.root { conventions } else { for_subprojects }).evidence(),
             }
         })
         .collect()
+}
+
+/// A script without its `name { ... }` blocks.
+fn without_blocks(text: &str, name: &str) -> String {
+    let mut out = text.to_string();
+    for b in blocks(text, name).into_iter().rev() {
+        let start = b.as_ptr() as usize - text.as_ptr() as usize;
+        out.replace_range(start..start + b.len(), "");
+    }
+    out
 }
 
 /// The bodies of `name { ... }` blocks in a script.
@@ -159,7 +176,7 @@ fn fixture_module(ws: &Workspace, dir: &Path) -> bool {
 /// installed JDK's release.
 pub fn plan(ws: &Workspace, configured: Option<u32>, needs: &[(usize, u32)], installed: Option<u32>) -> ReleasePlan {
     if let Some(r) = configured {
-        return ReleasePlan { load: r, exact: vec![(ws.root.clone(), r)], floors: vec![(ws.root.clone(), r)] };
+        return ReleasePlan { load: r, exact: vec![(ws.root.clone(), Some(r))], floors: vec![(ws.root.clone(), Some(r))] };
     }
     let mut evidence = module_evidence(ws);
     // the modules that hold code (an aggregator pom without sources says nothing)
@@ -185,9 +202,12 @@ pub fn plan(ws: &Workspace, configured: Option<u32>, needs: &[(usize, u32)], ins
     let used: Vec<(usize, Evidence)> = evidence.iter().copied().enumerate().filter(|&(m, _)| (with_code[m] || !any_code) && !fixture_module(ws, &ws.modules[m].dir)).collect();
     let need = used.iter().filter_map(|(_, e)| e.floor()).fold(need, u32::max);
     let readable = |r: u32| installed.is_none_or(|i| r <= i);
-    let exact: Vec<(PathBuf, u32)> = used.iter().filter_map(|&(m, e)| match e {
-        Evidence::Exact(r) if readable(r) => Some((ws.modules[m].dir.clone(), r)),
-        _ => None,
+    let exact: Vec<(PathBuf, Option<u32>)> = evidence.iter().enumerate().map(|(m, &e)| {
+        let r = match e {
+            Evidence::Exact(r) if readable(r) && !fixture_module(ws, &ws.modules[m].dir) => Some(r),
+            _ => None,
+        };
+        (ws.modules[m].dir.clone(), r)
     }).collect();
     let all_exact = !used.is_empty() && used.iter().all(|(_, e)| matches!(e, Evidence::Exact(_)));
     let load = match installed {
@@ -196,7 +216,7 @@ pub fn plan(ws: &Workspace, configured: Option<u32>, needs: &[(usize, u32)], ins
         Some(i) => i,
         None => need.max(crate::config::DEFAULT_JAVA_RELEASE),
     };
-    let floors = used.iter().filter_map(|&(m, e)| Some((ws.modules[m].dir.clone(), e.floor()?))).collect();
+    let floors = evidence.iter().enumerate().map(|(m, e)| (ws.modules[m].dir.clone(), e.floor().filter(|_| !fixture_module(ws, &ws.modules[m].dir)))).collect();
     ReleasePlan { load, exact, floors }
 }
 
@@ -346,8 +366,9 @@ fn gradle_setting(text: &str, key: &str) -> Setting {
         let end = v.find(['\n', ';', '}']).unwrap_or(v.len());
         let v = v[..end].trim();
         let v = if v.matches(')').count() > v.matches('(').count() { v[..v.rfind(')').unwrap_or(v.len())].trim() } else { v };
-        // Kotlin's own `languageVersion = "1.9"` (or KOTLIN_2_1) is no Java version
-        if key == "languageVersion" && !v.contains("JavaLanguageVersion") {
+        // Kotlin's own `languageVersion = "1.9"` (or KOTLIN_2_1) is no Java
+        // version; anything else that is not a literal (a variable) is opaque
+        if key == "languageVersion" && !v.contains("JavaLanguageVersion") && (v.starts_with(['"', '\'']) || v.contains("KOTLIN_") || v.contains("KotlinVersion")) {
             continue;
         }
         match parse_version(v) {
@@ -838,6 +859,15 @@ mod tests {
             ],
         );
         assert_eq!(evidence_of(&dir), vec![(":".into(), Exact(17)), ("compat".into(), AtLeast(11)), ("current".into(), Unknown), ("kotlin".into(), Exact(21)), ("release".into(), Exact(8))]);
+        // a Java toolchain set through a variable: not a literal, and not Kotlin's
+        let dir = temp(
+            "toolchain-variable",
+            &[
+                ("build.gradle", "subprojects { java { toolchain { languageVersion = JavaLanguageVersion.of(17) } } }\n"),
+                ("child/build.gradle", "def selectedVersion = JavaLanguageVersion.of(21)\njava { toolchain { languageVersion.set(selectedVersion) } }\n"),
+            ],
+        );
+        assert_eq!(evidence_of(&dir), vec![(":".into(), Unknown), ("child".into(), Unknown)]);
         // Maven: --release is exact, source/target a lower bound, an
         // unresolvable property or a parent outside the repository unknown
         let pom = |inner: &str| format!("<project>{inner}</project>");
@@ -875,7 +905,7 @@ mod tests {
         );
         let ws = Workspace::discover(&dir, &[]);
         let m = |name: &str| ws.modules.iter().position(|m| m.name == name).unwrap();
-        let exact = |p: &ReleasePlan| p.exact.iter().map(|(d, r)| (d.strip_prefix(&ws.root).unwrap().to_string_lossy().to_string(), *r)).collect::<Vec<_>>();
+        let exact = |p: &ReleasePlan| p.exact.iter().filter_map(|(d, r)| Some((d.strip_prefix(&ws.root).unwrap().to_string_lossy().to_string(), (*r)?))).collect::<Vec<_>>();
         // a module on a lower bound: the installed JDK's API; the exact modules stay exact
         let p = plan(&ws, None, &[], Some(21));
         assert_eq!((p.load, exact(&p)), (21, vec![("a".to_string(), 11), ("b".to_string(), 17)]));
@@ -885,7 +915,7 @@ mod tests {
         let p = plan(&ws, None, &[(m("a"), 16)], Some(21));
         assert_eq!(exact(&p), vec![("b".to_string(), 17)]);
         // grounds.toml decides for every module
-        assert_eq!(plan(&ws, Some(17), &[], Some(21)), ReleasePlan { load: 17, exact: vec![(ws.root.clone(), 17)], floors: vec![(ws.root.clone(), 17)] });
+        assert_eq!(plan(&ws, Some(17), &[], Some(21)), ReleasePlan { load: 17, exact: vec![(ws.root.clone(), Some(17))], floors: vec![(ws.root.clone(), Some(17))] });
         // every module exact: the highest of them
         std::fs::write(dir.join("c/build.gradle"), "compileJava { options.release = 8 }\n").unwrap();
         let ws = Workspace::discover(&dir, &[]);
