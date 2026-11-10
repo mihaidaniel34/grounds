@@ -122,7 +122,8 @@ check() {
     snapshot_lines < "$out/threads-default.txt" > "$out/current/$name.txt"
     { diff -u --label "1 thread" --label "16 threads" "$out/threads-1.txt" "$out/threads-16.txt"
       diff -u --label "default threads" --label "1 thread" "$out/threads-default.txt" "$out/threads-1.txt"; } > "$out/threads-$name.diff" || true
-    threads=$(sed -n 's/^[-+]\({.*\)/\1/p' "$out/threads-$name.diff" | LC_ALL=C sort -u | head -20)
+    # (the first twenty: `head` would close the pipe on `sort`, which fails the script under pipefail)
+    threads=$(sed -n 's/^[-+]\({.*\)/\1/p' "$out/threads-$name.diff" | LC_ALL=C sort -u | sed -n '1,20p')
     [ -n "$threads" ] || rm -f "$out/threads-$name.diff"
     rm -f "$out/threads-default.txt" "$out/threads-1.txt" "$out/threads-16.txt"
     hard=$(awk -v rules=",$hard_rules," 'index(rules, "," $2 ",")' "$out/current/$name.txt")
