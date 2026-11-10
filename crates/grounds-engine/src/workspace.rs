@@ -240,6 +240,8 @@ pub fn modules_built_against_own_release(ws: &Workspace) -> Vec<PathBuf> {
         deps: Vec<(String, String, Option<String>)>,
     }
     let mut poms: Vec<Pom> = Vec::new();
+    // the version each artifact of the repository has: (group, artifact, version)
+    let mut versions: Vec<(String, String, Option<String>)> = Vec::new();
     for m in ws.modules.iter().filter(|m| m.build_system == BuildSystem::Maven && !fixture(&m.dir)) {
         let Some(text) = read(&m.dir.join("pom.xml")) else { continue };
         let text = strip_comments(&text, "", "<!--", "-->");
@@ -255,11 +257,12 @@ pub fn modules_built_against_own_release(ws: &Workspace) -> Vec<PathBuf> {
             }
         }
         let group = element(&own, "groupId").or_else(|| element(&parent, "groupId")).map(str::to_string);
+        let version = element(&own, "version").or_else(|| element(&parent, "version")).map(str::to_string);
         if let (Some(g), Some(a)) = (group, element(&own, "artifactId")) {
+            versions.push((g.clone(), a.to_string(), version.clone()));
             groups.push(g);
             artifacts.push(a.to_string());
         }
-        let version = element(&own, "version").or_else(|| element(&parent, "version")).map(str::to_string);
         let mut main = text.clone();
         for block in ["dependencyManagement", "profiles", "build"] {
             let (open, close) = (format!("<{block}>"), format!("</{block}>"));
@@ -270,15 +273,21 @@ pub fn modules_built_against_own_release(ws: &Workspace) -> Vec<PathBuf> {
                 main.replace_range(s..e + close.len(), "");
             }
         }
-        let deps = elements(&main, "dependency").into_iter().filter_map(|d| Some((element(d, "groupId")?.to_string(), element(d, "artifactId")?.to_string(), element(d, "version").map(str::to_string)))).collect();
+        // a runtime dependency says nothing about what the code compiles against
+        let deps = elements(&main, "dependency")
+            .into_iter()
+            .filter(|d| element(d, "scope") != Some("runtime"))
+            .filter_map(|d| Some((element(d, "groupId")?.to_string(), element(d, "artifactId")?.to_string(), element(d, "version").map(str::to_string))))
+            .collect();
         poms.push(Pom { dir: m.dir.clone(), version, deps });
     }
     for pom in &poms {
         let old = pom.deps.iter().any(|(g, a, v)| {
-            let own = groups.iter().zip(&artifacts).any(|(og, oa)| og == g && oa == a);
-            // a sibling at the project's version comes from the reactor, built from the sources
+            // a sibling at its own version comes from the reactor, built from the sources
+            let Some((_, _, own_version)) = versions.iter().find(|(og, oa, _)| og == g && oa == a) else { return false };
             let literal = v.as_deref().filter(|v| !v.contains("${"));
-            own && literal.is_some_and(|v| Some(v) != pom.version.as_deref())
+            let current = own_version.as_deref().or(pom.version.as_deref());
+            literal.is_some_and(|v| Some(v) != current)
         });
         if old {
             out.push(pom.dir.clone());
@@ -428,7 +437,8 @@ pub fn modules_built_against_own_release(ws: &Workspace) -> Vec<PathBuf> {
         let before = before.strip_suffix('(').unwrap_or(before).trim_end();
         let start = before.rfind(|c: char| !(c.is_alphanumeric() || c == '_')).map_or(0, |i| i + 1);
         let word = before[start..].to_ascii_lowercase();
-        ["implementation", "api", "compileonly", "runtimeonly", "compile", "runtime"].iter().any(|c| word.ends_with(c))
+        // not `runtimeOnly`: what the code compiles against is the question
+        ["implementation", "api", "compileonly", "compile"].iter().any(|c| word.ends_with(c))
     };
     for (dir, text) in declarations {
         let direct = quoted(&text).into_iter().any(|(at, s)| s.split(':').count() >= 2 && !s.contains(' ') && own(&s) && configuration_before(&text, at));
@@ -474,6 +484,31 @@ mod tests {
         let ws = Workspace::discover(&dir, &[]);
         let found: Vec<String> = modules_built_against_own_release(&ws).iter().map(|d| d.strip_prefix(&ws.root).unwrap().to_string_lossy().to_string()).collect();
         assert_eq!(found, vec!["compat"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_reactor_sibling_at_its_own_version_or_a_runtime_dependency_is_no_published_release() {
+        let dir = std::env::temp_dir().join(format!("grounds-own-release-2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let write = |rel: &str, text: &str| {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        // Maven: app at version 2 depends on its sibling lib, whose own version is 1
+        write("pom.xml", "<project><groupId>g</groupId><artifactId>root</artifactId><version>1</version><modules><module>lib</module><module>app</module></modules></project>");
+        write("lib/pom.xml", "<project><groupId>g</groupId><artifactId>lib</artifactId><version>1</version></project>");
+        write("app/pom.xml", "<project><groupId>g</groupId><artifactId>app</artifactId><version>2</version><dependencies><dependency><groupId>g</groupId><artifactId>lib</artifactId><version>1</version></dependency></dependencies></project>");
+        // Gradle: the project dependency compiles; a published copy at run time only
+        write("gr/settings.gradle", "include 'lib', 'app'\n");
+        write("gr/build.gradle", "allprojects { group = 'org.example' }\n");
+        write("gr/app/build.gradle", "dependencies {\n  implementation project(':lib')\n  runtimeOnly 'org.example:lib:0.1'\n}\n");
+        write("gr/lib/build.gradle", "\n");
+        let ws = Workspace::discover(&dir, &[]);
+        assert!(modules_built_against_own_release(&ws).is_empty(), "{:?}", modules_built_against_own_release(&ws));
+        let ws = Workspace::discover(&dir.join("gr"), &[]);
+        assert!(modules_built_against_own_release(&ws).is_empty(), "{:?}", modules_built_against_own_release(&ws));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
