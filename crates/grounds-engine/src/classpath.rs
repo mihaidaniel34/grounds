@@ -115,7 +115,7 @@ impl std::fmt::Display for Warning {
             ),
             Warning::OversizedEntry { entry } => write!(
                 f,
-                "grounds: warning: classpath entry {entry} holds more than {} files, so it is not read as a directory of classes. List the directory that holds the compiled packages, or the jars themselves (silence: `[classpath] warn = false`)",
+                "grounds: warning: classpath entry {entry} holds more than {} files and directories, so it is not read as a directory of classes. List the directory that holds the compiled packages, or the jars themselves (silence: `[classpath] warn = false`)",
                 grounds_classfile::DIR_LIMIT
             ),
         }
@@ -549,7 +549,7 @@ mod tests {
             other => panic!("{other}"),
         }).collect();
         assert_eq!(entries, ["/", "..", "."]);
-        assert!(w[0].to_string().contains("classpath entry / holds more than 200000 files"), "{}", w[0]);
+        assert!(w[0].to_string().contains("classpath entry / holds more than 200000 files and directories"), "{}", w[0]);
         let mut silent = Config::default();
         silent.classpath.warn = false;
         assert!(warnings(&ws, &silent, &index).is_empty());

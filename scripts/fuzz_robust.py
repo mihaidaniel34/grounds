@@ -927,8 +927,9 @@ def daemon_path(exe, d, spec, a, env):
     """The case as a git repository with an uncommitted edit, checked twice by `grounds changed`
     (the first run starts the daemon, the second goes through it), then the daemon stopped."""
     fails, served = [], False
-    env = dict(env, XDG_RUNTIME_DIR=os.path.join(os.path.dirname(d), "xdg-" + os.path.basename(d)))
-    os.makedirs(env["XDG_RUNTIME_DIR"], mode=0o700, exist_ok=True)
+    # a short path: the socket's path has a limit of about 100 bytes, and under macOS's
+    # temporary directory the daemon could never bind it, so no case went through one
+    env = dict(env, XDG_RUNTIME_DIR=tempfile.mkdtemp(prefix="grounds-xdg-", dir="/tmp"))
     try:
         git(d, "init", "-q")
         git(d, "add", "-A")
@@ -945,20 +946,28 @@ def daemon_path(exe, d, spec, a, env):
             with open(java[0], "wb") as fh:
                 fh.write(data[:len(data) * 2 // 3])
         for attempt in range(2):
-            code, out, err, _ = run([exe, "changed", "--root", d, "--json", "--all-lines"], a.timeout, env)
+            code, out, err, secs = run([exe, "changed", "--root", d, "--json", "--all-lines"], a.timeout, env)
             why = judge(code, out, err, (0, 1, 2))
             if why:
                 fails.append((f"changed#{attempt + 1}", why))
                 break
             if attempt == 0:
-                # wait for the daemon the first run started, 10 s in all
-                deadline = time.monotonic() + 10
+                # wait for the daemon the first run started. It loads the project as that run
+                # did, so it gets several times what the run took, and 10 s at least.
+                wait = max(10.0, 3 * secs + 5)
+                deadline = time.monotonic() + wait
                 while (left := deadline - time.monotonic()) > 0:
                     c, o, _, _ = run([exe, "daemon", "--status", "--root", d], max(left, 0.1), env)
                     if o.startswith("running"):
                         served = True
                         break
                     time.sleep(0.05)
+                # a project the command could load, and no daemon: it died starting (its output
+                # goes nowhere, so that is all there is to report). Without this the second run
+                # would answer in-process and the case would pass without a daemon.
+                if not served and code in (0, 1):
+                    fails.append(("daemon", f"not running {wait:.0f} s after `changed` started it"))
+                    break
     finally:
         code, out, err, _ = run([exe, "daemon", "--stop", "--root", d], 30, env)
         if code is None or "panicked" in err:

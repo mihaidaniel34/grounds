@@ -134,3 +134,25 @@ fn string_constants_doubling_over_classes_and_huge_qualified_names_are_bounded()
     assert!(t.elapsed() < Duration::from_secs(30), "{:?}", t.elapsed());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_constant_cut_off_at_the_nesting_bound_is_not_taken_for_a_variable() {
+    // 500 final locals, each the one before plus "": a constant, but nested
+    // past the bound of constant_value. "Not a constant" is then unknown, and
+    // a rule that reports concatenations of variables says nothing.
+    let mut body = String::from("final String v0 = \"a\";\n");
+    for i in 1..500 {
+        body.push_str(&format!("final String v{i} = v{} + \"\";\n", i - 1));
+    }
+    let src = format!(
+        "package p;\nclass A {{\n  void deep(StringBuilder sb) {{\n{body}sb.append(v499 + \"b\");\n  }}\n  void plain(StringBuilder sb, String s) {{\n    sb.append(s + \"b\");\n  }}\n}}\n"
+    );
+    let dir = project("constant-cutoff", &[("src/main/java/p/A.java", &src)]);
+    // (a debug build needs the stack the CLI gives its threads, and more)
+    let pool = rayon::ThreadPoolBuilder::new().num_threads(2).stack_size(256 << 20).build().unwrap();
+    let fs = pool.install(|| check(&dir, &["stringbuilder-append-concat"]));
+    let lines: Vec<usize> = fs.iter().map(|f| f.line as usize).collect();
+    // only the one in `plain`, three lines from the end
+    assert_eq!(lines, [src.lines().count() - 2], "{fs:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

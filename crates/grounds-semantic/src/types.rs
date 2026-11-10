@@ -707,6 +707,12 @@ impl<'t> FileModel<'t> {
         v
     }
 
+    /// How often `constant_value` gave up at the nesting bound so far. An
+    /// answer of "not a constant" given meanwhile is not known to be right.
+    pub fn constant_cut_offs(&self) -> u64 {
+        self.const_eval.get().1
+    }
+
     fn constant_value_uncached(&self, n: Node<'t>) -> Option<Constant> {
         let v = self.constant_value_raw(n)?;
         Some(match self.type_of(n.unparen()) {

@@ -125,19 +125,28 @@ impl ClassContainer {
             ClassContainer::JImage(j) => j.class_names().filter(|n| keep(n)).map(str::to_string).collect(),
             ClassContainer::Dir(root) => {
                 let mut out = Vec::new();
-                // real directories first, then symlinked ones (build tools
-                // link output directories), each real directory once: a link
-                // to a parent (or `/proc/self/root` under `/`) looped forever,
-                // and walking real paths first keeps an alias of a directory
-                // from listing its classes under the alias's package
-                let mut real = vec![root.clone()];
-                let mut linked: Vec<PathBuf> = Vec::new();
-                let mut visited = std::collections::HashSet::new();
-                let mut seen = 0usize;
-                while let Some(d) = real.pop().or_else(|| linked.pop()) {
-                    if !visited.insert(d.canonicalize().unwrap_or_else(|_| d.clone())) {
-                        continue;
+                // Every directory is listed under each path that leads to
+                // it, links included, as a compiler finds it (build tools
+                // link output directories). Only a directory that is already
+                // above the path it would be listed under is not entered:
+                // `up -> ..`, or `/proc/self/root` under `/`, never ended.
+                struct Above {
+                    real: PathBuf,
+                    up: Option<std::rc::Rc<Above>>,
+                }
+                let within = |real: &Path, mut above: Option<&std::rc::Rc<Above>>| {
+                    while let Some(a) = above {
+                        if a.real == real {
+                            return true;
+                        }
+                        above = a.up.as_ref();
                     }
+                    false
+                };
+                let top = std::rc::Rc::new(Above { real: root.canonicalize().unwrap_or_else(|_| root.clone()), up: None });
+                let mut todo = vec![(root.clone(), top)];
+                let mut seen = 0usize;
+                while let Some((d, above)) = todo.pop() {
                     let Ok(rd) = std::fs::read_dir(&d) else { continue };
                     for e in rd.flatten() {
                         seen += 1;
@@ -147,11 +156,14 @@ impl ClassContainer {
                         let p = e.path();
                         // the entry's own type costs no call; only a link is followed
                         let Ok(kind) = e.file_type() else { continue };
-                        if kind.is_dir() {
-                            real.push(p);
-                        } else if kind.is_symlink() && p.is_dir() {
-                            linked.push(p);
-                        } else if p.extension().is_some_and(|x| x == "class") {
+                        let link = kind.is_symlink();
+                        if kind.is_dir() || (link && p.is_dir()) {
+                            let real = if link { p.canonicalize().ok() } else { Some(above.real.join(e.file_name())) };
+                            if let Some(real) = real.filter(|r| !within(r, Some(&above))) {
+                                todo.push((p, std::rc::Rc::new(Above { real, up: Some(above.clone()) })));
+                            }
+                        // a regular file: a pipe named `A.class` would block the read
+                        } else if (kind.is_file() || (link && p.is_file())) && p.extension().is_some_and(|x| x == "class") {
                             if let Ok(rel) = p.strip_prefix(root) {
                                 let s = rel.with_extension("").to_string_lossy().replace('\\', "/");
                                 if keep(&s) {
@@ -276,12 +288,34 @@ mod tests {
         std::fs::write(dir.join("p/A.class"), b"").unwrap();
         std::os::unix::fs::symlink("..", dir.join("p/up")).unwrap();
         std::os::unix::fs::symlink(".", dir.join("self")).unwrap();
-        // an alias of a package directory, whichever read_dir lists first
+        // aliases of a package directory are packages too, whichever read_dir lists first
         for alias in ["a", "z"] {
             std::os::unix::fs::symlink("p", dir.join(alias)).unwrap();
         }
-        let names = super::ClassContainer::open_dir(&dir).class_names();
-        assert_eq!(names, vec!["p/A".to_string()]);
+        // two links that lead to each other
+        std::fs::create_dir_all(dir.join("q/r")).unwrap();
+        std::os::unix::fs::symlink("../q", dir.join("p/toq")).unwrap();
+        std::os::unix::fs::symlink("../../p", dir.join("q/r/top")).unwrap();
+        let mut names = super::ClassContainer::open_dir(&dir).class_names();
+        names.sort();
+        // (`q/r/top` is `p` again, and its `toq` would be `q` inside `q`)
+        assert_eq!(names, ["a/A", "p/A", "q/r/top/A", "z/A"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_package_linked_to_a_directory_inside_the_class_directory_is_listed() {
+        // a store beside the links into it; the walk used to list each real directory once, under the store's name
+        let dir = std::env::temp_dir().join(format!("grounds-classdir-store-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join(".store/lib")).unwrap();
+        std::fs::write(dir.join(".store/lib/Lib.class"), b"").unwrap();
+        std::os::unix::fs::symlink(".store/lib", dir.join("lib")).unwrap();
+        // not a file: reading it would wait for a writer
+        let fifo = std::process::Command::new("mkfifo").arg(dir.join(".store/lib/Pipe.class")).status();
+        let mut names = super::ClassContainer::open_dir(&dir).class_names();
+        names.sort();
+        assert_eq!(names, [".store/lib/Lib", "lib/Lib"], "{fifo:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
