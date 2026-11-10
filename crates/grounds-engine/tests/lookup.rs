@@ -185,6 +185,10 @@ fn a_module_built_against_a_published_release_of_the_project_sees_no_sources_of_
             ),
             ("streams/src/main/java/org/example/streams/TimeWindows.java", "package org.example.streams;\n\npublic final class TimeWindows {\n    // of(long) was removed in 4.0\n    public static TimeWindows ofSizeWithNoGrace(long size) { return new TimeWindows(); }\n}\n"),
             ("streams/upgrade-tests-22/src/test/java/org/example/upgrade/SmokeTest.java", "package org.example.upgrade;\n\nimport org.example.streams.TimeWindows;\n\nclass SmokeTest {\n    Object w() { return TimeWindows.of(1000L); }\n    void own() { new SmokeTest().noSuchMethod(); }\n}\n"),
+            // a module nested in the marked one is another module
+            ("streams/upgrade-tests-22/nested/build.gradle", "\n"),
+            ("streams/upgrade-tests-22/nested/src/main/java/org/example/nested/Helper.java", "package org.example.nested;\n\npublic class Helper { }\n"),
+            ("streams/upgrade-tests-22/src/test/java/org/example/upgrade/UsesHelper.java", "package org.example.upgrade;\n\nimport org.example.nested.Helper;\n\nclass UsesHelper {\n    void f() { new Helper().gone(); }\n}\n"),
             // a module built against the sources is judged against them
             ("app/src/main/java/org/example/app/Windows.java", "package org.example.app;\n\nimport org.example.streams.TimeWindows;\n\nclass Windows {\n    Object w() { return TimeWindows.of(1000L); }\n}\n"),
         ],

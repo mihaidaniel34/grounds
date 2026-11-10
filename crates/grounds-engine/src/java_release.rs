@@ -123,7 +123,7 @@ pub fn module_evidence(ws: &Workspace) -> Vec<Evidence> {
 }
 
 /// A script without its `name { ... }` blocks.
-fn without_blocks(text: &str, name: &str) -> String {
+pub(crate) fn without_blocks(text: &str, name: &str) -> String {
     let mut out = text.to_string();
     for b in blocks(text, name).into_iter().rev() {
         let start = b.as_ptr() as usize - text.as_ptr() as usize;

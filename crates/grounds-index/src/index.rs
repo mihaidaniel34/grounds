@@ -645,7 +645,8 @@ impl Index {
     /// the project itself (kafka's `streams/upgrade-system-tests-22` against
     /// `kafka-streams:2.2`): their code does not see the project's sources.
     pub fn set_modules_built_against_release(&mut self, dirs: Vec<String>) {
-        self.release_modules = dirs.into_iter().map(|d| if d.ends_with('/') { d } else { format!("{d}/") }).collect();
+        let sep = std::path::MAIN_SEPARATOR;
+        self.release_modules = dirs.into_iter().map(|d| if d.ends_with(['/', sep]) { d } else { format!("{d}{sep}") }).collect();
     }
 
     /// For a file of a module that compiles against a published release of
@@ -653,6 +654,12 @@ impl Index {
     /// it may differ from the one the file compiles against.
     pub fn built_against_release(&self, file: &str) -> Option<&str> {
         self.release_modules.iter().find(|d| file.starts_with(d.as_str())).map(String::as_str)
+    }
+
+    /// Whether `file` belongs to the module at `dir` itself, not to a module
+    /// nested below it (module directories come from `set_exact_releases`).
+    pub fn in_module(&self, file: &str, dir: &str) -> bool {
+        file.starts_with(dir) && self.exact_releases.iter().find(|(d, _)| file.starts_with(d.as_str())).is_none_or(|(d, _)| d.len() <= dir.len())
     }
 
     pub fn file(&self, path: &str) -> Option<&Arc<FileStub>> {

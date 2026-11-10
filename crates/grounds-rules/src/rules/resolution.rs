@@ -50,7 +50,7 @@ fn closed_class<'t>(cx: &Ctx<'_, 't>, name: &str) -> Option<std::sync::Arc<Class
         }
         let file = cx.fm.class(n).and_then(|k| k.source_file().map(|f| f.to_string()));
         if let (Some(module), Some(f)) = (release_module, &file) {
-            if !f.starts_with(module) {
+            if !cx.fm.index.in_module(f, module) {
                 return None;
             }
         }

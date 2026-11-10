@@ -248,6 +248,8 @@ pub fn modules_built_against_own_release(ws: &Workspace) -> Vec<PathBuf> {
     let mut poms: Vec<Pom> = Vec::new();
     // the version each artifact of the repository has: (group, artifact, version)
     let mut versions: Vec<(String, String, Option<String>)> = Vec::new();
+    // versions set in dependencyManagement anywhere in the repository: (group, artifact, version)
+    let mut managed: Vec<(String, String, String)> = Vec::new();
     for m in ws.modules.iter().filter(|m| m.build_system == BuildSystem::Maven && !fixture(&m.dir)) {
         let Some(text) = read(&m.dir.join("pom.xml")) else { continue };
         let text = strip_comments(&text, "", "<!--", "-->");
@@ -268,6 +270,9 @@ pub fn modules_built_against_own_release(ws: &Workspace) -> Vec<PathBuf> {
             versions.push((g.clone(), a.to_string(), version.clone()));
             groups.push(g);
             artifacts.push(a.to_string());
+        }
+        for dm in elements(&text, "dependencyManagement") {
+            managed.extend(elements(dm, "dependency").into_iter().filter_map(|d| Some((element(d, "groupId")?.to_string(), element(d, "artifactId")?.to_string(), element(d, "version")?.to_string()))));
         }
         let mut main = text.clone();
         for block in ["dependencyManagement", "profiles", "build"] {
@@ -291,7 +296,9 @@ pub fn modules_built_against_own_release(ws: &Workspace) -> Vec<PathBuf> {
         let old = pom.deps.iter().any(|(g, a, v)| {
             // a sibling at its own version comes from the reactor, built from the sources
             let Some((_, _, own_version)) = versions.iter().find(|(og, oa, _)| og == g && oa == a) else { return false };
-            let literal = v.as_deref().filter(|v| !v.contains("${"));
+            // without its own version, the one dependencyManagement sets
+            let v = v.as_deref().or_else(|| managed.iter().find(|(mg, ma, _)| mg == g && ma == a).map(|(_, _, mv)| mv.as_str()));
+            let literal = v.filter(|v| !v.contains("${"));
             let current = own_version.as_deref().or(pom.version.as_deref());
             literal.is_some_and(|v| Some(v) != current)
         });
@@ -435,6 +442,8 @@ pub fn modules_built_against_own_release(ws: &Workspace) -> Vec<PathBuf> {
             from = end.max(start);
         }
         own_text.push_str(&text[last.min(text.len())..]);
+        // a script's `subprojects { }` and `allprojects { }` are about other modules
+        let own_text = crate::java_release::without_blocks(&crate::java_release::without_blocks(&own_text, "subprojects"), "allprojects");
         declarations.push((dir.clone(), own_text));
     }
     // `testImplementation "g:a:v"`, `implementation("g:a:v")`, `api libs.x`
@@ -515,6 +524,32 @@ mod tests {
         assert!(modules_built_against_own_release(&ws).is_empty(), "{:?}", modules_built_against_own_release(&ws));
         let ws = Workspace::discover(&dir.join("gr"), &[]);
         assert!(modules_built_against_own_release(&ws).is_empty(), "{:?}", modules_built_against_own_release(&ws));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn managed_versions_count_and_the_roots_subprojects_block_is_not_the_root() {
+        let dir = std::env::temp_dir().join(format!("grounds-own-release-3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let write = |rel: &str, text: &str| {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        // the old version comes from the root's dependencyManagement
+        write("pom.xml", "<project><groupId>g</groupId><artifactId>root</artifactId><version>3</version><modules><module>core</module><module>compat</module></modules><dependencyManagement><dependencies><dependency><groupId>g</groupId><artifactId>core</artifactId><version>2</version></dependency></dependencies></dependencyManagement></project>");
+        write("core/pom.xml", "<project><parent><groupId>g</groupId><artifactId>root</artifactId><version>3</version></parent><artifactId>core</artifactId></project>");
+        write("compat/pom.xml", "<project><parent><groupId>g</groupId><artifactId>root</artifactId><version>3</version></parent><artifactId>compat</artifactId><dependencies><dependency><groupId>g</groupId><artifactId>core</artifactId></dependency></dependencies></project>");
+        // Gradle: a published release declared for the subprojects marks no root
+        write("gr/settings.gradle", "include 'lib', 'app'\n");
+        write("gr/build.gradle", "allprojects { group = 'org.example' }\nsubprojects {\n  dependencies { testImplementation 'org.example:lib:0.1' }\n}\n");
+        write("gr/app/build.gradle", "\n");
+        write("gr/lib/build.gradle", "\n");
+        let ws = Workspace::discover(&dir, &[]);
+        let found: Vec<String> = modules_built_against_own_release(&ws).iter().map(|d| d.strip_prefix(&ws.root).unwrap().to_string_lossy().to_string()).collect();
+        assert_eq!(found, vec!["compat"]);
+        let ws = Workspace::discover(&dir.join("gr"), &[]);
+        assert!(!modules_built_against_own_release(&ws).contains(&ws.root));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
