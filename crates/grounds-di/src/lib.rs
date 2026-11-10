@@ -2143,12 +2143,20 @@ impl DiModel {
         let mut out: Vec<(usize, usize)> = Vec::new();
         for ctx in &self.contexts {
             let mut seen: FxHashMap<&str, usize> = FxHashMap::default();
+            // the root is registered before the scan, and the scanner skips
+            // a candidate whose name an explicitly registered bean already
+            // has (ClassPathBeanDefinitionScanner.isCompatible): no clash
+            let root = self.component_classes.get(&ctx.root).copied().filter(|&r| self.beans[r].source == BeanSource::Component && self.beans[r].framework == Framework::Spring);
+            if let Some(r) = root {
+                seen.insert(&self.beans[r].name, r);
+            }
             for (i, b) in self.beans.iter().enumerate() {
-                if b.framework != Framework::Spring || b.conditional || b.is_test || !self.context_holds(ctx, b, false) {
+                if Some(i) == root || b.framework != Framework::Spring || b.conditional || b.is_test || !self.context_holds(ctx, b, false) {
                     continue;
                 }
                 match seen.get(b.name.as_str()) {
-                    Some(&j) => out.push((j, i)),
+                    Some(&j) if Some(j) == root && b.source == BeanSource::Component => {}
+                    Some(&j) => out.push((j.min(i), j.max(i))),
                     None => {
                         seen.insert(&b.name, i);
                     }
@@ -3059,5 +3067,21 @@ mod tests {
         ]);
         assert_eq!(m.contexts.len(), 2);
         assert!(!matches!(point_resolution(&idx, &m, "store"), Resolution::Ambiguous(_)));
+    }
+
+    #[test]
+    fn the_class_an_application_starts_from_shadows_a_scanned_namesake() {
+        let demo = ("src/main/java/com/x/demo/DemoApplication.java", "package com.x.demo; @org.springframework.boot.autoconfigure.SpringBootApplication public class DemoApplication { public static void main(String[] a) {} }");
+        let wrapper = ("src/main/java/com/x/wrapper/DemoApplication.java", "package com.x.wrapper; @org.springframework.boot.autoconfigure.SpringBootApplication(scanBasePackages = \"com.x\") public class DemoApplication { public static void main(String[] a) {} }");
+        let (_, m) = model(&[demo, wrapper]);
+        assert!(conflicts(&m).is_empty());
+        // a third application scanning both registers both by scanning: they clash;
+        // so does a @Bean method of the root's name
+        let third = ("src/main/java/com/Third.java", "package com; @org.springframework.boot.autoconfigure.SpringBootApplication public class Third { public static void main(String[] a) {} }");
+        let (_, m) = model(&[demo, wrapper, third]);
+        assert_eq!(conflicts(&m), vec!["DemoApplication DemoApplication"]);
+        let bean = ("src/main/java/com/x/demo/Beans.java", "package com.x.demo; import org.springframework.context.annotation.*; @Configuration class Beans { @Bean Object demoApplication() { return null; } }");
+        let (_, m) = model(&[demo, bean]);
+        assert_eq!(conflicts(&m), vec!["Beans.demoApplication DemoApplication"]);
     }
 }
