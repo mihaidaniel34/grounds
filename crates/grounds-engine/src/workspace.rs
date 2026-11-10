@@ -77,7 +77,7 @@ pub struct SourceSets {
 impl SourceSets {
     pub fn load(root: &Path) -> SourceSets {
         let mut tasks = HashMap::new();
-        if let Ok(text) = std::fs::read_to_string(root.join(".grounds/source-sets.txt")) {
+        if let Ok(text) = crate::fsutil::read_text(root.join(".grounds/source-sets.txt")) {
             for line in text.lines() {
                 let mut parts = line.split('\t');
                 let (Some(module), Some(set)) = (parts.next(), parts.next()) else { continue };

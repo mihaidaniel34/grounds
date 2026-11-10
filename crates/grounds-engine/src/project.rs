@@ -59,7 +59,7 @@ fn spring_registrations(ws: &Workspace) -> (Vec<String>, Vec<String>) {
     let (mut out, mut auto) = (Vec::new(), Vec::new());
     for m in &ws.modules {
         let meta = m.dir.join("src/main/resources/META-INF");
-        if let Ok(t) = std::fs::read_to_string(meta.join("spring.factories")) {
+        if let Ok(t) = crate::fsutil::read_text(meta.join("spring.factories")) {
             // key=a.B,\ c.D  (values may continue over lines)
             for (k, v) in t.replace("\r\n", "\n").replace("\\\n", "").lines().filter_map(|l| l.split_once('=').map(|(k, v)| (k.trim().to_string(), v.to_string()))) {
                 let classes: Vec<String> = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
@@ -71,7 +71,7 @@ fn spring_registrations(ws: &Workspace) -> (Vec<String>, Vec<String>) {
         }
         if let Ok(rd) = std::fs::read_dir(meta.join("spring")) {
             for e in rd.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "imports")) {
-                if let Ok(t) = std::fs::read_to_string(e.path()) {
+                if let Ok(t) = crate::fsutil::read_text(e.path()) {
                     let classes: Vec<String> = t.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from).collect();
                     if e.file_name() == "org.springframework.boot.autoconfigure.AutoConfiguration.imports" {
                         auto.extend(classes.iter().cloned());
@@ -104,7 +104,7 @@ impl LombokConfigs {
             .build();
         for e in walker.flatten() {
             if e.file_name() == "lombok.config" {
-                if let (Some(dir), Ok(text)) = (e.path().parent(), std::fs::read_to_string(e.path())) {
+                if let (Some(dir), Ok(text)) = (e.path().parent(), crate::fsutil::read_text(e.path())) {
                     let mut entries = Vec::new();
                     for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
                         if let Some(key) = line.strip_prefix("clear ") {
@@ -250,7 +250,7 @@ impl Project {
             .files
             .par_iter()
             .filter_map(|f| {
-                let text = std::fs::read_to_string(&f.path).ok()?;
+                let text = crate::fsutil::read_text(&f.path).ok()?;
                 let h = content_hash(&text) ^ lombok.key_for(&f.path);
                 let key = f.path.to_string_lossy();
                 if let Some(s) = cache.get(&key, h) {
@@ -305,7 +305,7 @@ impl Project {
         }
         let key = path_key(path);
         let old = self.index.file(&key).map(|s| s.signature_hash);
-        match std::fs::read_to_string(path) {
+        match crate::fsutil::read_text(path) {
             Ok(text) => {
                 let pf = ParsedFile::parse(text);
                 let stub = Arc::new(self.extract(path, &pf));
@@ -349,7 +349,7 @@ fn bean_overriding_allowed(ws: &Workspace) -> bool {
             let name = e.file_name().to_string_lossy().to_string();
             let config = name.starts_with("application") && (name.ends_with(".properties") || name.ends_with(".yml") || name.ends_with(".yaml"));
             config
-                && std::fs::read_to_string(e.path()).is_ok_and(|t| {
+                && crate::fsutil::read_text(e.path()).is_ok_and(|t| {
                     t.lines().any(|l| {
                         let l = l.trim().to_ascii_lowercase();
                         // `spring.main.allow-bean-definition-overriding=true` or
@@ -366,7 +366,7 @@ fn lombok_copies_qualifiers(root: &Path) -> bool {
     let mut depth = 0;
     while let Some(d) = stack.pop() {
         let cfg = d.join("lombok.config");
-        if let Ok(t) = std::fs::read_to_string(&cfg) {
+        if let Ok(t) = crate::fsutil::read_text(&cfg) {
             if t.lines().any(|l| l.contains("copyableAnnotations") && (l.contains("Qualifier") || l.contains("Value"))) {
                 return true;
             }
