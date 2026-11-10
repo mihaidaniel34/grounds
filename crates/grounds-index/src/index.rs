@@ -18,7 +18,7 @@ thread_local! {
 /// split into package and nested classes, which is quadratic in the length:
 /// a file cut off in `@a.x.x.x...` (a million segments) never finished. No
 /// name in the corpus has 21.
-const MAX_NAME_SEGMENTS: usize = 256;
+pub(crate) const MAX_NAME_SEGMENTS: usize = 256;
 
 use dashmap::DashMap;
 use grounds_classfile::ClassContainer;
