@@ -707,8 +707,9 @@ impl<'t> FileModel<'t> {
         v
     }
 
-    /// How often `constant_value` gave up at the nesting bound so far. An
-    /// answer of "not a constant" given meanwhile is not known to be right.
+    /// How often `constant_value` gave up at the nesting bound so far. Its
+    /// answer was then "not a constant", which is not known to be right, and
+    /// neither is anything computed from it since.
     pub fn constant_cut_offs(&self) -> u64 {
         self.const_eval.get().1
     }

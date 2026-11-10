@@ -90,7 +90,6 @@ impl RuleSet {
                                     continue;
                                 }
                                 let rule = &self.rules[ri];
-                                let before = (out.len(), fm.constant_cut_offs());
                                 let mut cx = Ctx { fm, src: fm.src, info, di, options, rule: rule.meta(), out: &mut out, flow: &flow };
                                 let t0 = if profiling() { Some(std::time::Instant::now()) } else { None };
                                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rule.check_node(n, &mut cx)));
@@ -100,7 +99,6 @@ impl RuleSet {
                                 if r.is_err() {
                                     eprintln!("grounds: rule {} panicked on {}", rule.meta().id, info.path);
                                 }
-                                unjudged(fm, &mut out, before);
                             }
                         }
                     }
@@ -123,7 +121,6 @@ impl RuleSet {
                 continue;
             }
             let rule = &self.rules[ri];
-            let before = (out.len(), fm.constant_cut_offs());
             let mut cx = Ctx { fm, src: fm.src, info, di, options, rule: rule.meta(), out: &mut out, flow: &flow };
             let t0 = if profiling() { Some(std::time::Instant::now()) } else { None };
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rule.check_file(&mut cx)));
@@ -133,7 +130,13 @@ impl RuleSet {
             if r.is_err() {
                 eprintln!("grounds: rule {} panicked on {}", rule.meta().id, info.path);
             }
-            unjudged(fm, &mut out, before);
+        }
+        // A constant nested past the bound of `constant_value` came back as
+        // "not a constant", and what was derived from that (a type, a rule's
+        // reason to report) may be cached anywhere in the model. Such a file
+        // is not judged, like one nested too deep to parse.
+        if fm.constant_cut_offs() > 0 {
+            return Vec::new();
         }
         // code the parser could not read is not judged: drop findings that
         // overlap a syntax error
@@ -193,14 +196,6 @@ impl RuleSet {
             true
         });
         out
-    }
-}
-
-/// Drops what a rule reported while a constant was cut off at the nesting
-/// bound: "not a constant" may have been the reason for it, and is not known.
-fn unjudged(fm: &FileModel, out: &mut Vec<Diagnostic>, (len, cut_offs): (usize, u64)) {
-    if fm.constant_cut_offs() != cut_offs {
-        out.truncate(len);
     }
 }
 
