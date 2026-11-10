@@ -566,6 +566,32 @@ impl<'a> Builder<'a> {
         !m.is_constructor() && m.annotations.iter().any(|a| self.factory_annotation(a, 0))
     }
 
+    /// A factory method's annotations as the container reads them: its own,
+    /// then those carried by the project annotations that make it a factory
+    /// method (`@Exported` meta-annotated `@Bean("special") @Primary`), so
+    /// the bean's name, qualifiers, primary, conditions and the rest come
+    /// from the same place whether written directly or composed. Direct
+    /// annotations come first and win.
+    fn factory_method_annotations(&mut self, anns: &[AnnotationInfo]) -> Vec<AnnotationInfo> {
+        let mut out: Vec<AnnotationInfo> = anns.to_vec();
+        let mut seen: rustc_hash::FxHashSet<Name> = anns.iter().map(|a| a.name.clone()).collect();
+        let mut i = 0;
+        while i < out.len() {
+            let a = out[i].clone();
+            i += 1;
+            if BEAN_METHOD_ANNOTATIONS.iter().any(|b| a.is(b)) || !self.factory_annotation(&a, 0) {
+                continue;
+            }
+            let Some(c) = self.index.class(&a.name).filter(|c| c.kind == ClassKind::Annotation) else { continue };
+            for m in c.annotations.iter() {
+                if !m.name.starts_with("java.lang.annotation.") && seen.insert(m.name.clone()) {
+                    out.push(m.clone());
+                }
+            }
+        }
+        out
+    }
+
     fn is_custom_qualifier(&mut self, ann: &AnnotationInfo) -> bool {
         if let Some(r) = self.qualifier_ann.get(&ann.name) {
             return *r;
@@ -1258,14 +1284,15 @@ impl<'a> Builder<'a> {
                 if m.ret == Ty::Void || m.ret.is_unknown() {
                     continue;
                 }
-                let bean_ann = m.annotations.iter().find(|a| a.simple_name() == "Bean");
+                let anns = self.factory_method_annotations(&m.annotations);
+                let bean_ann = anns.iter().find(|a| a.simple_name() == "Bean");
                 let names: Vec<String> = bean_ann.map(|a| ["name", "value"].iter().flat_map(|k| a.arg(k).map(|v| v.strings()).unwrap_or_default()).collect()).unwrap_or_default();
                 let (name, aliases) = match names.split_first() {
                     Some((f, rest)) => (f.clone(), rest.to_vec()),
                     None => (m.name.to_string(), Vec::new()),
                 };
-                let mut qualifiers = self.qualifiers_of(&m.annotations);
-                if let Some(nm) = m.annotations.iter().find(|a| a.simple_name() == "Named").and_then(|a| first_string(a, &["value"])) {
+                let mut qualifiers = self.qualifiers_of(&anns);
+                if let Some(nm) = anns.iter().find(|a| a.simple_name() == "Named").and_then(|a| first_string(a, &["value"])) {
                     qualifiers.push(nm);
                 }
                 let autowire_candidate = bean_ann.and_then(|a| a.arg("autowireCandidate")).and_then(|v| v.as_bool()) != Some(false);
@@ -1276,14 +1303,14 @@ impl<'a> Builder<'a> {
                     declaring_class: c.name.clone(),
                     source: BeanSource::FactoryMethod(m.name.clone()),
                     qualifiers,
-                    primary: m.annotations.iter().any(|a| a.simple_name() == "Primary"),
-                    conditional: conditional || self.conditional_meta(&m.annotations),
+                    primary: anns.iter().any(|a| a.simple_name() == "Primary"),
+                    conditional: conditional || self.conditional_meta(&anns),
                     file: file.clone(),
                     is_test,
                     autowire_candidate,
                     framework: fw,
-                    dynamic_names: class_dynamic || m.annotations.iter().any(|a| matches!(a.simple_name(), "EachBean" | "EachProperty")),
-                    replaces: m.annotations.iter().any(|a| a.simple_name() == "Replaces"),
+                    dynamic_names: class_dynamic || anns.iter().any(|a| matches!(a.simple_name(), "EachBean" | "EachProperty")),
+                    replaces: anns.iter().any(|a| a.simple_name() == "Replaces"),
                     static_factory: m.flags.is_static(),
                 };
                 self.add_bean(mbean);
@@ -2691,5 +2718,32 @@ mod tests {
              @Service class UsesRedis { UsesRedis(RedisStore redis) {} }"),
         ]);
         assert_eq!(point_resolution(&idx, &m, "redis"), Resolution::Unknown);
+    }
+
+    #[test]
+    fn a_composed_factory_annotation_keeps_the_bean_metadata_it_carries() {
+        // a project annotation carrying @Bean("special") names the bean
+        // "special", one carrying @Bean @Primary makes it primary, as the
+        // same annotations directly on the method do
+        let (idx, m) = model(&[
+            ("src/main/java/app/Exported.java", "package app; @org.springframework.context.annotation.Bean(\"special\") public @interface Exported {}"),
+            ("src/main/java/app/Chosen.java", "package app; @org.springframework.context.annotation.Bean @org.springframework.context.annotation.Primary public @interface Chosen {}"),
+            ("src/main/java/app/Plain.java", "package app; @org.springframework.context.annotation.Bean public @interface Plain {}"),
+            ("src/main/java/app/A.java", "package app; import org.springframework.stereotype.*; import org.springframework.context.annotation.*; import org.springframework.beans.factory.annotation.Qualifier;
+             interface Pipe {} interface Hose {} interface Valve {}
+             @Configuration class Parts {
+               @Exported Pipe pipe() { return null; }
+               @Chosen Hose mainHose() { return null; } @Bean Hose spareHose() { return null; }
+               @Plain Valve leftValve() { return null; } @Bean Valve rightValve() { return null; } }
+             @Service class Uses { Uses(@Qualifier(\"special\") Pipe special, @Qualifier(\"other\") Pipe other, Hose hose, Valve valve) {} }
+             @org.springframework.boot.autoconfigure.SpringBootApplication class App {}"),
+        ]);
+        let special = point_resolution(&idx, &m, "special");
+        assert!(matches!(special, Resolution::Unique(i) if m.beans[i].name == "special"), "{special:?}");
+        let hose = point_resolution(&idx, &m, "hose");
+        assert!(matches!(hose, Resolution::Unique(i) if m.beans[i].name == "mainHose"), "{hose:?}");
+        // what the composed annotation does not carry is not invented
+        assert!(matches!(point_resolution(&idx, &m, "other"), Resolution::QualifierNotFound { .. }));
+        assert!(matches!(point_resolution(&idx, &m, "valve"), Resolution::Ambiguous(_)));
     }
 }
