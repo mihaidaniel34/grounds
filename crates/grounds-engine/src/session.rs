@@ -246,6 +246,14 @@ impl Session {
         &self.project.workspace.root
     }
 
+    /// Source files that could not be read and are tried again at every
+    /// sync (see `FileStamp::unread`).
+    pub fn unread_files(&self) -> Vec<PathBuf> {
+        let mut v: Vec<PathBuf> = self.stamps.iter().filter(|(_, s)| s.unread).map(|(p, _)| p.clone()).collect();
+        v.sort();
+        v
+    }
+
     /// Files whose content is compared at every sync, their time being too
     /// recent to trust (see `FileStamp`), and whether the project is to be
     /// loaded again: what a sync costs beyond looking at times.
