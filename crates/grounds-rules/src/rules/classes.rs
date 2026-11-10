@@ -1195,7 +1195,23 @@ impl Rule for MutableEnumField {
         }
         let in_enum = n.parent().is_some_and(|p| p.kind() == "enum_body_declarations");
         if in_enum {
+            let Some(decl) = owning_type_decl(n) else { return };
+            // a private field that only the constructors assign, with no
+            // Lombok setter, cannot change after the constants are built: at
+            // most `final` is missing
+            let setter = has_annotation_named(n, cx.src, "Setter") || has_annotation_named(decl, cx.src, "Setter") || has_annotation_named(decl, cx.src, "Data");
+            let open = !n.has_modifier("private") || setter;
+            let cls = cx.fm.class_of_decl(decl);
             for d in n.fields("declarator") {
+                let Some(name) = d.field("name").map(|x| cx.text(x)) else { continue };
+                let written = decl.descendants().filter(|a| matches!(a.kind(), "assignment_expression" | "update_expression")).any(|a| {
+                    let t = if a.kind() == "assignment_expression" { a.field("left") } else { a.kids().into_iter().find(|k| k.is_named()) };
+                    let ours = t.and_then(|t| cx.fm.field_ref(t.unparen())).is_some_and(|f| cls.as_ref().is_some_and(|c| f.owner == c.name) && &*f.field.name == name);
+                    ours && !a.ancestors().take_while(|x| *x != decl).any(|x| x.kind() == "constructor_declaration")
+                });
+                if !open && !written {
+                    continue;
+                }
                 cx.report(d, format!("Enum field `{}` is mutable; make it final", d.field("name").map(|x| cx.text(x)).unwrap_or("")));
             }
         }
