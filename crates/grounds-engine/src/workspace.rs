@@ -105,6 +105,16 @@ impl SourceSets {
     }
 }
 
+/// The `.java` files under `root` that git tracks although `.gitignore`
+/// matches them, relative to `root`. Empty outside a git work tree.
+fn tracked_but_ignored(root: &Path) -> Vec<PathBuf> {
+    let out = std::process::Command::new("git").arg("-C").arg(root).args(["ls-files", "-z", "--cached", "--ignored", "--exclude-standard", "--", "*.java"]).stderr(std::process::Stdio::null()).output();
+    match out {
+        Ok(o) if o.status.success() => o.stdout.split(|&b| b == 0).filter(|p| !p.is_empty()).filter_map(|p| std::str::from_utf8(p).ok()).map(PathBuf::from).collect(),
+        _ => Vec::new(),
+    }
+}
+
 impl Workspace {
     pub fn discover(root: &Path, exclude: &[String]) -> Workspace {
         let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
@@ -133,6 +143,20 @@ impl Workspace {
             .build();
         let mut module_dirs: Vec<(PathBuf, BuildSystem)> = Vec::new();
         let mut java_files: Vec<PathBuf> = Vec::new();
+        let source = |p: &Path, name: &str| -> bool {
+            if !name.ends_with(".java") || name == "module-info.java" || name == "package-info.java" {
+                return false;
+            }
+            // skip non-generated build outputs: a `build`/`target` directory
+            // inside the project and above `src` (not the folders the
+            // project sits in, nor a package named `build`)
+            let rel = p.strip_prefix(&root).unwrap_or(p);
+            let output = rel.components().map(|c| c.as_os_str()).take_while(|c| *c != "src").any(|c| c == "build" || c == "target");
+            if output && classify(p) != SourceKind::Generated {
+                return false;
+            }
+            !(is_resource(rel) || excludes.iter().any(|g| g.matches_path(rel)))
+        };
         for entry in walker.flatten() {
             let p = entry.path();
             let Some(name) = p.file_name().and_then(|n| n.to_str()) else { continue };
@@ -142,24 +166,23 @@ impl Workspace {
                     "pom.xml" => module_dirs.push((p.parent().unwrap().to_path_buf(), BuildSystem::Maven)),
                     _ => {}
                 }
-                if name.ends_with(".java") && name != "module-info.java" && name != "package-info.java" {
-                    // skip non-generated build outputs: a `build`/`target` directory
-                    // inside the project and above `src` (not the folders the
-                    // project sits in, nor a package named `build`)
-                    let rel = p.strip_prefix(&root).unwrap_or(p);
-                    let output = rel.components().map(|c| c.as_os_str()).take_while(|c| *c != "src").any(|c| c == "build" || c == "target");
-                    if output && classify(p) != SourceKind::Generated {
-                        continue;
-                    }
-                    if let Ok(rel) = p.strip_prefix(&root) {
-                        if is_resource(rel) || excludes.iter().any(|g| g.matches_path(rel)) {
-                            continue;
-                        }
-                    }
+                if source(p, name) {
                     java_files.push(p.to_path_buf());
                 }
             }
         }
+        // files git tracks are part of the project whatever .gitignore says
+        // (a directory ignored after its files were added): the build compiles them
+        for rel in tracked_but_ignored(&root) {
+            let skipped = rel.components().any(|c| c.as_os_str().to_str().is_none_or(|n| SKIP_DIRS.contains(&n) || n.starts_with('.')));
+            let p = root.join(&rel);
+            let Some(name) = rel.file_name().and_then(|n| n.to_str()) else { continue };
+            if !skipped && p.is_file() && source(&p, name) {
+                java_files.push(p);
+            }
+        }
+        java_files.sort();
+        java_files.dedup();
         module_dirs.sort_by(|a, b| a.0.cmp(&b.0));
         module_dirs.dedup_by(|a, b| a.0 == b.0);
         if !module_dirs.iter().any(|(d, _)| *d == root) {

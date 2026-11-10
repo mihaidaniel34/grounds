@@ -146,3 +146,27 @@ fn a_class_of_a_variant_source_set_is_seen_only_from_that_set() {
     );
     assert_eq!(findings(&dir), vec!["app/src/fdroid/java/app/FdroidLoader.java:6 unresolved-constructor".to_string()]);
 }
+
+#[test]
+fn files_git_tracks_are_read_whatever_gitignore_says() {
+    let dir = project(
+        "gitignored-tracked",
+        &[
+            (".gitignore", "/a/src/main/java/p/\n"),
+            ("a/src/main/java/p/Logic.java", "package p;\npublic class Logic {\n    static void serializeParent(String s) {}\n}\n"),
+            ("a/src/test/java/p/LogicTest.java", "package p;\npublic class LogicTest {\n    void t() { Logic.serializeParent(\"x\"); Logic.serializeChild(\"x\"); }\n}\n"),
+            ("b/src/main/java/p/Logic.java", "package p;\npublic class Logic {\n    static void serializeCar(String s) {}\n}\n"),
+            // ignored and not tracked: not part of the project
+            ("a/src/main/java/p/Scratch.java", "package p;\nclass Scratch {\n    void t() { Logic.nothingHere(); }\n}\n"),
+        ],
+    );
+    let git = |args: &[&str]| {
+        let ok = std::process::Command::new("git").arg("-C").arg(&dir).args(args).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t").env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t").status().is_ok_and(|s| s.success());
+        assert!(ok, "git {args:?}");
+    };
+    git(&["init", "-q"]);
+    git(&["add", "-A"]);
+    git(&["add", "-f", "a/src/main/java/p/Logic.java"]);
+    git(&["commit", "-qm", "init"]);
+    assert_eq!(findings(&dir), vec!["a/src/test/java/p/LogicTest.java:3 unresolved-method".to_string()]);
+}
