@@ -528,6 +528,8 @@ struct Builder<'a> {
     /// in main sources / only in test sources: any class may be registered
     opaque_filter: bool,
     opaque_filter_in_tests: bool,
+    /// modules running a classpath scanner in code, and whether in test sources
+    code_scans: Vec<(String, bool)>,
     /// classes registered through META-INF files
     registered: rustc_hash::FxHashSet<String>,
     /// the auto-configurations among them
@@ -787,8 +789,10 @@ impl<'a> Builder<'a> {
             let stereotyped = !c.is_abstract() && anns.iter().any(|a| self.stereotype(a, 0).is_some());
             // (a scan the model cannot read, declared in test sources,
             // registers for test points only)
-            let main_scan = !is_test && (if c.is_interface() { self.unexpanded_mapper_scan } else { self.opaque_filter });
-            let test_scan = if c.is_interface() { self.unexpanded_mapper_scan_in_tests } else { self.opaque_filter_in_tests };
+            let module = c.source_file().map(module_of).unwrap_or("");
+            let code_scan = |tests: bool| !c.is_interface() && self.code_scans.iter().any(|(m, t)| m == module && *t == tests);
+            let main_scan = !is_test && (if c.is_interface() { self.unexpanded_mapper_scan } else { self.opaque_filter } || code_scan(false));
+            let test_scan = (if c.is_interface() { self.unexpanded_mapper_scan_in_tests } else { self.opaque_filter_in_tests }) || code_scan(true);
             let concrete = !c.is_interface() && !c.is_abstract();
             let assignable: Vec<bool> = if concrete { self.filter_types.iter().filter(|(t, _)| self.index.is_subclass(n, t).is_yes()).map(|(_, t)| *t).collect() } else { Vec::new() };
             // an interface extending a type the model cannot resolve (a
@@ -835,6 +839,45 @@ impl<'a> Builder<'a> {
         producers.dedup();
         self.model.unseen = unseen;
         self.model.unseen_producers = producers;
+    }
+
+    /// The type of the object a `FactoryBean` bean of type `ty` makes:
+    /// Spring exposes the bean under its name as that object (the factory
+    /// itself is `&name`). Read from `FactoryBean<T>` or Spring's abstract
+    /// bases, through project superclasses, also without Spring's jar.
+    fn factory_product(&self, ty: &Ty) -> Option<Ty> {
+        const FACTORY: &str = "org.springframework.beans.factory.FactoryBean";
+        let known = |t: Ty| -> Option<Ty> {
+            let t = t.upper_bound();
+            (t.class_name().is_some() && !t.mentions_type_var()).then_some(t)
+        };
+        if let Some(sup) = self.index.as_super(ty, FACTORY) {
+            return sup.args().first().cloned().and_then(known);
+        }
+        let mut cur: Option<Name> = ty.class_name().map(Arc::from);
+        let mut hops = 0;
+        while let Some(x) = cur.take() {
+            let (stub, raw) = self.index.raw_class(&x)?;
+            let scope = self.index.scope_for_raw(stub, raw);
+            for t in raw.superclass.iter().chain(&raw.interfaces) {
+                let TypeSyntax::Named(segs) = t else { continue };
+                let Some((last, args)) = segs.last() else { continue };
+                if !matches!(&**last, "FactoryBean" | "SmartFactoryBean" | "AbstractFactoryBean") {
+                    continue;
+                }
+                let names: Vec<&str> = segs.iter().map(|s| &*s.0).collect();
+                let spring = match self.index.resolve_type_name(&names, &scope) {
+                    Some(q) => q.starts_with("org.springframework.beans.factory."),
+                    None => true,
+                };
+                if spring {
+                    return args.first().map(|a| self.index.resolve_type(a, &scope)).and_then(known);
+                }
+            }
+            hops += 1;
+            cur = self.class(&x).and_then(|c| c.superclass.as_ref().and_then(|s| s.class_name()).map(Arc::from)).filter(|s| hops < 8 && self.index.is_source_class(s));
+        }
+        None
     }
 
     /// Does the class's hierarchy reach, through project types, a supertype
@@ -1082,6 +1125,14 @@ impl<'a> Builder<'a> {
             if ["ClassPathXmlApplicationContext", "GenericXmlApplicationContext", "FileSystemXmlApplicationContext", "XmlBeanDefinitionReader", "XmlWebApplicationContext"].iter().any(|n| mentions(n)) {
                 if in_tests { self.model.xml_config_in_tests = true } else { self.model.xml_config = true }
             }
+            // a scanner run in code (from a BeanFactoryPostProcessor, an
+            // ImportBeanDefinitionRegistrar, ...) registers by its own filters:
+            // any class may be registered
+            // (in its own module: what other modules hold is beyond what the
+            // sources show it scans)
+            if mentions("ClassPathBeanDefinitionScanner") || mentions("ClassPathScanningCandidateComponentProvider") {
+                self.code_scans.push((module_of(path).to_string(), in_tests));
+            }
             if mentions("MapperScannerConfigurer") {
                 if in_tests { self.unexpanded_mapper_scan_in_tests = true } else { self.unexpanded_mapper_scan = true }
             }
@@ -1109,6 +1160,26 @@ impl<'a> Builder<'a> {
         // them ambiguous or clashes by name
         let outside_scan = |c: &ClassInfo| !in_scan(c.package()) && !imported.contains(&c.name);
 
+        // HTTP service interfaces @ImportHttpServices registers: the types it
+        // names and the packages it names (one naming neither is left to
+        // the evidence rule: its annotation is a registration the model
+        // cannot classify)
+        let mut http_types: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
+        let mut http_packages: Vec<String> = Vec::new();
+        for n in &names {
+            let Some(c) = self.class(n) else { continue };
+            let mut stack: Vec<AnnotationInfo> = c.annotations.iter().filter(|a| matches!(a.simple_name(), "ImportHttpServices" | "ImportHttpServiceGroups")).cloned().collect();
+            while let Some(a) = stack.pop() {
+                if a.simple_name() == "ImportHttpServiceGroups" {
+                    stack.extend(a.arg("value").map(|v| v.values()).unwrap_or_default().into_iter().filter_map(|v| if let AnnotationValue::Annotation(x) = v { Some((**x).clone()) } else { None }));
+                    continue;
+                }
+                let classes = |k: &str| a.arg(k).map(|v| v.values()).unwrap_or_default().into_iter().filter_map(|x| if let AnnotationValue::Class(t) = x { t.class_name().map(str::to_string) } else { None }).collect::<Vec<_>>();
+                http_types.extend(classes("types").into_iter().chain(classes("value")));
+                http_packages.extend(split_packages(a.arg("basePackages").map(|v| v.strings()).unwrap_or_default()));
+                http_packages.extend(classes("basePackageClasses").iter().map(|t| package_of(t).to_string()));
+            }
+        }
         for n in &names {
             let Some(c) = self.class(n) else { continue };
             let file = c.source_file().map(Arc::from);
@@ -1146,7 +1217,11 @@ impl<'a> Builder<'a> {
                 for a in &c.annotations {
                     match a.simple_name() {
                         "ConfigurationProperties" | "EachProperty" | "ConfigurationReader" if a.name.starts_with("io.micronaut") || !a.resolved => source = Some((BeanSource::Component, Framework::Micronaut)),
-                        "FeignClient" | "HttpExchange" => source = Some((BeanSource::Client, Framework::Spring)),
+                        "FeignClient" => source = Some((BeanSource::Client, Framework::Spring)),
+                        // an HTTP service interface is a bean only where
+                        // @ImportHttpServices registers its proxy; otherwise a
+                        // @Bean method creates it (HttpServiceProxyFactory)
+                        "HttpExchange" if http_types.contains(&*c.name) || http_packages.iter().any(|p| package_covered(p, c.package())) => source = Some((BeanSource::Client, Framework::Spring)),
                         "Client" if a.name.starts_with("io.micronaut") || !a.resolved => source = Some((BeanSource::Client, Framework::Micronaut)),
                         "Repository" | "JdbcRepository" | "MongoRepository" | "R2dbcRepository" if a.name.starts_with("io.micronaut") => source = Some((BeanSource::Repository, Framework::Micronaut)),
                         // Jakarta Data: the implementation is generated at build time (Hibernate, Quarkus, ...)
@@ -1519,6 +1594,18 @@ impl<'a> Builder<'a> {
                 }
             }
         }
+        // a FactoryBean is registered under its name as the object it makes
+        for i in 0..self.model.beans.len() {
+            let b = &self.model.beans[i];
+            if b.framework != Framework::Spring || !matches!(b.source, BeanSource::Component | BeanSource::FactoryMethod(_)) || b.is_test && b.declaring_class.contains('$') {
+                continue;
+            }
+            let Some(product) = self.factory_product(&b.ty.clone()) else { continue };
+            let mut made = self.model.beans[i].clone();
+            made.ty = product;
+            self.model.beans[i].name = format!("&{}", made.name);
+            self.add_bean(made);
+        }
         let mut by_class: FxHashMap<Name, Vec<usize>> = FxHashMap::default();
         for (i, b) in self.model.beans.iter().enumerate() {
             if let Some(n) = b.ty.class_name() {
@@ -1827,6 +1914,7 @@ impl DiModel {
             filter_types: Vec::new(),
             opaque_filter: false,
             opaque_filter_in_tests: false,
+            code_scans: Vec::new(),
             registered: registered.iter().cloned().collect(),
             auto_registered: auto_registered.iter().cloned().collect(),
         };
@@ -3260,5 +3348,66 @@ mod tests {
         assert_eq!(point_resolution(&idx, &m, "employees"), Resolution::Unknown);
         assert_eq!(point_resolution(&idx, &m, "articles"), Resolution::Unknown);
         assert_eq!(point_resolution(&idx, &m, "port"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn beans_registered_in_ways_spring_reads_and_the_model_must_too() {
+        let app = ("src/main/java/com/x/App.java", "package com.x; @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] a) {} }");
+        // a FactoryBean bean is its product under its name, without Spring's jar
+        let factory = [
+            app,
+            ("src/main/java/com/x/Engine.java", "package com.x; public interface Engine {}"),
+            ("src/main/java/com/x/EngineFactoryBean.java", "package com.x; import org.springframework.beans.factory.FactoryBean;
+             public class EngineFactoryBean implements FactoryBean<Engine> { public Engine getObject() { return null; } public Class<?> getObjectType() { return Engine.class; } }"),
+            ("src/main/java/com/x/EngineConfig.java", "package com.x; import org.springframework.context.annotation.*;
+             @Configuration public class EngineConfig {
+                 @Bean(name = \"engine\") public EngineFactoryBean engineFactoryBean() { return new EngineFactoryBean(); }
+                 @Bean public String engineName(Engine engine) { return null; }
+                 @Bean public String other(@org.springframework.beans.factory.annotation.Qualifier(\"engine\") Engine named, Missing missing) { return null; }
+             }
+             interface Missing {}"),
+        ];
+        let (idx, m) = model(&factory);
+        assert!(matches!(point_resolution(&idx, &m, "engine"), Resolution::Unique(_)));
+        assert!(matches!(point_resolution(&idx, &m, "named"), Resolution::Unique(_)));
+        assert_eq!(point_resolution(&idx, &m, "missing"), Resolution::NotFound);
+        assert!(m.name_conflicts().is_empty());
+        // a scanner run in code registers classes by filters the model cannot read
+        let boundary = [
+            app,
+            ("src/main/java/com/x/Boundary.java", "package com.x; public interface Boundary {} class Interactor implements Boundary {}"),
+            ("src/main/java/com/x/Controller.java", "package com.x; @org.springframework.stereotype.Controller class Controller { Controller(Boundary boundary) {} }"),
+        ];
+        let (idx, m) = model(&boundary);
+        assert_eq!(point_resolution(&idx, &m, "boundary"), Resolution::NotFound);
+        let scanner = ("src/main/java/com/x/Scan.java", "package com.x; import org.springframework.context.annotation.ClassPathBeanDefinitionScanner;
+             class Scan { void scan(Object registry) { new ClassPathBeanDefinitionScanner(null).scan(\"com.x\"); } }");
+        let (idx, m) = model(&[boundary[0], boundary[1], boundary[2], scanner]);
+        assert_eq!(point_resolution(&idx, &m, "boundary"), Resolution::Unknown);
+        // (in another module, it does not scan this one)
+        let elsewhere = ("tools/src/main/java/t/Scan.java", "package t; import org.springframework.context.annotation.ClassPathBeanDefinitionScanner; class Scan { ClassPathBeanDefinitionScanner s; }");
+        let (idx, m) = model(&[boundary[0], boundary[1], boundary[2], elsewhere]);
+        assert_eq!(point_resolution(&idx, &m, "boundary"), Resolution::NotFound);
+        // an HTTP service interface is a bean only under @ImportHttpServices
+        let client = [
+            app,
+            ("src/main/java/com/x/JoyClient.java", "package com.x; @org.springframework.web.service.annotation.HttpExchange(\"/joy\") public interface JoyClient {}"),
+            ("src/main/java/com/x/HttpConfig.java", "package com.x; import org.springframework.context.annotation.*; @Configuration class HttpConfig { @Bean JoyClient joyClient() { return null; } }"),
+            ("src/main/java/com/x/Uses.java", "package com.x; @org.springframework.stereotype.Controller class Uses { Uses(JoyClient joy) {} }"),
+        ];
+        let (idx, m) = model(&client);
+        assert!(matches!(point_resolution(&idx, &m, "joy"), Resolution::Unique(_)));
+        // (an import of other services does not make it one)
+        let others = ("src/main/java/com/x/Clients.java", "package com.x; @org.springframework.web.service.registry.ImportHttpServices(group = \"books\", types = Books.class) @org.springframework.context.annotation.Configuration class Clients {} interface Books {}");
+        let (idx, m) = model(&[client[0], client[1], client[2], client[3], others]);
+        assert!(matches!(point_resolution(&idx, &m, "joy"), Resolution::Unique(_)));
+        for import in ["types = JoyClient.class", "basePackages = \"com.x\""] {
+            let imported = format!("package com.x; @org.springframework.web.service.registry.ImportHttpServices({import}) @org.springframework.context.annotation.Configuration class Clients {{}}");
+            let (idx, m) = model(&[client[0], client[1], client[3], ("src/main/java/com/x/Clients.java", &imported)]);
+            assert!(matches!(point_resolution(&idx, &m, "joy"), Resolution::Unique(_)), "{import}");
+            // and with the @Bean method too, two beans
+            let (idx, m) = model(&[client[0], client[1], client[2], client[3], ("src/main/java/com/x/Clients.java", &imported)]);
+            assert!(matches!(point_resolution(&idx, &m, "joy"), Resolution::Ambiguous(_)), "{import}");
+        }
     }
 }
