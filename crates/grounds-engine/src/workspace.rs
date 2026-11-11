@@ -43,6 +43,9 @@ pub struct Workspace {
     /// time, so they are where a source file that appears, or comes back, is
     /// noticed (see `Session::sync`).
     pub dirs: Vec<PathBuf>,
+    /// The files git tracks although an ignore file matches them, relative
+    /// to the root, as this discovery read them (`tracked_but_ignored`).
+    pub tracked: Vec<PathBuf>,
 }
 
 /// The files in a directory that decide which files the discovery skips,
@@ -201,7 +204,7 @@ impl SourceSets {
 static GIT_LISTINGS: std::sync::Mutex<Vec<(PathBuf, usize)>> = std::sync::Mutex::new(Vec::new());
 
 #[cfg(test)]
-fn git_listings(root: &Path) -> usize {
+pub(crate) fn git_listings(root: &Path) -> usize {
     GIT_LISTINGS.lock().unwrap().iter().find(|(r, _)| r == root).map_or(0, |(_, n)| *n)
 }
 
@@ -225,7 +228,7 @@ fn tracked_but_ignored(root: &Path) -> Vec<PathBuf> {
 /// The git directory of the work tree holding `root`: the `.git` directory
 /// of `root` or a directory above it, or the one a `.git` file names (a
 /// linked worktree's, which has its own index and HEAD).
-fn git_dir(root: &Path) -> Option<PathBuf> {
+pub fn git_dir(root: &Path) -> Option<PathBuf> {
     // the nearest repository at or above the root, as `boundary` finds one
     let top = root.ancestors().find(|a| boundary(a).is_some_and(|b| b & 3 != 0))?;
     let dot = top.join(".git");
@@ -233,6 +236,14 @@ fn git_dir(root: &Path) -> Option<PathBuf> {
         1 => Some(dot),
         _ => gitdir_of(&dot).map(|g| if g.is_absolute() { g } else { top.join(g) }),
     }
+}
+
+/// The files the list of tracked-but-ignored files depends on besides the
+/// ignore files: the index and HEAD of the work tree's own git directory
+/// (`git_dir`; a linked worktree has its own), whether they exist or not.
+/// Empty outside a work tree.
+pub fn index_files(root: &Path) -> Vec<PathBuf> {
+    git_dir(root).map(|g| vec![g.join("index"), g.join("HEAD")]).unwrap_or_default()
 }
 
 /// What the list of tracked-but-ignored files depends on besides the
@@ -248,7 +259,7 @@ fn index_stamp(root: &Path) -> Option<(std::time::SystemTime, u64, Vec<u8>)> {
 /// over the whole repository costs tens of milliseconds there. A discovery of
 /// the whole workspace (`fresh`: also after an ignore file changes) and a
 /// change of git's index or HEAD read it again.
-fn tracked_but_ignored_cached(root: &Path, fresh: bool) -> Vec<PathBuf> {
+pub(crate) fn tracked_but_ignored_cached(root: &Path, fresh: bool) -> Vec<PathBuf> {
     type Cache = std::sync::Mutex<std::collections::HashMap<PathBuf, ((std::time::SystemTime, u64, Vec<u8>), Vec<PathBuf>)>>;
     static CACHE: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
@@ -359,9 +370,9 @@ impl Workspace {
         // files git tracks are part of the project whatever .gitignore says
         // (a directory ignored after its files were added): the build compiles them
         let mut known: std::collections::HashSet<PathBuf> = dirs.iter().cloned().collect();
-        for rel in tracked {
+        for rel in &tracked {
             let skipped = rel.components().any(|c| c.as_os_str().to_str().is_none_or(|n| SKIP_DIRS.contains(&n) || n.starts_with('.')));
-            let p = root.join(&rel);
+            let p = root.join(rel);
             let Some(name) = rel.file_name().and_then(|n| n.to_str()) else { continue };
             // (only below the start, and as deep as the discovery goes)
             let Ok(below) = p.strip_prefix(&base) else { continue };
@@ -406,7 +417,7 @@ impl Workspace {
             let kind = classify(&p);
             files.push(SourceFile { path: p, module, kind });
         }
-        Workspace { root, modules, files, dirs }
+        Workspace { root, modules, files, dirs, tracked }
     }
 
     pub fn module_of(&self, path: &Path) -> Option<usize> {

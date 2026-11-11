@@ -1717,3 +1717,87 @@ fn a_stable_rule_is_stable_on_changed_lines_on_unchanged_lines_and_outside_git()
     assert_eq!(unused(&r), [(3, Maturity::Stable), (4, Maturity::Stable)]);
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+/// What `grounds changed --base HEAD` reports, through a session that has
+/// lived through the changes and through a fresh one: the same, and the JDK
+/// API the two load.
+fn changed_as_fresh(s: &mut Session, dir: &Path, what: &str) -> String {
+    let opts = || CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: Some("HEAD".into()) };
+    let warm = json(&s.check(&opts()));
+    let mut fresh = Session::open(dir).unwrap();
+    assert_eq!(warm, json(&fresh.check(&opts())), "after {what}, the session must report what a fresh run reports");
+    assert_eq!(s.project.stats.java_release, fresh.project.stats.java_release, "after {what}, the session must check against the JDK API a fresh run loads");
+    assert_eq!(holdings(s), holdings(&fresh), "after {what}");
+    warm
+}
+
+#[test]
+fn a_module_that_gains_its_first_sources_gets_the_jdk_api_a_fresh_load_picks() {
+    // The release review's R2: the root module compiles for exactly Java 8,
+    // a module `later` for 21 holds no sources yet, so the JDK API loaded is
+    // 8's. A source added to `later` makes it count: a fresh load loads 21's,
+    // where `ArrayList.getFirst` exists. The session must do the same, and go
+    // back when the module has no sources again.
+    let dir = std::env::temp_dir().join(format!("grounds-session-release-plan-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write(&dir, "settings.gradle", "rootProject.name = 'demo'\ninclude 'later'\n");
+    write(&dir, "build.gradle", "plugins { id 'java' }\ntasks.withType(JavaCompile) { options.release = 8 }\n");
+    write(&dir, "later/build.gradle", "plugins { id 'java' }\ntasks.withType(JavaCompile) { options.release = 21 }\n");
+    write(&dir, "src/main/java/Earlier.java", "class Earlier {}\n");
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+    let mut s = Session::open(&dir).unwrap();
+    changed_as_fresh(&mut s, &dir, "the load");
+    let java8 = s.project.stats.java_release;
+    write(&dir, "later/src/main/java/Later.java", "class Later extends java.util.ArrayList<String> { void test() { new Later().getFirst(); } }\n");
+    let r = changed_as_fresh(&mut s, &dir, "a source was added to a module that had none");
+    assert!(!r.contains("unresolved-method"), "{r}");
+    let java21 = s.project.stats.java_release;
+    // (where a JDK is installed that can tell the two apart)
+    if java8 == 8 {
+        assert_eq!(java21, 21, "the newly populated module counts");
+    }
+    std::fs::remove_file(dir.join("later/src/main/java/Later.java")).unwrap();
+    changed_as_fresh(&mut s, &dir, "the module lost its only source");
+    assert_eq!(s.project.stats.java_release, java8);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_file_git_starts_or_stops_tracking_against_gitignore_is_read_or_dropped() {
+    // The release review's R8: a fresh load reads the files git tracks
+    // although .gitignore matches them. `git add -f` of such a file changes
+    // only git's index: the session must find the file all the same, and
+    // drop it when git stops tracking it.
+    let dir = std::env::temp_dir().join(format!("grounds-session-index-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, ".gitignore", "Hidden.java\n");
+    write(&dir, "src/main/java/Use.java", "class Use {}\n");
+    write(&dir, "src/main/java/Hidden.java", "class Hidden {}\n");
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+    // (old times: what sync does, not a recent time, must find the file)
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    set_tree_mtime(&dir, ".", old);
+    set_mtime(&dir, ".git/info/exclude", old);
+    let mut s = Session::open(&dir).unwrap();
+    changed_as_fresh(&mut s, &dir, "the load");
+    git(&dir, &["add", "-f", "src/main/java/Hidden.java"]);
+    git(&dir, &["commit", "-qm", "track"]);
+    write(&dir, "src/main/java/Use.java", "class Use { void test(Hidden h) { h.missing(); } }\n");
+    let r = changed_as_fresh(&mut s, &dir, "git started tracking an ignored file");
+    assert!(r.contains("unresolved-method"), "{r}");
+    // and back: untracked (still on disk, still ignored), it goes
+    git(&dir, &["rm", "-q", "--cached", "src/main/java/Hidden.java"]);
+    let r = changed_as_fresh(&mut s, &dir, "git stopped tracking an ignored file");
+    assert!(!r.contains("unresolved-method"), "{r}");
+    // a commit that touches neither: nothing changes
+    git(&dir, &["commit", "-qm", "untrack"]);
+    changed_as_fresh(&mut s, &dir, "a commit");
+    let _ = std::fs::remove_dir_all(&dir);
+}

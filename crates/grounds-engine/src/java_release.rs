@@ -409,18 +409,43 @@ pub fn infer(ws: &Workspace) -> Option<u32> {
 }
 
 fn gradle_scripts(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
+    gradle_scripts_in(dir, depth, out, &mut Vec::new());
+}
+
+/// The Gradle scripts below `dir` that convention plugins are read from, and
+/// (`dirs`) the directories looked into, whose times change when a script
+/// is added or removed there.
+fn gradle_scripts_in(dir: &Path, depth: u32, out: &mut Vec<PathBuf>, dirs: &mut Vec<PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else { return };
+    dirs.push(dir.to_path_buf());
     for e in rd.flatten() {
         let p = e.path();
         let name = e.file_name().to_string_lossy().to_string();
         if p.is_dir() {
             if depth < 8 && !matches!(name.as_str(), "build" | ".gradle") {
-                gradle_scripts(&p, depth + 1, out);
+                gradle_scripts_in(&p, depth + 1, out, dirs);
             }
         } else if name.ends_with(".gradle") || name.ends_with(".gradle.kts") {
             out.push(p);
         }
     }
+}
+
+/// What `module_evidence` reads of Gradle's convention plugins besides the
+/// modules' build files: the scripts in `buildSrc` and `build-logic`, the
+/// directories they were looked for in, and those two directories, whether
+/// they exist or not. (For a session, which loads the project again when one
+/// of them changes.)
+pub fn convention_files(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    for dir in ["buildSrc", "build-logic"] {
+        let (mut scripts, mut dirs) = (Vec::new(), Vec::new());
+        gradle_scripts_in(&root.join(dir), 0, &mut scripts, &mut dirs);
+        out.push(root.join(dir));
+        out.extend(scripts);
+        out.extend(dirs);
+    }
+    out
 }
 
 /// A Java version as written in a build file: `1.8`, `8`, `"17"`,
