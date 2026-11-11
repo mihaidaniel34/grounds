@@ -15,6 +15,11 @@
 //!   the build), a value grounds cannot evaluate (a variable, an expression, a
 //!   property it cannot resolve, a parent POM outside the repository).
 //!
+//! A module's tests are compiled by a compile of their own, which the build
+//! may give another release ([`Scoped`]): Maven's `testRelease`,
+//! `testSource`/`testTarget`; Gradle's `compileTestJava { }`. Its files
+//! (`src/test`) take that one, and the other source sets theirs.
+//!
 //! The code itself is evidence too: a module said to compile for exactly R
 //! whose code uses newer syntax (a record before 16, a sealed class before
 //! 17) does not, and its API is unknown.
@@ -52,6 +57,85 @@ impl Evidence {
     }
 }
 
+impl ReleasePlan {
+    /// The release a file compiles for exactly, as the index tells it
+    /// (`Index::exact_release`): its source set's when that differs, else its
+    /// module's (the innermost).
+    pub fn exact_release(&self, file: &Path) -> Option<u32> {
+        let module = self.exact.iter().filter(|(d, _)| file.starts_with(d)).max_by_key(|(d, _)| d.as_os_str().len());
+        let set = self.sets.iter().filter(|(d, _, _)| file.starts_with(d)).max_by_key(|(d, _, _)| d.as_os_str().len());
+        match (module, set) {
+            (m, Some((d, r, _))) if m.is_none_or(|(m, _)| d.as_os_str().len() > m.as_os_str().len()) => *r,
+            (m, _) => m?.1,
+        }
+    }
+}
+
+/// What a module's build says of each of its compiles: the main code's
+/// (`src/main`), the tests' (`src/test`), and the other source sets'.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Scoped {
+    pub main: Evidence,
+    pub test: Evidence,
+    /// None: the build compiles them with the main code or the tests, which
+    /// one is not known (Maven's `build-helper` sources): what both state
+    /// when they agree.
+    pub other: Option<Evidence>,
+}
+
+impl Scoped {
+    pub fn all(e: Evidence) -> Scoped {
+        Scoped { main: e, test: e, other: Some(e) }
+    }
+
+    pub fn get(&self, scope: Scope) -> Evidence {
+        let agree = |a: Evidence, b: Evidence| if a == b { a } else { Evidence::Unknown };
+        let other = self.other.unwrap_or(agree(self.main, self.test));
+        match scope {
+            Scope::Main => self.main,
+            Scope::Test => self.test,
+            Scope::Other => other,
+            // a file outside `src/<set>/`: in a source directory the build
+            // sets, compiled by one of them
+            Scope::Rest => agree(agree(self.main, self.test), other),
+        }
+    }
+}
+
+/// Which of a module's compiles a source file is in, by where it is in the
+/// module: `src/main/`, `src/test/`, another `src/<set>/`, or elsewhere.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Scope {
+    Main,
+    Test,
+    Other,
+    Rest,
+}
+
+impl Scope {
+    pub const ALL: [Scope; 4] = [Scope::Main, Scope::Test, Scope::Other, Scope::Rest];
+
+    pub fn index(self) -> usize {
+        self as usize
+    }
+
+    /// The scope of `file` in the module at `module`, and the directory of
+    /// its source set (`<module>/src/<set>`) when it is in one.
+    pub fn of(module: &Path, file: &Path) -> (Scope, Option<PathBuf>) {
+        let Ok(rel) = file.strip_prefix(module) else { return (Scope::Rest, None) };
+        let comps: Vec<&std::ffi::OsStr> = rel.components().map(|c| c.as_os_str()).collect();
+        if comps.len() < 3 || comps[0] != "src" {
+            return (Scope::Rest, None);
+        }
+        let scope = match comps[1].to_str() {
+            Some("main") => Scope::Main,
+            Some("test") => Scope::Test,
+            _ => Scope::Other,
+        };
+        (scope, Some(module.join("src").join(comps[1])))
+    }
+}
+
 /// The release whose JDK API is loaded, and the modules whose code compiles
 /// against exactly one release.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,16 +143,23 @@ pub struct ReleasePlan {
     pub load: u32,
     /// (module directory, release when exact) for every module: a module
     /// with None stops the lookup of an enclosing module's release.
-    /// `missing-jdk-import` judges files of exact modules only.
+    /// `missing-jdk-import` judges files of exact modules only. The release
+    /// of the module's files outside its source sets (`Scope::Rest`), which
+    /// is its main code's when the module's compiles agree.
     pub exact: Vec<(PathBuf, Option<u32>)>,
     /// (module directory, lowest release it may compile for): exact ones and
     /// `source`/`target` lower bounds; None when unknown.
     pub floors: Vec<(PathBuf, Option<u32>)>,
+    /// (source set directory, exact release, floor) of the source sets
+    /// whose compile states otherwise than the module entry: the tests
+    /// compiled for another release than the main code (`testRelease`,
+    /// `compileTestJava { options.release }`), or for one grounds cannot read.
+    pub sets: Vec<(PathBuf, Option<u32>, Option<u32>)>,
 }
 
 /// The evidence of every module of the workspace, in `ws.modules` order.
 /// Builds inside a source tree (test fixtures) say nothing about the project.
-pub fn module_evidence(ws: &Workspace) -> Vec<Evidence> {
+pub fn module_evidence(ws: &Workspace) -> Vec<Scoped> {
     let mut poms = PomCache::default();
     // Gradle convention plugins (`id("java-conventions")`) and the root build
     // (`subprojects { }`) set it for modules that do not set it themselves
@@ -136,10 +227,13 @@ pub fn module_evidence(ws: &Workspace) -> Vec<Evidence> {
         .iter()
         .map(|m| {
             if fixture_module(ws, &m.dir) {
-                return Evidence::Unknown;
+                return Scoped::all(Evidence::Unknown);
             }
             match m.build_system {
-                BuildSystem::Maven => poms.evidence(&m.dir.join("pom.xml")),
+                BuildSystem::Maven => {
+                    let pom = m.dir.join("pom.xml");
+                    Scoped { main: poms.evidence(&pom, false), test: poms.evidence(&pom, true), other: None }
+                }
                 BuildSystem::Gradle => {
                     let mut own = GradleSettings::default();
                     for (_, t) in scripts.iter().filter(|(d, _)| *d == m.dir) {
@@ -150,9 +244,9 @@ pub fn module_evidence(ws: &Workspace) -> Vec<Evidence> {
                     for (_, g) in targeted.iter().filter(|(d, _)| *d == m.dir) {
                         own.merge(g);
                     }
-                    own.or(if m.dir == ws.root { &conventions } else { &for_subprojects }).evidence()
+                    own.evidence(if m.dir == ws.root { &conventions } else { &for_subprojects })
                 }
-                BuildSystem::None => (if m.dir == ws.root { conventions } else { for_subprojects }).evidence(),
+                BuildSystem::None => GradleSettings::default().evidence(if m.dir == ws.root { &conventions } else { &for_subprojects }),
             }
         })
         .collect()
@@ -346,9 +440,9 @@ fn fixture_module(ws: &Workspace, dir: &Path) -> bool {
 
 /// Which JDK API to load and which modules compile for an exact release.
 /// `configured`: `java_release` from grounds.toml, exact for every module.
-/// `needs`: (module index, lowest release its code needs). `installed`: the
-/// installed JDK's release.
-pub fn plan(ws: &Workspace, configured: Option<u32>, needs: &[(usize, u32)], installed: Option<u32>) -> ReleasePlan {
+/// `needs`: (module index, scope, lowest release its code there needs).
+/// `installed`: the installed JDK's release.
+pub fn plan(ws: &Workspace, configured: Option<u32>, needs: &[(usize, Scope, u32)], installed: Option<u32>) -> ReleasePlan {
     if let Some(r) = configured {
         // every module listed, with the one release: the list is also how a
         // file's module is told from an enclosing module's (`Index::in_module`)
@@ -358,54 +452,80 @@ pub fn plan(ws: &Workspace, configured: Option<u32>, needs: &[(usize, u32)], ins
             }
             v
         });
-        return ReleasePlan { load: r, exact: all.clone(), floors: all };
+        return ReleasePlan { load: r, exact: all.clone(), floors: all, sets: Vec::new() };
     }
     let mut evidence = module_evidence(ws);
-    // the modules that hold code (an aggregator pom without sources says nothing)
-    let mut with_code = vec![false; ws.modules.len()];
+    // the compiles that hold code (an aggregator pom without sources says
+    // nothing), and the source set directories of each module
+    let mut with_code = vec![[false; 4]; ws.modules.len()];
+    let mut set_dirs: Vec<Vec<(Scope, PathBuf)>> = vec![Vec::new(); ws.modules.len()];
     for f in &ws.files {
+        let Some(m) = ws.modules.get(f.module) else { continue };
+        let (scope, dir) = Scope::of(&m.dir, &f.path);
         if f.kind != crate::workspace::SourceKind::Generated {
-            if let Some(w) = with_code.get_mut(f.module) {
-                *w = true;
+            with_code[f.module][scope.index()] = true;
+        }
+        if let Some(d) = dir {
+            if !set_dirs[f.module].iter().any(|(_, e)| *e == d) {
+                set_dirs[f.module].push((scope, d));
             }
         }
     }
     let mut need = 0;
-    for &(m, n) in needs {
+    for &(m, scope, n) in needs {
         need = need.max(n);
-        if let Some(Evidence::Exact(r)) = evidence.get(m).copied() {
+        if let Some(Evidence::Exact(r)) = evidence.get(m).map(|e| e.get(scope)) {
             if n > r {
-                // the code says the release is not the one stated
-                evidence[m] = Evidence::Unknown;
+                // the code says the release is not the one stated: the build
+                // is not read right, for any of the module's compiles
+                evidence[m] = Scoped::all(Evidence::Unknown);
             }
         }
     }
-    let any_code = with_code.iter().any(|&w| w);
-    let used: Vec<(usize, Evidence)> = evidence.iter().copied().enumerate().filter(|&(m, _)| (with_code[m] || !any_code) && !fixture_module(ws, &ws.modules[m].dir)).collect();
-    let need = used.iter().filter_map(|(_, e)| e.floor()).fold(need, u32::max);
+    let any_code = with_code.iter().any(|w| w.iter().any(|&c| c));
+    // the evidence of each compile that holds code (of every module's main
+    // code when there is none): the API loaded serves them all
+    let used: Vec<Evidence> = (0..ws.modules.len())
+        .filter(|&m| !fixture_module(ws, &ws.modules[m].dir))
+        .flat_map(|m| {
+            let e = evidence[m];
+            let w = with_code[m];
+            Scope::ALL.into_iter().filter(move |s| if any_code { w[s.index()] } else { *s == Scope::Main }).map(move |s| e.get(s))
+        })
+        .collect();
+    let need = used.iter().filter_map(|e| e.floor()).fold(need, u32::max);
     let readable = |r: u32| installed.is_none_or(|i| r <= i);
-    let exact: Vec<(PathBuf, Option<u32>)> = evidence.iter().enumerate().map(|(m, &e)| {
-        let r = match e {
-            Evidence::Exact(r) if readable(r) && !fixture_module(ws, &ws.modules[m].dir) => Some(r),
-            _ => None,
-        };
-        (ws.modules[m].dir.clone(), r)
-    }).collect();
-    let all_exact = !used.is_empty() && used.iter().all(|(_, e)| matches!(e, Evidence::Exact(_)));
+    let exact_of = |m: usize, e: Evidence| match e {
+        Evidence::Exact(r) if readable(r) && !fixture_module(ws, &ws.modules[m].dir) => Some(r),
+        _ => None,
+    };
+    let floor_of = |m: usize, e: Evidence| e.floor().filter(|_| !fixture_module(ws, &ws.modules[m].dir));
+    let exact: Vec<(PathBuf, Option<u32>)> = evidence.iter().enumerate().map(|(m, e)| (ws.modules[m].dir.clone(), exact_of(m, e.get(Scope::Rest)))).collect();
+    let floors = evidence.iter().enumerate().map(|(m, e)| (ws.modules[m].dir.clone(), floor_of(m, e.get(Scope::Rest)))).collect();
+    let mut sets = Vec::new();
+    for (m, e) in evidence.iter().enumerate() {
+        let rest = (exact_of(m, e.get(Scope::Rest)), floor_of(m, e.get(Scope::Rest)));
+        for (scope, dir) in &set_dirs[m] {
+            let own = (exact_of(m, e.get(*scope)), floor_of(m, e.get(*scope)));
+            if own != rest {
+                sets.push((dir.clone(), own.0, own.1));
+            }
+        }
+    }
+    let all_exact = !used.is_empty() && used.iter().all(|e| matches!(e, Evidence::Exact(_)));
     let load = match installed {
         Some(i) if need > i => need,
-        _ if all_exact => used.iter().filter_map(|(_, e)| e.floor()).max().unwrap_or(need),
+        _ if all_exact => used.iter().filter_map(|e| e.floor()).max().unwrap_or(need),
         Some(i) => i,
         None => need.max(crate::config::DEFAULT_JAVA_RELEASE),
     };
-    let floors = evidence.iter().enumerate().map(|(m, e)| (ws.modules[m].dir.clone(), e.floor().filter(|_| !fixture_module(ws, &ws.modules[m].dir)))).collect();
-    ReleasePlan { load, exact, floors }
+    ReleasePlan { load, exact, floors, sets }
 }
 
 /// The highest release the project's builds state, if any: the release
 /// whose API [`plan`] loads when the installed JDK is not known.
 pub fn infer(ws: &Workspace) -> Option<u32> {
-    module_evidence(ws).into_iter().filter_map(Evidence::floor).max()
+    module_evidence(ws).into_iter().flat_map(|e| [Scope::Main, Scope::Test, Scope::Other].map(|s| e.get(s))).filter_map(Evidence::floor).max()
 }
 
 fn gradle_scripts(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
@@ -494,43 +614,36 @@ impl Setting {
     }
 }
 
-/// The Java settings of Gradle scripts.
+/// The Java settings of Gradle scripts for one compile task (or for all).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct GradleSettings {
+struct Kinds {
     release: Setting,
     toolchain: Setting,
     compat: Setting,
 }
 
-impl GradleSettings {
-    fn read(text: &str) -> GradleSettings {
-        let text = strip_script_comments(text, false);
-        let get = |keys: &[&str]| {
-            let mut s = Setting::default();
-            for k in keys {
-                s.merge(gradle_setting(&text, k));
-            }
-            s
-        };
-        GradleSettings { release: get(&["options.release"]), toolchain: get(&["languageVersion", "jvmToolchain"]), compat: get(&["targetCompatibility", "sourceCompatibility"]) }
-    }
-
+impl Kinds {
     /// The same settings, each one that is set made opaque.
-    fn opaque(self) -> GradleSettings {
+    fn opaque(self) -> Kinds {
         let o = |s: Setting| if s.is_set() { Setting { literal: None, opaque: true, mixed: false } } else { s };
-        GradleSettings { release: o(self.release), toolchain: o(self.toolchain), compat: o(self.compat) }
+        Kinds { release: o(self.release), toolchain: o(self.toolchain), compat: o(self.compat) }
     }
 
-    fn merge(&mut self, o: &GradleSettings) {
+    fn merge(&mut self, o: &Kinds) {
         self.release.merge(o.release);
         self.toolchain.merge(o.toolchain);
         self.compat.merge(o.compat);
     }
 
+    fn with(mut self, o: &Kinds) -> Kinds {
+        self.merge(o);
+        self
+    }
+
     /// Each kind of setting from `self`, else from `inherited`.
-    fn or(&self, inherited: &GradleSettings) -> GradleSettings {
+    fn or(&self, inherited: &Kinds) -> Kinds {
         let pick = |a: Setting, b: Setting| if a.is_set() { a } else { b };
-        GradleSettings { release: pick(self.release, inherited.release), toolchain: pick(self.toolchain, inherited.toolchain), compat: pick(self.compat, inherited.compat) }
+        Kinds { release: pick(self.release, inherited.release), toolchain: pick(self.toolchain, inherited.toolchain), compat: pick(self.compat, inherited.compat) }
     }
 
     /// `--release` decides the API; without it the toolchain's JDK does;
@@ -553,9 +666,211 @@ impl GradleSettings {
     }
 }
 
-/// The assignments of `key` in a script (comments stripped).
-fn gradle_setting(text: &str, key: &str) -> Setting {
-    let mut s = Setting::default();
+/// The Java settings of Gradle scripts, by the compile tasks they apply to:
+/// every one (`java { }`, `tasks.withType(JavaCompile)`, a toolchain), the
+/// main compile (`compileJava { }`), the test compile (`compileTestJava { }`)
+/// and the compiles of other source sets.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct GradleSettings {
+    all: Kinds,
+    main: Kinds,
+    test: Kinds,
+    other: Kinds,
+}
+
+impl GradleSettings {
+    fn read(text: &str) -> GradleSettings {
+        let text = strip_script_comments(text, false);
+        let mut g = GradleSettings::default();
+        for (keys, kind) in [(&["options.release"][..], 0), (&["languageVersion", "jvmToolchain"][..], 1), (&["targetCompatibility", "sourceCompatibility"][..], 2)] {
+            for k in keys {
+                for (at, literal) in gradle_setting(&text, k) {
+                    let s = match literal {
+                        Some(r) => Setting { literal: Some(r), ..Setting::default() },
+                        None => Setting { opaque: true, ..Setting::default() },
+                    };
+                    let opaque = Setting { opaque: true, ..Setting::default() };
+                    let put = |kinds: &mut Kinds, s: Setting| match kind {
+                        0 => kinds.release.merge(s),
+                        1 => kinds.toolchain.merge(s),
+                        _ => kinds.compat.merge(s),
+                    };
+                    match task_scope(&text, at) {
+                        TaskScope::All => put(&mut g.all, s),
+                        TaskScope::Main => put(&mut g.main, s),
+                        TaskScope::Test => put(&mut g.test, s),
+                        // another source set's compile (`compileJava9Java`):
+                        // which files it compiles is the build's business, so
+                        // it counts with the main compile's settings (as
+                        // conflicting with them, when it differs) and leaves
+                        // the other source sets unknown
+                        TaskScope::Other => {
+                            put(&mut g.main, s);
+                            put(&mut g.other, opaque);
+                        }
+                        // chosen by a condition (`if (name == 'compileTestJava')`)
+                        TaskScope::Unreadable => put(&mut g.all, opaque),
+                    }
+                }
+            }
+        }
+        g
+    }
+
+    /// The same settings, each one that is set made opaque.
+    fn opaque(self) -> GradleSettings {
+        GradleSettings { all: self.all.opaque(), main: self.main.opaque(), test: self.test.opaque(), other: self.other.opaque() }
+    }
+
+    fn merge(&mut self, o: &GradleSettings) {
+        self.all.merge(&o.all);
+        self.main.merge(&o.main);
+        self.test.merge(&o.test);
+        self.other.merge(&o.other);
+    }
+
+    /// What applies to each compile: the settings of every compile and its own.
+    fn scopes(&self) -> [Kinds; 3] {
+        [self.all.with(&self.main), self.all.with(&self.test), self.all.with(&self.other)]
+    }
+
+    /// The evidence of each compile, from the module's own settings
+    /// (`self`), else for each kind of setting the `inherited` ones.
+    fn evidence(&self, inherited: &GradleSettings) -> Scoped {
+        let (own, inh) = (self.scopes(), inherited.scopes());
+        let ev = |i: usize| own[i].or(&inh[i]).evidence();
+        Scoped { main: ev(0), test: ev(1), other: Some(ev(2)) }
+    }
+}
+
+/// Which compile tasks a setting in a Gradle script applies to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TaskScope {
+    All,
+    Main,
+    Test,
+    /// Another source set's compile task.
+    Other,
+    /// Tasks chosen by a condition grounds does not evaluate.
+    Unreadable,
+}
+
+/// The compile task a setting at `at` configures: the one a dotted prefix
+/// names (`compileTestJava.options.release`), else the one the innermost
+/// enclosing block naming a task does (`compileTestJava { }`,
+/// `tasks.named('compileTestJava') { }`, `tasks.compileTestJava { }`), else
+/// every one.
+fn task_scope(text: &str, at: usize) -> TaskScope {
+    if let Some(before) = text[..at].strip_suffix('.') {
+        if let Some(s) = header_scope(chain_before(before)) {
+            return s;
+        }
+    }
+    let mut depth = 0usize;
+    for (i, c) in text[..at].char_indices().rev() {
+        match c {
+            '}' => depth += 1,
+            '{' if depth > 0 => depth -= 1,
+            '{' => {
+                if let Some(s) = header_scope(chain_before(&text[..i])) {
+                    return s;
+                }
+            }
+            _ => {}
+        }
+    }
+    TaskScope::All
+}
+
+/// The expression that ends `text` (a block's header, or what is before a
+/// `.`): identifiers joined by dots, with their arguments, type arguments
+/// and closures (`tasks.withType(JavaCompile).matching { ... }.configureEach`,
+/// `if (name == 'compileTestJava')`).
+fn chain_before(text: &str) -> &str {
+    let b = text.as_bytes();
+    let mut i = text.trim_end().len();
+    let end = i;
+    loop {
+        let mut grouped = false;
+        // arguments, type arguments, closures
+        while i > 0 && matches!(b[i - 1], b')' | b'}' | b']' | b'>') {
+            let close = b[i - 1];
+            let open = match close {
+                b')' => b'(',
+                b'}' => b'{',
+                b']' => b'[',
+                _ => b'<',
+            };
+            let mut depth = 0usize;
+            let mut j = i;
+            while j > 0 {
+                j -= 1;
+                if b[j] == close {
+                    depth += 1;
+                } else if b[j] == open {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+            }
+            if depth != 0 {
+                return &text[i..end];
+            }
+            i = j;
+            grouped = true;
+            while i > 0 && b[i - 1].is_ascii_whitespace() {
+                i -= 1;
+            }
+        }
+        let ident_end = i;
+        while i > 0 && (b[i - 1].is_ascii_alphanumeric() || b[i - 1] == b'_') {
+            i -= 1;
+        }
+        if i == ident_end && !grouped {
+            break;
+        }
+        let mut k = i;
+        while k > 0 && b[k - 1].is_ascii_whitespace() {
+            k -= 1;
+        }
+        if k > 0 && b[k - 1] == b'.' {
+            i = k - 1;
+            while i > 0 && b[i - 1].is_ascii_whitespace() {
+                i -= 1;
+            }
+        } else {
+            break;
+        }
+    }
+    &text[i..end]
+}
+
+/// The compile task a block header or a dotted prefix names, if any.
+fn header_scope(header: &str) -> Option<TaskScope> {
+    let words: Vec<&str> = header.split(|c: char| !(c.is_alphanumeric() || c == '_')).collect();
+    let mut tasks: Vec<&str> = words.iter().copied().filter(|w| w.len() > "compileJava".len() - 1 && w.starts_with("compile") && w.ends_with("Java")).collect();
+    tasks.sort_unstable();
+    tasks.dedup();
+    if tasks.is_empty() {
+        return None;
+    }
+    // a task chosen by a condition, or several tasks
+    let conditional = words.iter().any(|w| matches!(*w, "if" | "when" | "unless" | "matching" | "filter" | "findAll" | "find" | "each" | "forEach" | "all" | "takeIf")) || ["==", "!=", "!", "contains", "startsWith", "endsWith"].iter().any(|o| header.contains(o));
+    if conditional || tasks.len() > 1 {
+        return Some(TaskScope::Unreadable);
+    }
+    Some(match tasks[0] {
+        "compileJava" => TaskScope::Main,
+        "compileTestJava" => TaskScope::Test,
+        _ => TaskScope::Other,
+    })
+}
+
+/// The assignments of `key` in a script (comments stripped): where each
+/// is, and its value when that is a literal.
+fn gradle_setting(text: &str, key: &str) -> Vec<(usize, Option<u32>)> {
+    let mut out = Vec::new();
     let mut from = 0;
     while let Some(i) = text[from..].find(key) {
         let start = from + i;
@@ -585,12 +900,9 @@ fn gradle_setting(text: &str, key: &str) -> Setting {
         if key == "languageVersion" && !v.contains("JavaLanguageVersion") && !in_toolchain(text, start) {
             continue;
         }
-        match parse_version(v) {
-            Some(r) => s.merge(Setting { literal: Some(r), ..Setting::default() }),
-            None => s.opaque = true,
-        }
+        out.push((start, parse_version(v)));
     }
-    s
+    out
 }
 
 /// Whether the text at `at` is in a toolchain: a `toolchain.` qualifier
@@ -776,8 +1088,16 @@ fn children(block: &str) -> HashMap<String, String> {
 
 struct Pom {
     props: HashMap<String, String>,
-    /// maven-compiler-plugin configuration (build plugins and plugin management)
+    /// maven-compiler-plugin configuration (build plugins and plugin
+    /// management) of the main compile: the plugin's, under its
+    /// `default-compile` execution's
     compiler: HashMap<String, String>,
+    /// The same of the test compile: the plugin's, under its
+    /// `default-testCompile` execution's.
+    test_compiler: HashMap<String, String>,
+    /// Another execution of the `testCompile` goal sets a release, source or
+    /// target: which tests compile for which release is not known.
+    other_test_compile: bool,
     parent: Option<PathBuf>,
     /// The major version of a Spring Boot parent (0 when unread).
     spring_boot_parent: Option<u32>,
@@ -817,16 +1137,18 @@ impl PomCache {
         self.property(&parent, key, depth + 1)
     }
 
-    fn compiler(&mut self, path: &Path, key: &str, depth: u32) -> Option<String> {
+    /// The compiler plugin's `key` for the main compile (for the test
+    /// compile with `test`), from the pom or its in-repository parents.
+    fn compiler(&mut self, path: &Path, key: &str, test: bool, depth: u32) -> Option<String> {
         let pom = self.load(path)?;
-        if let Some(v) = pom.compiler.get(key) {
+        if let Some(v) = if test { &pom.test_compiler } else { &pom.compiler }.get(key) {
             return Some(v.clone());
         }
         let parent = pom.parent.clone()?;
         if depth > 10 {
             return None;
         }
-        self.compiler(&parent, key, depth + 1)
+        self.compiler(&parent, key, test, depth + 1)
     }
 
     /// Whether resolving `value` reads one of `props`, directly or through
@@ -869,15 +1191,19 @@ impl PomCache {
         None
     }
 
-    /// The evidence of a pom with its parents in the repository.
-    fn evidence(&mut self, path: &Path) -> Evidence {
+    /// The evidence of a pom with its parents in the repository, for its
+    /// main compile or (`test`) its test compile. The test compile's release
+    /// is `testRelease` (`maven.compiler.testRelease`), else `release`; its
+    /// source and target `testSource`/`testTarget`, else `source`/`target`
+    /// (maven-compiler-plugin's `TestCompilerMojo`).
+    fn evidence(&mut self, path: &Path, test: bool) -> Evidence {
         // a profile of the pom or a parent in the repository may set it otherwise
         let mut profile_props: Vec<String> = Vec::new();
         let mut cur = Some(path.to_path_buf());
         for _ in 0..10 {
             let Some(p) = cur.take() else { break };
             let Some(pom) = self.load(&p) else { break };
-            if pom.profile_configures_compiler {
+            if pom.profile_configures_compiler || (test && pom.other_test_compile) {
                 return Evidence::Unknown;
             }
             profile_props.extend(pom.profile_props.iter().cloned());
@@ -885,7 +1211,7 @@ impl PomCache {
         }
         // a value a profile may change: the property itself, or one it reads
         let value = |c: &mut PomCache, param: &str, prop: &str| -> Option<Option<u32>> {
-            let raw = match c.compiler(path, param, 0) {
+            let raw = match c.compiler(path, param, test, 0) {
                 Some(raw) => raw,
                 None if profile_props.iter().any(|p| p == prop) => return Some(None),
                 None => c.property(path, prop, 0)?,
@@ -895,13 +1221,24 @@ impl PomCache {
             }
             Some(c.resolve(path, &raw).and_then(|r| parse_version(&r)))
         };
-        // the plugin's configuration wins over the property it defaults to
-        match value(self, "release", "maven.compiler.release") {
+        // the plugin's configuration wins over the property it defaults to;
+        // the test compile's own parameter over the main one's
+        let release = match test {
+            true => value(self, "testRelease", "maven.compiler.testRelease").or_else(|| value(self, "release", "maven.compiler.release")),
+            false => value(self, "release", "maven.compiler.release"),
+        };
+        match release {
             Some(Some(r)) => return Evidence::Exact(r),
             Some(None) => return Evidence::Unknown,
             None => {}
         }
-        let source_target = [value(self, "target", "maven.compiler.target"), value(self, "source", "maven.compiler.source")];
+        let source_target = match test {
+            true => [
+                value(self, "testTarget", "maven.compiler.testTarget").or_else(|| value(self, "target", "maven.compiler.target")),
+                value(self, "testSource", "maven.compiler.testSource").or_else(|| value(self, "source", "maven.compiler.source")),
+            ],
+            false => [value(self, "target", "maven.compiler.target"), value(self, "source", "maven.compiler.source")],
+        };
         if source_target.contains(&Some(None)) {
             return Evidence::Unknown;
         }
@@ -942,7 +1279,7 @@ impl PomCache {
     fn release(&mut self, path: &Path) -> Option<u32> {
         // the plugin's configuration wins over the property it defaults to
         for (param, prop) in [("release", "maven.compiler.release"), ("target", "maven.compiler.target"), ("source", "maven.compiler.source")] {
-            let raw = self.compiler(path, param, 0).or_else(|| self.property(path, prop, 0));
+            let raw = self.compiler(path, param, false, 0).or_else(|| self.property(path, prop, 0));
             if let Some(v) = raw.and_then(|r| self.resolve(path, &r)).and_then(|r| parse_version(&r)) {
                 return Some(v);
             }
@@ -961,7 +1298,7 @@ fn parse_pom(text: &str, path: &Path) -> Pom {
     let profiles = elements(&text, "profiles");
     let profile_configures_compiler = profiles.iter().flat_map(|p| elements(p, "plugin")).any(|pl| {
         element(pl, "artifactId") == Some("maven-compiler-plugin")
-            && (["<release>", "<source>", "<target>"].iter().any(|k| pl.contains(k)) || elements(pl, "compilerArgs").iter().any(|a| ["--release", "-release", "-source", "-target", "--source", "--target"].iter().any(|f| a.contains(&format!(">{f}<")) || a.contains(&format!(">{f} ")) || a.contains(&format!(">{f}=")))))
+            && (["<release>", "<source>", "<target>", "<testRelease>", "<testSource>", "<testTarget>"].iter().any(|k| pl.contains(k)) || elements(pl, "compilerArgs").iter().any(|a| ["--release", "-release", "-source", "-target", "--source", "--target"].iter().any(|f| a.contains(&format!(">{f}<")) || a.contains(&format!(">{f} ")) || a.contains(&format!(">{f}=")))))
     });
     let profile_props = profiles.iter().flat_map(|p| elements(p, "properties")).flat_map(children).map(|(k, _)| k).collect();
     let mut main = text.clone();
@@ -973,6 +1310,8 @@ fn parse_pom(text: &str, path: &Path) -> Pom {
     }
     let props = elements(&main, "properties").into_iter().flat_map(children).collect();
     let mut compiler = HashMap::new();
+    let mut test_compiler = HashMap::new();
+    let mut other_test_compile = false;
     for plugin in elements(&main, "plugin") {
         if element(plugin, "artifactId") != Some("maven-compiler-plugin") {
             continue;
@@ -989,14 +1328,23 @@ fn parse_pom(text: &str, path: &Path) -> Pom {
             }
             own.replace_range(s..e + "</executions>".len(), "");
         }
-        let settings = |conf: &str| children(conf).into_iter().filter(|(k, _)| matches!(k.as_str(), "release" | "target" | "source")).collect::<Vec<_>>();
+        let settings = |conf: &str| children(conf).into_iter().filter(|(k, _)| matches!(k.as_str(), "release" | "target" | "source" | "testRelease" | "testTarget" | "testSource")).collect::<Vec<_>>();
         for conf in elements(&own, "configuration") {
             for (k, v) in settings(conf) {
-                compiler.entry(k).or_insert(v);
+                compiler.entry(k.clone()).or_insert(v.clone());
+                test_compiler.entry(k).or_insert(v);
             }
         }
-        for conf in executions.iter().filter(|e| element(e, "id") == Some("default-compile")).flat_map(|e| elements(e, "configuration")) {
-            compiler.extend(settings(conf));
+        for e in &executions {
+            let id = element(e, "id");
+            let set = elements(e, "configuration").into_iter().flat_map(settings).collect::<Vec<_>>();
+            match id {
+                Some("default-compile") => compiler.extend(set),
+                Some("default-testCompile") => test_compiler.extend(set),
+                // another compile of tests (`<goal>testCompile</goal>`)
+                _ if !set.is_empty() && elements(e, "goal").iter().any(|g| g.trim() == "testCompile") => other_test_compile = true,
+                _ => {}
+            }
         }
     }
     let parent_block = element(&main, "parent");
@@ -1010,7 +1358,7 @@ fn parse_pom(text: &str, path: &Path) -> Pom {
         p.exists().then_some(p)
     });
     let spring_boot_parent = parent_block.filter(|p| element(p, "groupId") == Some("org.springframework.boot")).map(|p| element(p, "version").and_then(|v| v.split('.').next()?.parse().ok()).unwrap_or(0));
-    Pom { props, compiler, parent, spring_boot_parent, profile_configures_compiler, profile_props }
+    Pom { props, compiler, test_compiler, other_test_compile, parent, spring_boot_parent, profile_configures_compiler, profile_props }
 }
 
 #[cfg(test)]
@@ -1082,9 +1430,10 @@ mod tests {
         let java9 = "<execution><id>java9</id><configuration><release>9</release></configuration></execution>";
         let dir = temp("exec", &[("pom.xml", &compiler(&format!("<executions><execution><id>default-compile</id><configuration><release>8</release></configuration></execution>{java9}</executions>")))]);
         assert_eq!(infer_dir(&dir), Some(8));
-        // the main compile's settings override the plugin level's
+        // the main compile's settings override the plugin level's, which
+        // still is the test compile's
         let dir = temp("exec-wins", &[("pom.xml", &compiler("<configuration><release>17</release></configuration><executions><execution><id>default-compile</id><configuration><release>11</release></configuration></execution></executions>"))]);
-        assert_eq!(infer_dir(&dir), Some(11));
+        assert_eq!(module_evidence(&Workspace::discover(&dir, &[])), vec![Scoped { main: Evidence::Exact(11), test: Evidence::Exact(17), other: None }]);
         let dir = temp("exec-after", &[("pom.xml", &compiler(&format!("<executions>{java9}</executions><configuration><source>1.8</source><target>1.8</target></configuration>")))]);
         assert_eq!(infer_dir(&dir), Some(8));
         let dir = temp("exec-only", &[("pom.xml", &compiler(&format!("<executions>{java9}</executions>")))]);
@@ -1131,7 +1480,7 @@ mod tests {
     fn evidence_of(dir: &Path) -> Vec<(String, Evidence)> {
         let ws = Workspace::discover(dir, &[]);
         let ev = module_evidence(&ws);
-        ws.modules.iter().zip(ev).map(|(m, e)| (m.name.clone(), e)).collect()
+        ws.modules.iter().zip(ev).map(|(m, e)| (m.name.clone(), e.main)).collect()
     }
 
     #[test]
@@ -1158,9 +1507,9 @@ mod tests {
             ],
         );
         assert_eq!(evidence_of(&dir), vec![(":".into(), Unknown), ("checker".into(), Unknown), ("multi".into(), Unknown), ("same".into(), Exact(17))]);
-        // different source levels for different compile tasks: no floor either
+        // different source levels for the main and the test compile: each its own
         let dir = temp("mixed-compat", &[("build.gradle", "compileJava { sourceCompatibility = 11 }\ncompileTestJava { sourceCompatibility = 17 }\n")]);
-        assert_eq!(evidence_of(&dir), vec![(":".into(), Unknown)]);
+        assert_eq!(module_evidence(&Workspace::discover(&dir, &[])), vec![Scoped { main: AtLeast(11), test: AtLeast(17), other: Some(Unknown) }]);
         // Maven: a profile that sets the release (activated by the JDK, a flag)
         let dir = temp(
             "profile",
@@ -1285,6 +1634,111 @@ mod tests {
     }
 
     #[test]
+    fn what_the_test_compile_states() {
+        use Evidence::*;
+        let scoped = |dir: &Path| {
+            let ws = Workspace::discover(dir, &[]);
+            ws.modules.iter().zip(module_evidence(&ws)).map(|(m, e)| (m.name.clone(), e.main, e.test)).collect::<Vec<_>>()
+        };
+        let pom = |inner: &str| format!("<project>{inner}</project>");
+        let plugin = |inner: &str| format!("<build><plugins><plugin><artifactId>maven-compiler-plugin</artifactId>{inner}</plugin></plugins></build>");
+        let dir = temp(
+            "maven-test",
+            &[
+                ("pom.xml", &pom("<properties><java.version>8</java.version><test.java.version>25</test.java.version></properties><modules><module>a</module></modules>")),
+                // prometheus client_java: the root's plugin configuration, read through properties
+                ("a/pom.xml", &pom(&format!("<parent><artifactId>root</artifactId></parent>{}", plugin("<configuration><release>${java.version}</release><testRelease>${test.java.version}</testRelease></configuration>")))),
+                // testSource/testTarget without a release: a lower bound of their own
+                ("b/pom.xml", &pom("<properties><maven.compiler.source>8</maven.compiler.source><maven.compiler.target>8</maven.compiler.target><maven.compiler.testSource>17</maven.compiler.testSource><maven.compiler.testTarget>17</maven.compiler.testTarget></properties>")),
+                // with a release, javac takes --release and not the test source level
+                ("c/pom.xml", &pom("<properties><maven.compiler.release>11</maven.compiler.release><maven.compiler.testSource>17</maven.compiler.testSource></properties>")),
+                // a test release grounds cannot resolve
+                ("d/pom.xml", &pom("<properties><maven.compiler.release>11</maven.compiler.release><maven.compiler.testRelease>${tests.jdk}</maven.compiler.testRelease></properties>")),
+                // a profile sets the test release
+                ("e/pom.xml", &pom(&format!("<properties><maven.compiler.release>11</maven.compiler.release></properties><profiles><profile><id>p</id>{}</profile></profiles>", plugin("<configuration><testRelease>21</testRelease></configuration>")))),
+                // another execution compiles tests for another release
+                ("f/pom.xml", &pom(&plugin("<configuration><release>11</release></configuration><executions><execution><id>java21-tests</id><goals><goal>testCompile</goal></goals><configuration><release>21</release></configuration></execution></executions>"))),
+                // the main compile's execution is not the test compile's
+                ("g/pom.xml", &pom(&plugin("<executions><execution><id>default-compile</id><configuration><release>11</release></configuration></execution></executions>"))),
+                // a property a profile sets
+                ("h/pom.xml", &pom("<properties><maven.compiler.release>11</maven.compiler.release><maven.compiler.testRelease>17</maven.compiler.testRelease></properties><profiles><profile><id>p</id><properties><maven.compiler.testRelease>21</maven.compiler.testRelease></properties></profile></profiles>")),
+            ],
+        );
+        assert_eq!(
+            scoped(&dir),
+            vec![
+                (":".into(), Unknown, Unknown),
+                ("a".into(), Exact(8), Exact(25)),
+                ("b".into(), AtLeast(8), AtLeast(17)),
+                ("c".into(), Exact(11), Exact(11)),
+                ("d".into(), Exact(11), Unknown),
+                ("e".into(), Unknown, Unknown),
+                ("f".into(), Exact(11), Unknown),
+                ("g".into(), Exact(11), Unknown),
+                ("h".into(), Exact(11), Unknown),
+            ]
+        );
+        let dir = temp(
+            "gradle-test",
+            &[
+                ("build.gradle", "subprojects { java { toolchain { languageVersion = JavaLanguageVersion.of(17) } } }\n"),
+                // a dotted assignment, and a release of the test compile over the inherited toolchain
+                ("dotted/build.gradle", "compileJava.options.release = 8\ncompileTestJava.options.release = 21\n"),
+                ("inherits/build.gradle.kts", "tasks.named<JavaCompile>(\"compileTestJava\") { options.release.set(21) }\n"),
+                ("kotlin-tasks/build.gradle.kts", "tasks {\n  compileJava { options.release = 11 }\n  compileTestJava {\n    options.release = 21\n  }\n}\n"),
+                // chosen by a condition: neither is known
+                ("conditional/build.gradle", "tasks.withType(JavaCompile).configureEach {\n  if (name == 'compileTestJava') {\n    options.release = 21\n  }\n}\n"),
+                ("matching/build.gradle.kts", "tasks.withType<JavaCompile>()\n  .matching { it.name == \"compileTestJava\" }\n  .configureEach { options.release = 21 }\n"),
+                // a toolchain the test compile's own launcher sets
+                ("launcher/build.gradle", "compileJava { options.release = 11 }\ncompileTestJava {\n  javaCompiler = javaToolchains.compilerFor { languageVersion = JavaLanguageVersion.of(21) }\n}\n"),
+                // an expression for the test compile
+                ("opaque/build.gradle", "compileJava { options.release = 11 }\ncompileTestJava { options.release = testJavaVersion as Integer }\n"),
+            ],
+        );
+        assert_eq!(
+            scoped(&dir),
+            vec![
+                (":".into(), Unknown, Unknown),
+                ("conditional".into(), Unknown, Unknown),
+                ("dotted".into(), Exact(8), Exact(21)),
+                ("inherits".into(), Exact(17), Exact(21)),
+                ("kotlin-tasks".into(), Exact(11), Exact(21)),
+                ("launcher".into(), Exact(11), Exact(21)),
+                ("matching".into(), Unknown, Unknown),
+                ("opaque".into(), Exact(11), Unknown),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_sources_take_the_test_compiles_release() {
+        let dir = temp(
+            "plan-tests",
+            &[
+                ("pom.xml", "<project><properties><maven.compiler.release>8</maven.compiler.release><maven.compiler.testRelease>17</maven.compiler.testRelease></properties><modules><module>a</module><module>b</module></modules></project>"),
+                ("a/pom.xml", "<project><parent><artifactId>root</artifactId></parent></project>"),
+                ("a/src/main/java/A.java", "class A {}\n"),
+                ("a/src/test/java/ATest.java", "class ATest {}\n"),
+                // no test code: Java 8 and 17 both, with nothing for 17
+                ("b/pom.xml", "<project><parent><artifactId>root</artifactId></parent></project>"),
+                ("b/src/main/java/B.java", "class B {}\n"),
+            ],
+        );
+        let ws = Workspace::discover(&dir, &[]);
+        let m = |name: &str| ws.modules.iter().position(|m| m.name == name).unwrap();
+        let p = plan(&ws, None, &[], Some(21));
+        // the API loaded serves the tests' release too
+        assert_eq!(p.load, 17);
+        let at = |rel: &str| p.exact_release(&dir.join(rel));
+        assert_eq!((at("a/src/main/java/A.java"), at("a/src/test/java/ATest.java"), at("a/A.java"), at("b/src/main/java/B.java")), (Some(8), Some(17), None, Some(8)));
+        // a record in tests said to compile for 8 would be no news; in main code it is
+        let p = plan(&ws, None, &[(m("a"), Scope::Test, 16)], Some(21));
+        assert_eq!(p.exact_release(&dir.join("a/src/test/java/ATest.java")), Some(17));
+        let p = plan(&ws, None, &[(m("a"), Scope::Main, 16)], Some(21));
+        assert_eq!((p.exact_release(&dir.join("a/src/main/java/A.java")), p.exact_release(&dir.join("a/src/test/java/ATest.java"))), (None, None));
+    }
+
+    #[test]
     fn the_api_loaded_and_the_exact_modules() {
         let dir = temp(
             "plan",
@@ -1300,14 +1754,15 @@ mod tests {
         );
         let ws = Workspace::discover(&dir, &[]);
         let m = |name: &str| ws.modules.iter().position(|m| m.name == name).unwrap();
-        let exact = |p: &ReleasePlan| p.exact.iter().filter_map(|(d, r)| Some((d.strip_prefix(&ws.root).unwrap().to_string_lossy().to_string(), (*r)?))).collect::<Vec<_>>();
+        // the release of each module's main code
+        let exact = |p: &ReleasePlan| p.exact.iter().filter_map(|(d, _)| Some((d.strip_prefix(&ws.root).unwrap().to_string_lossy().to_string(), p.exact_release(&d.join("src/main/java/X.java"))?))).collect::<Vec<_>>();
         // a module on a lower bound: the installed JDK's API; the exact modules stay exact
         let p = plan(&ws, None, &[], Some(21));
         assert_eq!((p.load, exact(&p)), (21, vec![("a".to_string(), 11), ("b".to_string(), 17)]));
         // a module's code needs more than the installed JDK
-        assert_eq!(plan(&ws, None, &[(m("c"), 25)], Some(21)).load, 25);
+        assert_eq!(plan(&ws, None, &[(m("c"), Scope::Main, 25)], Some(21)).load, 25);
         // a record in a module said to compile for 11: its release is not exact
-        let p = plan(&ws, None, &[(m("a"), 16)], Some(21));
+        let p = plan(&ws, None, &[(m("a"), Scope::Main, 16)], Some(21));
         assert_eq!(exact(&p), vec![("b".to_string(), 17)]);
         // grounds.toml decides for every module
         let p = plan(&ws, Some(17), &[], Some(21));

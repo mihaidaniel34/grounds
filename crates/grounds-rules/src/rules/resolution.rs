@@ -377,7 +377,7 @@ declare_rule!(MissingJdkImport {
     tier: Edit,
     sources: ["javac:doesnt.exist", "javac:cant.resolve.location"],
     kinds: ["import_declaration"],
-    description: "The imported `java.*` class or package is not public API in the project's Java release, so the code does not compile for that release: a class added in a later release (`java.util.SequencedCollection` is Java 21), one removed since, or one the JDK does not export. Checked only in modules whose build states the release exactly (`--release`, `maven.compiler.release`, `options.release`, a toolchain) and whose code does not contradict it, against that release's API from the JDK.",
+    description: "The imported `java.*` class or package is not public API in the project's Java release, so the code does not compile for that release: a class added in a later release (`java.util.SequencedCollection` is Java 21), one removed since, or one the JDK does not export. Checked only where the build states the release exactly (`--release`, `maven.compiler.release`, `options.release`, a toolchain) and the code does not contradict it, against that release's API from the JDK; tests against the test compile's release (`testRelease`, `compileTestJava`), and not at all when that one cannot be read.",
 });
 
 impl Rule for MissingJdkImport {

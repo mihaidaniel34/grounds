@@ -67,38 +67,47 @@ pub struct Project {
 }
 
 /// What the release plan depends on in the sources, per module (in
-/// `ws.modules` order): whether it holds code (`java_release::plan` counts
-/// only modules that do) and the lowest release its code needs. The rest of
-/// what the plan reads (build files, `grounds.toml`, the installed JDK) a
-/// session follows as configuration, loading the project again when it
-/// changes.
+/// `ws.modules` order) and per compile of it (`java_release::Scope`, by
+/// index): whether it holds code (`java_release::plan` counts only those
+/// that do) and the lowest release its code needs; and the source set
+/// directories of each (`java_release::plan` gives those whose compile
+/// differs from the module's a release of their own). The rest of what the plan
+/// reads (build files, `grounds.toml`, the installed JDK) a session follows
+/// as configuration, loading the project again when it changes.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ReleaseInputs {
-    pub with_code: Vec<bool>,
-    pub needs: Vec<Option<u32>>,
+    pub with_code: Vec<[bool; 4]>,
+    pub needs: Vec<[Option<u32>; 4]>,
+    /// (module, `<module>/src/<set>`), sorted.
+    pub sets: Vec<(usize, PathBuf)>,
 }
 
 impl ReleaseInputs {
     /// Of the workspace's files, with the stub each has (none for a file that
     /// could not be read, which needs nothing, as at load).
     pub fn of<'a>(ws: &Workspace, stub: impl Fn(&Path) -> Option<&'a FileStub>) -> ReleaseInputs {
-        let mut r = ReleaseInputs { with_code: vec![false; ws.modules.len()], needs: vec![None; ws.modules.len()] };
+        let mut r = ReleaseInputs { with_code: vec![[false; 4]; ws.modules.len()], needs: vec![[None; 4]; ws.modules.len()], sets: Vec::new() };
         for f in &ws.files {
+            let Some(m) = ws.modules.get(f.module) else { continue };
+            let (scope, set) = crate::java_release::Scope::of(&m.dir, &f.path);
+            let scope = scope.index();
+            r.sets.extend(set.map(|d| (f.module, d)));
             if f.kind != SourceKind::Generated {
-                if let Some(w) = r.with_code.get_mut(f.module) {
-                    *w = true;
-                }
+                r.with_code[f.module][scope] = true;
             }
-            if let (Some(n), Some(need)) = (r.needs.get_mut(f.module), stub(&f.path).and_then(|s| code_needs(&f.path, s))) {
+            if let Some(need) = stub(&f.path).and_then(|s| code_needs(&f.path, s)) {
+                let n = &mut r.needs[f.module][scope];
                 *n = (*n).max(Some(need));
             }
         }
+        r.sets.sort();
+        r.sets.dedup();
         r
     }
 
-    /// As `java_release::plan` takes them: (module, lowest release needed).
-    pub fn needs(&self) -> Vec<(usize, u32)> {
-        self.needs.iter().enumerate().filter_map(|(m, n)| n.map(|n| (m, n))).collect()
+    /// As `java_release::plan` takes them: (module, scope, lowest release needed).
+    pub fn needs(&self) -> Vec<(usize, crate::java_release::Scope, u32)> {
+        self.needs.iter().enumerate().flat_map(|(m, n)| crate::java_release::Scope::ALL.into_iter().filter_map(move |s| n[s.index()].map(|n| (m, s, n)))).collect()
     }
 }
 
@@ -668,6 +677,7 @@ impl Project {
         let mut index = Index::new(classpath);
         index.set_release_floors(releases.floors.iter().map(|(d, r)| (d.to_string_lossy().to_string(), *r)).collect());
         index.set_exact_releases(releases.exact.iter().map(|(d, r)| (d.to_string_lossy().to_string(), *r)).collect());
+        index.set_source_set_releases(releases.sets.iter().map(|(d, e, f)| (d.to_string_lossy().to_string(), (*e, *f))).collect());
         index.set_modules_built_against_release(crate::workspace::modules_built_against_own_release(&workspace).iter().map(|d| d.to_string_lossy().to_string()).collect());
         let mut new_cache = StubCache::load(&workspace.root);
         new_cache.retain(|_| false);

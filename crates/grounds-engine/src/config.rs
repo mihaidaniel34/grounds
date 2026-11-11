@@ -97,8 +97,9 @@ impl Config {
     }
 
     /// The JDK API to load and the modules that compile for an exact
-    /// release, given the lowest release each module's code needs.
-    pub fn release_plan(&self, ws: &crate::workspace::Workspace, needs: &[(usize, u32)]) -> crate::java_release::ReleasePlan {
+    /// release, given the lowest release each module's code needs (in its
+    /// main code, its tests, ...).
+    pub fn release_plan(&self, ws: &crate::workspace::Workspace, needs: &[(usize, crate::java_release::Scope, u32)]) -> crate::java_release::ReleasePlan {
         let installed = self.java_home.clone().or_else(grounds_classfile::find_java_home).and_then(|h| grounds_classfile::jdk_feature_release(&h));
         crate::java_release::plan(ws, self.java_release, needs, installed)
     }

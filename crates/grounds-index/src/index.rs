@@ -430,6 +430,10 @@ pub struct Index {
     /// they compile for exactly, with that release.
     exact_releases: Vec<(String, Option<u32>)>,
     release_floors: Vec<(String, Option<u32>)>,
+    /// Directories (ending in `/`) of source sets that compile otherwise
+    /// than the rest of their module (tests for a newer release than the
+    /// main code): (exact release, floor).
+    set_releases: Vec<(String, SetRelease)>,
     /// Number of files in a variant source set (see `in_variant_set`)
     /// declaring each class name.
     variant_defs: FxHashMap<Name, u32>,
@@ -522,7 +526,7 @@ impl Drop for Resolving<'_> {
 
 impl Index {
     pub fn new(classpath: Arc<Classpath>) -> Index {
-        Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), copies: FxHashMap::default(), variant_defs: FxHashMap::default(), exact_releases: Vec::new(), release_floors: Vec::new(), release_modules: Vec::new(), generation: 0, resolved_at: AtomicU64::new(u64::MAX), plan: parking_lot::Mutex::new(None), extended: parking_lot::Mutex::new(None) }
+        Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), copies: FxHashMap::default(), variant_defs: FxHashMap::default(), exact_releases: Vec::new(), release_floors: Vec::new(), set_releases: Vec::new(), release_modules: Vec::new(), generation: 0, resolved_at: AtomicU64::new(u64::MAX), plan: parking_lot::Mutex::new(None), extended: parking_lot::Mutex::new(None) }
     }
 
     pub fn set_file(&mut self, path: Arc<str>, stub: Arc<FileStub>) {
@@ -650,14 +654,37 @@ impl Index {
     /// the JDK API to the JDK running it, or grounds cannot tell; the module
     /// nearest the file decides, not an enclosing one.
     pub fn exact_release(&self, file: &str) -> Option<u32> {
-        self.exact_releases.iter().find(|(d, _)| file.starts_with(d.as_str()))?.1
+        let module = self.exact_releases.iter().find(|(d, _)| file.starts_with(d.as_str()));
+        match self.source_set_release(file, module.map(|(d, _)| d.len())) {
+            Some((exact, _)) => exact,
+            None => module?.1,
+        }
+    }
+
+    /// The releases of a file's source set when it compiles otherwise than
+    /// its module (`set_source_set_releases`), its module's directory being
+    /// `module` bytes long: a module nested in the source set is its own.
+    fn source_set_release(&self, file: &str, module: Option<usize>) -> Option<SetRelease> {
+        let (d, r) = self.set_releases.iter().find(|(d, _)| file.starts_with(d.as_str()))?;
+        module.is_none_or(|m| d.len() > m).then_some(*r)
+    }
+
+    /// The source sets (`<module>/src/test`) that compile for another
+    /// release than the rest of their module, or for one not known:
+    /// (directory, (exact release, floor)).
+    pub fn set_source_set_releases(&mut self, sets: Vec<(String, SetRelease)>) {
+        self.set_releases = innermost_first(sets);
     }
 
     /// The lowest release a file's module may compile for: its exact
     /// release, or the `source`/`target` it states. A JDK member newer than
     /// that may not exist where the code is built, though the API loaded has it.
     pub fn release_floor(&self, file: &str) -> Option<u32> {
-        self.release_floors.iter().find(|(d, _)| file.starts_with(d.as_str()))?.1
+        let module = self.release_floors.iter().find(|(d, _)| file.starts_with(d.as_str()));
+        match self.source_set_release(file, module.map(|(d, _)| d.len())) {
+            Some((_, floor)) => floor,
+            None => module?.1,
+        }
     }
 
     /// Every module's floor (see `release_floor`): (directory, release).
@@ -1705,6 +1732,9 @@ pub fn module_dir(path: &str) -> &str {
 }
 
 /// Module directories ending in `/`, the innermost first.
+/// A source set's exact release and release floor (`Index::set_source_set_releases`).
+pub type SetRelease = (Option<u32>, Option<u32>);
+
 fn innermost_first<T>(modules: Vec<(String, T)>) -> Vec<(String, T)> {
     let sep = std::path::MAIN_SEPARATOR;
     let mut modules: Vec<(String, T)> = modules.into_iter().map(|(d, r)| (if d.ends_with(['/', sep]) { d } else { format!("{d}{sep}") }, r)).collect();
