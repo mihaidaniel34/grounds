@@ -46,14 +46,21 @@ fn assertion_classes<'t>(cx: &Ctx<'_, 't>, call: Node<'t>) -> Vec<Name> {
     // would hide a static import): each by the name the code writes for it,
     // or, when that is not known, nothing is known
     if call.field("object").is_none() {
-        for decl in call.ancestors().filter(|a| grounds_syntax::is_type_declaration(a.kind())) {
+        // (anonymous class bodies too: `new ext.Base() { ... }` inherits from ext.Base)
+        let mut cur = cx.fm.enclosing_class_node(call);
+        while let Some(decl) = cur {
+            cur = cx.fm.enclosing_class_node(decl);
             if cx.fm.class_name_of_decl(decl).is_some_and(|cn| cx.fm.hierarchy_complete(cn)) {
                 continue;
             }
-            if decl.field("interfaces").is_some() {
+            let sup = if decl.kind() == "class_body" {
+                decl.parent().filter(|p| p.kind() == "object_creation_expression").and_then(|p| p.field("type"))
+            } else if decl.field("interfaces").is_some() {
                 return Vec::new();
-            }
-            let Some(sup) = decl.field("superclass").and_then(|s| s.kids().into_iter().find(|k| k.is_named())) else { return Vec::new() };
+            } else {
+                decl.field("superclass").and_then(|s| s.kids().into_iter().find(|k| k.is_named()))
+            };
+            let Some(sup) = sup else { return Vec::new() };
             let written: String = cx.text(sup).split('<').next().unwrap_or("").chars().filter(|c| !c.is_whitespace()).collect();
             let full = if written.contains('.') {
                 written
@@ -92,7 +99,8 @@ fn assertion_classes<'t>(cx: &Ctx<'_, 't>, call: Node<'t>) -> Vec<Name> {
             _ => {}
         }
     } else {
-        for cls in call.ancestors().filter(|a| grounds_syntax::is_type_declaration(a.kind())).filter_map(|d| cx.fm.class_of_decl(d)) {
+        let classes = std::iter::successors(cx.fm.enclosing_class_node(call), |c| cx.fm.enclosing_class_node(*c)).filter_map(|d| cx.fm.class_name_of_decl(d).and_then(|n| cx.fm.class(n)));
+        for cls in classes {
             let found: Vec<Name> = cx.fm.methods_named(&cls.this_type(), name).into_iter().map(|m| m.owner).collect();
             if !found.is_empty() {
                 owners.extend(found);
