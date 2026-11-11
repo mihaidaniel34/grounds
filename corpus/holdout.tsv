@@ -39,3 +39,24 @@ jackson-core	https://github.com/FasterXML/jackson-core.git	895a149e0da49568e367a
 commons-compress	https://github.com/apache/commons-compress.git	54f0e8ea790923a60812173b8e79b520da9da901
 hikaricp	https://github.com/brettwooldridge/HikariCP.git	a4d93f4f85517f90e632b795486d7102e933d7ff
 jgrapht	https://github.com/jgrapht/jgrapht.git	8a6b9547a32efd955758e53ec7463db5e00f695f
+# third set, 2026-11
+fineract	https://github.com/apache/fineract.git	12e7559288b9106accbbdfc0225c2745fef9582f
+jeecg-boot	https://github.com/jeecgboot/JeecgBoot.git	49c29032e18df784f1a75123d90647bc8f74cedb
+hertzbeat	https://github.com/apache/hertzbeat.git	51469b886b7f0ab4d73c54fb34d1a9b9f6eba6a6
+spring-boot-admin	https://github.com/codecentric/spring-boot-admin.git	baf2c5491b9db83973bde4f1fc62ad9d7ed88c17
+newbee-mall	https://github.com/newbee-ltd/newbee-mall.git	a069069b07027613bf0e7f571736be86f431faee
+streampark	https://github.com/apache/streampark.git	ad12bad0a717d7ed64367b776b1ee646716634d3
+spring-kafka	https://github.com/spring-projects/spring-kafka.git	1593ec5fa1f9e21e4003278fe36109d803e4529a
+spring-cloud-gateway	https://github.com/spring-cloud/spring-cloud-gateway.git	08229b46de0a5a34f5aa7f600321ad6f4f66fe8a
+micronaut-starter	https://github.com/micronaut-projects/micronaut-starter.git	987728468ed839a8350e70d00d94da2cf272f5a9
+micronaut-security	https://github.com/micronaut-projects/micronaut-security.git	bec30c3c2950bff14f9d614b08bc4957e17f3669
+quarkus-langchain4j	https://github.com/quarkiverse/quarkus-langchain4j.git	0fd3a789a1e39a7c1697dd6039bfa2b215f82320
+smallrye-reactive-messaging	https://github.com/smallrye/smallrye-reactive-messaging.git	86b1df95689b4e3a0dc9dc3d8ff0398593c55b6b
+jnosql	https://github.com/eclipse-jnosql/jnosql.git	fa763512aee80f210d24bb68df47006a7e88a479
+eureka	https://github.com/Netflix/eureka.git	793de0a7e7f8200e4da45a08217a5a8b811f1b0a
+graylog	https://github.com/Graylog2/graylog2-server.git	d295f2759c3d5a74e073e58c08c50649e980a669
+logback	https://github.com/qos-ch/logback.git	5761779e16b2f2b29ea04f8900970d29cf57dd95
+truth	https://github.com/google/truth.git	c5b33d3b69e4e0c03129e7ce94c328f4a744a2c5
+agrona	https://github.com/aeron-io/agrona.git	e2c9047fa09087ad41198db2d614c792f176fa87
+disruptor	https://github.com/LMAX-Exchange/disruptor.git	c871ca49826a6be7ada6957f6fbafcfecf7b1f87
+commons-collections	https://github.com/apache/commons-collections.git	0d09264a50120494a3f37784874ae661b0ecf0b2
