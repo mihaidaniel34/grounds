@@ -46,7 +46,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           mkdir "$RUNNER_TEMP/path"
-          for t in sh uname mktemp cut tar gzip mkdir cp chmod mv basename sha256sum sed tail find wget; do
+          for t in sh uname mktemp cut tar gzip mkdir cp chmod mv rm basename sha256sum sed tail find wget; do
             ln -s "$(command -v $t)" "$RUNNER_TEMP/path/$t"
           done
           PATH=$RUNNER_TEMP/path sh -s -- --dir "$RUNNER_TEMP/wget" < install.sh
