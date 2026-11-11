@@ -20,6 +20,18 @@ with --no-daemon, which loads the project from scratch.
 Commits in between that change no Java file are checked out but not asked
 about (the daemon still has to follow what they do to build files).
 
+Then files go and come back, as an edit that deletes a file and a `git
+reset` that restores it do: every tracked Java file is deleted, with the
+directories that are left empty, and both are asked (`changed`); git
+restores them, and both are asked about the whole walk as one change
+(`changed`). Restored, a file equals HEAD and is in no
+list of changed files, so only a daemon that finds files by itself holds
+them again. A daemon that does not has most of the project unknown, which a
+main line that compiles may not show; so then a public method of a class
+that many files import, the one they call the most, is renamed and both are
+asked once more: a fresh run reports the calls as broken, and so must the
+daemon.
+
 With --budget SECONDS the newest commit is asked about once first, to see
 what a step costs on this project, and N is lowered to what fits: the walk
 is of the newest commits either way, and every commit chosen is asked
@@ -41,9 +53,11 @@ report is not in --known.
 """
 
 import argparse
+import itertools
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -94,6 +108,55 @@ def difference(a, b):
         elif v != b.get(k):
             out.append(f"{k}: {v}")
     return out
+
+
+# a public method declared on one line: its name
+DECLARATION = re.compile(r"^\s*public\s+(?:(?:static|final|synchronized|abstract|default)\s+)*(?:<[^>]*>\s+)?[\w.$<>\[\], ?]+\s+(\w+)\s*\(")
+
+
+def rename_probes(d, files):
+    """Methods to rename so that other files stop compiling, best first: per
+    project class among the 20 that the most files import by name, its public
+    method declared once that those files call the most (`Class.name(` for a
+    static one, `.name(` else). Yields (file, line index, name, (start, end)
+    of the name in that line)."""
+    importers = {}
+    for l in git(d, "grep", "-E", r"^import [A-Za-z_][A-Za-z0-9_.]*;", "--", "*.java", check=False).splitlines():
+        f, _, line = l.partition(":")
+        importers.setdefault(line[len("import "):].strip().rstrip(";"), []).append(f)
+    by_name = {}
+    for f in files:
+        by_name.setdefault(os.path.basename(f)[:-len(".java")], []).append(f)
+    for n, users in sorted(importers.items(), key=lambda x: (-len(x[1]), x[0]))[:20]:
+        suffix = n.replace(".", "/") + ".java"
+        f = next((f for f in by_name.get(n.rsplit(".", 1)[-1], []) if f == suffix or f.endswith("/" + suffix)), None)
+        if f is None:
+            continue
+        with open(os.path.join(d, f), encoding="utf-8", errors="surrogateescape", newline="") as fh:
+            lines = fh.read().splitlines(keepends=True)
+        declared = {}
+        for i, l in enumerate(lines):
+            m = DECLARATION.match(l)
+            if m:
+                declared.setdefault(m.group(1), []).append((i, m.span(1)))
+        once = {k: v[0][0] for k, v in declared.items() if len(v) == 1}
+        span = {k: v[0][1] for k, v in declared.items() if len(v) == 1}
+        if not once:
+            continue
+        simple = n.rsplit(".", 1)[-1]
+        call = {k: f"{simple}.{k}(" if re.search(r"\bstatic\b", lines[i].split("(")[0]) else f".{k}(" for k, i in once.items()}
+        calls = dict.fromkeys(once, 0)
+        for u in users:
+            try:
+                with open(os.path.join(d, u), encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
+            except OSError:
+                continue
+            for k in calls:
+                calls[k] += text.count(call[k])
+        name = max(sorted(calls), key=lambda k: calls[k])
+        if calls[name]:
+            yield f, once[name], name, span[name]
 
 
 def summary(path):
@@ -170,6 +233,28 @@ def main():
     line.reverse()  # oldest first; line[0] is only a starting point
     steps, stats = [], {"commits": 0, "skipped": 0, "differs": 0, "reported": 0, "known": 0}
     failed = False
+
+    def compare(step, what, base):
+        """Ask the daemon and a fresh run; a difference fails the run."""
+        nonlocal failed
+        t = time.monotonic()
+        warm = changed(grounds, d, base, True)
+        step["daemon-seconds"] = round(time.monotonic() - t, 1)
+        fresh = changed(grounds, d, base, False)
+        step["fresh-seconds"] = round(time.monotonic() - t - step["daemon-seconds"], 1)
+        if warm != fresh:
+            stats["differs"] += 1
+            failed = True
+            only_warm, only_fresh = difference(warm, fresh), difference(fresh, warm)
+            step["daemon-only"], step["fresh-only"] = only_warm, only_fresh
+            print(f"DAEMON DIFFERS from a fresh run {what}:")
+            for w in only_warm[:10]:
+                print(f"    daemon only: {w}")
+            for w in only_fresh[:10]:
+                print(f"    fresh only:  {w}")
+        return fresh
+
+    dirty = False  # the work tree holds edits of this script
     subprocess.run([grounds, "daemon", "--root", d, "--stop"], capture_output=True)
     try:
         git(d, *move, line[0])
@@ -198,19 +283,8 @@ def main():
                 stats["skipped"] += 1
                 continue
             stats["commits"] += 1
-            warm = changed(grounds, d, parent, True)
-            fresh = changed(grounds, d, parent, False)
             step = {"commit": commit, "files": len(touched)}
-            if warm != fresh:
-                stats["differs"] += 1
-                failed = True
-                only_warm, only_fresh = difference(warm, fresh), difference(fresh, warm)
-                step["daemon-only"], step["fresh-only"] = only_warm, only_fresh
-                print(f"DAEMON DIFFERS from a fresh run at {commit[:12]} ({len(touched)} files):")
-                for w in only_warm[:10]:
-                    print(f"    daemon only: {w}")
-                for w in only_fresh[:10]:
-                    print(f"    fresh only:  {w}")
+            fresh = compare(step, f"at {commit[:12]} ({len(touched)} files)", parent)
             breaks = [where(x) for x in fresh.get("pending", [])]
             breaks += [where(x) for x in fresh.get("findings", []) if json.loads(x)["rule"] in COMPILE_RULES]
             if breaks:
@@ -225,8 +299,59 @@ def main():
                 else:
                     stats["known"] += 1
             steps.append(step)
+        # files that go and come back (see above)
+        t = time.monotonic()
+        files = [f for f in git(d, "ls-files", "-z", "--", "*.java").split("\0") if f]
+        dirty = True
+        emptied = set()
+        for f in files:
+            p = os.path.join(d, f)
+            if os.path.isfile(p):
+                os.remove(p)
+                emptied.add(os.path.dirname(p))
+        for x in sorted(emptied, key=len, reverse=True):
+            while x.startswith(d + os.sep):
+                try:
+                    os.rmdir(x)
+                except OSError:
+                    break
+                x = os.path.dirname(x)
+        step = {"commit": "deleted", "files": len(files)}
+        compare(step, f"with the {len(files)} tracked Java files deleted", None)
+        steps.append(step)
+        git(d, "checkout", "-q", "--", ".")
+        dirty = False
+        step = {"commit": "restored", "files": len(files)}
+        compare(step, "with them restored", None)
+        steps.append(step)
+        # (the next candidate while a fresh run reports no broken place: at most three)
+        for f, i, name, (begin, end) in itertools.islice(rename_probes(d, files), 3):
+            path = os.path.join(d, f)
+            with open(path, encoding="utf-8", errors="surrogateescape", newline="") as fh:
+                lines = fh.read().splitlines(keepends=True)
+            # (the name where the declaration was matched, not its first
+            # `name(`: `run ()` has none; a file that changed since is skipped)
+            if lines[i][begin:end] != name:
+                print(f"{project}: {name} is not where it was found in {f}; the next candidate")
+                continue
+            lines[i] = lines[i][:begin] + f"{name}ZzReplay" + lines[i][end:]
+            dirty = True  # (the checkout is put back below, or by `finally`)
+            with open(path, "w", encoding="utf-8", errors="surrogateescape", newline="") as fh:
+                fh.write("".join(lines))
+            step = {"commit": "renamed", "files": 1, "file": f, "method": name}
+            fresh = compare(step, f"with {name} renamed in {f}", None)
+            step["pending"] = len(fresh.get("pending", []))
+            steps.append(step)
+            git(d, "checkout", "-q", "--", ".")
+            dirty = False
+            if step["pending"] or "daemon-only" in step:
+                break
+        step["seconds"] = round(time.monotonic() - t, 1)
+        print(f"{project}: files deleted, restored and a method renamed, each asked both ways, in {step['seconds']:.0f} s")
     finally:
         subprocess.run([grounds, "daemon", "--root", d, "--stop"], capture_output=True)
+        if dirty:
+            git(d, "checkout", "-q", "--", ".")
         restore()
     print(f"{project}: {stats['commits']} commits replayed ({stats['skipped']} without Java changes), "
           f"daemon differs on {stats['differs']}, compile-break reports on {stats['reported']} ({stats['known']} known)")

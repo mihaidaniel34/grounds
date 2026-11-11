@@ -50,6 +50,10 @@ pub struct Project {
     /// What each source file was when its stub was made, for telling later
     /// that it changed (taken over by a `Session`).
     pub stamps: rustc_hash::FxHashMap<PathBuf, FileStamp>,
+    /// The directories the discovery of source files went into, and the
+    /// ignore files that decided what it skipped (`None`: not there), for
+    /// telling later that a source file appeared (taken over by a `Session`).
+    pub walked: Walk,
     /// When loading began. A file written after this may have been read
     /// before or after the write.
     pub load_began: std::time::SystemTime,
@@ -334,6 +338,74 @@ impl FileStamp {
     }
 }
 
+/// Stamps of what a walk for source files read: the directories it listed
+/// and the ignore files that applied (see `Workspace::discover_in`).
+#[derive(Clone, Debug, Default)]
+pub struct Walk {
+    pub dirs: rustc_hash::FxHashMap<PathBuf, FileStamp>,
+    pub ignores: Vec<(PathBuf, Option<FileStamp>)>,
+    /// The directories walked where a repository starts, and how
+    /// (`workspace::boundary`): that decides whether ignore files count and
+    /// which exclude file applies.
+    pub gits: rustc_hash::FxHashMap<PathBuf, u8>,
+    /// The same for the directories above the root, a repository there or not.
+    pub outer_gits: Vec<(PathBuf, Option<u8>)>,
+    /// A repository started or ended while the walk ran: it may have skipped
+    /// files by the other one, and the next sync walks again.
+    pub pending: bool,
+}
+
+impl Walk {
+    /// Stamp `dirs`, which a walk that began at `began` listed, and the ignore
+    /// files in them. The walk does not say when it listed each directory, so
+    /// the stamps are taken after it: one whose time is recent as of `began`
+    /// may have been written while the walk ran, after its listing, and is
+    /// marked `unread`, to be looked at again at the next sync; so is a
+    /// directory that cannot be listed (no permission), until it can.
+    /// `before`: ignore files stamped before the walk began; one the same
+    /// before and after it is what the walk read, and keeps the time it was
+    /// first seen (a time in the future is trusted once seen for the margin).
+    /// An ignore file whose content cannot be read stays `unread`. With
+    /// `root`, the walk was of the whole workspace there: the ignore files
+    /// and repositories above it are stamped too. `bounds`: where repositories
+    /// started (`workspace::boundary`) just before the walk began, in the
+    /// directories known then; one that differs now makes the walk `pending`.
+    pub fn stamp(dirs: &[PathBuf], root: Option<&Path>, began: SystemTime, before: &rustc_hash::FxHashMap<PathBuf, FileStamp>, bounds: &rustc_hash::FxHashMap<PathBuf, Option<u8>>) -> Walk {
+        use crate::workspace::{boundary, listable, outer_ignore_files, repo_inputs, IGNORE_FILES};
+        let mark = |p: &Path, s: FileStamp| match before.get(p).filter(|b| b.same(&s)) {
+            Some(b) => s.after(Some(b)),
+            None => FileStamp { unread: s.unread || recent(s.mtime, began), ..s },
+        };
+        let dir_mark = |d: &Path, s: FileStamp| {
+            let s = mark(d, s);
+            FileStamp { unread: s.unread || !listable(d), ..s }
+        };
+        // (with the hash of its content, which must have been read)
+        let ignore = |p: &Path| {
+            FileStamp::of(p, true).map(|s| {
+                let s = mark(p, s);
+                FileStamp { unread: s.unread || s.hash.is_none(), ..s }
+            })
+        };
+        let dirs: rustc_hash::FxHashMap<PathBuf, FileStamp> = dirs.par_iter().filter_map(|d| FileStamp::of(d, false).map(|s| (d.clone(), dir_mark(d, s)))).collect();
+        let gits: rustc_hash::FxHashMap<PathBuf, u8> = dirs.par_iter().filter_map(|(d, _)| boundary(d).map(|k| (d.clone(), k))).collect();
+        let mut ignores: Vec<(PathBuf, Option<FileStamp>)> = dirs.par_iter().flat_map_iter(|(d, _)| IGNORE_FILES.iter().filter_map(|n| ignore(&d.join(n)).map(|s| (d.join(n), Some(s))))).collect();
+        // what every repository the walk went into reads its excludes
+        // through, there or not
+        let mut listed: Vec<PathBuf> = gits.keys().flat_map(|d| repo_inputs(d)).collect();
+        let mut outer_gits = Vec::new();
+        if let Some(root) = root {
+            listed.extend(outer_ignore_files(root));
+            outer_gits = root.ancestors().skip(1).map(|a| (a.to_path_buf(), boundary(a))).collect();
+        }
+        let pending = bounds.par_iter().any(|(d, b)| boundary(d) != *b);
+        ignores.extend(listed.iter().map(|p| (p.clone(), ignore(p))));
+        ignores.sort_by(|a, b| a.0.cmp(&b.0));
+        ignores.dedup_by(|a, b| a.0 == b.0);
+        Walk { dirs, ignores, gits, outer_gits, pending }
+    }
+}
+
 impl Project {
     pub fn load(root: &Path) -> anyhow::Result<Project> {
         // before grounds.toml is read: it is one of the files that may be
@@ -354,6 +426,7 @@ impl Project {
         crate::workspace::set_extra_test_sets(config.test_source_sets.iter().cloned().chain(source_sets.test_sets()).collect());
         crate::workspace::register_project_root(&root.canonicalize().unwrap_or_else(|_| root.to_path_buf()));
         let workspace = Workspace::discover(root, &config.exclude);
+        let walked = Walk::stamp(&workspace.dirs, Some(&workspace.root), load_began, &Default::default(), &Default::default());
         stats.t_discover = t.elapsed();
         stats.files = workspace.files.len();
 
@@ -434,7 +507,7 @@ impl Project {
         di.lombok_copies_qualifiers = lombok_copies_qualifiers(&workspace.root);
         di.bean_overriding_allowed = bean_overriding_allowed(&workspace);
         let classpath_warnings = crate::classpath::warnings(&workspace, &config, &index);
-        Ok(Project { config, workspace, index, stats, di, source_sets, lombok, registered, auto_registered, classpath_warnings, classpath_entries: entries, stamps, load_began })
+        Ok(Project { config, workspace, index, stats, di, source_sets, lombok, registered, auto_registered, classpath_warnings, classpath_entries: entries, stamps, walked, load_began })
     }
 
     pub fn source_kind(&self, path: &Path) -> SourceKind {

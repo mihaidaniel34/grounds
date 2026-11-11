@@ -984,6 +984,457 @@ fn a_file_that_could_not_be_read_is_read_once_it_can_be() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// What a session holds of the sources, to compare with a fresh load: the
+/// files with their module and kind, the files in the index, and every class
+/// as it resolves.
+fn holdings(s: &Session) -> (Vec<String>, Vec<String>, Vec<String>) {
+    let ws = &s.project.workspace;
+    let mut files: Vec<String> = ws.files.iter().map(|f| format!("{} {} {:?}", f.path.strip_prefix(&ws.root).unwrap_or(&f.path).display(), ws.modules[f.module].name, f.kind)).collect();
+    files.sort();
+    let index = &s.project.index;
+    let mut indexed: Vec<String> = index.files().map(|(p, _)| p.to_string()).collect();
+    indexed.sort();
+    let mut names: Vec<_> = index.source_class_names().cloned().collect();
+    names.sort();
+    (files, indexed, names.iter().map(|n| format!("{:?}", index.class(n))).collect())
+}
+
+/// After `what`, the session holds what a fresh one holds.
+fn holds_as_fresh(s: &mut Session, dir: &Path, what: &str) {
+    s.sync(&[]);
+    let fresh = Session::open(dir).unwrap();
+    assert_eq!(holdings(s), holdings(&fresh), "after {what}, the session must hold the sources a fresh load finds");
+}
+
+/// Every file and directory under `rel` gets time `t`, as a restore that
+/// keeps times (or a clock that is behind) leaves them.
+fn set_tree_mtime(dir: &Path, rel: &str, t: std::time::SystemTime) {
+    let p = dir.join(rel);
+    if p.is_dir() {
+        // (not git's own files: its objects are read-only)
+        for e in std::fs::read_dir(&p).unwrap().flatten().filter(|e| e.file_name() != ".git") {
+            set_tree_mtime(dir, &format!("{rel}/{}", e.file_name().to_string_lossy()), t);
+        }
+        std::fs::File::open(&p).unwrap().set_modified(t).unwrap();
+    } else {
+        set_mtime(dir, rel, t);
+    }
+}
+
+/// An interface, its implementation in another file, and a class the
+/// implementation's signature names; all committed, with old times.
+fn restored_project(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("grounds-session-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, "src/main/java/demo/Req.java", "package demo;\npublic class Req {}\n");
+    write(&dir, "src/main/java/demo/Biz.java", "package demo;\npublic interface Biz {\n    void handle(Req r);\n}\n");
+    write(&dir, "src/main/java/demo/BizImpl.java", "package demo;\npublic class BizImpl implements Biz {\n    public void handle(Req r) {}\n}\n");
+    write(&dir, "src/main/java/demo/sub/Sub.java", "package demo.sub;\npublic class Sub {}\n");
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "init"]);
+    // (old: a reload or a recent time would read everything again and hide what sync does)
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    set_tree_mtime(&dir, ".", old);
+    // (git's exclude file too: just written, it would have the first sync walk
+    // the whole workspace, and the tests pass without listing a directory)
+    set_mtime(&dir, ".git/info/exclude", old);
+    dir
+}
+
+/// The session found what changed by listing the directories that changed,
+/// not by walking the whole workspace (which an ignore file's change does).
+fn listed_not_walked(s: &Session) {
+    assert_eq!(s.full_walks(), 0, "found by the directories that changed, not by a walk of the workspace");
+}
+
+#[test]
+fn a_deleted_file_that_comes_back_is_read_again() {
+    // The hold-out measurement's case: an edit deletes a file, `git reset`
+    // brings it back. Equal to HEAD again, it is in no list of changed files,
+    // and its time may be any (here an old one): the session must find it
+    // all the same, or the classes that name it stay unknown and a break in
+    // a caller goes unreported.
+    let dir = restored_project("restored");
+    let req = "src/main/java/demo/Req.java";
+    let text = std::fs::read_to_string(dir.join(req)).unwrap();
+    let old = mtime(&dir, req);
+    let mut s = Session::open(&dir).unwrap();
+    let opts = CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None };
+    std::fs::remove_file(dir.join(req)).unwrap();
+    s.check(&opts);
+    holds_as_fresh(&mut s, &dir, "a file was deleted");
+    write(&dir, req, &text);
+    set_mtime(&dir, req, old);
+    holds_as_fresh(&mut s, &dir, "the deleted file came back with its old time");
+    listed_not_walked(&s);
+    // a method added to the interface, committed, breaks the implementation
+    write(&dir, "src/main/java/demo/Biz.java", "package demo;\npublic interface Biz {\n    void handle(Req r);\n    void added();\n}\n");
+    git(&dir, &["commit", "-qam", "added"]);
+    let opts = CheckOptions { base: Some("HEAD~1".into()), ..opts };
+    let warm = s.check(&opts);
+    let fresh = Session::open(&dir).unwrap().check(&opts);
+    assert!(fresh.pending.iter().any(|f| f.rule == "unimplemented-abstract-method"), "{}", json(&fresh));
+    assert_eq!(json(&warm), json(&fresh), "the daemon answers as a fresh run");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn files_that_appear_in_no_list_of_changed_files_are_found() {
+    // A branch switch, a pull, `git stash pop`: files appear (and go) that
+    // equal HEAD afterwards, in an existing package and in a new one.
+    let dir = restored_project("branch");
+    git(&dir, &["checkout", "-qb", "base"]);
+    git(&dir, &["checkout", "-qb", "other"]);
+    write(&dir, "src/main/java/demo/Added.java", "package demo;\npublic class Added extends Req {}\n");
+    write(&dir, "src/main/java/demo/fresh/deep/New.java", "package demo.fresh.deep;\npublic class New {}\n");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "other"]);
+    git(&dir, &["checkout", "-q", "base"]);
+    let mut s = Session::open(&dir).unwrap();
+    git(&dir, &["checkout", "-q", "other"]);
+    holds_as_fresh(&mut s, &dir, "a checkout that adds files");
+    assert!(s.project.index.class_exists("demo.fresh.deep.New"));
+    git(&dir, &["checkout", "-q", "base"]);
+    holds_as_fresh(&mut s, &dir, "a checkout that removes them");
+    git(&dir, &["checkout", "-q", "other"]);
+    git(&dir, &["reset", "-q", "--soft", "base"]);
+    git(&dir, &["reset", "-q"]);
+    git(&dir, &["stash", "push", "-q", "-u", "--", "src"]);
+    holds_as_fresh(&mut s, &dir, "a stash of untracked files");
+    git(&dir, &["stash", "pop", "-q"]);
+    holds_as_fresh(&mut s, &dir, "a stash pop");
+    // a generator writes a tree of sources, with old times
+    write(&dir, "build/generated/sources/annotationProcessor/java/main/demo/gen/Gen.java", "package demo.gen;\npublic class Gen {}\n");
+    set_tree_mtime(&dir, "build", std::time::SystemTime::now() - std::time::Duration::from_secs(600));
+    holds_as_fresh(&mut s, &dir, "a generator wrote sources");
+    listed_not_walked(&s);
+    assert!(s.project.index.class_exists("demo.gen.Gen"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_directory_that_goes_and_comes_back_is_read_again() {
+    let dir = restored_project("dirback");
+    let mut s = Session::open(&dir).unwrap();
+    let old = mtime(&dir, "src/main/java/demo/sub/Sub.java");
+    std::fs::remove_dir_all(dir.join("src/main/java/demo")).unwrap();
+    holds_as_fresh(&mut s, &dir, "a package directory was removed");
+    git(&dir, &["checkout", "-q", "--", "."]);
+    set_tree_mtime(&dir, "src/main/java/demo", old);
+    holds_as_fresh(&mut s, &dir, "it came back, with old times");
+    listed_not_walked(&s);
+    assert!(s.project.index.class_exists("demo.sub.Sub"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_file_replaced_by_a_directory_and_back() {
+    let dir = restored_project("filedir");
+    let mut s = Session::open(&dir).unwrap();
+    let req = "src/main/java/demo/Req.java";
+    let old = mtime(&dir, req);
+    std::fs::remove_file(dir.join(req)).unwrap();
+    write(&dir, "src/main/java/demo/Req.java/Inner.java", "package demo;\npublic class Inner {}\n");
+    holds_as_fresh(&mut s, &dir, "a file was replaced by a directory");
+    assert!(s.unread_files().is_empty(), "a directory is no file to read again: {:?}", s.unread_files());
+    std::fs::remove_dir_all(dir.join(req)).unwrap();
+    git(&dir, &["checkout", "-q", "--", req]);
+    set_mtime(&dir, req, old);
+    holds_as_fresh(&mut s, &dir, "the directory was replaced by the file");
+    listed_not_walked(&s);
+    assert!(s.project.index.class_exists("demo.Req"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_module_directory_that_appears_is_a_module() {
+    // no settings file names it: its build file alone makes it a module
+    let dir = restored_project("newmodule");
+    let mut s = Session::open(&dir).unwrap();
+    write(&dir, "lib/build.gradle", "plugins { id 'java-library' }\n");
+    write(&dir, "lib/src/main/java/lib/Lib.java", "package lib;\npublic class Lib {}\n");
+    write(&dir, "lib/src/test/java/lib/LibTest.java", "package lib;\nclass LibTest {}\n");
+    set_tree_mtime(&dir, "lib", std::time::SystemTime::now() - std::time::Duration::from_secs(600));
+    holds_as_fresh(&mut s, &dir, "a module directory appeared");
+    assert!(s.project.workspace.modules.iter().any(|m| m.name == "lib"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_ignore_file_that_changes_changes_the_sources() {
+    let dir = restored_project("ignorefile");
+    let mut s = Session::open(&dir).unwrap();
+    write(&dir, ".gitignore", "src/main/java/demo/sub/\n");
+    holds_as_fresh(&mut s, &dir, "a .gitignore appeared");
+    assert!(!s.project.index.class_exists("demo.sub.Sub"));
+    // edited in place: the directory's time does not change
+    write(&dir, ".gitignore", "*.log\n");
+    set_mtime(&dir, ".gitignore", std::time::SystemTime::now() - std::time::Duration::from_secs(60));
+    holds_as_fresh(&mut s, &dir, "the .gitignore no longer lists it");
+    assert!(s.project.index.class_exists("demo.sub.Sub"));
+    write(&dir, ".git/info/exclude", "Req.java\n");
+    holds_as_fresh(&mut s, &dir, "git's exclude file lists a file");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_directory_renamed_in_case_only_is_held_once() {
+    // On a file system that ignores case (macOS by default) the old spelling
+    // still answers a look at its time: the listing of the parent decides.
+    let dir = restored_project("caserename");
+    let mut s = Session::open(&dir).unwrap();
+    std::fs::rename(dir.join("src/main/java/demo"), dir.join("src/main/java/DEMO")).unwrap();
+    holds_as_fresh(&mut s, &dir, "a package directory renamed in case only");
+    holds_as_fresh(&mut s, &dir, "a second sync");
+    listed_not_walked(&s);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlink_in_place_of_a_directory_or_a_file_holds_no_sources() {
+    // The discovery does not follow symlinks; a file's stamp does, so the
+    // target's unchanged time must not keep what the link replaced.
+    let dir = restored_project("symlinks");
+    let away = dir.with_extension("away");
+    let _ = std::fs::remove_dir_all(&away);
+    std::fs::create_dir_all(&away).unwrap();
+    let mut s = Session::open(&dir).unwrap();
+    std::fs::rename(dir.join("src/main/java/demo/sub"), away.join("sub")).unwrap();
+    std::os::unix::fs::symlink(away.join("sub"), dir.join("src/main/java/demo/sub")).unwrap();
+    holds_as_fresh(&mut s, &dir, "a directory replaced by a symlink to it");
+    holds_as_fresh(&mut s, &dir, "a second sync");
+    std::fs::rename(dir.join("src/main/java/demo/Req.java"), away.join("Req.java")).unwrap();
+    std::os::unix::fs::symlink(away.join("Req.java"), dir.join("src/main/java/demo/Req.java")).unwrap();
+    holds_as_fresh(&mut s, &dir, "a file replaced by a symlink to it");
+    holds_as_fresh(&mut s, &dir, "a second sync");
+    listed_not_walked(&s);
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&away);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_directory_that_cannot_be_listed_is_listed_once_it_can_be() {
+    // (as root a directory without permissions can still be listed: then
+    // this only checks that the session holds what a fresh load holds)
+    use std::os::unix::fs::PermissionsExt;
+    let dir = restored_project("unlistable");
+    let mut s = Session::open(&dir).unwrap();
+    let sub = dir.join("src/main/java/demo/sub");
+    write(&dir, "src/main/java/demo/sub/B.java", "package demo.sub;\npublic class B {}\n");
+    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o000)).unwrap();
+    s.sync(&[]);
+    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    holds_as_fresh(&mut s, &dir, "the directory could be listed again");
+    holds_as_fresh(&mut s, &dir, "a second sync");
+    assert!(s.project.index.class_exists("demo.sub.B"));
+    listed_not_walked(&s);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_exclude_file_of_a_linked_worktree_is_followed() {
+    // In a worktree `.git` is a file; `ignore` reads the main repository's
+    // `info/exclude` (its common directory's)
+    let main = restored_project("worktree");
+    let dir = main.with_extension("wt");
+    let _ = std::fs::remove_dir_all(&dir);
+    git(&main, &["worktree", "add", "-q", "--detach", dir.to_str().unwrap()]);
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    set_tree_mtime(&dir, ".", old);
+    let mut s = Session::open(&dir).unwrap();
+    assert!(s.project.index.class_exists("demo.Req"));
+    write(&main, ".git/info/exclude", "Req.java\n");
+    set_mtime(&main, ".git/info/exclude", old - std::time::Duration::from_secs(60));
+    holds_as_fresh(&mut s, &dir, "the main repository's exclude file lists a file");
+    assert!(!s.project.index.class_exists("demo.Req"));
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&main);
+}
+
+#[test]
+fn an_ignore_file_that_removes_a_module_reloads_the_project() {
+    let dir = restored_project("ignoremodule");
+    write(&dir, "lib/build.gradle", "plugins { id 'java-library' }\n");
+    write(&dir, "lib/src/main/java/lib/L.java", "package lib;\npublic class L {}\n");
+    set_tree_mtime(&dir, "lib", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
+    let mut s = Session::open(&dir).unwrap();
+    assert!(s.project.workspace.modules.iter().any(|m| m.name == "lib"));
+    write(&dir, ".ignore", "lib/build.gradle\n");
+    holds_as_fresh(&mut s, &dir, "an ignore file hides a module's build file");
+    assert!(!s.project.workspace.modules.iter().any(|m| m.name == "lib"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_ignore_file_with_a_time_in_the_future_is_trusted_once_seen_for_the_margin() {
+    // A time in the future is "recent" by every clock: seen unchanged for the
+    // margin it is trusted, or every request walks the whole workspace.
+    let dir = restored_project("futureignore");
+    write(&dir, ".ignore", "*.log\n");
+    set_mtime(&dir, ".ignore", std::time::SystemTime::now() + std::time::Duration::from_secs(3600));
+    let mut s = Session::open(&dir).unwrap();
+    holds_as_fresh(&mut s, &dir, "an ignore file with a time in the future");
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    s.sync(&[]);
+    let walks = s.full_walks();
+    for _ in 0..3 {
+        s.sync(&[]);
+    }
+    assert_eq!(s.full_walks(), walks, "nothing changed: no walk of the workspace");
+    holds_as_fresh(&mut s, &dir, "the syncs since");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_directory_that_can_be_read_but_not_entered_is_listed_once_it_can_be() {
+    // Without execute permission a directory lists its names, but its files
+    // cannot be reached: it is not taken as listed until they can be.
+    // (as root the permission is not enforced: then this only checks that
+    // the session holds what a fresh load holds)
+    use std::os::unix::fs::PermissionsExt;
+    let dir = restored_project("unenterable");
+    let mut s = Session::open(&dir).unwrap();
+    let sub = dir.join("src/main/java/demo/sub");
+    write(&dir, "src/main/java/demo/sub/B.java", "package demo.sub;\npublic class B {}\n");
+    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o400)).unwrap();
+    s.sync(&[]);
+    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    holds_as_fresh(&mut s, &dir, "the directory could be entered again");
+    holds_as_fresh(&mut s, &dir, "a second sync");
+    assert!(s.project.index.class_exists("demo.sub.Sub") && s.project.index.class_exists("demo.sub.B"));
+    listed_not_walked(&s);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_ignore_file_that_cannot_be_read_is_read_once_it_can_be() {
+    // (as root the permission is not enforced: then this only checks that
+    // the session holds what a fresh load holds)
+    use std::os::unix::fs::PermissionsExt;
+    let dir = restored_project("unreadableignore");
+    let mut s = Session::open(&dir).unwrap();
+    write(&dir, ".ignore", "Req.java\n");
+    std::fs::set_permissions(dir.join(".ignore"), std::fs::Permissions::from_mode(0o000)).unwrap();
+    s.sync(&[]);
+    s.sync(&[]);
+    std::fs::set_permissions(dir.join(".ignore"), std::fs::Permissions::from_mode(0o644)).unwrap();
+    holds_as_fresh(&mut s, &dir, "the ignore file could be read again");
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    holds_as_fresh(&mut s, &dir, "past the margin");
+    assert!(!s.project.index.class_exists("demo.Req"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_exclude_file_of_a_nested_repository_is_followed() {
+    let dir = restored_project("nestedrepo");
+    let mut s = Session::open(&dir).unwrap();
+    let sub = dir.join("src/main/java/demo/sub");
+    git(&sub, &["init", "-q"]);
+    holds_as_fresh(&mut s, &dir, "a repository started in a package directory");
+    write(&sub, ".git/info/exclude", "Sub.java\n");
+    set_mtime(&sub, ".git/info/exclude", std::time::SystemTime::now() - std::time::Duration::from_secs(60));
+    holds_as_fresh(&mut s, &dir, "its exclude file lists a file");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_repository_that_starts_or_ends_around_the_workspace_changes_what_is_ignored() {
+    // a `.gitignore` only counts inside a repository: `git init` on a
+    // workspace that had none, and the reverse, change the sources
+    let dir = std::env::temp_dir().join(format!("grounds-session-gitinit-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, ".gitignore", "Req.java\n");
+    write(&dir, "src/main/java/demo/Req.java", "package demo;\npublic class Req {}\n");
+    write(&dir, "src/main/java/demo/Biz.java", "package demo;\npublic class Biz {}\n");
+    set_tree_mtime(&dir, ".", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
+    let mut s = Session::open(&dir).unwrap();
+    assert!(s.project.index.class_exists("demo.Req"));
+    git(&dir, &["init", "-q"]);
+    holds_as_fresh(&mut s, &dir, "git init");
+    assert!(!s.project.index.class_exists("demo.Req"));
+    std::fs::remove_dir_all(dir.join(".git")).unwrap();
+    holds_as_fresh(&mut s, &dir, "the repository removed");
+    assert!(s.project.index.class_exists("demo.Req"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_jj_repository_counts_as_a_repository() {
+    // `ignore` applies `.gitignore` inside a `.jj` repository as inside a git one
+    let dir = std::env::temp_dir().join(format!("grounds-session-jj-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, ".gitignore", "Req.java\n");
+    write(&dir, "src/main/java/demo/Req.java", "package demo;\npublic class Req {}\n");
+    write(&dir, "src/main/java/demo/Biz.java", "package demo;\npublic class Biz {}\n");
+    set_tree_mtime(&dir, ".", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
+    let mut s = Session::open(&dir).unwrap();
+    std::fs::create_dir(dir.join(".jj")).unwrap();
+    holds_as_fresh(&mut s, &dir, "a .jj directory made");
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    holds_as_fresh(&mut s, &dir, "past the margin");
+    assert!(!s.project.index.class_exists("demo.Req"));
+    std::fs::remove_dir(dir.join(".jj")).unwrap();
+    holds_as_fresh(&mut s, &dir, "the .jj directory removed");
+    assert!(s.project.index.class_exists("demo.Req"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_worktree_whose_git_file_is_rewritten_follows_the_new_exclude_file() {
+    // The main repository moves: the worktree's `.git` file names a gitdir
+    // that is gone, so no exclude file applies; `git worktree repair` writes
+    // the new one, still a file, and the main repository's exclude applies again.
+    let main = restored_project("wtrepair");
+    write(&main, ".git/info/exclude", "Req.java\n");
+    let dir = main.with_extension("wt");
+    let _ = std::fs::remove_dir_all(&dir);
+    git(&main, &["worktree", "add", "-q", "--detach", dir.to_str().unwrap()]);
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    set_tree_mtime(&dir, ".", old);
+    set_mtime(&main, ".git/info/exclude", old);
+    let mut s = Session::open(&dir).unwrap();
+    assert!(!s.project.index.class_exists("demo.Req"));
+    let moved = main.with_extension("moved");
+    let _ = std::fs::remove_dir_all(&moved);
+    std::fs::rename(&main, &moved).unwrap();
+    holds_as_fresh(&mut s, &dir, "the main repository moved");
+    git(&moved, &["worktree", "repair", dir.to_str().unwrap()]);
+    holds_as_fresh(&mut s, &dir, "the worktree repaired");
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    holds_as_fresh(&mut s, &dir, "past the margin");
+    assert!(!s.project.index.class_exists("demo.Req"));
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&moved);
+}
+
+#[test]
+fn a_repository_that_starts_or_ends_while_the_walk_runs_leaves_a_walk_to_do() {
+    // The walk filtered by where repositories started before it; if that
+    // differs by the time it is stamped, it is done again at the next sync.
+    use grounds_engine::project::Walk;
+    let dir = restored_project("walkrace");
+    let root = dir.canonicalize().unwrap();
+    let began = std::time::SystemTime::now();
+    let before: rustc_hash::FxHashMap<std::path::PathBuf, Option<u8>> = [(root.clone(), Some(1))].into_iter().collect();
+    let none = rustc_hash::FxHashMap::default();
+    assert!(!Walk::stamp(std::slice::from_ref(&root), Some(&root), began, &none, &before).pending, "the same repository: done");
+    std::fs::remove_dir_all(root.join(".git")).unwrap();
+    assert!(Walk::stamp(std::slice::from_ref(&root), Some(&root), began, &none, &before).pending, "the repository ended during the walk");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The same place, a different claim: a changed return type turns "`Old` has
 /// no method `missing`" (there before the change) into "`New` has no method
 /// `missing`" on an unchanged line of another file. That is a new break.
