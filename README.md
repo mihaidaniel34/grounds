@@ -292,9 +292,15 @@ SHA-256 sum and puts `grounds` in `~/.local/bin`, without sudo:
 curl -fsSL https://raw.githubusercontent.com/mihaidaniel34/grounds/master/install.sh | sh
 ```
 
-`sh -s -- --version 0.1.0` installs a given release and `--dir DIR` puts it
-elsewhere (or set `GROUNDS_VERSION`, `GROUNDS_INSTALL_DIR`); run it again to
-update. By hand, pick the target for your machine:
+Run it again to update. Options go after `sh -s --`: `--version` installs a
+given release and `--dir` puts it elsewhere (or set `GROUNDS_VERSION`,
+`GROUNDS_INSTALL_DIR`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mihaidaniel34/grounds/master/install.sh | sh -s -- --version 0.1.0 --dir ~/bin
+```
+
+By hand, pick the target for your machine:
 
 ```bash
 target=aarch64-apple-darwin   # x86_64-apple-darwin, x86_64-unknown-linux-musl, aarch64-unknown-linux-musl

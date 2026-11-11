@@ -18,7 +18,7 @@ main() {
 	set -eu
 	repo=mihaidaniel34/grounds
 	version=${GROUNDS_VERSION:-}
-	dir=${GROUNDS_INSTALL_DIR:-${HOME:?HOME is not set}/.local/bin}
+	dir=${GROUNDS_INSTALL_DIR:-}
 
 	while [ $# -gt 0 ]; do
 		case $1 in
@@ -45,6 +45,7 @@ main() {
 		*) fail "unknown option: $1 (try --help)" ;;
 		esac
 	done
+	[ -n "$dir" ] || dir=${HOME:?HOME is not set; choose a directory with --dir}/.local/bin
 
 	if command -v curl >/dev/null 2>&1; then
 		fetch() { curl -fsSL --proto '=https' --tlsv1.2 --retry 3 -o "$2" "$1"; }
@@ -55,8 +56,17 @@ main() {
 				"https://github.com/$repo/releases/latest") && echo "${u##*/tag/}"
 		}
 	elif command -v wget >/dev/null 2>&1; then
-		# GNU wget or busybox's (Alpine), which share only the basic options
+		# GNU wget checks TLS certificates. Busybox's does only through Alpine's
+		# ssl_client helper; its built-in TLS and its openssl fallback do not,
+		# and the checksum comes over the same connection, so refuse those.
+		case $(wget --version 2>/dev/null) in
+		*"GNU Wget"*) ;;
+		*) command -v ssl_client >/dev/null 2>&1 ||
+			fail "this wget may not check TLS certificates; install curl (or GNU wget) and run again" ;;
+		esac
 		fetch() { wget -q -O "$2" "$1"; }
+		# The release redirect needs headers wget prints differently per
+		# implementation; the API is limited to 60 requests an hour per address.
 		latest_tag() {
 			wget -q -O - "https://api.github.com/repos/$repo/releases/latest" |
 				sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1
@@ -68,7 +78,8 @@ main() {
 	target=$(detect_target)
 
 	if [ -z "$version" ]; then
-		version=$(latest_tag) || fail "could not find the latest release"
+		version=$(latest_tag) || version=
+		[ -n "$version" ] || fail "could not find the latest release; name one with --version X.Y.Z"
 		case ${version#v} in
 		"" | */* | *[!0-9A-Za-z.+-]*) fail "could not read the latest release's version (got '$version')" ;;
 		esac
@@ -79,7 +90,8 @@ main() {
 	url=https://github.com/$repo/releases/download/v$version/$name.tar.gz
 
 	tmp=$(mktemp -d 2>/dev/null || mktemp -d -t grounds)
-	trap 'rm -rf "$tmp"' EXIT
+	stage=
+	trap 'rm -rf "$tmp" ${stage:+"$stage"}' EXIT
 	trap 'exit 130' INT
 	trap 'exit 143' TERM
 
@@ -97,13 +109,18 @@ main() {
 
 	mkdir -p "$dir" 2>/dev/null || fail "cannot create $dir; choose another with --dir"
 	[ -w "$dir" ] || fail "cannot write to $dir; choose another with --dir (or run with sudo)"
-	# Copy next to the target and rename over it, so a running grounds (the
-	# daemon) keeps its file and nobody sees a half-written one.
-	cp "$tmp/$name/grounds" "$dir/.grounds.new"
-	chmod 755 "$dir/.grounds.new"
-	mv -f "$dir/.grounds.new" "$dir/grounds"
+	# Copy to a new file of our own next to the target and rename it over the
+	# target, so a running grounds (the daemon) keeps its file, nobody sees a
+	# half-written one, and nothing someone else put in DIR is written through.
+	stage=$(mktemp "$dir/.grounds.XXXXXX") || fail "cannot create a file in $dir"
+	cp "$tmp/$name/grounds" "$stage"
+	chmod 755 "$stage"
+	mv -f "$stage" "$dir/grounds"
+	stage=
 
-	say "installed $("$dir/grounds" --version 2>/dev/null || echo "grounds $version") to $dir/grounds"
+	installed=$("$dir/grounds" --version 2>/dev/null) ||
+		fail "$dir/grounds was written but does not run (is $dir on a noexec mount?); choose another directory with --dir"
+	say "installed $installed to $dir/grounds"
 
 	case :${PATH:-}: in
 	*:"$dir":* | *:"${dir%/}":*) ;;
