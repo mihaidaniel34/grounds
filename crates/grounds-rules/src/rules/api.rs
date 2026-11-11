@@ -1485,6 +1485,15 @@ impl Rule for StreamCountComparison {
     }
 }
 
+/// The methods a stream's own interfaces declare.
+const STREAM_METHODS: [MethodMatcher; 5] = [
+    MethodMatcher::exact("java.util.stream.BaseStream"),
+    MethodMatcher::exact("java.util.stream.Stream"),
+    MethodMatcher::exact("java.util.stream.IntStream"),
+    MethodMatcher::exact("java.util.stream.LongStream"),
+    MethodMatcher::exact("java.util.stream.DoubleStream"),
+];
+
 declare_rule!(StreamConsumedTwice {
     id: "stream-consumed-twice",
     name: "Stream used after it was already consumed",
@@ -1513,12 +1522,16 @@ impl Rule for StreamConsumedTwice {
             if reassigned || uses.iter().any(|u| cx.owning_callable(*u) != Some(owner)) {
                 continue;
             }
-            // operations on the stream; `close`/`isParallel` do not consume it and
-            // `onClose`/`parallel`/.. return the receiver itself
+            // operations on the stream: calls of methods the stream interfaces
+            // declare (not `toString()`, `hashCode()` and the other methods of
+            // Object, which leave the stream as it was); `close`/`isParallel`
+            // do not consume it and `onClose`/`parallel`/.. return the
+            // receiver itself
             let ops: Vec<Node<'t>> = uses
                 .iter()
                 .filter_map(|u| u.parent().filter(|p| p.kind() == "method_invocation" && p.field("object") == Some(*u)))
                 .filter(|c| !matches!(cx.fm.call_name(*c), Some("close" | "isParallel" | "onClose" | "parallel" | "sequential" | "unordered")))
+                .filter(|c| cx.fm.call_matches_any(*c, &STREAM_METHODS))
                 .collect();
             if ops.len() < 2 {
                 continue;
