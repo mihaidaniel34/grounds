@@ -1457,13 +1457,66 @@ impl Rule for LoopBoundOffByOne {
 }
 
 /// Calls that answer the same each time on the same receiver: the length of
-/// a `String` and the ordinal of an enum constant, which never change. Not
-/// any `size()` or `length()` by its name: a collection or a `StringBuilder`
-/// may change between two calls (another thread, a concurrent collection),
-/// and a project's own `size()` may answer differently each time.
+/// a `String` and the ordinal of an enum constant, which never change, and
+/// the size of a local that holds an unmodifiable JDK collection
+/// (`var xs = List.of(..)`, never assigned again). Not any `size()` or
+/// `length()` by its name: a collection or a `StringBuilder` may change
+/// between two calls (another thread, a concurrent collection), and a
+/// project's own `size()` may answer differently each time. The receiver
+/// must stay the same object too (`stable_receiver`).
 fn is_stable_call<'t>(d: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
     const STABLE: [MethodMatcher; 2] = [MethodMatcher::exact("java.lang.String").named(&["length"]).arity(0), MethodMatcher::exact("java.lang.Enum").named(&["ordinal"]).arity(0)];
-    d.kind() == "method_invocation" && cx.fm.call_matches_any(d, &STABLE)
+    if d.kind() != "method_invocation" {
+        return false;
+    }
+    let receiver = d.field("object");
+    if cx.fm.call_matches_any(d, &STABLE) {
+        return receiver.is_none_or(|o| stable_receiver(o, cx));
+    }
+    cx.fm.call_name(d) == Some("size") && cx.fm.args_of(d).is_empty() && receiver.is_some_and(|o| unmodifiable_local(o, cx))
+}
+
+/// A local never assigned after its initializer, which is an unmodifiable
+/// collection of the JDK: `List.of(..)`, `Set.copyOf(..)`, `Map.ofEntries(..)`.
+fn unmodifiable_local<'t>(e: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+    const FACTORIES: [MethodMatcher; 3] = [
+        MethodMatcher::statics("java.util.List").named(&["of", "copyOf"]),
+        MethodMatcher::statics("java.util.Set").named(&["of", "copyOf"]),
+        MethodMatcher::statics("java.util.Map").named(&["of", "copyOf", "ofEntries"]),
+    ];
+    let e = e.unparen();
+    let Some(i) = (e.kind() == "identifier").then(|| cx.fm.local_ref(e)).flatten() else { return false };
+    let assigned = cx.fm.binder.uses[i].iter().any(|u| {
+        u.parent_unparen().is_some_and(|p| match p.kind() {
+            "assignment_expression" => p.field("left").map(|l| l.unparen()) == Some(*u),
+            "update_expression" => true,
+            _ => false,
+        })
+    });
+    let init = cx.fm.binder.decls[i].decl_node.field("value").map(|v| v.unparen());
+    !assigned && init.is_some_and(|v| v.kind() == "method_invocation" && cx.fm.call_matches_any(v, &FACTORIES))
+}
+
+/// A receiver that is the same object at each of two reads: a local or a
+/// parameter (nothing in the chain assigns, see `ContradictoryRange`),
+/// `this`, a literal, or a final field of such. Not a field that another
+/// thread may replace between the reads (`text.length()`, `array.length`
+/// of a non-final field).
+fn stable_receiver<'t>(e: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+    let e = e.unparen();
+    match e.kind() {
+        "this" | "string_literal" => true,
+        "identifier" => match cx.fm.field_ref(e) {
+            Some(f) => f.field.flags.is_final(),
+            None => cx.fm.local_ref(e).is_some(),
+        },
+        "field_access" => {
+            let Some(f) = cx.fm.field_ref(e) else { return false };
+            // (a static field named through its class: `Holder.NAME`)
+            f.field.flags.is_final() && (f.field.flags.is_static() || e.field("object").is_some_and(|o| stable_receiver(o, cx)))
+        }
+        _ => false,
+    }
 }
 
 /// `x < 3` or `3 > x` as (x, "<", 3): a side-effect-free operand compared
@@ -1499,6 +1552,8 @@ fn const_comparison<'t>(e: Node<'t>, cx: &Ctx<'_, 't>) -> Option<(Node<'t>, &'st
     let x = x.unparen();
     let unstable = std::iter::once(x).chain(x.descendants()).any(|d| match d.kind() {
         "method_invocation" => !is_stable_call(d, cx),
+        // the length of an array that another thread may replace
+        "field_access" if d.field("field").is_some_and(|f| f.text(cx.src) == "length") && cx.type_of(d.field("object").unwrap_or(d)).is_array() => !d.field("object").is_some_and(|o| stable_receiver(o, cx)),
         "object_creation_expression" | "assignment_expression" | "update_expression" | "array_creation_expression" | "lambda_expression" => true,
         _ => false,
     });
