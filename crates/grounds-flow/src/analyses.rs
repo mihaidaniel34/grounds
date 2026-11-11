@@ -149,17 +149,81 @@ pub struct NullnessAnalysis<'a, 't> {
     pub cfg: &'a Cfg<'t>,
 }
 
-const OBJECTS_NULL_CHECKS: &[MethodMatcher] = &[MethodMatcher::statics("java.util.Objects").named(&["isNull", "nonNull"])];
+const OBJECTS_NULL_CHECKS: &[MethodMatcher] = &[MethodMatcher::statics("java.util.Objects").named(&["isNull", "nonNull"]).params(&["java.lang.Object"])];
 
-const REQUIRE_NON_NULL: &[MethodMatcher] = &[
-    MethodMatcher::statics("java.util.Objects").named(&["requireNonNull", "requireNonNullElse"]),
+// A fact about nullness comes from a call only when the method resolves to an
+// owner known to carry that contract: a method of another owner, or of the
+// project, proves nothing because of its name. There are two kinds of
+// contracts, and each is used only for what it guarantees.
+
+/// Methods that return only when their checked argument is non-null
+/// (`requireNonNull(x)`, `checkNotNull(x)`, `assertNotNull(x)`): the
+/// argument is non-null after the call. The checked argument is the first
+/// one, except for JUnit 4 and 3, where a message comes first.
+const CHECKS_FIRST_ARG_NON_NULL: &[MethodMatcher] = &[
+    MethodMatcher::statics("java.util.Objects").named(&["requireNonNull"]),
     MethodMatcher::statics("org.junit.jupiter.api.Assertions").named(&["assertNotNull"]),
-    MethodMatcher::statics("org.junit.Assert").named(&["assertNotNull"]),
     MethodMatcher::statics("org.testng.Assert").named(&["assertNotNull"]),
-    MethodMatcher::statics("junit.framework.Assert").named(&["assertNotNull"]),
     MethodMatcher::statics("com.google.common.base.Preconditions").named(&["checkNotNull"]),
     MethodMatcher::statics("org.springframework.util.Assert").named(&["notNull"]),
     MethodMatcher::statics("org.apache.commons.lang3.Validate").named(&["notNull"]),
+];
+const CHECKS_LAST_ARG_NON_NULL: &[MethodMatcher] =
+    &[MethodMatcher::statics("org.junit.Assert").named(&["assertNotNull"]), MethodMatcher::statics("junit.framework.Assert").named(&["assertNotNull"])];
+
+/// Methods whose RESULT is never null, whatever their arguments: the
+/// checks above that return their argument, and `requireNonNullElse(x, d)`,
+/// which leaves a null `x` null and returns `d` instead.
+const RETURNS_NON_NULL: &[MethodMatcher] = &[
+    MethodMatcher::statics("java.util.Objects").named(&["requireNonNull", "requireNonNullElse", "requireNonNullElseGet"]),
+    MethodMatcher::statics("com.google.common.base.Preconditions").named(&["checkNotNull"]),
+    MethodMatcher::statics("org.apache.commons.lang3.Validate").named(&["notNull"]),
+];
+
+/// Static utilities that are true for a null argument (`StringUtils.isEmpty(x)`):
+/// false proves the argument non-null.
+const TRUE_FOR_NULL: &[MethodMatcher] = &[
+    MethodMatcher::statics("org.apache.commons.lang3.StringUtils").named(&["isEmpty", "isBlank"]).arity(1),
+    MethodMatcher::statics("org.apache.commons.lang.StringUtils").named(&["isEmpty", "isBlank"]).arity(1),
+    MethodMatcher::statics("org.apache.commons.lang3.ObjectUtils").named(&["isEmpty"]).arity(1),
+    MethodMatcher::statics("org.apache.commons.lang3.ArrayUtils").named(&["isEmpty"]).arity(1),
+    MethodMatcher::statics("org.apache.commons.collections4.CollectionUtils").named(&["isEmpty"]).arity(1),
+    MethodMatcher::statics("org.apache.commons.collections4.MapUtils").named(&["isEmpty"]).arity(1),
+    MethodMatcher::statics("org.springframework.util.StringUtils").named(&["isEmpty"]).arity(1),
+    MethodMatcher::statics("org.springframework.util.ObjectUtils").named(&["isEmpty"]).arity(1),
+    MethodMatcher::statics("org.springframework.util.CollectionUtils").named(&["isEmpty"]).arity(1),
+    MethodMatcher::statics("com.google.common.base.Strings").named(&["isNullOrEmpty"]).arity(1),
+];
+
+/// Static utilities that are false for a null argument (`StringUtils.hasText(x)`):
+/// true proves the argument non-null.
+const FALSE_FOR_NULL: &[MethodMatcher] = &[
+    MethodMatcher::statics("org.apache.commons.lang3.StringUtils").named(&["isNotEmpty", "isNotBlank"]).arity(1),
+    MethodMatcher::statics("org.apache.commons.lang.StringUtils").named(&["isNotEmpty", "isNotBlank"]).arity(1),
+    MethodMatcher::statics("org.apache.commons.lang3.ObjectUtils").named(&["isNotEmpty"]).arity(1),
+    MethodMatcher::statics("org.apache.commons.lang3.ArrayUtils").named(&["isNotEmpty"]).arity(1),
+    MethodMatcher::statics("org.apache.commons.collections4.CollectionUtils").named(&["isNotEmpty"]).arity(1),
+    MethodMatcher::statics("org.apache.commons.collections4.MapUtils").named(&["isNotEmpty"]).arity(1),
+    MethodMatcher::statics("org.springframework.util.StringUtils").named(&["hasText", "hasLength"]).arity(1),
+];
+
+/// Instance methods true only for a non-null argument: `"x".equals(v)`
+/// (equals is false for null on these final JDK classes), and String methods
+/// that throw for a null argument (`"abc".contains(v)`). Collection
+/// `contains` is not one: a collection may hold null.
+const TRUE_ONLY_FOR_NON_NULL_ARG: &[MethodMatcher] = &[
+    MethodMatcher::exact("java.lang.String").named(&["equals"]).params(&["java.lang.Object"]),
+    MethodMatcher::exact("java.lang.String").named(&["equalsIgnoreCase", "startsWith", "endsWith"]).params(&["java.lang.String"]),
+    MethodMatcher::exact("java.lang.String").named(&["contains"]).params(&["java.lang.CharSequence"]),
+    MethodMatcher::exact("java.lang.Enum").named(&["equals"]).params(&["java.lang.Object"]),
+    MethodMatcher::exact("java.lang.Integer").named(&["equals"]).params(&["java.lang.Object"]),
+    MethodMatcher::exact("java.lang.Long").named(&["equals"]).params(&["java.lang.Object"]),
+    MethodMatcher::exact("java.lang.Short").named(&["equals"]).params(&["java.lang.Object"]),
+    MethodMatcher::exact("java.lang.Byte").named(&["equals"]).params(&["java.lang.Object"]),
+    MethodMatcher::exact("java.lang.Character").named(&["equals"]).params(&["java.lang.Object"]),
+    MethodMatcher::exact("java.lang.Boolean").named(&["equals"]).params(&["java.lang.Object"]),
+    MethodMatcher::exact("java.lang.Double").named(&["equals"]).params(&["java.lang.Object"]),
+    MethodMatcher::exact("java.lang.Float").named(&["equals"]).params(&["java.lang.Object"]),
 ];
 
 impl<'a, 't> NullnessAnalysis<'a, 't> {
@@ -215,7 +279,7 @@ impl<'a, 't> NullnessAnalysis<'a, 't> {
                     }
                     return Some(Nullness::Nullable);
                 }
-                if self.fm.call_matches_any(v, REQUIRE_NON_NULL) {
+                if self.fm.call_matches_any(v, RETURNS_NON_NULL) {
                     return Some(Nullness::NonNull);
                 }
                 if c.ret.is_prim() {
@@ -492,40 +556,37 @@ impl<'a, 't> NullnessAnalysis<'a, 't> {
                 }
             }
             "method_invocation" => {
-                let name = self.fm.call_name(c).unwrap_or("");
-                let args = self.fm.args_of(c);
-                let first_local = args.first().map(|a| a.unparen()).filter(|a| a.kind() == "identifier").and_then(|a| self.fm.binder.decl_index_of_ref(a));
-                match name {
-                    "isNull" | "nonNull" => {
-                        if let Some(i) = first_local {
-                            let is_null = name == "isNull";
-                            // non-null on the "not null" outcome is safe for any
-                            // predicate; null on the other only with Objects' contract
-                            out.push((i, Nullness::NonNull, !is_null));
-                            if self.fm.call_matches_any(c, OBJECTS_NULL_CHECKS) {
-                                out.push((i, Nullness::Null, is_null));
-                            }
-                        }
-                    }
-                    "isEmpty" | "isBlank" | "isNullOrEmpty" | "hasText" | "hasLength" | "isNotEmpty" | "isNotBlank" if !args.is_empty() => {
-                        // StringUtils.isEmpty(x): false => non-null; hasText(x): true => non-null
-                        if let Some(i) = first_local {
-                            let nonnull_on_true = matches!(name, "hasText" | "hasLength" | "isNotEmpty" | "isNotBlank");
-                            out.push((i, Nullness::NonNull, nonnull_on_true));
-                        }
-                    }
-                    "equals" | "equalsIgnoreCase" | "contains" | "startsWith" | "endsWith" => {
-                        // "lit".equals(x) true => x non-null
-                        if let Some(i) = first_local {
-                            out.push((i, Nullness::NonNull, true));
-                        }
-                    }
-                    _ => {}
+                let fm = self.fm;
+                let args = fm.args_of(c);
+                let Some(i) = args.first().map(|a| a.unparen()).filter(|a| a.kind() == "identifier").and_then(|a| fm.binder.decl_index_of_ref(a)) else { return out };
+                if fm.call_matches_any(c, OBJECTS_NULL_CHECKS) {
+                    let is_null = fm.call_name(c) == Some("isNull");
+                    out.push((i, Nullness::NonNull, !is_null));
+                    out.push((i, Nullness::Null, is_null));
+                } else if fm.call_matches_any(c, TRUE_FOR_NULL) {
+                    out.push((i, Nullness::NonNull, false));
+                } else if fm.call_matches_any(c, FALSE_FOR_NULL) || fm.call_matches_any(c, TRUE_ONLY_FOR_NON_NULL_ARG) {
+                    out.push((i, Nullness::NonNull, true));
                 }
             }
             _ => {}
         }
         out
+    }
+
+    /// The local an argument-checking call (`requireNonNull(x)`,
+    /// `assertNotNull("msg", x)`) proves non-null once it returns.
+    fn checked_non_null(&self, call: Node<'t>) -> Option<usize> {
+        let args = self.fm.args_of(call);
+        let a = if self.fm.call_matches_any(call, CHECKS_FIRST_ARG_NON_NULL) {
+            args.first()
+        } else if self.fm.call_matches_any(call, CHECKS_LAST_ARG_NON_NULL) {
+            args.last()
+        } else {
+            None
+        }?
+        .unparen();
+        (a.kind() == "identifier").then(|| self.fm.binder.decl_index_of_ref(a)).flatten()
     }
 
     /// Locals passed directly as arguments to a boolean method of the
@@ -636,10 +697,11 @@ impl<'a, 't> NullnessAnalysis<'a, 't> {
                 // `StringUtils.isNotEmpty(name)` after `name = ""`
                 let i = local(args.first().copied())?;
                 let init = self.literal_init(i)?;
-                let empty = match name {
-                    "isEmpty" | "isBlank" | "isNullOrEmpty" => !truth,
-                    "isNotEmpty" | "isNotBlank" | "hasText" | "hasLength" => truth,
-                    _ => false,
+                // only the library utilities known to call "" and null empty
+                let empty = if fm.call_matches_any(c, TRUE_FOR_NULL) {
+                    !truth
+                } else {
+                    fm.call_matches_any(c, FALSE_FOR_NULL) && truth
                 };
                 let empty_init = fm.text(init) == "\"\"" || init.kind() == "null_literal";
                 (empty && empty_init).then_some(i)
@@ -846,8 +908,12 @@ impl<'a, 't> Analysis<'t> for NullnessAnalysis<'a, 't> {
                         }
                     }
                 }
-                // AssertJ: `assertThat(x).isNotNull()` aborts when x is null
-                if matches!(self.fm.call_name(e), Some("isNotNull" | "isNotEmpty" | "isNotBlank" | "isInstanceOf")) {
+                // AssertJ and Truth: `assertThat(x).isNotNull()` aborts when x is null;
+                // a same-named method of another owner proves nothing
+                let assertion_library = |o: &str| o.starts_with("org.assertj.") || o.starts_with("com.google.common.truth.");
+                if matches!(self.fm.call_name(e), Some("isNotNull" | "isNotEmpty" | "isNotBlank" | "isInstanceOf"))
+                    && self.fm.select_method(e).is_some_and(|c| !c.ambiguous && assertion_library(&c.owner))
+                {
                     let subject = assert_that_root(self.fm, e.field("object"));
                     if let Some(a) = subject.and_then(|o| self.fm.args_of(o).first().map(|a| a.unparen())).filter(|a| a.kind() == "identifier") {
                         if let Some(i) = self.fm.binder.decl_index_of_ref(a) {
@@ -855,15 +921,8 @@ impl<'a, 't> Analysis<'t> for NullnessAnalysis<'a, 't> {
                         }
                     }
                 }
-                if self.fm.call_matches_any(e, REQUIRE_NON_NULL) {
-                    // the checked value is the first argument (`requireNonNull(x, msg)`)
-                    if let Some(a) = self.fm.args_of(e).first().map(|a| a.unparen()) {
-                        if a.kind() == "identifier" {
-                            if let Some(i) = self.fm.binder.decl_index_of_ref(a) {
-                                f.insert(i, Nullness::NonNull);
-                            }
-                        }
-                    }
+                if let Some(i) = self.checked_non_null(e) {
+                    f.insert(i, Nullness::NonNull);
                 }
             }
             "instanceof_expression" => {}
