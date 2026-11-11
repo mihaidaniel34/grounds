@@ -46,7 +46,8 @@ pub struct Session {
 
 /// What a project is loaded from besides its Java sources: the files that
 /// decide its modules, classpath, settings and beans.
-/// - build files and `lombok.config` of the root and of every module;
+/// - build files and `lombok.config` of the root and of every module, and
+///   Gradle's convention scripts (`buildSrc`, `build-logic`);
 /// - `grounds.toml`, the classpath dumps, the source sets a dump recorded and
 ///   every jar on the classpath (a snapshot jar is rebuilt in place);
 /// - per module, Spring's registration files and `application*` settings,
@@ -73,6 +74,8 @@ fn config_files(project: &Project) -> Vec<PathBuf> {
         paths.extend(crate::classpath::BUILD_FILES.iter().chain(&["lombok.config"]).map(|n| d.join(n)));
     }
     paths.extend(project.lombok.files());
+    // Gradle convention plugins: the release they set is every module's
+    paths.extend(crate::java_release::convention_files(&ws.root));
     for m in &ws.modules {
         let resources = m.dir.join("src/main/resources");
         let meta = resources.join("META-INF");
@@ -419,6 +422,39 @@ impl Session {
         // ignore files count only inside one; or one that did during the
         // last walk
         full |= self.walked.pending || self.walked.outer_gits.iter().any(|(a, kind)| boundary(a) != *kind);
+        // git's index or HEAD changed (`git add`, a commit, a checkout): the
+        // files git tracks although ignored, which a fresh load reads, may
+        // be others. Asked of git only then; when the list differs, the
+        // workspace is walked again, which reads the files that became
+        // tracked and drops those that are no longer. (Stamped before git
+        // is asked: a change while it runs shows at the next sync.) When git
+        // cannot answer, which files those are is not known: the session
+        // keeps what it holds and the stamps it had, and asks again at the
+        // next sync, walking only once git answers with another list.
+        let moved = |s: &mut Session| {
+            s.walked.git.iter_mut().any(|(p, stamp)| match stamp {
+                Some(stamp) => stamp.changed(p, clock),
+                None => FileStamp::of(p, false).is_some(),
+            })
+        };
+        if !full && (self.walked.tracked_unknown || moved(self)) {
+            let stamps: Vec<(PathBuf, Option<FileStamp>)> = self.walked.git.iter().map(|(p, old)| (p.clone(), FileStamp::of(p, true).map(|s| s.after(old.as_ref())))).collect();
+            match crate::workspace::tracked_but_ignored_cached(&root, true) {
+                (_, false) => {
+                    crate::trace::log(|| "sync: git could not list the tracked files, asking again at the next sync".into());
+                    self.walked.tracked_unknown = true;
+                }
+                (tracked, true) if tracked == self.walked.tracked => {
+                    crate::trace::log(|| "sync: git's index changed, the same files tracked although ignored".into());
+                    self.walked.git = stamps;
+                    self.walked.tracked_unknown = false;
+                }
+                _ => {
+                    crate::trace::log(|| "sync: git tracks other ignored files, walking the workspace".into());
+                    full = true;
+                }
+            }
+        }
         let (mut found, mut found_modules) = (Vec::new(), Vec::new());
         let mut gone: FxHashSet<PathBuf> = FxHashSet::default();
         // a directory the discovery would not go into (any more): it and all
@@ -494,7 +530,8 @@ impl Session {
             self.full_walks += 1;
             // ignore files stamped before the walk: one unchanged by its end is
             // what it read, and keeps the time it was first seen
-            let before: FxHashMap<PathBuf, FileStamp> = self.walked.ignores.iter().filter_map(|(p, old)| FileStamp::of(p, true).map(|s| (p.clone(), s.after(old.as_ref())))).collect();
+            // (and git's index and HEAD, which the list of tracked files was read with)
+            let before: FxHashMap<PathBuf, FileStamp> = self.walked.ignores.iter().chain(&self.walked.git).filter_map(|(p, old)| FileStamp::of(p, true).map(|s| (p.clone(), s.after(old.as_ref())))).collect();
             // and where repositories start, in the directories known before
             // the walk and above the root: one that starts or ends while it
             // runs leaves another walk to do
@@ -502,7 +539,7 @@ impl Session {
             bounds.extend(root.ancestors().skip(1).map(|a| (a.to_path_buf(), boundary(a))));
             let began = SystemTime::now();
             let w = walk(&root, None);
-            self.walked = Walk::stamp(&w.dirs, Some(&root), began, &before, &bounds);
+            self.walked = Walk::of_workspace(&w, began, &before, &bounds);
             // the modules as a fresh load finds them: one added, gone or of
             // another build system reloads the project
             let layout = |ms: &[crate::workspace::Module]| {
@@ -571,16 +608,7 @@ impl Session {
             if self.config_unread {
                 crate::trace::log(|| "sync: reload, the version of a configuration file the load read is not known".into());
             }
-            let root = self.root().to_path_buf();
-            // stamped before the load begins, to tell afterwards whether the
-            // load read them as they are then
-            let before: FxHashMap<PathBuf, Option<FileStamp>> = self.config.iter().map(|(p, _)| (p.clone(), FileStamp::of(p, false))).collect();
-            if let Ok(project) = Project::load(&root) {
-                // warnings already shown are not shown again for the same state
-                let shown = self.warned.then(|| self.project.classpath_warnings.clone());
-                *self = Session::from_load(project, Some(&before));
-                self.warned = shown.is_some_and(|w| w == self.project.classpath_warnings);
-            }
+            self.reload();
         }
         // (on all cores: after a checkout of the whole tree every file is racy
         // and its content is compared)
@@ -621,6 +649,7 @@ impl Session {
         let mut any_decl_change = false;
         let mut di_stale = false;
         let mut forgotten: FxHashSet<PathBuf> = FxHashSet::default();
+        let any_stale = !stale.is_empty();
         for p in stale {
             // the stamp first, then the text it vouches for; a path that is
             // no longer a file (a directory now), or that the walk no longer
@@ -668,6 +697,15 @@ impl Session {
         if !forgotten.is_empty() {
             self.project.workspace.files.retain(|f| !forgotten.contains(&f.path));
         }
+        // The JDK API, the modules' releases and all that is resolved against
+        // them follow from the release plan, which also depends on the
+        // sources (which modules hold code, what release the code needs): one
+        // a fresh load would make differently now is made by loading again.
+        if any_stale && self.project.release_plan_changed() {
+            crate::trace::log(|| "sync: reload, the sources change the release plan".into());
+            self.reload();
+            return changed;
+        }
         if any_decl_change || di_stale {
             self.project.rebuild_di();
         }
@@ -680,6 +718,20 @@ impl Session {
             }
         }
         changed
+    }
+
+    /// Load the project again, as a new session would load it.
+    fn reload(&mut self) {
+        let root = self.root().to_path_buf();
+        // stamped before the load begins, to tell afterwards whether the
+        // load read them as they are then
+        let before: FxHashMap<PathBuf, Option<FileStamp>> = self.config.iter().map(|(p, _)| (p.clone(), FileStamp::of(p, false))).collect();
+        if let Ok(project) = Project::load(&root) {
+            // warnings already shown are not shown again for the same state
+            let shown = self.warned.then(|| self.project.classpath_warnings.clone());
+            *self = Session::from_load(project, Some(&before));
+            self.warned = shown.is_some_and(|w| w == self.project.classpath_warnings);
+        }
     }
 
     fn target_files(&self, opts: &CheckOptions) -> Vec<PathBuf> {
@@ -1503,4 +1555,56 @@ mod tests {
         assert!(after.contains("Clinic.java"), "{after}");
         let _ = std::fs::remove_dir_all(&dir);
     }
+
+    /// Git's index and HEAD are those of the work tree's own git directory:
+    /// a linked worktree's, for a project below the top of its repository.
+    /// A sync with neither changed runs no git; staging an ignored file, or
+    /// unstaging it, is seen as a fresh load sees it.
+    #[test]
+    fn the_work_tree_s_own_index_decides_the_tracked_ignored_files() {
+        let base = std::env::temp_dir().join(format!("grounds-index-worktree-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let main = base.join("main");
+        let w = |rel: &str, text: &str| {
+            let p = main.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        w(".gitignore", "Hidden.java\n");
+        w("app/build.gradle", "plugins { id 'java' }\n");
+        w("app/src/main/java/Use.java", "class Use { void test(Hidden h) { h.missing(); } }\n");
+        w("app/src/main/java/Hidden.java", "class Hidden {}\n");
+        std::fs::create_dir_all(&main).unwrap();
+        git(&main, &["init", "-q"]);
+        git(&main, &["add", "-A"]);
+        git(&main, &["commit", "-qm", "init"]);
+        let tree = base.join("tree");
+        git(&main, &["worktree", "add", "-q", tree.to_str().unwrap()]);
+        std::fs::write(tree.join("app/src/main/java/Hidden.java"), "class Hidden {}\n").unwrap();
+        let dir = tree.join("app").canonicalize().unwrap();
+        let opts = CheckOptions { mode: Mode::Checkpoint, files: vec![dir.join("src/main/java/Use.java")], all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None };
+        let report = |s: &mut Session| serde_json::to_string(&s.check(&opts)).unwrap();
+        let as_fresh = |s: &mut Session, what: &str| {
+            let warm = report(s);
+            assert_eq!(warm, report(&mut Session::open(&dir).unwrap()), "after {what}");
+            warm
+        };
+        let mut s = Session::open(&dir).unwrap();
+        assert!(!as_fresh(&mut s, "the load").contains("unresolved-method"));
+        // (the index was written just before the load: the first sync asks git once)
+        s.sync(&[]);
+        let runs = crate::workspace::git_listings(&dir);
+        s.sync(&[]);
+        s.sync(&[]);
+        assert_eq!(crate::workspace::git_listings(&dir), runs, "a sync with git's index and HEAD unchanged runs no git");
+        // staged in the main work tree: not this work tree's index
+        git(&main, &["add", "-f", "app/src/main/java/Hidden.java"]);
+        assert!(!as_fresh(&mut s, "a file staged in another work tree").contains("unresolved-method"));
+        git(&tree, &["add", "-f", "app/src/main/java/Hidden.java"]);
+        assert!(as_fresh(&mut s, "a file staged in this work tree").contains("unresolved-method"));
+        git(&tree, &["rm", "-q", "--cached", "app/src/main/java/Hidden.java"]);
+        assert!(!as_fresh(&mut s, "the file unstaged").contains("unresolved-method"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
 }

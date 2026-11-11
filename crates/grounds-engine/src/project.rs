@@ -57,6 +57,49 @@ pub struct Project {
     /// When loading began. A file written after this may have been read
     /// before or after the write.
     pub load_began: std::time::SystemTime,
+    /// The JDK API loaded and the release of each module
+    /// (`java_release::plan`): the classpath, the index's exact releases and
+    /// release floors, and resolution depend on it.
+    pub releases: crate::java_release::ReleasePlan,
+    /// What the plan took from the sources (see `release_inputs`): a sync
+    /// that changes it plans again.
+    pub release_inputs: ReleaseInputs,
+}
+
+/// What the release plan depends on in the sources, per module (in
+/// `ws.modules` order): whether it holds code (`java_release::plan` counts
+/// only modules that do) and the lowest release its code needs. The rest of
+/// what the plan reads (build files, `grounds.toml`, the installed JDK) a
+/// session follows as configuration, loading the project again when it
+/// changes.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ReleaseInputs {
+    pub with_code: Vec<bool>,
+    pub needs: Vec<Option<u32>>,
+}
+
+impl ReleaseInputs {
+    /// Of the workspace's files, with the stub each has (none for a file that
+    /// could not be read, which needs nothing, as at load).
+    pub fn of<'a>(ws: &Workspace, stub: impl Fn(&Path) -> Option<&'a FileStub>) -> ReleaseInputs {
+        let mut r = ReleaseInputs { with_code: vec![false; ws.modules.len()], needs: vec![None; ws.modules.len()] };
+        for f in &ws.files {
+            if f.kind != SourceKind::Generated {
+                if let Some(w) = r.with_code.get_mut(f.module) {
+                    *w = true;
+                }
+            }
+            if let (Some(n), Some(need)) = (r.needs.get_mut(f.module), stub(&f.path).and_then(|s| code_needs(&f.path, s))) {
+                *n = (*n).max(Some(need));
+            }
+        }
+        r
+    }
+
+    /// As `java_release::plan` takes them: (module, lowest release needed).
+    pub fn needs(&self) -> Vec<(usize, u32)> {
+        self.needs.iter().enumerate().filter_map(|(m, n)| n.map(|n| (m, n))).collect()
+    }
 }
 
 /// Class names registered through Spring's META-INF files in any module, and
@@ -378,6 +421,17 @@ pub struct Walk {
     /// A repository started or ended while the walk ran: it may have skipped
     /// files by the other one, and the next sync walks again.
     pub pending: bool,
+    /// Of a walk of the whole workspace: git's index and HEAD for the work
+    /// tree (`workspace::index_files`; `None`: not there), and the files git
+    /// tracks although ignored that the walk read with them
+    /// (`Workspace::tracked`). Staging, committing or checking out changes
+    /// which files those are, and no directory's time shows it.
+    pub git: Vec<(PathBuf, Option<FileStamp>)>,
+    pub tracked: Vec<PathBuf>,
+    /// git could not list the tracked-but-ignored files when they were last
+    /// asked for: which they are is not known, and every sync asks again
+    /// (without walking the workspace) until git answers.
+    pub tracked_unknown: bool,
 }
 
 impl Walk {
@@ -392,11 +446,13 @@ impl Walk {
     /// first seen (a time in the future is trusted once seen for the margin).
     /// An ignore file whose content cannot be read stays `unread`. With
     /// `root`, the walk was of the whole workspace there: the ignore files
-    /// and repositories above it are stamped too. `bounds`: where repositories
+    /// and repositories above it are stamped too, and git's index and HEAD
+    /// (as ignore files: one whose time is recent as of `began` is `unread`;
+    /// `of_workspace` adds the tracked-but-ignored files read with them). `bounds`: where repositories
     /// started (`workspace::boundary`) just before the walk began, in the
     /// directories known then; one that differs now makes the walk `pending`.
     pub fn stamp(dirs: &[PathBuf], root: Option<&Path>, began: SystemTime, before: &rustc_hash::FxHashMap<PathBuf, FileStamp>, bounds: &rustc_hash::FxHashMap<PathBuf, Option<u8>>) -> Walk {
-        use crate::workspace::{boundary, listable, outer_ignore_files, repo_inputs, IGNORE_FILES};
+        use crate::workspace::{boundary, index_files, listable, outer_ignore_files, repo_inputs, IGNORE_FILES};
         let mark = |p: &Path, s: FileStamp| match before.get(p).filter(|b| b.same(&s)) {
             Some(b) => s.after(Some(b)),
             None => FileStamp { unread: s.unread || recent(s.mtime, began), ..s },
@@ -418,16 +474,22 @@ impl Walk {
         // what every repository the walk went into reads its excludes
         // through, there or not
         let mut listed: Vec<PathBuf> = gits.keys().flat_map(|d| repo_inputs(d)).collect();
-        let mut outer_gits = Vec::new();
+        let (mut outer_gits, mut git) = (Vec::new(), Vec::new());
         if let Some(root) = root {
             listed.extend(outer_ignore_files(root));
             outer_gits = root.ancestors().skip(1).map(|a| (a.to_path_buf(), boundary(a))).collect();
+            git = index_files(root).into_iter().map(|p| { let s = ignore(&p); (p, s) }).collect();
         }
         let pending = bounds.par_iter().any(|(d, b)| boundary(d) != *b);
         ignores.extend(listed.iter().map(|p| (p.clone(), ignore(p))));
         ignores.sort_by(|a, b| a.0.cmp(&b.0));
         ignores.dedup_by(|a, b| a.0 == b.0);
-        Walk { dirs, ignores, gits, outer_gits, pending }
+        Walk { dirs, ignores, gits, outer_gits, pending, git, tracked: Vec::new(), tracked_unknown: false }
+    }
+
+    /// The same, of a walk of the whole workspace that found `ws`.
+    pub fn of_workspace(ws: &Workspace, began: SystemTime, before: &rustc_hash::FxHashMap<PathBuf, FileStamp>, bounds: &rustc_hash::FxHashMap<PathBuf, Option<u8>>) -> Walk {
+        Walk { tracked: ws.tracked.clone(), tracked_unknown: !ws.tracked_known, ..Walk::stamp(&ws.dirs, Some(&ws.root), began, before, bounds) }
     }
 }
 
@@ -451,7 +513,7 @@ impl Project {
         crate::workspace::set_extra_test_sets(config.test_source_sets.iter().cloned().chain(source_sets.test_sets()).collect());
         crate::workspace::register_project_root(&root.canonicalize().unwrap_or_else(|_| root.to_path_buf()));
         let workspace = Workspace::discover(root, &config.exclude);
-        let walked = Walk::stamp(&workspace.dirs, Some(&workspace.root), load_began, &Default::default(), &Default::default());
+        let walked = Walk::of_workspace(&workspace, load_began, &Default::default(), &Default::default());
         stats.t_discover = t.elapsed();
         stats.files = workspace.files.len();
 
@@ -493,9 +555,10 @@ impl Project {
         stats.classpath_entries = entries.len();
         let java_home = config.java_home.clone().or_else(grounds_classfile::find_java_home);
         // the release the build states, checked against what the code uses
-        let module_of: std::collections::HashMap<&Path, usize> = workspace.files.iter().map(|f| (f.path.as_path(), f.module)).collect();
-        let needs: Vec<(usize, u32)> = results.iter().filter_map(|(p, _, stub, _)| Some((*module_of.get(p.as_path())?, code_needs(p, stub)?))).collect();
-        let releases = config.release_plan(&workspace, &needs);
+        let stubs: std::collections::HashMap<&Path, &FileStub> = results.iter().map(|(p, _, stub, _)| (p.as_path(), &**stub)).collect();
+        let release_inputs = ReleaseInputs::of(&workspace, |p| stubs.get(p).copied());
+        drop(stubs);
+        let releases = config.release_plan(&workspace, &release_inputs.needs());
         stats.java_release = releases.load;
         let classpath = Arc::new(Classpath::build(java_home.as_deref(), stats.java_release, &entries));
         // a JDK home without lib/ct.sym is reported by the classpath warnings
@@ -539,7 +602,22 @@ impl Project {
         di.lombok_copies_qualifiers = lombok_copies_qualifiers(&workspace.root);
         di.bean_overriding_allowed = bean_overriding_allowed(&workspace);
         let classpath_warnings = crate::classpath::warnings(&workspace, &config, &index);
-        Ok(Project { config, workspace, index, stats, di, source_sets, lombok, registered, auto_registered, classpath_warnings, classpath_entries: entries, stamps, walked, load_began })
+        Ok(Project { config, workspace, index, stats, di, source_sets, lombok, registered, auto_registered, classpath_warnings, classpath_entries: entries, stamps, walked, load_began, releases, release_inputs })
+    }
+
+    /// Whether the release plan a load would make now, from the sources as
+    /// the index holds them, differs from the one this project was loaded
+    /// with. Plans again only when what the sources tell it changed (a
+    /// module gained its first source or lost its last, a file needs a newer
+    /// release): otherwise no more than a pass over the files in memory.
+    pub fn release_plan_changed(&mut self) -> bool {
+        let inputs = ReleaseInputs::of(&self.workspace, |p| self.index.file(&p.to_string_lossy()).map(|s| &**s));
+        if inputs == self.release_inputs {
+            return false;
+        }
+        let plan = self.config.release_plan(&self.workspace, &inputs.needs());
+        self.release_inputs = inputs;
+        plan != self.releases
     }
 
     pub fn source_kind(&self, path: &Path) -> SourceKind {
