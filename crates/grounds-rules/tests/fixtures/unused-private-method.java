@@ -19,3 +19,7 @@ class UnknownArguments {
     private void close(byte code) { close(codec.message(code)); }
     private void close(com.unknown.Message msg) { }
 }
+class TypedReference {
+    private <T> T identity(T t) { return t; }
+    java.util.function.Function<String, String> f() { return this::<String>identity; }
+}

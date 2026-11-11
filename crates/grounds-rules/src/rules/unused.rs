@@ -21,7 +21,14 @@ pub fn rules() -> Vec<Box<dyn Rule>> {
 /// Is this identifier use a pure write (target of `=`)?
 fn is_write_only(u: Node) -> bool {
     match u.parent_unparen() {
-        Some(p) if p.kind() == "assignment_expression" => p.field("left").map(|l| l.unparen()) == Some(u),
+        // `x = v` writes; `x += v` reads x too, which counts only when its
+        // value is used (`return x += 1`), not as a statement of its own
+        Some(p) if p.kind() == "assignment_expression" => {
+            p.field("left").map(|l| l.unparen()) == Some(u)
+                && (p.field("operator").is_some_and(|o| o.kind() == "=")
+                    // (a `for` condition uses the value; its init and update do not)
+                    || p.parent().is_some_and(|pp| pp.kind() == "expression_statement" || (pp.kind() == "for_statement" && pp.field("condition") != Some(p))))
+        }
         Some(p) if p.kind() == "update_expression" => p.parent().is_some_and(|pp| pp.kind() == "expression_statement" || pp.kind() == "for_statement"),
         _ => false,
     }
@@ -32,7 +39,7 @@ declare_rule!(UnusedLocal {
     name: "Unused local variable",
     category: BadPractice,
     severity: Warning,
-    maturity: Preview,
+    maturity: Stable,
     tier: Edit,
     sources: ["sonar:S1481", "sonar:S1854", "pmd:UnusedLocalVariable", "intellij:UnusedDeclaration"],
     kinds: ["<file>"],
@@ -96,7 +103,7 @@ impl Rule for UnusedPatternVariable {
     }
 }
 
-fn top_level_decl<'t>(n: Node<'t>) -> Option<Node<'t>> {
+pub(crate) fn top_level_decl<'t>(n: Node<'t>) -> Option<Node<'t>> {
     let mut last = None;
     for a in std::iter::once(n).chain(n.ancestors()) {
         if grounds_syntax::is_type_declaration(a.kind()) {
@@ -115,7 +122,7 @@ declare_rule!(UnusedPrivateField {
     name: "Unused private field",
     category: BadPractice,
     severity: Warning,
-    maturity: Preview,
+    maturity: Stable,
     sources: ["sonar:S1068", "spotbugs:URF_UNREAD_FIELD", "spotbugs:UUF_UNUSED_FIELD", "pmd:UnusedPrivateField"],
     kinds: ["field_declaration"],
     description: "A private field that is never read is dead state; if it is written, the writes are wasted work and may hide a missing use.",
@@ -198,7 +205,7 @@ declare_rule!(UnusedPrivateMethod {
     name: "Unused private method",
     category: BadPractice,
     severity: Warning,
-    maturity: Preview,
+    maturity: Stable,
     sources: ["sonar:S1144", "spotbugs:UPM_UNCALLED_PRIVATE_METHOD", "pmd:UnusedPrivateMethod"],
     kinds: ["method_declaration"],
     description: "A private method that is never called is dead code (or the caller was removed in a refactoring that forgot it).",
@@ -221,6 +228,10 @@ impl Rule for UnusedPrivateMethod {
         let top_text = cx.text(top);
         // referenced by name in strings (@MethodSource, reflection) or method references
         if top_text.contains(&format!("\"{name}\"")) || top_text.contains(&format!("::{name}")) || top_text.contains(&format!("#{name}")) {
+            return;
+        }
+        // `this::<String>identity`: a method reference with type arguments
+        if top.descendants().any(|d| d.kind() == "method_reference" && d.kids().last().is_some_and(|k| k.kind() == "identifier" && cx.text(*k) == name)) {
             return;
         }
         // a bare @MethodSource uses the provider named like the test method

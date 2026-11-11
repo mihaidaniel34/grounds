@@ -29,3 +29,10 @@ class CTest {
         org.junit.jupiter.api.Assertions.assertEquals(e.getCode(), 0, "unexpected code"); // expect
     }
 }
+class DTest {
+    // a helper whose class is not on the classpath may take (actual, expected)
+    @org.junit.jupiter.api.Test void t(lib.Checks helper) {
+        int r = 1;
+        helper.assertEquals(r, 42);
+    }
+}

@@ -48,7 +48,6 @@ fn preview_false_turns_preview_rules_off() {
     let p = Project::load(&dir).unwrap();
     assert!(!p.config.rules.preview);
     let expected: Vec<_> = grounds_rules::catalog().iter().filter(|m| m.default_enabled && m.maturity == Maturity::Stable).map(|m| m.id).collect();
-    // (no rule is stable yet, so this is the empty list for now)
     assert_eq!(ids(&p), expected);
     assert!(rules_found(&p).is_empty());
     let _ = std::fs::remove_dir_all(&dir);
@@ -112,12 +111,18 @@ fn the_break_rules_are_stable_in_changed_and_preview_in_check() {
     use grounds_engine::analyze::selected_rules_for;
     let dir = project("modes", Some("[rules]\npreview = false\n"));
     let p = Project::load(&dir).unwrap();
-    // `grounds check`: no rule is stable, so none runs
-    assert!(selected_rules_for(&p, false).is_empty());
-    // `grounds changed`: exactly the compile-break rules of `STABLE_IN_CHANGED`
+    // `grounds check`: exactly the stable rules
+    let stable: Vec<_> = grounds_rules::catalog().iter().filter(|m| m.default_enabled && m.maturity == Maturity::Stable).map(|m| m.id).collect();
+    assert!(!stable.is_empty());
+    let mut check: Vec<_> = selected_rules_for(&p, false).iter().map(|r| r.meta().id).collect();
+    check.sort();
+    let mut want = stable.clone();
+    want.sort();
+    assert_eq!(check, want);
+    // `grounds changed`: those, plus the compile-break rules of `STABLE_IN_CHANGED`
     let mut changed: Vec<_> = selected_rules_for(&p, true).iter().map(|r| r.meta().id).collect();
     changed.sort();
-    let mut expected: Vec<_> = grounds_rules::STABLE_IN_CHANGED.iter().copied().filter(|id| grounds_rules::meta_of(id).unwrap().default_enabled).collect();
+    let mut expected: Vec<_> = grounds_rules::STABLE_IN_CHANGED.iter().copied().filter(|id| grounds_rules::meta_of(id).unwrap().default_enabled).chain(stable.iter().copied()).collect();
     expected.sort();
     assert_eq!(changed, expected);
     // every stable rule is compared with the base; the wiring rules are

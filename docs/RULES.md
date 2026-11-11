@@ -4,7 +4,7 @@
 
 Tier `edit` rules run after every edit; all rules run at checkpoints. Rules marked *off* are disabled by default (enable in `grounds.toml`).
 
-Maturity: 0 rules are `stable` (held to the project's precision promise). 6 are `stable in changed`: the compile-break rules, whose findings `grounds changed` reports only when they are new with the change (on a changed line, or a place in another file the change broke); those findings are stable, while the same rules run over a whole project with `grounds check` are preview. The other 312 are `preview` (still being measured). Preview rules run by default for now; `preview = false` under `[rules]` in `grounds.toml` turns them off, except those named by id in `enable` or `--rules`; it keeps the `stable in changed` rules in `grounds changed`, and they run in `grounds check` only when named by id. The wiring rules are preview in both: their claims depend on order in the wiring model. See the README.
+Maturity: 8 rules are `stable` (held to the project's precision promise in `grounds check` and `grounds changed` alike). 6 are `stable in changed`: the compile-break rules, whose findings `grounds changed` reports only when they are new with the change (on a changed line, or a place in another file the change broke); those findings are stable, while the same rules run over a whole project with `grounds check` are preview. The other 304 are `preview` (still being measured). Preview rules run by default for now; `preview = false` under `[rules]` in `grounds.toml` turns them off, except those named by id in `enable` or `--rules`; it keeps the `stable in changed` rules in `grounds changed`, and they run in `grounds check` only when named by id. The wiring rules are preview in both: their claims depend on order in the wiring model. See the README.
 
 ## bad-practice (38)
 
@@ -31,8 +31,8 @@ Maturity: 0 rules are `stable` (held to the project's precision promise). 6 are 
 | `deprecated-api-usage` | info | preview | checkpoint | sonar:S1874, sonar:S5738, intellij:Deprecation |
 | `optional-as-parameter-or-field` *off* | info | preview | checkpoint | sonar:S3553, intellij:OptionalUsedAsFieldOrParameterType |
 | `loop-counter-modified-in-body` | info | preview | checkpoint | sonar:S127, pmd:AvoidReassigningLoopVariables, intellij:AssignmentToForLoopParameter |
-| `public-static-non-final-field` | warning | preview | checkpoint | sonar:S1444, spotbugs:MS_SHOULD_BE_FINAL, pmd:MutableStaticState |
-| `public-static-mutable-container` | warning | preview | checkpoint | sonar:S2386, spotbugs:MS_MUTABLE_ARRAY, spotbugs:MS_MUTABLE_COLLECTION, spotbugs:MS_MUTABLE_COLLECTION_PKGPROTECT |
+| `public-static-non-final-field` | warning | stable | checkpoint | sonar:S1444, spotbugs:MS_SHOULD_BE_FINAL, pmd:MutableStaticState |
+| `public-static-mutable-container` | warning | stable | checkpoint | sonar:S2386, spotbugs:MS_MUTABLE_ARRAY, spotbugs:MS_MUTABLE_COLLECTION, spotbugs:MS_MUTABLE_COLLECTION_PKGPROTECT |
 | `static-field-written-from-instance-method` | warning | preview | checkpoint | sonar:S2696, spotbugs:ST_WRITE_TO_STATIC_FROM_INSTANCE_METHOD |
 | `field-hides-superclass-field` | info | preview | checkpoint | sonar:S2387, spotbugs:MF_CLASS_MASKS_FIELD, intellij:FieldNameHidesFieldInSuperclass |
 | `class-shadows-supertype-name` *off* | info | preview | checkpoint | sonar:S2176, spotbugs:NM_SAME_SIMPLE_NAME_AS_SUPERCLASS, spotbugs:NM_SAME_SIMPLE_NAME_AS_INTERFACE |
@@ -41,9 +41,9 @@ Maturity: 0 rules are `stable` (held to the project's precision promise). 6 are 
 | `compareto-without-equals` | info | preview | checkpoint | sonar:S1210, spotbugs:EQ_COMPARETO_USE_OBJECT_EQUALS |
 | `mutable-enum-field` | warning | preview | checkpoint | sonar:S3066, spotbugs:ME_MUTABLE_ENUM_FIELD, spotbugs:ME_ENUM_FIELD_SETTER |
 | `mutable-exception` | info | preview | checkpoint | sonar:S1165 |
-| `unused-local-variable` | warning | preview | edit | sonar:S1481, sonar:S1854, pmd:UnusedLocalVariable, intellij:UnusedDeclaration |
-| `unused-private-field` | warning | preview | checkpoint | sonar:S1068, spotbugs:URF_UNREAD_FIELD, spotbugs:UUF_UNUSED_FIELD, pmd:UnusedPrivateField |
-| `unused-private-method` | warning | preview | checkpoint | sonar:S1144, spotbugs:UPM_UNCALLED_PRIVATE_METHOD, pmd:UnusedPrivateMethod |
+| `unused-local-variable` | warning | stable | edit | sonar:S1481, sonar:S1854, pmd:UnusedLocalVariable, intellij:UnusedDeclaration |
+| `unused-private-field` | warning | stable | checkpoint | sonar:S1068, spotbugs:URF_UNREAD_FIELD, spotbugs:UUF_UNUSED_FIELD, pmd:UnusedPrivateField |
+| `unused-private-method` | warning | stable | checkpoint | sonar:S1144, spotbugs:UPM_UNCALLED_PRIVATE_METHOD, pmd:UnusedPrivateMethod |
 | `unused-parameter` | info | preview | checkpoint | sonar:S1172, pmd:UnusedFormalParameter, intellij:UnusedParameters |
 | `unused-private-class` | info | preview | checkpoint | sonar:S1144 |
 | `dead-store` | warning | preview | checkpoint | sonar:S1854, spotbugs:DLS_DEAD_LOCAL_STORE, pmd:UnusedAssignment, intellij:UnusedAssignment |
@@ -145,7 +145,7 @@ Maturity: 0 rules are `stable` (held to the project's precision promise). 6 are 
 | `record-array-component` | info | preview | checkpoint | sonar:S6218 |
 | `equals-without-type-check` | warning | preview | checkpoint | sonar:S2097, spotbugs:BC_EQUALS_METHOD_SHOULD_WORK_FOR_ALL_OBJECTS |
 | `null-dereference` | error | preview | edit | sonar:S2259, spotbugs:NP_ALWAYS_NULL, spotbugs:NP_NULL_ON_SOME_PATH, spotbugs:NP_GUARANTEED_DEREF, errorprone:NullAway, intellij:DataFlowIssue |
-| `redundant-null-check` | warning | preview | checkpoint | sonar:S2583, sonar:S2589, spotbugs:RCN_REDUNDANT_NULLCHECK_OF_NONNULL_VALUE, spotbugs:RCN_REDUNDANT_NULLCHECK_WOULD_HAVE_BEEN_A_NPE, spotbugs:RCN_REDUNDANT_NULLCHECK_OF_NULL_VALUE, intellij:ConstantConditions |
+| `redundant-null-check` | warning | stable | checkpoint | sonar:S2583, sonar:S2589, spotbugs:RCN_REDUNDANT_NULLCHECK_OF_NONNULL_VALUE, spotbugs:RCN_REDUNDANT_NULLCHECK_WOULD_HAVE_BEEN_A_NPE, spotbugs:RCN_REDUNDANT_NULLCHECK_OF_NULL_VALUE, intellij:ConstantConditions |
 | `resource-leak` | warning | preview | checkpoint | sonar:S2095, spotbugs:OBL_UNSATISFIED_OBLIGATION, spotbugs:OS_OPEN_STREAM, pmd:CloseResource, errorprone:StreamResourceLeak |
 | `optional-get-without-check` | warning | preview | checkpoint | sonar:S3655, intellij:OptionalGetWithoutIsPresent, errorprone:OptionalNotPresent |
 | `infinite-recursion` | error | preview | edit | sonar:S2190, spotbugs:IL_INFINITE_RECURSIVE_LOOP, errorprone:InfiniteRecursion |
@@ -192,7 +192,7 @@ Maturity: 0 rules are `stable` (held to the project's precision promise). 6 are 
 | `synchronized-on-getclass` | warning | preview | checkpoint | sonar:S3067, spotbugs:WL_USING_GETCLASS_RATHER_THAN_CLASS_LITERAL |
 | `synchronized-on-non-final-field` | warning | preview | checkpoint | sonar:S2445, spotbugs:ML_SYNC_ON_FIELD_TO_GUARD_CHANGING_THAT_FIELD |
 | `double-checked-locking` | error | preview | checkpoint | sonar:S2168, spotbugs:DC_DOUBLECHECK, pmd:DoubleCheckedLocking |
-| `static-non-thread-safe-field` | warning | preview | checkpoint | sonar:S2885, spotbugs:STCAL_STATIC_SIMPLE_DATE_FORMAT_INSTANCE, spotbugs:STCAL_STATIC_CALENDAR_INSTANCE, pmd:UnsynchronizedStaticFormatter |
+| `static-non-thread-safe-field` | warning | stable | checkpoint | sonar:S2885, spotbugs:STCAL_STATIC_SIMPLE_DATE_FORMAT_INSTANCE, spotbugs:STCAL_STATIC_CALENDAR_INSTANCE, pmd:UnsynchronizedStaticFormatter |
 | `sleep-while-holding-lock` | warning | preview | checkpoint | sonar:S2276, spotbugs:SWL_SLEEP_WITH_LOCK_HELD |
 | `thread-started-in-constructor` | warning | preview | checkpoint | spotbugs:SC_START_IN_CTOR, sonar:S2693 |
 | `condition-wait-instead-of-await` | error | preview | edit | spotbugs:DM_MONITOR_WAIT_ON_CONDITION, errorprone:WaitNotInLoop |
@@ -354,7 +354,7 @@ Maturity: 0 rules are `stable` (held to the project's precision promise). 6 are 
 
 | id | severity | maturity | tier | origin |
 |---|---|---|---|---|
-| `assertion-argument-order` | warning | preview | checkpoint | sonar:S3415 |
+| `assertion-argument-order` | warning | stable | checkpoint | sonar:S3415 |
 | `test-without-assertion` | warning | preview | checkpoint | sonar:S2699, pmd:UnitTestShouldIncludeAssert |
 | `junit5-private-test-method` | error | preview | checkpoint | sonar:S5810 |
 | `mixed-junit-versions` | error | preview | checkpoint | sonar:S5967, sonar:S6073 |

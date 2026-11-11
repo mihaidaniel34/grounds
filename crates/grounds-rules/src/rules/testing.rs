@@ -44,8 +44,22 @@ fn assertion_class<'t>(cx: &Ctx<'_, 't>, call: Node<'t>) -> Option<Name> {
     let name = cx.fm.call_name(call)?;
     let mut owners: Vec<Name> = Vec::new();
     if let Some(o) = call.field("object") {
-        if let Some(Symbol::Type(t)) = cx.fm.symbol(o) {
-            owners.push(t);
+        match cx.fm.symbol(o) {
+            Some(Symbol::Type(t)) => owners.push(t),
+            // a class that is not on the classpath: named by its import
+            // (`Assertions.assertEquals` with `import org.junit.jupiter.api.Assertions`)
+            // or written qualified (`org.junit.Assert.assertEquals`)
+            None => {
+                let text = cx.text(o);
+                if o.kind() == "identifier" {
+                    if let Some(i) = cx.fm.stub.imports.iter().find(|i| !i.is_static && !i.on_demand && i.is_named(text)) {
+                        owners.push(Name::from(&*i.path));
+                    }
+                } else if o.kind() == "field_access" && text.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '_') && text.starts_with(|c: char| c.is_lowercase()) {
+                    owners.push(Name::from(text));
+                }
+            }
+            _ => {}
         }
     } else {
         for cls in call.ancestors().filter(|a| grounds_syntax::is_type_declaration(a.kind())).filter_map(|d| cx.fm.class_of_decl(d)) {
@@ -78,7 +92,7 @@ declare_rule!(AssertionArgumentOrder {
     name: "Expected and actual swapped in assertEquals",
     category: Testing,
     severity: Warning,
-    maturity: Preview,
+    maturity: Stable,
     scope: Test,
     sources: ["sonar:S3415"],
     kinds: ["method_invocation"],
@@ -96,8 +110,15 @@ impl Rule for AssertionArgumentOrder {
         if args.len() < 2 {
             return;
         }
+        // a project helper named assertEquals may take (actual, expected), and
+        // so may a method called on an object whose type is unknown
+        // (`helper.assertEquals(actual, 42)` with the helper's jar missing); an
+        // unqualified call with an unknown owner is a static import of an
+        // assertion class or an inherited assertion method
         let owner = assertion_class(cx, n);
-        // a project helper named assertEquals may take (actual, expected)
+        if owner.is_none() && n.field("object").is_some() {
+            return;
+        }
         if owner.as_ref().is_some_and(|o| !(o.starts_with("org.junit") || o.starts_with("junit.") || o.starts_with("org.testng") || o.starts_with("kotlin.test"))) {
             return;
         }

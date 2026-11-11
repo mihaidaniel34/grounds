@@ -1690,3 +1690,30 @@ fn a_tracked_file_in_an_ignored_directory_that_comes_back_is_read_again() {
     listed_not_walked(&s);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_stable_rule_is_stable_on_changed_lines_on_unchanged_lines_and_outside_git() {
+    use grounds_rules::Maturity;
+    let (repo, dir) = gap_project("stable-rule");
+    // an unused local before the change, on a line the change does not touch
+    write(&dir, "src/main/java/demo/Old.java", "package demo;\nclass Old {\n    void a() { int before = 1; }\n}\n");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "old"]);
+    let mut s = Session::open(&dir).unwrap();
+    write(&dir, "src/main/java/demo/Old.java", "package demo;\nclass Old {\n    void a() { int before = 1; }\n    void b() { int added = 1; }\n}\n");
+    let opts = |all_lines| CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines, use_baseline: false, min_severity: Severity::Info, base: None };
+    let unused = |r: &grounds_engine::session::Report| -> Vec<(u32, Maturity)> {
+        let mut v: Vec<_> = r.findings.iter().filter(|f| f.rule == "unused-local-variable").map(|f| (f.line as u32, f.maturity)).collect();
+        v.sort_by_key(|x| x.0);
+        v
+    };
+    // changed lines only: the new one, stable
+    assert_eq!(unused(&s.check(&opts(false))), [(4, Maturity::Stable)]);
+    // `--all-lines`: the old one too, and it is stable as well
+    assert_eq!(unused(&s.check(&opts(true))), [(3, Maturity::Stable), (4, Maturity::Stable)]);
+    // outside a git repository
+    let _ = std::fs::remove_dir_all(repo.join(".git"));
+    let r = Session::open(&dir).unwrap().check(&CheckOptions { files: vec![dir.join("src/main/java/demo/Old.java")], ..opts(true) });
+    assert_eq!(unused(&r), [(3, Maturity::Stable), (4, Maturity::Stable)]);
+    let _ = std::fs::remove_dir_all(&repo);
+}

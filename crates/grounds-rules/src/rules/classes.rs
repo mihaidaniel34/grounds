@@ -170,9 +170,19 @@ fn is_mutable_type<'t>(cx: &Ctx<'_, 't>, ty: &Ty, init: Option<Node<'t>>) -> boo
     if ty.is_array() {
         // zero-length arrays are immutable
         if let Some(i) = init {
-            // `new T[0]`, `{}`, `new T[] {}` (any whitespace)
+            // `new T[0]`, `new T[0][3]` (the outer dimension is what holds
+            // elements), `{}`, `new T[] {}` (any whitespace)
+            let i = i.unparen();
+            if i.kind() == "array_creation_expression" {
+                if let Some(d) = i.kids().into_iter().find(|k| k.kind() == "dimensions_expr") {
+                    let t: String = cx.text(d).chars().filter(|c| !c.is_whitespace()).collect();
+                    if t == "[0]" {
+                        return false;
+                    }
+                }
+            }
             let t: String = cx.text(i).chars().filter(|c| !c.is_whitespace()).collect();
-            if t.ends_with("[0]") || t == "{}" || t.ends_with("[]{}") {
+            if t == "{}" || t.ends_with("[]{}") {
                 return false;
             }
         }
@@ -190,7 +200,7 @@ declare_rule!(PublicStaticMutableField {
     name: "public static field is not final",
     category: BadPractice,
     severity: Warning,
-    maturity: Preview,
+    maturity: Stable,
     sources: ["sonar:S1444", "spotbugs:MS_SHOULD_BE_FINAL", "pmd:MutableStaticState"],
     kinds: ["field_declaration"],
     description: "A public static non-final field is global mutable state: any code can change it at any time, with no synchronization. Make it final (and private if it must change).",
@@ -220,7 +230,7 @@ declare_rule!(PublicStaticMutableContainer {
     name: "public static final array or mutable collection",
     category: BadPractice,
     severity: Warning,
-    maturity: Preview,
+    maturity: Stable,
     sources: ["sonar:S2386", "spotbugs:MS_MUTABLE_ARRAY", "spotbugs:MS_MUTABLE_COLLECTION", "spotbugs:MS_MUTABLE_COLLECTION_PKGPROTECT"],
     kinds: ["field_declaration"],
     description: "`final` only fixes the reference: the contents of a public static array or `ArrayList`/`HashMap` can still be changed by anyone. Expose an unmodifiable view or copy.",
