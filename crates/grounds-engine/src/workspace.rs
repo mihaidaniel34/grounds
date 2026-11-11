@@ -196,9 +196,13 @@ impl SourceSets {
     }
 }
 
+/// How many times the discovery ran `git ls-files` (for tests of its cost).
+static GIT_LISTINGS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// The `.java` files and build files under `root` that git tracks although
 /// `.gitignore` matches them, relative to `root`. Empty outside a git work tree.
 fn tracked_but_ignored(root: &Path) -> Vec<PathBuf> {
+    GIT_LISTINGS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let out = std::process::Command::new("git").arg("-C").arg(root).args(["ls-files", "-z", "--cached", "--ignored", "--exclude-standard", "--", "*.java", "*pom.xml", "*build.gradle", "*build.gradle.kts"]).stderr(std::process::Stdio::null()).output();
     match out {
         Ok(o) if o.status.success() => o.stdout.split(|&b| b == 0).filter(|p| !p.is_empty()).filter_map(|p| std::str::from_utf8(p).ok()).map(PathBuf::from).collect(),
@@ -210,17 +214,13 @@ fn tracked_but_ignored(root: &Path) -> Vec<PathBuf> {
 /// of `root` or a directory above it, or the one a `.git` file names (a
 /// linked worktree's, which has its own index and HEAD).
 fn git_dir(root: &Path) -> Option<PathBuf> {
-    for a in root.ancestors() {
-        let dot = a.join(".git");
-        let Ok(meta) = std::fs::metadata(&dot) else { continue };
-        if meta.is_dir() {
-            return Some(dot);
-        }
-        let text = std::fs::read_to_string(&dot).ok()?;
-        let named = PathBuf::from(text.trim().strip_prefix("gitdir:")?.trim());
-        return Some(if named.is_absolute() { named } else { a.join(named) });
+    // the nearest repository at or above the root, as `boundary` finds one
+    let top = root.ancestors().find(|a| boundary(a).is_some_and(|b| b & 3 != 0))?;
+    let dot = top.join(".git");
+    match boundary(top)? & 3 {
+        1 => Some(dot),
+        _ => gitdir_of(&dot).map(|g| if g.is_absolute() { g } else { top.join(g) }),
     }
-    None
 }
 
 /// What the list of tracked-but-ignored files depends on besides the
@@ -316,7 +316,7 @@ impl Workspace {
             let Some(parent) = d.parent() else { return true };
             ignore::WalkBuilder::new(parent).hidden(true).git_ignore(true).git_exclude(true).parents(true).max_depth(Some(1)).build().flatten().any(|e| e.path() == d)
         };
-        let tracked = tracked_but_ignored_cached(&root, start.is_none_or(|s| s == root));
+        let tracked = tracked_but_ignored_cached(&root, max_depth.is_none() && start.is_none_or(|s| s == root));
         // (only a start that holds such files can be one: a walked directory
         // that became ignored means an ignore file changed, and a walk of the
         // whole workspace follows)
@@ -974,11 +974,25 @@ mod tests {
         for root in [dir.clone(), dir.join("sub"), wt.clone(), wt.join("sub")] {
             let before = index_stamp(&root);
             assert!(before.is_some(), "{}", root.display());
+            // a session lists the directory of an atomic save: no git process
+            let root = root.canonicalize().unwrap();
+            let listed = |start: &Path| Workspace::discover_in(&root, Some(start), Some(1), &[]);
+            Workspace::discover(&root, &[]);
+            let start = if root.ends_with("sub") { root.clone() } else { root.join("sub") };
+            let a = start.join("A.java");
+            std::fs::write(start.join("A.java.tmp"), "class A { int x; }").unwrap();
+            std::fs::rename(start.join("A.java.tmp"), &a).unwrap();
+            let runs = GIT_LISTINGS.load(std::sync::atomic::Ordering::Relaxed);
+            assert!(listed(&start).files.iter().any(|f| f.path == a));
+            assert_eq!(GIT_LISTINGS.load(std::sync::atomic::Ordering::Relaxed), runs, "a listing after a save ran git: {}", root.display());
             // the index changes: the stamp does (the cached list is read again)
             std::thread::sleep(std::time::Duration::from_millis(20));
             std::fs::write(root.join("B.java"), format!("class B {{}} // {}", root.display())).unwrap();
             git(&root, &["add", "B.java"]);
             assert_ne!(index_stamp(&root), before, "{}", root.display());
+            // and the next listing reads the list again
+            listed(&start);
+            assert_eq!(GIT_LISTINGS.load(std::sync::atomic::Ordering::Relaxed), runs + 1, "the index changed: {}", root.display());
         }
         git(&dir, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
         let _ = std::fs::remove_dir_all(&dir);
