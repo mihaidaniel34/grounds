@@ -334,9 +334,15 @@ pub fn modules_built_against_own_release(ws: &Workspace) -> Vec<PathBuf> {
         let mut old = false;
         for (g, a, v) in &pom.deps {
             let g = resolve(&mut cache, pom, g);
-            // a sibling at its own version comes from the reactor, built from the sources
-            let Some((_, _, own_version)) = siblings.iter().find(|(sg, sa, _)| sa == a && sg.is_some() && *sg == g) else { continue };
-            let own_version = own_version.clone().or_else(|| pom.version.as_deref().and_then(|v| resolve(&mut cache, pom, v)));
+            // a sibling at its own version comes from the reactor, built from the
+            // sources; several modules may have these coordinates (a jre and an
+            // android flavor), and the version of any of them is the reactor's
+            let own_versions: Vec<Option<String>> = siblings.iter().filter(|(sg, sa, _)| sa == a && sg.is_some() && *sg == g).map(|(_, _, v)| v.clone()).collect();
+            if own_versions.is_empty() {
+                continue;
+            }
+            let consumer_version = pom.version.as_deref().and_then(|v| resolve(&mut cache, pom, v));
+            let own_versions: Vec<Option<String>> = own_versions.into_iter().map(|v| v.or_else(|| consumer_version.clone())).collect();
             let candidates: Vec<Option<String>> = match v {
                 Some(v) => vec![resolve(&mut cache, pom, v)],
                 None => {
@@ -353,7 +359,7 @@ pub fn modules_built_against_own_release(ws: &Workspace) -> Vec<PathBuf> {
                     c
                 }
             };
-            if candidates.iter().any(|c| c.is_none() || *c != own_version) {
+            if candidates.iter().any(|c| c.is_none() || !own_versions.contains(c)) {
                 old = true;
             }
         }
@@ -633,6 +639,15 @@ mod tests {
         write("r/unknown/pom.xml", &rchild("unknown", &dep("core", "${somewhere.else}")));
         write("r/literal/pom.xml", &rchild("literal", &dep("core", "2")));
         assert_eq!(found(&dir.join("r")), vec!["literal", "property", "unknown"]);
+        // two reactor modules with the same coordinates (a jre and an android
+        // flavor): a version of either one is the reactor's
+        write("f/pom.xml", "<project><groupId>g</groupId><artifactId>root</artifactId><version>3-jre</version></project>");
+        write("f/core/pom.xml", "<project><groupId>g</groupId><artifactId>core</artifactId><version>3-jre</version></project>");
+        write("f/android/core/pom.xml", "<project><groupId>g</groupId><artifactId>core</artifactId><version>3-android</version></project>");
+        write("f/testlib/pom.xml", &format!("<project><groupId>g</groupId><artifactId>testlib</artifactId><version>3-jre</version>{}</project>", dep("core", "${project.version}")));
+        write("f/android/testlib/pom.xml", &format!("<project><groupId>g</groupId><artifactId>testlib</artifactId><version>3-android</version>{}</project>", dep("core", "3-android")));
+        write("f/compat/pom.xml", &format!("<project><groupId>g</groupId><artifactId>compat</artifactId><version>3-jre</version>{}</project>", dep("core", "2-jre")));
+        assert_eq!(found(&dir.join("f")), vec!["compat"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
