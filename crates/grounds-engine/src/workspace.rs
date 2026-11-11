@@ -389,6 +389,9 @@ impl Workspace {
         // files git tracks are part of the project whatever .gitignore says
         // (a directory ignored after its files were added): the build compiles them
         let mut known: std::collections::HashSet<PathBuf> = dirs.iter().cloned().collect();
+        // directories below the root that are real (no symlink), as the walk
+        // goes into them; looked at once each
+        let mut real: std::collections::HashMap<PathBuf, bool> = std::collections::HashMap::new();
         for rel in &tracked {
             let skipped = rel.components().any(|c| c.as_os_str().to_str().is_none_or(|n| SKIP_DIRS.contains(&n) || n.starts_with('.')));
             let p = root.join(rel);
@@ -398,15 +401,31 @@ impl Workspace {
             if skipped {
                 continue;
             }
+            // one reached through a symlink at any component below the root
+            // is not one the walk reaches (it follows none), and a sync takes
+            // it as gone: not a file of the project, nor its directories
+            // (the directories that hold it, from the root down, as far as
+            // they are real)
+            let mut held: Vec<&Path> = p.ancestors().skip(1).take_while(|a| *a != root && a.starts_with(&root)).collect();
+            held.reverse();
+            let reached = held.iter().take_while(|a| *real.entry(a.to_path_buf()).or_insert_with(|| std::fs::symlink_metadata(a).is_ok_and(|m| m.is_dir()))).count();
+            let linked = reached < held.len();
             let within = |q: &Path| max_depth.is_none_or(|d| q.strip_prefix(&base).map_or(usize::MAX, |r| r.components().count()) <= d);
             // the directories that hold it, which the walk does not go into:
-            // a file deleted or restored there changes their time
-            for a in p.ancestors().skip(1).take_while(|a| a.starts_with(&base)).filter(|a| within(a)) {
+            // a file deleted or restored there changes their time (and the
+            // last real one above a symlink changes when the symlink is
+            // replaced by the directory again)
+            for a in std::iter::once(root.as_path()).chain(held[..reached].iter().copied()).filter(|a| a.starts_with(&base) && within(a)) {
                 if known.insert(a.to_path_buf()) {
                     dirs.push(a.to_path_buf());
                 }
             }
-            if max_depth.is_some_and(|d| below.components().count() > d) || !p.is_file() {
+            if linked {
+                continue;
+            }
+            // (not through a symlink, which the walk does not follow either,
+            // and which a sync takes as gone)
+            if max_depth.is_some_and(|d| below.components().count() > d) || !std::fs::symlink_metadata(&p).is_ok_and(|m| m.is_file()) {
                 continue;
             }
             match name {
