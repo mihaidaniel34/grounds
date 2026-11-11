@@ -196,13 +196,25 @@ impl SourceSets {
     }
 }
 
-/// How many times the discovery ran `git ls-files` (for tests of its cost).
-static GIT_LISTINGS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+/// How many times the discovery ran `git ls-files` in each work tree (for
+/// tests of its cost; per root, as tests run in parallel).
+static GIT_LISTINGS: std::sync::Mutex<Vec<(PathBuf, usize)>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn git_listings(root: &Path) -> usize {
+    GIT_LISTINGS.lock().unwrap().iter().find(|(r, _)| r == root).map_or(0, |(_, n)| *n)
+}
 
 /// The `.java` files and build files under `root` that git tracks although
 /// `.gitignore` matches them, relative to `root`. Empty outside a git work tree.
 fn tracked_but_ignored(root: &Path) -> Vec<PathBuf> {
-    GIT_LISTINGS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    {
+        let mut runs = GIT_LISTINGS.lock().unwrap();
+        match runs.iter_mut().find(|(r, _)| r == root) {
+            Some((_, n)) => *n += 1,
+            None => runs.push((root.to_path_buf(), 1)),
+        }
+    }
     let out = std::process::Command::new("git").arg("-C").arg(root).args(["ls-files", "-z", "--cached", "--ignored", "--exclude-standard", "--", "*.java", "*pom.xml", "*build.gradle", "*build.gradle.kts"]).stderr(std::process::Stdio::null()).output();
     match out {
         Ok(o) if o.status.success() => o.stdout.split(|&b| b == 0).filter(|p| !p.is_empty()).filter_map(|p| std::str::from_utf8(p).ok()).map(PathBuf::from).collect(),
@@ -982,9 +994,9 @@ mod tests {
             let a = start.join("A.java");
             std::fs::write(start.join("A.java.tmp"), "class A { int x; }").unwrap();
             std::fs::rename(start.join("A.java.tmp"), &a).unwrap();
-            let runs = GIT_LISTINGS.load(std::sync::atomic::Ordering::Relaxed);
+            let runs = git_listings(&root);
             assert!(listed(&start).files.iter().any(|f| f.path == a));
-            assert_eq!(GIT_LISTINGS.load(std::sync::atomic::Ordering::Relaxed), runs, "a listing after a save ran git: {}", root.display());
+            assert_eq!(git_listings(&root), runs, "a listing after a save ran git: {}", root.display());
             // the index changes: the stamp does (the cached list is read again)
             std::thread::sleep(std::time::Duration::from_millis(20));
             std::fs::write(root.join("B.java"), format!("class B {{}} // {}", root.display())).unwrap();
@@ -992,7 +1004,7 @@ mod tests {
             assert_ne!(index_stamp(&root), before, "{}", root.display());
             // and the next listing reads the list again
             listed(&start);
-            assert_eq!(GIT_LISTINGS.load(std::sync::atomic::Ordering::Relaxed), runs + 1, "the index changed: {}", root.display());
+            assert_eq!(git_listings(&root), runs + 1, "the index changed: {}", root.display());
         }
         git(&dir, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
         let _ = std::fs::remove_dir_all(&dir);
