@@ -1189,19 +1189,25 @@ fn change_check<'t>(_n: Node<'t>, l: Node<'t>, r: Node<'t>, cx: &Ctx<'_, 't>) ->
             return true;
         }
         // a local that started out as the other operand or as such a call,
-        // and that every later assignment keeps one (`m = visit(m, ctx)` in
-        // a loop): an assignment of anything else (`r = new BigDecimal(..)`)
-        // means the comparison may not ask what the initializer did
+        // and that no assignment gives a new object (`r = new BigDecimal(..)`,
+        // a helper that always makes one): such a local is never the other
+        // operand. Other assignments keep the identity question one of which
+        // object it holds (`m = visit(m, ctx)`, `elements = body`).
         let a = strip(a);
         if a.kind() != "identifier" || cx.fm.field_ref(a).is_some() {
             continue;
         }
         let Some(i) = cx.fm.local_ref(a) else { continue };
-        let name = normalized(a, src);
-        let Some(init) = cx.fm.binder.decls[i].decl_node.field("value") else { continue };
+        // (a declarator's initializer: not the collection a for-each variable runs over)
+        let decl = cx.fm.binder.decls[i].decl_node;
+        let Some(init) = decl.field("value").filter(|_| decl.kind() == "variable_declarator") else { continue };
         let keeps = |v: Node<'t>| normalized(strip(v), src) == of || received(v, &of);
         let assigned = cx.fm.binder.uses[i].iter().filter_map(|u| u.parent_unparen().filter(|p| p.kind() == "assignment_expression" && p.field("left").map(|l| l.unparen()) == Some(*u)));
-        if keeps(init) && assigned.into_iter().all(|p| op(p) == "=" && p.field("right").is_some_and(|v| keeps(v) || received(v, &name))) {
+        let fresh = |v: Node<'t>| {
+            let v = strip(v);
+            matches!(v.kind(), "object_creation_expression" | "array_creation_expression") || v.kind() == "method_invocation" && returns_new(v, cx)
+        };
+        if keeps(init) && assigned.into_iter().all(|p| op(p) == "=" && p.field("right").is_some_and(|v| !fresh(v))) {
             return true;
         }
     }

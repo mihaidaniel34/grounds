@@ -77,6 +77,34 @@ class Rewriter {
         r = new java.math.BigDecimal(v.toString());
         return r == v; // expect
     }
+    // a local that switches between two objects: which one it holds
+    boolean active(java.util.ArrayList<String> first, java.util.ArrayList<String> rest, boolean more) {
+        var elements = first;
+        if (more) elements = rest;
+        return elements == first;
+    }
+    boolean transformed(java.math.BigDecimal v) {
+        java.math.BigDecimal r = round(v);
+        r = r.stripTrailingZeros();
+        return r == v;
+    }
+    // an element is not the collection it came from
+    java.util.List<java.math.BigDecimal> all(java.math.BigDecimal v) { return java.util.List.of(v); }
+    boolean element(java.math.BigDecimal v) {
+        for (java.math.BigDecimal x : all(v)) {
+            if (x == v) return true; // expect
+        }
+        return false;
+    }
+    // two locals of one name in separate blocks: each is its own
+    boolean scoped(java.math.BigDecimal v, boolean c) {
+        if (c) {
+            java.math.BigDecimal r = new java.math.BigDecimal("1");
+            if (r.signum() > 0) return false;
+        }
+        java.math.BigDecimal r = round(v);
+        return r == v;
+    }
     // a helper that may hand its argument back stays silent
     java.math.BigDecimal maybe(java.math.BigDecimal v) { return v.signum() == 0 ? v : new java.math.BigDecimal(v.toString()); }
     boolean unknown(java.math.BigDecimal v) {
