@@ -887,7 +887,6 @@ api/src/test/java/com/alibaba/nacos/api/remote/DefaultRequestFutureTest.java:386
 api/src/test/java/com/alibaba/nacos/api/remote/DefaultRequestFutureTest.java:70 thread-sleep-in-test
 api/src/test/java/com/alibaba/nacos/api/remote/DefaultRequestFutureTest.java:88 thread-sleep-in-test
 api/src/test/java/com/alibaba/nacos/api/remote/ability/ServerRemoteAbilityTest.java:72 assert-true-with-comparison
-api/src/test/java/com/alibaba/nacos/api/remote/request/EmptyContentRequestTest.java:68 deprecated-api-usage
 api/src/test/java/com/alibaba/nacos/api/utils/AbilityKeyTest.java:42 enum-keyed-hash-collection
 api/src/test/java/com/alibaba/nacos/api/utils/json/JsonAdapterSelectorTest.java:189 close-in-finally-unguarded
 api/src/test/java/com/alibaba/nacos/api/utils/json/JsonUtilsTest.java:135 default-charset
@@ -1411,7 +1410,6 @@ common/src/main/java/com/alibaba/nacos/common/notify/NotifyCenter.java:386 catch
 common/src/main/java/com/alibaba/nacos/common/notify/NotifyCenter.java:49 public-static-non-final-field
 common/src/main/java/com/alibaba/nacos/common/notify/NotifyCenter.java:51 public-static-non-final-field
 common/src/main/java/com/alibaba/nacos/common/notify/NotifyCenter.java:58 field-naming
-common/src/main/java/com/alibaba/nacos/common/notify/NotifyCenter.java:90 deprecated-api-usage
 common/src/main/java/com/alibaba/nacos/common/packagescan/classreading/ClassReader.java:187 constructor-calls-overridable-method
 common/src/main/java/com/alibaba/nacos/common/packagescan/classreading/ClassReader.java:189 constructor-calls-overridable-method
 common/src/main/java/com/alibaba/nacos/common/packagescan/classreading/ClassReader.java:193 constructor-calls-overridable-method
@@ -1502,7 +1500,6 @@ common/src/main/java/com/alibaba/nacos/common/remote/client/grpc/GrpcConnection.
 common/src/main/java/com/alibaba/nacos/common/remote/client/grpc/GrpcConnection.java:192 catch-throwable
 common/src/main/java/com/alibaba/nacos/common/remote/client/grpc/GrpcConstants.java:34 utility-class-instantiable
 common/src/main/java/com/alibaba/nacos/common/spi/NacosServiceLoader.java:31 utility-class-instantiable
-common/src/main/java/com/alibaba/nacos/common/spi/NacosServiceLoader.java:83 deprecated-api-usage
 common/src/main/java/com/alibaba/nacos/common/task/engine/NacosDelayTaskExecuteEngine.java:148 catch-throwable
 common/src/main/java/com/alibaba/nacos/common/task/engine/NacosDelayTaskExecuteEngine.java:160 private-constructor-class-not-final
 common/src/main/java/com/alibaba/nacos/common/task/engine/NacosExecuteTaskExecuteEngine.java:46 constructor-calls-overridable-method
@@ -1777,7 +1774,6 @@ common/src/test/java/com/alibaba/nacos/common/utils/ConcurrentHashSetTest.java:9
 common/src/test/java/com/alibaba/nacos/common/utils/ConvertUtilsTest.java:93 method-too-long
 common/src/test/java/com/alibaba/nacos/common/utils/IoUtilsTest.java:100 test-without-assertion
 common/src/test/java/com/alibaba/nacos/common/utils/IoUtilsTest.java:121 assertthrows-multiple-calls
-common/src/test/java/com/alibaba/nacos/common/utils/IoUtilsTest.java:133 deprecated-api-usage
 common/src/test/java/com/alibaba/nacos/common/utils/IoUtilsTest.java:152 assertthrows-multiple-calls
 common/src/test/java/com/alibaba/nacos/common/utils/IoUtilsTest.java:160 assertthrows-multiple-calls
 common/src/test/java/com/alibaba/nacos/common/utils/IoUtilsTest.java:169 assertthrows-multiple-calls

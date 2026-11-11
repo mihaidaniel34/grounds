@@ -120,8 +120,6 @@ embeddings/langchain4j-embeddings/src/main/java/dev/langchain4j/model/embedding/
 embeddings/langchain4j-embeddings/src/main/java/dev/langchain4j/model/embedding/onnx/OnnxBertBiEncoder.java:66 throw-generic-exception
 embeddings/langchain4j-embeddings/src/main/java/dev/langchain4j/model/embedding/onnx/OnnxBertBiEncoder.java:96 throw-generic-exception
 embeddings/langchain4j-embeddings/src/main/java/dev/langchain4j/model/embedding/onnx/internal/VectorUtils.java:5 utility-class-instantiable
-embeddings/langchain4j-embeddings/src/test/java/dev/langchain4j/model/embedding/onnx/OnnxEmbeddingModelIT.java:42 deprecated-api-usage
-embeddings/langchain4j-embeddings/src/test/java/dev/langchain4j/model/embedding/onnx/OnnxEmbeddingModelIT.java:48 deprecated-api-usage
 experimental/langchain4j-experimental-hibernate/src/main/java/dev/langchain4j/rag/content/retriever/hibernate/HibernateContentRetriever.java:199 throw-generic-exception
 experimental/langchain4j-experimental-skills-shell/src/main/java/dev/langchain4j/skills/shell/RunShellCommandToolConfig.java:13 unused-import
 experimental/langchain4j-experimental-skills-shell/src/main/java/dev/langchain4j/skills/shell/RunShellCommandToolConfig.java:16 private-constructor-class-not-final
@@ -790,7 +788,6 @@ langchain4j-core/src/main/java/dev/langchain4j/internal/ToolSpecificationUtils.j
 langchain4j-core/src/main/java/dev/langchain4j/internal/UriUtils.java:107 catch-return-null
 langchain4j-core/src/main/java/dev/langchain4j/internal/UriUtils.java:33 complex-boolean-expression
 langchain4j-core/src/main/java/dev/langchain4j/internal/Utils.java:136 trim-isempty
-langchain4j-core/src/main/java/dev/langchain4j/internal/Utils.java:341 deprecated-api-usage
 langchain4j-core/src/main/java/dev/langchain4j/internal/Utils.java:370 throw-generic-exception
 langchain4j-core/src/main/java/dev/langchain4j/internal/Utils.java:377 throw-generic-exception
 langchain4j-core/src/main/java/dev/langchain4j/internal/Utils.java:413 collection-method-returns-null
@@ -943,7 +940,6 @@ langchain4j-core/src/test/java/dev/langchain4j/data/audio/AudioTest.java:97 defa
 langchain4j-core/src/test/java/dev/langchain4j/data/document/DocumentLoaderTest.java:101 throw-generic-exception
 langchain4j-core/src/test/java/dev/langchain4j/data/document/DocumentLoaderTest.java:53 close-in-finally-unguarded
 langchain4j-core/src/test/java/dev/langchain4j/data/document/DocumentLoaderTest.java:70 throw-generic-exception
-langchain4j-core/src/test/java/dev/langchain4j/internal/CustomMimeTypesFileTypeDetectorTest.java:144 deprecated-api-usage
 langchain4j-core/src/test/java/dev/langchain4j/internal/JsonCodecTest.java:206 record-array-component
 langchain4j-core/src/test/java/dev/langchain4j/internal/JsonParsingUtilsTest.java:37 equals-without-hashcode
 langchain4j-core/src/test/java/dev/langchain4j/internal/RetryUtilsTest.java:175 thread-sleep-in-test
@@ -1772,8 +1768,6 @@ langchain4j-onnx-scoring/src/main/java/dev/langchain4j/model/scoring/onnx/OnnxSc
 langchain4j-onnx-scoring/src/main/java/dev/langchain4j/model/scoring/onnx/OnnxScoringBertCrossEncoder.java:52 catch-instanceof-dispatch
 langchain4j-onnx-scoring/src/main/java/dev/langchain4j/model/scoring/onnx/OnnxScoringBertCrossEncoder.java:56 throw-generic-exception
 langchain4j-onnx-scoring/src/main/java/dev/langchain4j/model/scoring/onnx/OnnxScoringModel.java:37 missing-override
-langchain4j-onnx-scoring/src/test/java/dev/langchain4j/model/scoring/onnx/OnnxScoringModelIT.java:40 deprecated-api-usage
-langchain4j-onnx-scoring/src/test/java/dev/langchain4j/model/scoring/onnx/OnnxScoringModelIT.java:44 deprecated-api-usage
 langchain4j-open-ai-official/src/main/java/dev/langchain4j/model/openaiofficial/InternalOpenAiOfficialBatchHelper.java:26 private-constructor-class-not-final
 langchain4j-open-ai-official/src/main/java/dev/langchain4j/model/openaiofficial/InternalOpenAiOfficialBatchHelper.java:52 catch-return-null
 langchain4j-open-ai-official/src/main/java/dev/langchain4j/model/openaiofficial/InternalOpenAiOfficialDecisionHelper.java:188 lost-stack-trace
@@ -2405,7 +2399,6 @@ langchain4j-workers-ai/src/main/java/dev/langchain4j/model/workersai/client/Work
 langchain4j-workers-ai/src/main/java/dev/langchain4j/model/workersai/client/WorkersAiTextCompletionResponse.java:97 missing-override
 langchain4j-workers-ai/src/test/java/dev/langchain4j/model/workersai/WorkersAiImageModelIT.java:43 unused-local-variable
 langchain4j-workers-ai/src/test/java/dev/langchain4j/model/workersai/WorkersAiImageModelIT.java:50 test-without-assertion
-langchain4j-workers-ai/src/test/java/dev/langchain4j/model/workersai/WorkersAiImageModelIT.java:63 deprecated-api-usage
 langchain4j/src/main/java/dev/langchain4j/chain/ConversationalChain.java:19 private-constructor-class-not-final
 langchain4j/src/main/java/dev/langchain4j/data/document/loader/ClassPathDocumentLoader.java:121 throw-generic-exception
 langchain4j/src/main/java/dev/langchain4j/data/document/loader/ClassPathDocumentLoader.java:340 throw-generic-exception
@@ -2421,9 +2414,7 @@ langchain4j/src/main/java/dev/langchain4j/data/document/loader/FileSystemDocumen
 langchain4j/src/main/java/dev/langchain4j/data/document/loader/FileSystemDocumentLoader.java:313 throw-generic-exception
 langchain4j/src/main/java/dev/langchain4j/data/document/loader/FileSystemDocumentLoader.java:401 throw-generic-exception
 langchain4j/src/main/java/dev/langchain4j/data/document/loader/UrlDocumentLoader.java:11 utility-class-instantiable
-langchain4j/src/main/java/dev/langchain4j/data/document/loader/UrlDocumentLoader.java:45 deprecated-api-usage
 langchain4j/src/main/java/dev/langchain4j/data/document/parser/TextDocumentParser.java:36 throw-generic-exception
-langchain4j/src/main/java/dev/langchain4j/data/document/source/UrlSource.java:37 deprecated-api-usage
 langchain4j/src/main/java/dev/langchain4j/data/document/source/UrlSource.java:39 throw-generic-exception
 langchain4j/src/main/java/dev/langchain4j/data/document/source/UrlSource.java:51 throw-generic-exception
 langchain4j/src/main/java/dev/langchain4j/data/document/splitter/DocumentBySentenceSplitter.java:87 throw-generic-exception
