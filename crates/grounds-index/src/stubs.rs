@@ -1189,7 +1189,9 @@ impl<'s> Extractor<'s> {
                             .filter(|f| f.flags.has(Flags::RECORD_COMPONENT))
                             .map(|f| RawParam { name: f.name.clone(), ty: f.ty.clone(), annotations: Vec::new(), flags: Flags::default() })
                             .collect();
-                        (ps, false)
+                        // `record R(String a, Object... rest) { R { ... } }`: varargs
+                        // when the header's last component is
+                        (ps, formal_params(node.field("parameters"), src).1)
                     } else {
                         formal_params(m.field("parameters"), src)
                     };
