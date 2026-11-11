@@ -206,11 +206,34 @@ fn tracked_but_ignored(root: &Path) -> Vec<PathBuf> {
     }
 }
 
-/// Whether git ignores the directory `dir` of the work tree at `root`.
-fn ignored_dir(root: &Path, dir: &Path) -> bool {
-    let Ok(rel) = dir.strip_prefix(root) else { return false };
-    let rel = format!("{}/", rel.to_string_lossy());
-    std::process::Command::new("git").arg("-C").arg(root).args(["check-ignore", "-q", "--no-index", "--", &rel]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success())
+/// What the list of tracked-but-ignored files depends on besides the
+/// ignore files: git's index and HEAD (None when `.git` is not a directory).
+fn index_stamp(root: &Path) -> Option<(std::time::SystemTime, u64, Vec<u8>)> {
+    let git = root.join(".git");
+    let index = std::fs::metadata(git.join("index")).ok()?;
+    Some((index.modified().ok()?, index.len(), std::fs::read(git.join("HEAD")).ok()?))
+}
+
+/// `tracked_but_ignored`, kept between discoveries of one work tree: a
+/// session lists a changed directory again at every save, and a git process
+/// over the whole repository costs tens of milliseconds there. A discovery of
+/// the whole workspace (`fresh`: also after an ignore file changes) and a
+/// change of git's index or HEAD read it again.
+fn tracked_but_ignored_cached(root: &Path, fresh: bool) -> Vec<PathBuf> {
+    type Cache = std::sync::Mutex<std::collections::HashMap<PathBuf, ((std::time::SystemTime, u64, Vec<u8>), Vec<PathBuf>)>>;
+    static CACHE: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let Some(stamp) = index_stamp(root) else { return tracked_but_ignored(root) };
+    if !fresh {
+        if let Some((s, files)) = cache.lock().unwrap().get(root) {
+            if *s == stamp {
+                return files.clone();
+            }
+        }
+    }
+    let files = tracked_but_ignored(root);
+    cache.lock().unwrap().insert(root.to_path_buf(), (stamp, files.clone()));
+    files
 }
 
 impl Workspace {
@@ -270,7 +293,20 @@ impl Workspace {
         // holds tracked files, listed again by a session): only the tracked
         // files count there, as for a fresh load
         let base = start.unwrap_or(&root).to_path_buf();
-        let ignored_start = base != root && ignored_dir(&root, &base);
+        // (a directory is ignored when the walk of its parent, as the
+        // discovery walks it, does not list it: at some level from the root)
+        let listed_in_parent = |d: &Path| -> bool {
+            let Some(parent) = d.parent() else { return true };
+            ignore::WalkBuilder::new(parent).hidden(true).git_ignore(true).git_exclude(true).parents(true).max_depth(Some(1)).build().flatten().any(|e| e.path() == d)
+        };
+        let tracked = tracked_but_ignored_cached(&root, start.is_none_or(|s| s == root));
+        // (only a start that holds such files can be one: a walked directory
+        // that became ignored means an ignore file changed, and a walk of the
+        // whole workspace follows)
+        let ignored_start = base != root
+            && base.starts_with(&root)
+            && tracked.iter().any(|r| root.join(r).starts_with(&base))
+            && base.ancestors().take_while(|a| *a != root).any(|a| !listed_in_parent(a));
         if ignored_start {
             dirs.push(base.clone());
         }
@@ -294,7 +330,7 @@ impl Workspace {
         // files git tracks are part of the project whatever .gitignore says
         // (a directory ignored after its files were added): the build compiles them
         let mut known: std::collections::HashSet<PathBuf> = dirs.iter().cloned().collect();
-        for rel in tracked_but_ignored(&root) {
+        for rel in tracked {
             let skipped = rel.components().any(|c| c.as_os_str().to_str().is_none_or(|n| SKIP_DIRS.contains(&n) || n.starts_with('.')));
             let p = root.join(&rel);
             let Some(name) = rel.file_name().and_then(|n| n.to_str()) else { continue };
