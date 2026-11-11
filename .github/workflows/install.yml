@@ -1,0 +1,76 @@
+name: install
+
+# install.sh, run the way users run it (`curl ... | sh`), on every platform a
+# release has a build for, and on Alpine (busybox sh and wget, no curl or bash).
+# It installs the latest published release, so it also runs when one is published.
+on:
+  pull_request:
+    paths: [install.sh, .github/workflows/install.yml]
+  push:
+    branches: [master]
+    paths: [install.sh, .github/workflows/install.yml]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: latest release, default directory
+        run: |
+          sh < install.sh
+          ~/.local/bin/grounds --version
+      - name: pinned version, given directory
+        run: |
+          sh -s -- --version 0.1.0 --dir "$RUNNER_TEMP/bin" < install.sh
+          test "$("$RUNNER_TEMP/bin/grounds" --version)" = "grounds 0.1.0"
+      - name: a release that does not exist fails
+        run: |
+          if GROUNDS_VERSION=0.0.0 GROUNDS_INSTALL_DIR=$RUNNER_TEMP/none sh < install.sh; then exit 1; fi
+      - name: a directory every user may write to is refused unless sticky
+        run: |
+          mkdir -m 777 "$RUNNER_TEMP/open" && chmod 777 "$RUNNER_TEMP/open"
+          if sh -s -- --dir "$RUNNER_TEMP/open" < install.sh; then exit 1; fi
+          chmod +t "$RUNNER_TEMP/open"
+          sh -s -- --dir "$RUNNER_TEMP/open" < install.sh
+      - name: GNU wget alone
+        if: runner.os == 'Linux'
+        run: |
+          mkdir "$RUNNER_TEMP/path"
+          for t in sh uname mktemp cut tar gzip mkdir cp chmod mv rm basename sha256sum sed tail find wget; do
+            ln -s "$(command -v $t)" "$RUNNER_TEMP/path/$t"
+          done
+          PATH=$RUNNER_TEMP/path sh -s -- --dir "$RUNNER_TEMP/wget" < install.sh
+          "$RUNNER_TEMP/wget/grounds" --version
+      - name: without HOME, --dir and --help still work
+        run: |
+          env -u HOME sh -s -- --help < install.sh
+          env -u HOME sh -s -- --dir "$RUNNER_TEMP/nohome" < install.sh
+          "$RUNNER_TEMP/nohome/grounds" --version
+
+  alpine:
+    runs-on: ubuntu-latest
+    container: alpine:3.22
+    steps:
+      - uses: actions/checkout@v5
+      - name: busybox wget alone is refused, even with ssl_client
+        run: |
+          if command -v curl; then echo "curl must be absent here" >&2; exit 1; fi
+          command -v ssl_client
+          if sh < install.sh 2> err; then echo "installed with busybox wget" >&2; exit 1; fi
+          cat err
+          grep -q 'needs curl or GNU wget' err
+      - name: busybox sh and curl
+        run: |
+          apk add -q curl
+          sh < install.sh
+          ~/.local/bin/grounds --version

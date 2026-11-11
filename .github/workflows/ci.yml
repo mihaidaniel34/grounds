@@ -28,11 +28,12 @@ jobs:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 2   # a pull request's merge commit and the base it merges into
-      # a pull request that changes only the landing page skips the build; the
-      # job still runs and reports under its required name, so it can merge
+      # a pull request that changes only the landing page or the install script
+      # (install.yml tests that) skips the build; the job still runs and reports
+      # under its required name, so it can merge
       - id: changes
         if: github.event_name == 'pull_request'
-        run: git diff --quiet HEAD^1 HEAD -- . ':!site' && echo "skip=true" >> "$GITHUB_OUTPUT" || true
+        run: git diff --quiet HEAD^1 HEAD -- . ':!site' ':!install.sh' ':!.github/workflows/install.yml' && echo "skip=true" >> "$GITHUB_OUTPUT" || true
       # the analysis and the tests read the JDK's API signatures (ct.sym); the
       # release-newer-than-the-JDK tests run against each installed JDK
       - uses: actions/setup-java@v5
