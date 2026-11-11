@@ -170,9 +170,19 @@ fn is_mutable_type<'t>(cx: &Ctx<'_, 't>, ty: &Ty, init: Option<Node<'t>>) -> boo
     if ty.is_array() {
         // zero-length arrays are immutable
         if let Some(i) = init {
-            // `new T[0]`, `{}`, `new T[] {}` (any whitespace)
+            // `new T[0]`, `new T[0][3]` (the outer dimension is what holds
+            // elements), `{}`, `new T[] {}` (any whitespace)
+            let i = i.unparen();
+            if i.kind() == "array_creation_expression" {
+                if let Some(d) = i.kids().into_iter().find(|k| k.kind() == "dimensions_expr") {
+                    let t: String = cx.text(d).chars().filter(|c| !c.is_whitespace()).collect();
+                    if t == "[0]" {
+                        return false;
+                    }
+                }
+            }
             let t: String = cx.text(i).chars().filter(|c| !c.is_whitespace()).collect();
-            if t.ends_with("[0]") || t == "{}" || t.ends_with("[]{}") {
+            if t == "{}" || t.ends_with("[]{}") {
                 return false;
             }
         }

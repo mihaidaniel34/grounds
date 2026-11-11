@@ -7,3 +7,15 @@ class A {
     private static final DateTimeFormatter OK = DateTimeFormatter.ISO_DATE;
     private final SimpleDateFormat instanceOk = new SimpleDateFormat("yyyy");
 }
+class GuardedFormat {
+    private static final java.text.SimpleDateFormat FORMAT = new java.text.SimpleDateFormat("yyyy");
+    static synchronized String format(java.util.Date d) { return FORMAT.format(d); }
+    static String parse(String s) throws java.text.ParseException {
+        synchronized (GuardedFormat.class) { return FORMAT.parse(s).toString(); }
+    }
+}
+class UnguardedFormat {
+    private static final java.text.SimpleDateFormat FORMAT = new java.text.SimpleDateFormat("yyyy"); // expect
+    static synchronized String format(java.util.Date d) { return FORMAT.format(d); }
+    static String plain(java.util.Date d) { return FORMAT.format(d); }
+}

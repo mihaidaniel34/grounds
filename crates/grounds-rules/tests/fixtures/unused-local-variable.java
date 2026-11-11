@@ -11,3 +11,13 @@ class A {
     }
     int compute() { return 1; }
 }
+class CompoundReads {
+    int counted() {
+        int n = 0;
+        return n += 1;
+    }
+    void statementOnly() {
+        int m = 0; // expect
+        m += 1;
+    }
+}

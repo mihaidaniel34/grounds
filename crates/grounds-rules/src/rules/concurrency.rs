@@ -301,10 +301,25 @@ impl Rule for StaticDateFormat {
         let Some(t) = n.field("type") else { return };
         let ty = cx.fm.resolve_type_node(t);
         let bad = ["java.text.DateFormat", "java.util.Calendar", "java.text.MessageFormat", "java.text.NumberFormat"];
-        if is_subtype_any(cx.fm, &ty, &bad) {
+        if is_subtype_any(cx.fm, &ty, &bad) && !only_used_synchronized(n, cx) {
             cx.report(t, format!("`{}` is not thread-safe; a static instance is shared across threads", ty.display_simple()));
         }
     }
+}
+
+/// A private field every use of which (outside its own declaration) is in a
+/// `synchronized` method or block: which lock guards it is not checked, so
+/// the rule stays silent rather than guess.
+fn only_used_synchronized<'t>(field: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+    if !field.has_modifier("private") {
+        return false;
+    }
+    let Some(top) = crate::rules::unused::top_level_decl(field) else { return false };
+    let names: Vec<&str> = field.kids().into_iter().filter(|k| k.kind() == "variable_declarator").filter_map(|d| d.field("name")).map(|x| cx.text(x)).collect();
+    let (top_range, own) = (top.byte_range(), field.byte_range());
+    let uses: Vec<Node<'t>> = names.iter().flat_map(|name| cx.fm.occurrences(name).iter().copied().collect::<Vec<_>>()).filter(|o| top_range.contains(&o.start_byte()) && !own.contains(&o.start_byte())).collect();
+    !uses.is_empty()
+        && uses.iter().all(|u| u.ancestors().any(|a| a.kind() == "synchronized_statement" || (a.kind() == "method_declaration" && a.has_modifier("synchronized"))))
 }
 
 const THREAD_SLEEP: MethodMatcher = MethodMatcher::statics("java.lang.Thread").named(&["sleep"]);

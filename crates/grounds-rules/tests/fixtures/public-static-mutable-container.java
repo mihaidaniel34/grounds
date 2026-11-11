@@ -10,3 +10,7 @@ class EmptyArrays {
     public static final String[] NONE = new String[] {};
     public static final String[] NONE2 = new String[]{ };
 }
+class OuterDimension {
+    public static final int[][] EMPTY_ROWS = new int[0][3];
+    public static final int[][] ROWS = new int[3][0]; // expect
+}

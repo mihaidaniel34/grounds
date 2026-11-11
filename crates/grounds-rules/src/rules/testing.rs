@@ -96,8 +96,10 @@ impl Rule for AssertionArgumentOrder {
         if args.len() < 2 {
             return;
         }
-        let owner = assertion_class(cx, n);
-        // a project helper named assertEquals may take (actual, expected)
+        // a project helper named assertEquals may take (actual, expected), and
+        // so may a method whose owner is unknown (its jar is missing)
+        let Some(owner) = assertion_class(cx, n) else { return };
+        let owner = Some(owner);
         if owner.as_ref().is_some_and(|o| !(o.starts_with("org.junit") || o.starts_with("junit.") || o.starts_with("org.testng") || o.starts_with("kotlin.test"))) {
             return;
         }
