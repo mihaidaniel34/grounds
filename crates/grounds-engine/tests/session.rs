@@ -2385,3 +2385,77 @@ fn an_ignored_lombok_config_does_not_reload_the_project_at_every_sync() {
     assert!(!form(&s).contains("getValue"), "fluent accessors: {}", form(&s));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_lombok_config_deleted_and_unignored_applies_when_it_comes_back() {
+    // Review round 2 (G1): a config met while ignored, deleted, then the
+    // ignore rule removed and the config written again.
+    let dir = nested_lombok_project("lombokunignored");
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    write(&dir, ".gitignore", "lombok.config\n");
+    set_tree_mtime(&dir, ".", old);
+    let mut s = Session::open(&dir).unwrap();
+    holds_as_fresh(&mut s, &dir, "the load");
+    holds_as_fresh(&mut s, &dir, "a second sync");
+    write(&dir, "nested/lombok.config", "lombok.accessors.fluent = true\n");
+    holds_as_fresh(&mut s, &dir, "an ignored lombok.config appeared");
+    std::fs::remove_file(dir.join("nested/lombok.config")).unwrap();
+    holds_as_fresh(&mut s, &dir, "the ignored lombok.config went");
+    write(&dir, ".gitignore", "");
+    holds_as_fresh(&mut s, &dir, "the .gitignore no longer lists it");
+    write(&dir, "nested/lombok.config", "lombok.accessors.fluent = true\n");
+    holds_as_fresh(&mut s, &dir, "the lombok.config came back");
+    assert!(!form(&s).contains("getValue"), "fluent accessors: {}", form(&s));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_lombok_config_in_a_directory_that_could_not_be_listed_applies_once_it_can_be() {
+    // Review round 2 (G2): the name can be looked at, the directory cannot
+    // be listed (0111): whether a load reads the config is not known yet.
+    if !permissions_bind("a_lombok_config_in_a_directory_that_could_not_be_listed_applies_once_it_can_be") {
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let dir = nested_lombok_project("lombokunlisted");
+    let mut s = Session::open(&dir).unwrap();
+    holds_as_fresh(&mut s, &dir, "the load");
+    holds_as_fresh(&mut s, &dir, "a second sync");
+    write(&dir, "nested/lombok.config", "lombok.accessors.fluent = true\n");
+    let nested = dir.join("nested");
+    std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o111)).unwrap();
+    s.sync(&[]);
+    std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o755)).unwrap();
+    holds_as_fresh(&mut s, &dir, "the directory can be listed again");
+    assert!(!form(&s).contains("getValue"), "fluent accessors: {}", form(&s));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_lombok_config_symlink_whose_target_comes_within_reach_applies() {
+    // Review round 2 (G3): a symlinked config whose target cannot be looked
+    // at (a directory without permission) until it can.
+    if !permissions_bind("a_lombok_config_symlink_whose_target_comes_within_reach_applies") {
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let dir = nested_lombok_project("lomboksymlink");
+    let outside = dir.with_extension("outside");
+    let _ = std::fs::remove_dir_all(&outside);
+    write(&outside, "lombok.config", "lombok.accessors.fluent = true\n");
+    std::os::unix::fs::symlink(outside.join("lombok.config"), dir.join("nested/lombok.config")).unwrap();
+    std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o000)).unwrap();
+    // (the directory's time old again; not through the symlink)
+    std::fs::File::open(dir.join("nested")).unwrap().set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3600)).unwrap();
+    let mut s = Session::open(&dir).unwrap();
+    holds_as_fresh(&mut s, &dir, "the load");
+    holds_as_fresh(&mut s, &dir, "a second sync");
+    let began = s.project.load_began;
+    s.sync(&[]);
+    no_reload(&s, began, "while the target cannot be reached");
+    std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o755)).unwrap();
+    holds_as_fresh(&mut s, &dir, "the target can be reached");
+    assert!(!form(&s).contains("getValue"), "fluent accessors: {}", form(&s));
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&outside);
+}
