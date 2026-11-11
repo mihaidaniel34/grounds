@@ -174,9 +174,9 @@ fn is_mutable_type<'t>(cx: &Ctx<'_, 't>, ty: &Ty, init: Option<Node<'t>>) -> boo
             // elements), `{}`, `new T[] {}` (any whitespace)
             let i = i.unparen();
             if i.kind() == "array_creation_expression" {
+                // (`new byte[SIZE]` with `SIZE = 0`, `new int[1 - 1]`: a constant zero)
                 if let Some(d) = i.kids().into_iter().find(|k| k.kind() == "dimensions_expr") {
-                    let t: String = cx.text(d).chars().filter(|c| !c.is_whitespace()).collect();
-                    if t == "[0]" {
+                    if d.kids().into_iter().find(|k| k.is_named()).is_some_and(|e| cx.fm.constant_value(e).and_then(|c| c.as_i64()) == Some(0)) {
                         return false;
                     }
                 }

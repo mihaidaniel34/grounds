@@ -291,6 +291,9 @@ fn base_mode_removed_classes_and_new_beans() {
     write(&dir, "src/main/java/demo/StaticWildcard.java", "package demo;\nimport static somelib.Holder.*;\nclass StaticWildcard { Gone g; }\n");
     write(&dir, "src/main/java/other/Inherited.java", "package other;\nclass Inherited extends somelib.Base {\n    int v() { return demo.Gone.value(); }\n}\n");
     write(&dir, "src/main/java/demo/SelfQualified.java", "package demo;\nclass SelfQualified {\n    demo.Gone g;\n}\n");
+    // the simple name inside a class whose supertype we cannot see: that
+    // supertype may declare a member type Gone, which is what javac then binds
+    write(&dir, "src/main/java/demo/InheritsName.java", "package demo;\nclass InheritsName extends somelib.Base {\n    Gone value;\n    int v() { return Gone.value(); }\n}\n");
     // the qualifier names a class here (one that may inherit a nested Gone)
     write(&dir, "src/main/java/fourth/demo.java", "package fourth;\nclass demo extends somelib.Base {}\n");
     write(&dir, "src/main/java/fourth/ClassQualifier.java", "package fourth;\nclass ClassQualifier { demo.Gone g; }\n");

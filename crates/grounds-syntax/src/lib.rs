@@ -93,7 +93,15 @@ pub struct ParsedFile {
     pub text: Arc<str>,
     pub tree: Tree,
     pub lines: LineIndex,
+    /// The parse took too long and was abandoned: the tree is empty, and the
+    /// file is not judged (it counts as one with syntax errors)
+    pub cut_off: bool,
 }
+
+/// Progress checks a parse may take before it is abandoned (see
+/// `ParsedFile::parse`). The largest JDK sources (up to 885 KB) take about
+/// 5,000; a 3 MB line of semicolons in a `for` header took 125,000 (11 s).
+pub const PARSE_BUDGET: u64 = 50_000;
 
 impl std::fmt::Debug for ParsedFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -109,12 +117,39 @@ pub struct SyntaxError {
 
 impl ParsedFile {
     pub fn parse(text: impl Into<Arc<str>>) -> ParsedFile {
+        Self::parse_within(text, PARSE_BUDGET)
+    }
+
+    /// `parse` with a budget of `budget` progress checks.
+    pub fn parse_within(text: impl Into<Arc<str>>, budget: u64) -> ParsedFile {
         let text: Arc<str> = text.into();
         let fixed = fixup_for_grammar(&text);
         let bytes = fixed.as_deref().unwrap_or(text.as_bytes());
-        let tree = PARSER.with(|p| p.borrow_mut().parse(bytes, None)).expect("parse never fails without timeout");
+        // tree-sitter's error recovery can take minutes on pathological input
+        // (a 3 MB line of semicolons in a `for` header): a parse that takes
+        // more than PARSE_BUDGET progress checks (each about a hundred parser
+        // operations: a count, so the cut is the same on every machine) is
+        // abandoned, and the file is not judged, as one nested too deep
+        let mut ticks = 0u64;
+        let mut progress = |_: &tree_sitter::ParseState| {
+            ticks += 1;
+            if ticks > budget { std::ops::ControlFlow::Break(()) } else { std::ops::ControlFlow::Continue(()) }
+        };
+        let parsed = PARSER.with(|p| {
+            let mut p = p.borrow_mut();
+            let len = bytes.len();
+            let t = p.parse_with_options(&mut |i, _| if i < len { &bytes[i..] } else { &[] as &[u8] }, None, Some(tree_sitter::ParseOptions::new().progress_callback(&mut progress)));
+            if t.is_none() {
+                p.reset();
+            }
+            t
+        });
+        let (tree, cut_off) = match parsed {
+            Some(t) => (t, false),
+            None => (PARSER.with(|p| p.borrow_mut().parse(b"", None)).expect("an empty parse"), true),
+        };
         let lines = LineIndex::new(&text);
-        ParsedFile { text, tree, lines }
+        ParsedFile { text, tree, lines, cut_off }
     }
 
     pub fn root(&self) -> Node<'_> {
@@ -130,7 +165,7 @@ impl ParsedFile {
     }
 
     pub fn has_errors(&self) -> bool {
-        self.root().has_error()
+        self.cut_off || self.root().has_error()
     }
 
     /// How deeply the syntax tree nests (the root alone is 0), without
@@ -788,6 +823,13 @@ mod tests {
     #[test]
     fn depth_counts_nesting_without_recursion() {
         assert_eq!(ParsedFile::parse("").depth(), 0);
+        // a parse over its budget is abandoned: an empty tree, read as a file
+        // with syntax errors; within the budget, the same text parses
+        let src = format!("class A {{ int m() {{ for (int r;{}) {{}} return 0; }} }}", ";".repeat(20_000));
+        let cut = ParsedFile::parse_within(src.as_str(), 10);
+        assert!(cut.cut_off && cut.has_errors() && cut.root().child_count() == 0);
+        let whole = ParsedFile::parse(src.as_str());
+        assert!(!whole.cut_off && whole.root().child_count() > 0);
         let shallow = ParsedFile::parse("class A { int x = 1; }").depth();
         // a left-nested concatenation adds one level per `+`
         let deep = |n: usize| ParsedFile::parse(format!("class A {{ String s = \"a\"{}; }}", " + \"b\"".repeat(n))).depth();

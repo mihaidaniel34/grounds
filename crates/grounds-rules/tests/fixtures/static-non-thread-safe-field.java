@@ -30,3 +30,8 @@ class EscapingLambda {
     // the lambda runs after the monitor is released
     static synchronized Runnable task(java.util.Date d) { return () -> FORMAT.format(d); }
 }
+class DeclaratorDimensions {
+    static java.text.SimpleDateFormat formats[] = new java.text.SimpleDateFormat[0];
+    static java.util.Calendar calendars[][] = new java.util.Calendar[0][0];
+    static java.text.SimpleDateFormat single = new java.text.SimpleDateFormat("y"), many[] = {}; // expect
+}

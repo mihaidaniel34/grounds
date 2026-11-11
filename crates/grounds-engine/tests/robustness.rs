@@ -254,3 +254,31 @@ fn a_source_file_replaced_by_a_pipe_is_refused_and_not_taken_as_read() {
     assert!(back && none.is_empty(), "read once it is a file again");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_changed_file_replaced_by_a_pipe_does_not_block_change_mode() {
+    // `grounds changed` reads the changed files and their base versions; a
+    // tracked source turned into a pipe must not block it, whether found by
+    // git or named explicitly
+    use grounds_engine::session::{CheckOptions, Mode, Session};
+    let dir = project("changed-fifo", &[("src/main/java/p/Example.java", "package p;\nclass Example {}\n"), ("src/main/java/p/Other.java", "package p;\nclass Other {}\n")]);
+    let git = |args: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(&dir).args(["-c", "commit.gpgsign=false", "-c", "core.hooksPath=.no-hooks"]).args(args).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t").env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t").status().is_ok_and(|s| s.success()));
+    git(&["init", "-q"]);
+    git(&["add", "."]);
+    git(&["commit", "-qm", "init"]);
+    let example = dir.join("src/main/java/p/Example.java");
+    std::fs::remove_file(&example).unwrap();
+    assert!(std::process::Command::new("mkfifo").arg(&example).status().unwrap().success());
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (d, e) = (dir.clone(), example.clone());
+    std::thread::spawn(move || {
+        let mut s = Session::open(&d).unwrap();
+        for files in [Vec::new(), vec![e.clone()]] {
+            let _ = s.check(&CheckOptions { mode: Mode::Checkpoint, files, all_lines: false, use_baseline: false, min_severity: grounds_rules::Severity::Info, base: None });
+        }
+        let _ = s.check(&CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: grounds_rules::Severity::Info, base: Some("HEAD".into()) });
+        let _ = tx.send(());
+    });
+    assert!(rx.recv_timeout(Duration::from_secs(60)).is_ok(), "change mode blocked on a pipe");
+    let _ = std::fs::remove_dir_all(&dir);
+}

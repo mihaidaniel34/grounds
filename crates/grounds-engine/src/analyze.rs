@@ -147,7 +147,8 @@ pub fn analyze_text(project: &Project, rules: &RuleSet, options: &RuleOptions, p
     // deeper than this (generated lexers, a 13,000-term string concatenation
     // in a test input) overflowed the stack and killed the whole run. Like
     // code the parser could not read, it is not judged.
-    if pf.depth() > MAX_TREE_DEPTH {
+    // (and one whose parse was abandoned for taking too long)
+    if pf.cut_off || pf.depth() > MAX_TREE_DEPTH {
         return Vec::new();
     }
     let key = path_key(path);
