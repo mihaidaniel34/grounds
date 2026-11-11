@@ -65,9 +65,37 @@ pub fn outer_ignore_files(root: &Path) -> Vec<PathBuf> {
     v
 }
 
+/// Whether `d` has a `.git` entry, and of which kind (`true`: a directory):
+/// a repository starts there, and the ignore files only count inside one.
+pub fn git_kind(d: &Path) -> Option<bool> {
+    std::fs::symlink_metadata(d.join(".git")).ok().map(|m| m.is_dir())
+}
+
+/// The `info/exclude` that applies to a repository at `d` (see `git_common_dir`).
+pub fn exclude_file(d: &Path) -> Option<PathBuf> {
+    git_common_dir(d).map(|c| c.join("info/exclude"))
+}
+
+/// Whether the entries of directory `d` can be listed and looked at: a
+/// directory that can be read but not entered (no execute permission) lists
+/// names whose files cannot be reached. (The permission is the directory's,
+/// so its first entry tells.)
+pub fn listable(d: &Path) -> bool {
+    match std::fs::read_dir(d) {
+        Ok(mut entries) => match entries.next() {
+            Some(Ok(e)) => std::fs::symlink_metadata(e.path()).is_ok(),
+            Some(Err(_)) => false,
+            None => true,
+        },
+        Err(_) => false,
+    }
+}
+
 /// The git directory whose `info/exclude` applies to a repository at `d`, as
 /// `ignore` finds it: `d/.git`, or for a linked worktree (`.git` a file
 /// naming its `gitdir:`) the common directory that gitdir's `commondir` names.
+/// (A submodule's gitdir has no `commondir`: `ignore` then reads no exclude
+/// file for it, and neither is one watched.)
 fn git_common_dir(d: &Path) -> Option<PathBuf> {
     let dot = d.join(".git");
     let meta = std::fs::metadata(&dot).ok()?;

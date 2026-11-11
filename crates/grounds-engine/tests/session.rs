@@ -1223,6 +1223,84 @@ fn an_ignore_file_with_a_time_in_the_future_is_trusted_once_seen_for_the_margin(
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[cfg(unix)]
+#[test]
+fn a_directory_that_can_be_read_but_not_entered_is_listed_once_it_can_be() {
+    // Without execute permission a directory lists its names, but its files
+    // cannot be reached: it is not taken as listed until they can be.
+    // (as root the permission is not enforced: then this only checks that
+    // the session holds what a fresh load holds)
+    use std::os::unix::fs::PermissionsExt;
+    let dir = restored_project("unenterable");
+    let mut s = Session::open(&dir).unwrap();
+    let sub = dir.join("src/main/java/demo/sub");
+    write(&dir, "src/main/java/demo/sub/B.java", "package demo.sub;\npublic class B {}\n");
+    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o400)).unwrap();
+    s.sync(&[]);
+    std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    holds_as_fresh(&mut s, &dir, "the directory could be entered again");
+    holds_as_fresh(&mut s, &dir, "a second sync");
+    assert!(s.project.index.class_exists("demo.sub.Sub") && s.project.index.class_exists("demo.sub.B"));
+    listed_not_walked(&s);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn an_ignore_file_that_cannot_be_read_is_read_once_it_can_be() {
+    // (as root the permission is not enforced: then this only checks that
+    // the session holds what a fresh load holds)
+    use std::os::unix::fs::PermissionsExt;
+    let dir = restored_project("unreadableignore");
+    let mut s = Session::open(&dir).unwrap();
+    write(&dir, ".ignore", "Req.java\n");
+    std::fs::set_permissions(dir.join(".ignore"), std::fs::Permissions::from_mode(0o000)).unwrap();
+    s.sync(&[]);
+    s.sync(&[]);
+    std::fs::set_permissions(dir.join(".ignore"), std::fs::Permissions::from_mode(0o644)).unwrap();
+    holds_as_fresh(&mut s, &dir, "the ignore file could be read again");
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    holds_as_fresh(&mut s, &dir, "past the margin");
+    assert!(!s.project.index.class_exists("demo.Req"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn the_exclude_file_of_a_nested_repository_is_followed() {
+    let dir = restored_project("nestedrepo");
+    let mut s = Session::open(&dir).unwrap();
+    let sub = dir.join("src/main/java/demo/sub");
+    git(&sub, &["init", "-q"]);
+    holds_as_fresh(&mut s, &dir, "a repository started in a package directory");
+    write(&sub, ".git/info/exclude", "Sub.java\n");
+    set_mtime(&sub, ".git/info/exclude", std::time::SystemTime::now() - std::time::Duration::from_secs(60));
+    holds_as_fresh(&mut s, &dir, "its exclude file lists a file");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_repository_that_starts_or_ends_around_the_workspace_changes_what_is_ignored() {
+    // a `.gitignore` only counts inside a repository: `git init` on a
+    // workspace that had none, and the reverse, change the sources
+    let dir = std::env::temp_dir().join(format!("grounds-session-gitinit-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, ".gitignore", "Req.java\n");
+    write(&dir, "src/main/java/demo/Req.java", "package demo;\npublic class Req {}\n");
+    write(&dir, "src/main/java/demo/Biz.java", "package demo;\npublic class Biz {}\n");
+    set_tree_mtime(&dir, ".", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
+    let mut s = Session::open(&dir).unwrap();
+    assert!(s.project.index.class_exists("demo.Req"));
+    git(&dir, &["init", "-q"]);
+    holds_as_fresh(&mut s, &dir, "git init");
+    assert!(!s.project.index.class_exists("demo.Req"));
+    std::fs::remove_dir_all(dir.join(".git")).unwrap();
+    holds_as_fresh(&mut s, &dir, "the repository removed");
+    assert!(s.project.index.class_exists("demo.Req"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The same place, a different claim: a changed return type turns "`Old` has
 /// no method `missing`" (there before the change) into "`New` has no method
 /// `missing`" on an unchanged line of another file. That is a new break.

@@ -404,7 +404,7 @@ impl Session {
     /// file systems that do not change a directory's time when an entry is
     /// added to it.
     fn rescan(&mut self) -> (Vec<PathBuf>, FxHashSet<PathBuf>, bool) {
-        use crate::workspace::{outer_ignore_files, Workspace, IGNORE_FILES};
+        use crate::workspace::{git_kind, listable, Workspace, IGNORE_FILES};
         let clock = SystemTime::now();
         let root = self.project.workspace.root.clone();
         let exclude = self.project.config.exclude.clone();
@@ -415,6 +415,9 @@ impl Session {
             Some(stamp) => stamp.changed(p, clock),
             None => FileStamp::of(p, false).is_some(),
         });
+        // a repository that starts or ends above the root (`git init`): the
+        // ignore files count only inside one
+        full |= self.walked.outer_gits.iter().any(|(a, kind)| git_kind(a) != *kind);
         let (mut found, mut found_modules) = (Vec::new(), Vec::new());
         let mut gone: FxHashSet<PathBuf> = FxHashSet::default();
         // a directory the discovery would not go into (any more): it and all
@@ -423,6 +426,7 @@ impl Session {
         let forget = |s: &mut Session, gone: &mut FxHashSet<PathBuf>, d: &Path| {
             s.walked.dirs.retain(|p, _| !p.starts_with(d));
             s.walked.ignores.retain(|(p, _)| !p.starts_with(d));
+            s.walked.gits.retain(|p, _| !p.starts_with(d));
             gone.extend(s.stamps.keys().filter(|p| p.starts_with(d)).cloned());
         };
         if !full {
@@ -445,10 +449,18 @@ impl Session {
                     full = true;
                     break;
                 }
+                // a repository that starts or ends here, or a `.git` of
+                // another kind: which ignore files count, and which exclude
+                // file, is decided again
+                if git_kind(&d) != self.walked.gits.get(&d).copied() {
+                    full = true;
+                    break;
+                }
                 crate::trace::log(|| format!("sync: directory changed {}", d.display()));
-                // one that cannot be listed (no permission) is listed again
-                // at every sync until it can, as an unreadable file is read
-                stamp.unread = std::fs::read_dir(&d).is_err();
+                // one that cannot be listed or entered (no permission) is
+                // listed again at every sync until it can, as an unreadable
+                // file is read
+                stamp.unread = !listable(&d);
                 self.walked.dirs.insert(d.clone(), stamp.after(Some(&old)));
                 let began = SystemTime::now();
                 let listed = walk(&d, Some(1));
@@ -465,9 +477,10 @@ impl Session {
                 let new_dirs: Vec<&PathBuf> = listed.dirs.iter().filter(|s| **s != d && !self.walked.dirs.contains_key(*s)).collect();
                 for sub in new_dirs {
                     let w = walk(sub, None);
-                    let new = Walk::stamp(&w.dirs, &[], began, &FxHashMap::default());
+                    let new = Walk::stamp(&w.dirs, None, began, &FxHashMap::default());
                     self.walked.dirs.extend(new.dirs);
                     self.walked.ignores.extend(new.ignores);
+                    self.walked.gits.extend(new.gits);
                     found_modules.extend(modules(&w));
                     found.extend(files(w));
                 }
@@ -480,10 +493,10 @@ impl Session {
             self.full_walks += 1;
             // ignore files stamped before the walk: one unchanged by its end is
             // what it read, and keeps the time it was first seen
-            let before: FxHashMap<PathBuf, FileStamp> = self.walked.ignores.iter().filter_map(|(p, old)| FileStamp::of(p, false).map(|s| (p.clone(), s.after(old.as_ref())))).collect();
+            let before: FxHashMap<PathBuf, FileStamp> = self.walked.ignores.iter().filter_map(|(p, old)| FileStamp::of(p, true).map(|s| (p.clone(), s.after(old.as_ref())))).collect();
             let began = SystemTime::now();
             let w = walk(&root, None);
-            self.walked = Walk::stamp(&w.dirs, &outer_ignore_files(&root), began, &before);
+            self.walked = Walk::stamp(&w.dirs, Some(&root), began, &before);
             // the modules as a fresh load finds them: one added, gone or of
             // another build system reloads the project
             let layout = |ms: &[crate::workspace::Module]| {
