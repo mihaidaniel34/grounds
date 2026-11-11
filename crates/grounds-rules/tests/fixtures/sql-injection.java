@@ -125,6 +125,15 @@ class IdentifiersFromFields {
         ps.setString(1, pref);
         c.prepareStatement("UPDATE " + table + " SET seen = ? WHERE id = ?");
     }
+    // an apostrophe in a comment opens no literal
+    void commented(java.sql.Connection c, String column, String name) throws java.sql.SQLException {
+        if (!java.util.Set.of("id", "name").contains(column)) throw new IllegalArgumentException();
+        c.prepareStatement("SELECT /* don't expose details */ t." + column + " FROM t WHERE id = ?");
+        c.prepareStatement("SELECT -- don't expose details\n t." + column + " FROM t WHERE id = ?");
+        c.prepareStatement("SELECT 'it''s', t." + column + " FROM t WHERE id = ?");
+        c.prepareStatement("SELECT * FROM t /* it's */ WHERE id = ? AND name = '" + name + "'"); // expect
+        c.prepareStatement("SELECT * FROM t WHERE id = ? /* " + name + " */"); // expect
+    }
     // a value spliced in beside the placeholders
     void mixed(java.sql.Connection c, String table, String name) throws java.sql.SQLException {
         c.prepareStatement("SELECT * FROM " + table + " WHERE id = ? AND name = '" + name + "'"); // expect

@@ -653,10 +653,10 @@ fn format_parts<'t>(fmt: &str, args: &[Node<'t>], out: &mut Vec<SqlPart<'t>>) ->
 /// Does the SQL so far end where a table or column name goes: after `from`,
 /// `into`, `update`, `join`, `table`, or after a qualifier (`t.`)?
 fn identifier_position(before: &str) -> bool {
-    // inside a quoted literal (`host = 'www.` + host): a value
-    if before.matches('\'').count() % 2 == 1 {
-        return false;
-    }
+    // inside a quoted literal (`host = 'www.` + host): a value; inside a
+    // comment (`-- ` + note, `/* ` + note): not a name either
+    let Some(before) = sql_code(before) else { return false };
+    let before = before.as_str();
     if before.ends_with('.') {
         return true;
     }
@@ -666,6 +666,63 @@ fn identifier_position(before: &str) -> bool {
     }
     let lower = trimmed.to_ascii_lowercase();
     ["from", "into", "update", "join", "table"].iter().any(|k| lower.strip_suffix(k).is_some_and(|rest| !rest.ends_with(|c: char| c.is_alphanumeric() || c == '_')))
+}
+
+/// SQL text as the database reads it, comments (`-- ..`, `/* .. */`) made
+/// blanks, so that an apostrophe in a comment (`/* don't .. */`) does not
+/// open a literal; `None` when the text ends inside a quoted literal or
+/// identifier, or inside a comment. A quote in a literal is doubled (`'it''s'`).
+fn sql_code(text: &str) -> Option<String> {
+    #[derive(PartialEq)]
+    enum At {
+        Code,
+        Quoted(char),
+        Line,
+        Block,
+    }
+    let mut at = At::Code;
+    let mut out = String::with_capacity(text.len());
+    let mut cs = text.chars().peekable();
+    while let Some(c) = cs.next() {
+        match at {
+            At::Code => match c {
+                '\'' | '"' => {
+                    at = At::Quoted(c);
+                    out.push(c);
+                }
+                '-' if cs.peek() == Some(&'-') => {
+                    cs.next();
+                    at = At::Line;
+                    out.push(' ');
+                }
+                '/' if cs.peek() == Some(&'*') => {
+                    cs.next();
+                    at = At::Block;
+                    out.push(' ');
+                }
+                _ => out.push(c),
+            },
+            At::Quoted(q) => {
+                out.push(c);
+                if c == q {
+                    at = At::Code;
+                }
+            }
+            At::Line => {
+                if c == '\n' {
+                    at = At::Code;
+                    out.push(c);
+                }
+            }
+            At::Block => {
+                if c == '*' && cs.peek() == Some(&'/') {
+                    cs.next();
+                    at = At::Code;
+                }
+            }
+        }
+    }
+    (at == At::Code).then_some(out)
 }
 
 declare_rule!(SqlInjection {
