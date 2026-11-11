@@ -24,12 +24,13 @@ Then files go and come back, as an edit that deletes a file and a `git
 reset` that restores it do: every tracked Java file is deleted, with the
 directories that are left empty, and both are asked (`changed`); git
 restores them, and both are asked about the whole walk as one change
-(`changed --base <first commit>`). Restored, a file equals HEAD and is in no
+(`changed`). Restored, a file equals HEAD and is in no
 list of changed files, so only a daemon that finds files by itself holds
 them again. A daemon that does not has most of the project unknown, which a
-main line that compiles may not show; so then the class that the most files
-import (up to 20) is deleted and both are asked once more (`--base HEAD`): a fresh run
-reports those files as using a removed class, and so must the daemon.
+main line that compiles may not show; so then a public method of a class
+that many files import, the one they call the most, is renamed and both are
+asked once more: a fresh run reports the calls as broken, and so must the
+daemon.
 
 With --budget SECONDS the newest commit is asked about once first, to see
 what a step costs on this project, and N is lowered to what fits: the walk
@@ -52,9 +53,11 @@ report is not in --known.
 """
 
 import argparse
+import itertools
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import time
@@ -107,23 +110,51 @@ def difference(a, b):
     return out
 
 
-def most_imported(d, files, most=20):
-    """The tracked Java file of the project class that the most files import
-    by its qualified name, up to `most` (each of them is analysed when the
-    class is deleted), or None."""
-    imports = {}
-    for l in git(d, "grep", "-h", "-E", r"^import [A-Za-z_][A-Za-z0-9_.]*;", "--", "*.java", check=False).splitlines():
-        n = l[len("import "):].strip().rstrip(";")
-        imports[n] = imports.get(n, 0) + 1
+# a public method declared on one line: its name
+DECLARATION = re.compile(r"^\s*public\s+(?:(?:static|final|synchronized|abstract|default)\s+)*(?:<[^>]*>\s+)?[\w.$<>\[\], ?]+\s+(\w+)\s*\(")
+
+
+def rename_probes(d, files):
+    """Methods to rename so that other files stop compiling, best first: per
+    project class among the 20 that the most files import by name, its public
+    method declared once that those files call the most (`Class.name(` for a
+    static one, `.name(` else). Yields (file, line index, name)."""
+    importers = {}
+    for l in git(d, "grep", "-E", r"^import [A-Za-z_][A-Za-z0-9_.]*;", "--", "*.java", check=False).splitlines():
+        f, _, line = l.partition(":")
+        importers.setdefault(line[len("import "):].strip().rstrip(";"), []).append(f)
     by_name = {}
     for f in files:
         by_name.setdefault(os.path.basename(f)[:-len(".java")], []).append(f)
-    for n, _ in sorted(((n, c) for n, c in imports.items() if c <= most), key=lambda x: (-x[1], x[0])):
+    for n, users in sorted(importers.items(), key=lambda x: (-len(x[1]), x[0]))[:20]:
         suffix = n.replace(".", "/") + ".java"
-        for f in by_name.get(n.rsplit(".", 1)[-1], []):
-            if f == suffix or f.endswith("/" + suffix):
-                return f
-    return None
+        f = next((f for f in by_name.get(n.rsplit(".", 1)[-1], []) if f == suffix or f.endswith("/" + suffix)), None)
+        if f is None:
+            continue
+        with open(os.path.join(d, f), encoding="utf-8", errors="replace", newline="") as fh:
+            lines = fh.read().splitlines(keepends=True)
+        declared = {}
+        for i, l in enumerate(lines):
+            m = DECLARATION.match(l)
+            if m:
+                declared.setdefault(m.group(1), []).append(i)
+        once = {k: v[0] for k, v in declared.items() if len(v) == 1}
+        if not once:
+            continue
+        simple = n.rsplit(".", 1)[-1]
+        call = {k: f"{simple}.{k}(" if re.search(r"\bstatic\b", lines[i].split("(")[0]) else f".{k}(" for k, i in once.items()}
+        calls = dict.fromkeys(once, 0)
+        for u in users:
+            try:
+                with open(os.path.join(d, u), encoding="utf-8", errors="replace") as fh:
+                    text = fh.read()
+            except OSError:
+                continue
+            for k in calls:
+                calls[k] += text.count(call[k])
+        name = max(sorted(calls), key=lambda k: calls[k])
+        if calls[name]:
+            yield f, once[name], name
 
 
 def summary(path):
@@ -221,7 +252,7 @@ def main():
                 print(f"    fresh only:  {w}")
         return fresh
 
-    deleted = False
+    dirty = False  # the work tree holds edits of this script
     subprocess.run([grounds, "daemon", "--root", d, "--stop"], capture_output=True)
     try:
         git(d, *move, line[0])
@@ -269,7 +300,7 @@ def main():
         # files that go and come back (see above)
         t = time.monotonic()
         files = [f for f in git(d, "ls-files", "-z", "--", "*.java").split("\0") if f]
-        deleted = True
+        dirty = True
         emptied = set()
         for f in files:
             p = os.path.join(d, f)
@@ -287,24 +318,32 @@ def main():
         compare(step, f"with the {len(files)} tracked Java files deleted", None)
         steps.append(step)
         git(d, "checkout", "-q", "--", ".")
-        deleted = False
+        dirty = False
         step = {"commit": "restored", "files": len(files)}
-        compare(step, f"with them restored, asked about the walk since {line[0][:12]}", line[0])
+        compare(step, "with them restored", None)
         steps.append(step)
-        gone = most_imported(d, files)
-        if gone:
-            deleted = True
-            os.remove(os.path.join(d, gone))
-            step = {"commit": "deleted-class", "files": 1, "file": gone}
-            compare(step, f"with {gone}, the most imported class, deleted", "HEAD")
+        # (the next candidate while a fresh run reports no broken place: at most three)
+        for f, i, name in itertools.islice(rename_probes(d, files), 3):
+            path = os.path.join(d, f)
+            with open(path, encoding="utf-8", errors="surrogateescape", newline="") as fh:
+                lines = fh.read().splitlines(keepends=True)
+            lines[i] = lines[i].replace(f"{name}(", f"{name}ZzReplay(", 1)
+            dirty = True  # (the checkout is put back below, or by `finally`)
+            with open(path, "w", encoding="utf-8", errors="surrogateescape", newline="") as fh:
+                fh.write("".join(lines))
+            step = {"commit": "renamed", "files": 1, "file": f, "method": name}
+            fresh = compare(step, f"with {name} renamed in {f}", None)
+            step["pending"] = len(fresh.get("pending", []))
             steps.append(step)
             git(d, "checkout", "-q", "--", ".")
-            deleted = False
+            dirty = False
+            if step["pending"] or "daemon-only" in step:
+                break
         step["seconds"] = round(time.monotonic() - t, 1)
-        print(f"{project}: files deleted and restored, asked twice each, in {step['seconds']:.0f} s")
+        print(f"{project}: files deleted, restored and a method renamed, each asked both ways, in {step['seconds']:.0f} s")
     finally:
         subprocess.run([grounds, "daemon", "--root", d, "--stop"], capture_output=True)
-        if deleted:
+        if dirty:
             git(d, "checkout", "-q", "--", ".")
         restore()
     print(f"{project}: {stats['commits']} commits replayed ({stats['skipped']} without Java changes), "
