@@ -33,7 +33,10 @@ class Argv {
     void env(String file) throws Exception {
         new ProcessBuilder("env", "sh", "-c", "cat " + file); // expect
         new ProcessBuilder("/usr/bin/env", "bash", "-c", "cat " + file); // expect
-        new ProcessBuilder("env", "-i", "LANG=C", "--", "sh", "-c", "cat " + file); // expect
+        new ProcessBuilder("env", "-i", "--", "LANG=C", "sh", "-c", "cat " + file); // expect
+        new ProcessBuilder("env", "--", "LANG=C", "sh", "-c", "cat " + file); // expect
+        // the options end at an assignment: the program is "--"
+        new ProcessBuilder("env", "-i", "LANG=C", "--", "sh", "-c", "cat " + file);
         new ProcessBuilder("env", "-S", "sh -c", "cat " + file);
     }
     // options as the shell reads them: -C is noclobber, -- ends the options,

@@ -683,8 +683,10 @@ enum SqlLexed {
     Inside,
     /// Where the dialects read it differently: a backslash in a literal
     /// (an escape in MySQL and in PostgreSQL's `E'..'`, a character in
-    /// standard SQL), a `$` not followed by a digit (PostgreSQL's dollar
-    /// quote `$tag$` may open there), a `/*` inside
+    /// standard SQL), a `$` not followed by a digit outside a name
+    /// (PostgreSQL's dollar quote `$tag$` may open there), `--` not followed
+    /// by a blank (a comment, or MySQL's minus minus), a backtick (MySQL's
+    /// quoted identifier), a `/*` inside
     /// a block comment (nested in PostgreSQL, not elsewhere).
     Unknown,
 }
@@ -708,11 +710,18 @@ fn sql_code(text: &str) -> SqlLexed {
                     at = At::Quoted(c);
                     out.push(c);
                 }
+                // `-- ` starts a comment everywhere; `--` before anything
+                // but a blank does in standard SQL, not in MySQL (`1--2`)
                 '-' if cs.peek() == Some(&'-') => {
                     cs.next();
+                    if !cs.peek().is_some_and(|k| k.is_whitespace() || k.is_control()) {
+                        return SqlLexed::Unknown;
+                    }
                     at = At::Line;
                     out.push(' ');
                 }
+                // MySQL's quoted identifier, a character elsewhere
+                '`' => return SqlLexed::Unknown,
                 '/' if cs.peek() == Some(&'*') => {
                     cs.next();
                     at = At::Block;
@@ -720,7 +729,8 @@ fn sql_code(text: &str) -> SqlLexed {
                 }
                 // a possible dollar quote (`$$`, `$tag$`, a tag in any
                 // letters PostgreSQL takes: `$é$`); a parameter (`$1`) is not
-                '$' if !cs.peek().is_some_and(|k| k.is_ascii_digit()) => return SqlLexed::Unknown,
+                // (not within a name: `foo$tag$` is one identifier)
+                '$' if !cs.peek().is_some_and(|k| k.is_ascii_digit()) && !out.ends_with(|k: char| k.is_alphanumeric() || k == '_' || k == '$') => return SqlLexed::Unknown,
                 _ => out.push(c),
             },
             At::Quoted(q) => {
@@ -896,20 +906,21 @@ fn shell_command_in<'a, 't>(argv: &'a [Node<'t>], lit: &dyn Fn(&Node<'t>) -> Opt
     let mut rest = argv.iter();
     let mut program = rest.next().and_then(lit)?;
     if base(&program) == "env" {
+        let mut assigned = false;
         loop {
             let f = rest.next().and_then(lit)?;
             let assignment = f.split_once('=').is_some_and(|(n, _)| !n.is_empty() && !n.starts_with(|c: char| c.is_ascii_digit()) && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
+            // options end at `--` or at the first assignment; assignments
+            // go on to the program (`env -i -- LANG=C sh`; in
+            // `env LANG=C -- sh` the program is `--`)
             match f.as_str() {
-                "-i" | "--ignore-environment" => {}
-                "-u" => {
+                "-i" | "--ignore-environment" if !assigned => {}
+                "-u" if !assigned => {
                     rest.next().and_then(lit)?;
                 }
-                "--" => {
-                    program = rest.next().and_then(lit)?;
-                    break;
-                }
-                _ if f.starts_with('-') => return None,
-                _ if assignment => {}
+                "--" if !assigned => assigned = true,
+                _ if f.starts_with('-') && !assigned => return None,
+                _ if assignment => assigned = true,
                 _ => {
                     program = f;
                     break;

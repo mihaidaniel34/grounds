@@ -143,6 +143,11 @@ class IdentifiersFromFields {
         c.prepareStatement("SELECT E'it\\'s' AS note, t." + column + " FROM t WHERE id = ?");
         c.prepareStatement("SELECT 'it\\'s' AS note, t." + column + " FROM t WHERE id = ?");
         c.prepareStatement("SELECT /* outer /* inner */ don't */ t." + column + " FROM t WHERE id = ?");
+        // MySQL reads 1--2 as a subtraction, and `a/*b` as a quoted name
+        c.prepareStatement("SELECT 1--2, t." + column + " FROM t WHERE id = ?");
+        c.prepareStatement("SELECT t.`a/*b`, t." + column + " FROM t WHERE id = ?");
+        // a $ within a name opens no dollar quote
+        c.prepareStatement("SELECT foo$tag$ FROM t WHERE id = ? AND name = '" + column + "'"); // expect
         // a parameter `$1` is no dollar quote
         c.prepareStatement("SELECT t.a FROM t WHERE id = ? AND n = $1 AND name = '" + column + "'"); // expect
     }
