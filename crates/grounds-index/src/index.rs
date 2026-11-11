@@ -676,6 +676,8 @@ impl Index {
     pub fn set_modules_built_against_release(&mut self, dirs: Vec<String>) {
         let sep = std::path::MAIN_SEPARATOR;
         self.release_modules = dirs.into_iter().map(|d| if d.ends_with(['/', sep]) { d } else { format!("{d}{sep}") }).collect();
+        // (innermost first: a module nested in another is its own)
+        self.release_modules.sort_by_key(|d| std::cmp::Reverse(d.len()));
     }
 
     /// For a file of a module that compiles against a published release of
@@ -1339,8 +1341,10 @@ impl Index {
     /// The file whose stub the scope's imports belong to (cached for the
     /// last scope asked about: a file's lookups ask about the same one).
     fn scope_file(&self, scope: &Scope) -> Option<Arc<str>> {
+        // (index address, generation, imports address, file found)
+        type LastScope = (usize, u64, usize, Option<Arc<str>>);
         thread_local! {
-            static LAST: std::cell::RefCell<Option<(usize, u64, usize, Option<Arc<str>>)>> = const { std::cell::RefCell::new(None) };
+            static LAST: std::cell::RefCell<Option<LastScope>> = const { std::cell::RefCell::new(None) };
         }
         let key = (self as *const Index as usize, self.generation, scope.imports as *const _ as *const u8 as usize);
         if let Some(hit) = LAST.with(|l| l.borrow().as_ref().filter(|(i, g, p, _)| (*i, *g, *p) == key).map(|(_, _, _, f)| f.clone())) {

@@ -716,28 +716,26 @@ pub fn modules_built_against_own_release(ws: &Workspace) -> Vec<PathBuf> {
             set.insert(acc.clone());
         }
     };
-    let mut prefixes: std::collections::HashMap<&Path, std::collections::HashSet<String>> = std::collections::HashMap::new();
-    for (_, d) in &undeclared {
-        if prefixes.contains_key(d) {
-            continue;
-        }
-        let mut set = std::collections::HashSet::new();
-        let nested = |m: &Path| m != *d && m.starts_with(d);
-        for f in ws.files.iter().filter(|f| f.path.starts_with(d) && !nested(&ws.modules[f.module].dir)) {
-            let path = f.path.to_string_lossy().replace('\\', "/");
-            for (i, _) in path.match_indices("/java/") {
-                let package = &path[i + "/java/".len()..];
-                if let Some((dir, _)) = package.rsplit_once('/') {
-                    add_prefixes(&mut set, &dir.replace('/', "."));
-                }
+    let mut prefixes: std::collections::HashMap<&Path, std::collections::HashSet<String>> = undeclared.iter().map(|(_, d)| (*d, std::collections::HashSet::new())).collect();
+    // each file counts for the nearest such project above it (not one above a
+    // nested module: a nested module's files are its own)
+    let module_dirs: std::collections::HashSet<&Path> = ws.modules.iter().map(|m| m.dir.as_path()).collect();
+    for f in &ws.files {
+        let Some(d) = f.path.ancestors().skip(1).take_while(|a| a.starts_with(&ws.root)).find(|a| prefixes.contains_key(a) || module_dirs.contains(a)).filter(|a| prefixes.contains_key(a)) else { continue };
+        let path = f.path.to_string_lossy().replace('\\', "/");
+        let set = prefixes.get_mut(d).unwrap();
+        for (i, _) in path.match_indices("/java/") {
+            if let Some((dir, _)) = path[i + "/java/".len()..].rsplit_once('/') {
+                add_prefixes(set, &dir.replace('/', "."));
             }
         }
+    }
+    for (d, set) in prefixes.iter_mut() {
         for sset in std::fs::read_dir(d.join("src")).into_iter().flatten().flatten() {
             if let Some(m) = module_name(&sset.path().join("java/module-info.java")) {
-                add_prefixes(&mut set, &m);
+                add_prefixes(set, &m);
             }
         }
-        prefixes.insert(d, set);
     }
     let package_prefix = |g: &str, d: &Path| g.contains('.') && prefixes.get(d).is_some_and(|s| s.contains(g));
     let own = |coordinate: &str| -> bool {

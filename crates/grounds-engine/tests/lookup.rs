@@ -381,11 +381,13 @@ fn a_supertype_declared_twice_is_read_from_the_copy_the_file_compiles_against() 
             // supertype may declare)
             ("core/src/main/java/p/Thing.java", "package p;\npublic class Thing { public void real() {} }\n"),
             ("core/src/main/java/r/Other.java", "package r;\npublic class Other { public void real() {} }\n"),
-            ("core/src/main/java/p/Leaf.java", "package p;\nimport r.*;\npublic class Leaf extends Node {\n    void f(Thing t, Other o) { t.real(); t.missing(); o.real(); o.gone(); }\n}\n"),
+            ("core/src/main/java/p/Leaf.java", "package p;\nimport r.*;\npublic class Leaf extends Node {\n    void f(Thing t, Other o) {\n        t.real();\n        t.missing();\n        o.real();\n        o.gone();\n    }\n}\n"),
             // the old copy: another supertype, which may declare a member type Thing
             ("core/src/test/test_sourcecode/v1/p/Node.java", "package p;\npublic abstract class Node implements Old {}\n"),
-            ("core/src/test/test_sourcecode/v1/p/Old.java", "package p;\npublic interface Old {}\n"),
+            // (whose member types would be Leaf's if the old copy were read:
+            // Thing would then have missing(), and Other gone())
+            ("core/src/test/test_sourcecode/v1/p/Old.java", "package p;\npublic interface Old {\n    class Thing { public void missing() {} }\n    class Other { public void gone() {} }\n}\n"),
         ],
     );
-    assert_eq!(findings(&dir), vec!["core/src/main/java/p/Leaf.java:4 unresolved-method".to_string(), "core/src/main/java/p/Leaf.java:4 unresolved-method".to_string()]);
+    assert_eq!(findings(&dir), vec!["core/src/main/java/p/Leaf.java:6 unresolved-method".to_string(), "core/src/main/java/p/Leaf.java:8 unresolved-method".to_string()]);
 }
