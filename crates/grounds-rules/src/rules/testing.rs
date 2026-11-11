@@ -44,8 +44,22 @@ fn assertion_class<'t>(cx: &Ctx<'_, 't>, call: Node<'t>) -> Option<Name> {
     let name = cx.fm.call_name(call)?;
     let mut owners: Vec<Name> = Vec::new();
     if let Some(o) = call.field("object") {
-        if let Some(Symbol::Type(t)) = cx.fm.symbol(o) {
-            owners.push(t);
+        match cx.fm.symbol(o) {
+            Some(Symbol::Type(t)) => owners.push(t),
+            // a class that is not on the classpath: named by its import
+            // (`Assertions.assertEquals` with `import org.junit.jupiter.api.Assertions`)
+            // or written qualified (`org.junit.Assert.assertEquals`)
+            None => {
+                let text = cx.text(o);
+                if o.kind() == "identifier" {
+                    if let Some(i) = cx.fm.stub.imports.iter().find(|i| !i.is_static && !i.on_demand && i.is_named(text)) {
+                        owners.push(Name::from(&*i.path));
+                    }
+                } else if o.kind() == "field_access" && text.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '_') && text.starts_with(|c: char| c.is_lowercase()) {
+                    owners.push(Name::from(text));
+                }
+            }
+            _ => {}
         }
     } else {
         for cls in call.ancestors().filter(|a| grounds_syntax::is_type_declaration(a.kind())).filter_map(|d| cx.fm.class_of_decl(d)) {
