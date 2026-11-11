@@ -6,4 +6,4 @@ import org.springframework.stereotype.Service;
 @Mapper abstract class LookalikeMapper {}
 @Service class UsesLookalike { UsesLookalike(LookalikeMapper m) {} } // expect
 
-@org.springframework.boot.autoconfigure.SpringBootApplication class FixtureApp {}
+@org.springframework.boot.autoconfigure.SpringBootApplication class FixtureApp { public static void main(String[] args) {} }

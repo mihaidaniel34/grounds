@@ -9,5 +9,5 @@ import org.springframework.context.annotation.*;
     @Bean(name = "mailer") Object other() { return null; }
 }
 
-// the project is an application: its context is complete
-@org.springframework.boot.autoconfigure.SpringBootApplication class FixtureApp {}
+// the project is an application, started by its main: its context is complete
+@org.springframework.boot.autoconfigure.SpringBootApplication class FixtureApp { public static void main(String[] args) {} }

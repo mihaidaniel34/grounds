@@ -13,5 +13,5 @@ class App {
     @Bean Object wrong(@Qualifier("demo") Props props) { return new Object(); } // expect
 }
 
-// the project is an application: its context is complete
-@org.springframework.boot.autoconfigure.SpringBootApplication class FixtureApp {}
+// the project is an application, started by its main: its context is complete
+@org.springframework.boot.autoconfigure.SpringBootApplication class FixtureApp { public static void main(String[] args) {} }

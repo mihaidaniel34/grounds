@@ -5,5 +5,5 @@ import org.springframework.stereotype.Service;
 @Service class C { C(A a) {} } // expect
 @Service class D { D(A a) {} }
 
-// the project is an application: its context is complete
-@org.springframework.boot.autoconfigure.SpringBootApplication class FixtureApp {}
+// the project is an application, started by its main: its context is complete
+@org.springframework.boot.autoconfigure.SpringBootApplication class FixtureApp { public static void main(String[] args) {} }

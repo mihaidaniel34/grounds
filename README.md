@@ -49,11 +49,19 @@ leaves tests for the end of the task.
   dropping `@Qualifier`, constructor cycles, bean name clashes. It knows
   `@Primary`, profiles and conditions (treated as unknown), generics,
   factory methods, Spring Data repositories, Feign clients, MapStruct mappers
-  and Micronaut's `@EachBean`, `@Replaces` and bean naming. A Spring
-  library (no `@SpringBootApplication` in its main sources, nor a
-  `@ComponentScan` next to a `main` method; auto-configurations scanning
-  their own packages count as library code) is not judged: the
-  application using it wires its beans. JSR-330 injection points are not
+  and Micronaut's `@EachBean`, `@Replaces` and bean naming. Spring
+  wiring is judged per application context: one started from a class
+  grounds can name (a `@SpringBootApplication`, `@SpringBootConfiguration`
+  or `@ComponentScan` class with a `main` method, a class handed to
+  `SpringApplication.run` or `new AnnotationConfigApplicationContext`,
+  a servlet initializer's sources), holding what that class imports and
+  what its scans cover in its own module and in the modules that module
+  depends on (as its imports show: grounds does not read module
+  dependencies from build files). Code in no such context (a library, a sample that is never started, a
+  context only tests assemble; auto-configurations scanning their own
+  packages count as library code) is not judged: the application using
+  it wires its beans. Two beans clash or compete only when both are in
+  one context. JSR-330 injection points are not
   judged in a project that also wires through a container grounds does not
   model (Guice or Sisu modules, HK2 binders, Dagger, Maven 4 DI, Quarkus
   build-time beans): any type may be bound there.
@@ -81,8 +89,12 @@ grounds stays silent instead of guessing. It also needs evidence that the
 model has seen how beans of the type would be registered: when a class
 implementing the type, or a method producing it, carries an annotation the
 model cannot classify (a stereotype from a missing jar, an annotation a
-library scans for), is named in an `@Import` it did not follow, or a mapper
-scan cannot be expanded, or Spring XML may define beans, it stays silent.
+library scans for), is named in an `@Import` it did not follow, or is an
+interface extending a type grounds cannot resolve (a Spring Data store
+module's repository base without its jar), or a mapper scan cannot be
+expanded, or Spring XML may define beans, it stays silent. In a module
+using CDI, a plain class with a usable constructor may be a bean (bean
+discovery mode `all`, set in a `beans.xml` grounds does not read).
 
 ## Numbers
 

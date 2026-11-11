@@ -15,4 +15,4 @@ interface Notifier {}
          Notifier notifier) {}
 }
 
-@org.springframework.boot.autoconfigure.SpringBootApplication class FixtureApp {}
+@org.springframework.boot.autoconfigure.SpringBootApplication class FixtureApp { public static void main(String[] args) {} }
