@@ -944,7 +944,8 @@ fn holds_as_fresh(s: &mut Session, dir: &Path, what: &str) {
 fn set_tree_mtime(dir: &Path, rel: &str, t: std::time::SystemTime) {
     let p = dir.join(rel);
     if p.is_dir() {
-        for e in std::fs::read_dir(&p).unwrap().flatten() {
+        // (not git's own files: its objects are read-only)
+        for e in std::fs::read_dir(&p).unwrap().flatten().filter(|e| e.file_name() != ".git") {
             set_tree_mtime(dir, &format!("{rel}/{}", e.file_name().to_string_lossy()), t);
         }
         std::fs::File::open(&p).unwrap().set_modified(t).unwrap();
