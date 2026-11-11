@@ -339,12 +339,15 @@ impl Session {
             .into_iter()
             .map(|p| {
                 let earlier = before.and_then(|b| b.get(&p));
-                let now = FileStamp::of(&p, earlier.is_some_and(|e| e.is_some_and(|e| e.hash.is_some())));
+                // (with the hash of the content: a change of the change time
+                // alone, a hard link made, is then no change if the content is
+                // read the same)
+                let now = FileStamp::of(&p, true);
                 let read = match (earlier, &now) {
                     (Some(Some(e)), Some(n)) => e.same(n),
                     (Some(None), None) | (None, None) => true,
                     (Some(_), _) => false,
-                    (None, Some(n)) => !recent(n.mtime, began),
+                    (None, Some(n)) => !recent(n.time(), began),
                 };
                 if !read {
                     crate::trace::log(|| format!("load: {} may have been written during the load", p.display()));
@@ -404,6 +407,13 @@ impl Session {
     /// when one in a directory walked, above the root or in `.git/info`
     /// changes, appears or goes, the whole workspace is walked again.
     ///
+    /// A change of permissions (`chmod`, `chown`, an ACL) moves neither a
+    /// time nor a name, but the change time and the mode are in every stamp:
+    /// a directory that can no longer be listed or entered is listed again
+    /// (and at every sync until it can be), and an ignore file that can no
+    /// longer be read, or can again, walks the workspace. One that stays
+    /// unreadable is read again at each sync, and walks nothing.
+    ///
     /// Not followed: git's global excludes file (`core.excludesFile`), and
     /// file systems that do not change a directory's time when an entry is
     /// added to it.
@@ -415,8 +425,10 @@ impl Session {
         let walk = |start: &Path, depth| Workspace::discover_in(&root, Some(start), depth, &exclude);
         let files = |w: Workspace| w.files.into_iter().map(|f| f.path);
         let modules = |w: &Workspace| w.modules.iter().map(|m| m.dir.clone()).collect::<Vec<_>>();
+        // (one that could not be read is read again, and walks only once it
+        // can be or its stamp changes: see `FileStamp::read_otherwise`)
         let mut full = self.walked.ignores.iter_mut().any(|(p, stamp)| match stamp {
-            Some(stamp) => stamp.changed(p, clock),
+            Some(stamp) => stamp.read_otherwise(p, clock),
             None => FileStamp::of(p, false).is_some(),
         });
         // a repository that starts or ends above the root (`git init`): the
@@ -472,15 +484,19 @@ impl Session {
         // below it: the project is loaded again, as a new session would load
         // it. (One the load read is a configuration file, its change seen by
         // its own stamp.)
-        let known: FxHashSet<PathBuf> = self.config.iter().map(|(p, _)| p.clone()).collect();
+        let read_configs: FxHashSet<PathBuf> = self.config.iter().map(|(p, _)| p.clone()).collect();
         let new_lombok = |d: &Path| -> bool {
             let cfg = d.join("lombok.config");
-            let new = crate::project::LombokConfigs::reads_dir(&root, d) && !known.contains(&cfg) && std::fs::metadata(&cfg).is_ok_and(|m| m.is_file());
+            let new = crate::project::LombokConfigs::reads_dir(&root, d) && !read_configs.contains(&cfg) && std::fs::metadata(&cfg).is_ok_and(|m| m.is_file());
             if new {
                 crate::trace::log(|| format!("sync: reload, {} appeared", cfg.display()));
             }
             new
         };
+        // directories forgotten: a module in one (gone, now a symlink, which
+        // the discovery does not follow, though its build file may still be
+        // found through it) is no module for a fresh load
+        let mut forgotten: Vec<PathBuf> = Vec::new();
         if !full {
             let mut changed: Vec<PathBuf> = self.walked.dirs.par_iter_mut().filter_map(|(d, stamp)| stamp.changed(d, clock).then(|| d.clone())).collect();
             // (parents first: a directory that went takes those below it along)
@@ -493,10 +509,13 @@ impl Session {
                 let Some(mut stamp) = stamp else {
                     crate::trace::log(|| format!("sync: directory gone {}", d.display()));
                     forget(self, &mut gone, &d);
+                    forgotten.push(d);
                     continue;
                 };
                 // an ignore file that appeared or went
-                let known = |n: &&str| self.walked.ignores.iter().any(|(p, s)| s.is_some() && *p == d.join(n));
+                // (an entry as the listing sees it, whether or not what it
+                // names can be read: one that cannot is kept without a stamp)
+                let known = |n: &&str| self.walked.ignores.iter().any(|(p, _)| *p == d.join(n));
                 if IGNORE_FILES.iter().any(|n| known(n) != std::fs::symlink_metadata(d.join(n)).is_ok()) {
                     full = true;
                     break;
@@ -519,6 +538,18 @@ impl Session {
                 self.walked.dirs.insert(d.clone(), stamp.after(Some(&old)));
                 let began = SystemTime::now();
                 let listed = walk(&d, Some(1));
+                // a module here that the listing no longer finds (the
+                // directory cannot be listed now, its build file is ignored)
+                // or finds of another build system: the workspace is walked,
+                // which loads the project again if a fresh load lays the
+                // modules out otherwise (and only then: a listing of one
+                // directory is not the whole discovery)
+                let held = self.project.workspace.modules.iter().filter(|m| m.dir == d);
+                if held.into_iter().any(|h| !listed.modules.iter().any(|m| m.dir == h.dir && m.build_system == h.build_system)) {
+                    crate::trace::log(|| format!("sync: the module at {} is no longer listed as it was", d.display()));
+                    full = true;
+                    break;
+                }
                 // what was held below it by a name it no longer lists exactly
                 // (gone, now a symlink, renamed in case only on a file system
                 // that ignores case) is forgotten
@@ -528,6 +559,7 @@ impl Session {
                 for l in lost_dirs {
                     crate::trace::log(|| format!("sync: directory no longer listed {}", l.display()));
                     forget(self, &mut gone, &l);
+                    forgotten.push(l);
                 }
                 let new_dirs: Vec<&PathBuf> = listed.dirs.iter().filter(|s| **s != d && !self.walked.dirs.contains_key(*s)).collect();
                 for sub in new_dirs {
@@ -545,6 +577,11 @@ impl Session {
                 found_modules.extend(modules(&listed));
                 found.extend(files(listed));
             }
+        }
+        // the same for a module in a directory forgotten (gone, now a symlink)
+        if !full && self.project.workspace.modules.iter().any(|m| forgotten.iter().any(|f| m.dir.starts_with(f))) {
+            crate::trace::log(|| "sync: a module's directory is no longer walked".into());
+            full = true;
         }
         if full {
             crate::trace::log(|| "sync: an ignore file changed, walking the workspace".into());
@@ -681,8 +718,16 @@ impl Session {
             // the stamp first, then the text it vouches for; a path that is
             // no longer a file (a directory now), or that the walk no longer
             // finds, is gone, as for a fresh load
-            let file = std::fs::symlink_metadata(&p).is_ok_and(|m| m.is_file());
+            let meta = std::fs::symlink_metadata(&p);
+            let file = meta.as_ref().is_ok_and(|m| m.is_file());
             let (stamp, text) = if file && !gone.contains(&p) { FileStamp::read(&p) } else { (None, None) };
+            // one that cannot be looked at, its directory being readable but
+            // not enterable, is still listed: a fresh load holds it, without
+            // a stub, and so does the session, trying again at every sync
+            // (its directory, which cannot be entered, is listed again at
+            // every sync too, and says when it goes)
+            let unreachable = !gone.contains(&p) && meta.as_ref().is_err_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied);
+            let stamp = stamp.or_else(|| unreachable.then(FileStamp::unreachable));
             // refresh_file rebuilds the DI model itself; batch it below instead
             let key = path_key(&p);
             let old = self.project.index.file(&key).map(|s| s.signature_hash);
@@ -752,7 +797,7 @@ impl Session {
         let root = self.root().to_path_buf();
         // stamped before the load begins, to tell afterwards whether the
         // load read them as they are then
-        let before: FxHashMap<PathBuf, Option<FileStamp>> = self.config.iter().map(|(p, _)| (p.clone(), FileStamp::of(p, false))).collect();
+        let before: FxHashMap<PathBuf, Option<FileStamp>> = self.config.iter().map(|(p, _)| (p.clone(), FileStamp::of(p, true))).collect();
         if let Ok(project) = Project::load(&root) {
             // warnings already shown are not shown again for the same state
             let shown = self.warned.then(|| self.project.classpath_warnings.clone());
