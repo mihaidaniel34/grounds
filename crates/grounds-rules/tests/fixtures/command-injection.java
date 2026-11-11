@@ -59,6 +59,16 @@ class Argv {
         new ProcessBuilder("zsh", "-onounset", "-c", "echo " + x); // expect
         new ProcessBuilder("zsh", "-oerrexit", "-c", "echo " + x); // expect
         new ProcessBuilder("bash", "-onounset", "-c", "echo " + x);
+        new ProcessBuilder("zsh", "-o", "errexit", "-c", "echo " + x); // expect
+        new ProcessBuilder("bash", "-o", "pipefail", "-c", "echo " + x); // expect
+        // zsh: unsetting exec runs nothing, in every spelling
+        new ProcessBuilder("zsh", "+oexec", "-c", "echo " + x);
+        new ProcessBuilder("zsh", "+o", "exec", "-c", "echo " + x);
+        new ProcessBuilder("zsh", "-oNO_EXEC", "-c", "echo " + x);
+        new ProcessBuilder("zsh", "+oNO_EXEC", "-c", "echo " + x); // expect
+        // an option name the shell lacks: it refuses before running anything
+        new ProcessBuilder("zsh", "-oTHIS_OPTION_DOES_NOT_EXIST", "-c", "echo " + x);
+        new ProcessBuilder("bash", "-o", "nosuchoption", "-c", "echo " + x);
     }
     // the program is the first element: echo prints "sh -c cat <file>"
     void notAShell(String file) throws Exception {

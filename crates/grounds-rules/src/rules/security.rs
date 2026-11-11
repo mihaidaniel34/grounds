@@ -956,8 +956,41 @@ fn shell_command_in<'a, 't>(argv: &'a [Node<'t>], lit: &dyn Fn(&Node<'t>) -> Opt
         /// `-n`, `-o noexec`: the shell reads the commands without running them
         NoExec,
     }
-    // (zsh ignores case and underscores in option names: `NO_EXEC`)
-    let noexec = |v: &str| v.replace('_', "").eq_ignore_ascii_case("noexec");
+    // An option set by name (`-o name` sets it, `+o name` unsets it; zsh
+    // also takes the name attached, `-oname`): known to leave the command
+    // run, to stop it from running (`noexec`), or not known, which zsh and
+    // bash refuse before running anything, as they do a name they lack.
+    // zsh ignores case and underscores and reads a leading `no` as the
+    // inverse (`NO_EXEC`, `+oexec`); bash takes its names as they are.
+    let named = |set: bool, name: &str| -> Opt {
+        if zsh {
+            const ZSH: &[&str] = &[
+                "exec", "errexit", "errreturn", "unset", "pipefail", "xtrace", "verbose", "glob", "nullglob", "extendedglob", "shwordsplit", "ksharrays",
+                "posixbuiltins", "clobber", "rcs", "globalrcs", "login", "privileged", "notify", "monitor", "hashcmds", "warncreateglobal", "localoptions",
+            ];
+            let n = name.replace('_', "").to_ascii_lowercase();
+            let (n, set) = match n.strip_prefix("no") {
+                Some(rest) if !ZSH.contains(&n.as_str()) => (rest.to_string(), !set),
+                _ => (n, set),
+            };
+            match n.as_str() {
+                "exec" if !set => Opt::NoExec,
+                k if ZSH.contains(&k) => Opt::Plain,
+                _ => Opt::Unknown,
+            }
+        } else {
+            const BASH: &[&str] = &[
+                "allexport", "braceexpand", "emacs", "errexit", "errtrace", "functrace", "hashall", "histexpand", "history", "ignoreeof", "interactive-comments",
+                "keyword", "monitor", "noclobber", "noglob", "nolog", "notify", "nounset", "onecmd", "physical", "pipefail", "posix", "privileged", "verbose", "vi", "xtrace",
+            ];
+            match name {
+                "noexec" if set => Opt::NoExec,
+                "noexec" => Opt::Plain,
+                k if BASH.contains(&k) => Opt::Plain,
+                _ => Opt::Unknown,
+            }
+        }
+    };
     // the one-letter options of `set` and of the invocation; `o`/`O` take a
     // value and come alone
     const SHORT: &str = "abefhkmnptuvxBCEHPTilrsc";
@@ -966,13 +999,7 @@ fn shell_command_in<'a, 't>(argv: &'a [Node<'t>], lit: &dyn Fn(&Node<'t>) -> Opt
         "-o" | "+o" | "-O" | "+O" | "--rcfile" | "--init-file" => Opt::Value,
         "--login" | "--noprofile" | "--norc" | "--posix" | "--restricted" | "--verbose" | "--noediting" => Opt::Plain,
         // zsh takes an option's name attached: `-oerrexit`, `+onounset`
-        _ if zsh && f.len() > 2 && (f.starts_with("-o") || f.starts_with("+o")) => {
-            if f.starts_with('-') && noexec(&f[2..]) {
-                Opt::NoExec
-            } else {
-                Opt::Plain
-            }
-        }
+        _ if zsh && f.len() > 2 && (f.starts_with("-o") || f.starts_with("+o")) => named(f.starts_with('-'), &f[2..]),
         _ => match f.strip_prefix('-').map(|r| (r, true)).or_else(|| f.strip_prefix('+').map(|r| (r, false))) {
             Some((r, minus)) if !r.is_empty() && r.chars().all(|c| SHORT.contains(c)) => {
                 if minus && r.contains('n') {
@@ -986,8 +1013,13 @@ fn shell_command_in<'a, 't>(argv: &'a [Node<'t>], lit: &dyn Fn(&Node<'t>) -> Opt
             _ => Opt::Unknown,
         },
     };
-    // an option's value: `-o noexec` runs nothing either
-    let value = |f: &str, v: &str| (f == "-o" && noexec(v)).then_some(());
+    // an option's value: for `-o`/`+o` a name as above; `-o noexec` runs
+    // nothing, a name not known is refused (`Some(())`: no command runs, or
+    // which one is not known)
+    let value = |f: &str, v: &str| match f {
+        "-o" | "+o" => matches!(named(f == "-o", v), Opt::NoExec | Opt::Unknown).then_some(()),
+        _ => None,
+    };
     let operand = |f: &str| !f.starts_with('-') && !f.starts_with('+');
     // up to the command option
     loop {
