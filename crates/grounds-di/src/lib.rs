@@ -124,6 +124,44 @@ pub enum Resolution {
     Unknown,
 }
 
+/// One Spring application context, as far as the model can be certain of
+/// it. Spring builds a context from the classes handed to it
+/// (`SpringApplication.run(App.class)`, `new
+/// AnnotationConfigApplicationContext(Config.class)`, a servlet
+/// initializer's sources), plus what they import and scan, not from a
+/// module or a package. A class is a member when it is the root, is
+/// named by an `@Import` of a member, or is a component that a scan
+/// declared by a member covers, in the root's module or a module the
+/// root's module certainly depends on (it names one of that module's
+/// classes in an import). Scans with exclude filters, scans of
+/// conditional classes and scans of modules the root may not see make
+/// nobody a member: what they hold is unknown.
+#[derive(Clone, Debug, Default)]
+pub struct AppContext {
+    /// The first of `roots`.
+    pub root: Name,
+    /// The classes the context is started from (registered before scanning).
+    pub roots: Vec<Name>,
+    /// Code the model cannot follow may add sources to the context or change
+    /// its settings (bean overriding): what it holds is a lower bound, so
+    /// its members are judged, but no clash or ambiguity is concluded in it.
+    pub open: bool,
+    /// Classes registered explicitly: the roots and what members `@Import`.
+    pub registered: rustc_hash::FxHashSet<Name>,
+    /// Main-source classes certainly registered in it.
+    pub members: rustc_hash::FxHashSet<Name>,
+    /// Test-source components of the root's module its scans pick up when
+    /// a test starts it (`@SpringBootTest`); test configurations excluded.
+    pub test_members: rustc_hash::FxHashSet<Name>,
+}
+
+impl AppContext {
+    /// Is the class registered in this context (in a test run with `test`)?
+    pub fn holds(&self, class: &str, test: bool) -> bool {
+        self.members.contains(class) || (test && self.test_members.contains(class))
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct DiModel {
     pub beans: Vec<Bean>,
@@ -131,29 +169,23 @@ pub struct DiModel {
     by_class: FxHashMap<Name, Vec<usize>>,
     pub frameworks: Vec<Framework>,
     pub scan_roots: Vec<String>,
-    /// The main sources define a Spring application: `@SpringBootApplication`
-    /// / `@SpringBootConfiguration`, `@ComponentScan` on a class with a `main`
-    /// method, a `main` starting a context (SpringApplication(Builder),
-    /// AnnotationConfigApplicationContext, ...), or a servlet initializer.
-    /// Wiring is judged in the modules holding one and in the packages they
-    /// scan; elsewhere the code is a library (auto-configurations and
-    /// configurations a consumer imports scan packages too): its context is
-    /// assembled by an application we cannot see, which may provide any bean.
+    /// The main sources define a Spring application: some application
+    /// context is started from a class the model can name (see
+    /// `AppContext`). Wiring is judged only in the classes those contexts
+    /// certainly hold; elsewhere the code is a library, or belongs to a
+    /// context assembled by tests or by code the model cannot read, which
+    /// may provide any bean.
     pub spring_application: bool,
-    /// Modules (`module_of`) holding such an application.
-    pub app_modules: rustc_hash::FxHashSet<String>,
-    /// Packages the applications scan (roots declared in their modules), and
-    /// whether the scan is `@SpringBootApplication`'s, which skips
-    /// auto-configurations.
-    pub app_roots: Vec<(String, bool)>,
+    /// The application contexts started in main sources, each from its root.
+    pub contexts: Vec<AppContext>,
+    /// The classes some context holds.
+    app_classes: rustc_hash::FxHashSet<Name>,
     /// Auto-configurations: annotated `@AutoConfiguration` or listed in
     /// META-INF registration files. `@SpringBootApplication`'s scan skips
     /// them (AutoConfigurationExcludeFilter), so its packages covering one
     /// (a nested plugin project sharing the application's base package) do not make it
     /// application code.
     pub auto_configurations: rustc_hash::FxHashSet<Name>,
-    /// (scan root, module declaring it)
-    pub scan_root_modules: Vec<(String, String)>,
     /// simple names referenced by classes that register beans
     /// programmatically (BeanDefinitionRegistryPostProcessor,
     /// ImportBeanDefinitionRegistrar): such types may have beans we cannot see
@@ -179,6 +211,8 @@ pub struct DiModel {
     /// Constructor-injection edges (owner, dependency class, point index),
     /// computed once at build time.
     pub ctor_edges: Vec<(Name, Name, usize)>,
+    /// Same-name bean pairs in one context (see `name_conflicts`).
+    conflicts: Vec<(usize, usize)>,
     /// type name -> beans assignable to it (via the full supertype closure)
     providers: FxHashMap<Name, Vec<usize>>,
     /// beans whose supertype closure is incomplete (unknown library types)
@@ -307,6 +341,16 @@ const CDI_BEAN_DEFINING_META: &[&str] = &["jakarta.enterprise.context.NormalScop
 
 pub const QUALIFIER_ANNOTATIONS: &[&str] = &["org.springframework.beans.factory.annotation.Qualifier", "jakarta.inject.Named", "javax.inject.Named"];
 pub const INJECT_ANNOTATIONS: &[&str] = &["org.springframework.beans.factory.annotation.Autowired", "jakarta.inject.Inject", "javax.inject.Inject", "jakarta.annotation.Resource", "javax.annotation.Resource"];
+/// Does the annotation ask the container for a bean? `@Resource` does only
+/// in Spring (CommonAnnotationBeanPostProcessor looks the name up as a bean,
+/// then the type). In a Jakarta EE component it is a resource reference
+/// bound in the component's JNDI environment (by the server, `web.xml`,
+/// `ejb-jar.xml`), which the model does not see, and Micronaut does not
+/// read it at all.
+fn injects(a: &AnnotationInfo, fw: Framework) -> bool {
+    let resource = a.is("jakarta.annotation.Resource") || a.is("javax.annotation.Resource");
+    INJECT_ANNOTATIONS.iter().any(|x| a.is(x)) && (!resource || fw == Framework::Spring)
+}
 const BEAN_METHOD_ANNOTATIONS: &[&str] = &["org.springframework.context.annotation.Bean", "io.micronaut.context.annotation.Bean", "jakarta.inject.Singleton", "javax.inject.Singleton", "io.micronaut.context.annotation.Prototype", "io.micronaut.context.annotation.Context", "jakarta.enterprise.inject.Produces", "javax.enterprise.inject.Produces"];
 const CONDITIONAL_PREFIXES: &[&str] = &["Profile", "Conditional", "Requires", "Requirements", "IfBuildProperty", "LookupIfProperty"];
 
@@ -401,6 +445,18 @@ fn split_packages(values: Vec<String>) -> Vec<String> {
     values.iter().flat_map(|v| v.split([',', ';', ' ', '\t', '\n'])).map(str::trim).filter(|x| !x.is_empty()).map(str::to_string).collect()
 }
 
+/// The packages a `@ComponentScan` or `@SpringBootApplication` on `c`
+/// scans: the ones it names, the packages of the classes it names, or
+/// else `c`'s own package.
+fn scan_packages(c: &ClassInfo, a: &AnnotationInfo) -> Vec<String> {
+    let explicit: Vec<String> = split_packages(["scanBasePackages", "basePackages", "value"].iter().flat_map(|k| a.arg(k).map(|v| v.strings()).unwrap_or_default()).collect());
+    let classes: Vec<String> = ["scanBasePackageClasses", "basePackageClasses"]
+        .iter()
+        .flat_map(|k| a.arg(k).map(|v| v.values().into_iter().filter_map(|x| if let AnnotationValue::Class(t) = x { t.class_name().map(|c| package_of(c).to_string()) } else { None }).collect::<Vec<_>>()).unwrap_or_default())
+        .collect();
+    if explicit.is_empty() && classes.is_empty() { vec![c.package().to_string()] } else { explicit.into_iter().chain(classes).collect() }
+}
+
 /// Annotations known not to register what they annotate as a bean, by
 /// package (every annotation in it) or by name. Stereotypes and bean
 /// annotations are checked before this list, so a package listed here
@@ -463,6 +519,9 @@ fn first_string(a: &AnnotationInfo, keys: &[&str]) -> Option<String> {
 
 struct Builder<'a> {
     index: &'a Index,
+    /// source classes whose unresolved annotations the file's imports
+    /// qualify (see `qualified_class`)
+    qualified: FxHashMap<Name, Arc<ClassInfo>>,
     model: DiModel,
     /// memo: annotation name -> is stereotype / qualifier
     stereo: FxHashMap<Name, Option<Framework>>,
@@ -487,13 +546,58 @@ struct Builder<'a> {
     /// in main sources / only in test sources: any class may be registered
     opaque_filter: bool,
     opaque_filter_in_tests: bool,
+    /// modules running a classpath scanner in code, and whether in test sources
+    code_scans: Vec<(String, bool)>,
     /// classes registered through META-INF files
     registered: rustc_hash::FxHashSet<String>,
     /// the auto-configurations among them
     auto_registered: rustc_hash::FxHashSet<String>,
 }
 
+/// An unresolved annotation written with a simple name that a
+/// single-type import of the file names: it is that import's (whose jar is
+/// missing), not any framework's of the same simple name.
+fn qualify_annotations(anns: &mut [AnnotationInfo], imports: &grounds_index::stubs::Imports) -> bool {
+    let mut changed = false;
+    for a in anns {
+        if a.resolved || a.name.contains('.') {
+            continue;
+        }
+        if let Some(i) = imports.iter().find(|i| !i.is_static && !i.on_demand && i.is_named(&a.name)) {
+            a.name = i.path.clone();
+            changed = true;
+        }
+    }
+    changed
+}
+
 impl<'a> Builder<'a> {
+    /// The class as the index has it, with the unresolved annotations of a
+    /// source class qualified by its file's imports.
+    fn class(&self, n: &str) -> Option<Arc<ClassInfo>> {
+        self.qualified.get(n).cloned().or_else(|| self.index.class(n))
+    }
+
+    fn qualify_sources(&mut self) {
+        for n in self.index.source_class_names() {
+            let (Some(c), Some((stub, _))) = (self.index.class(n), self.index.raw_class(n)) else { continue };
+            let mut q = (*c).clone();
+            let mut changed = qualify_annotations(&mut q.annotations, &stub.imports);
+            for m in &mut q.methods {
+                changed |= qualify_annotations(&mut m.annotations, &stub.imports);
+                for p in &mut m.params {
+                    changed |= qualify_annotations(&mut p.annotations, &stub.imports);
+                }
+            }
+            for f in &mut q.fields {
+                changed |= qualify_annotations(&mut f.annotations, &stub.imports);
+            }
+            if changed {
+                self.qualified.insert(n.clone(), Arc::new(q));
+            }
+        }
+    }
+
     /// Is the annotation (or one of its meta-annotations) a bean-defining one?
     fn stereotype(&mut self, ann: &AnnotationInfo, depth: u32) -> Option<Framework> {
         if let Some(r) = self.stereo.get(&ann.name) {
@@ -514,7 +618,7 @@ impl<'a> Builder<'a> {
             if depth > 4 || !ann.resolved || n.starts_with("java.") {
                 return None;
             }
-            let c = self.index.class(n)?;
+            let c = self.class(n)?;
             if !c.is_interface() {
                 return None;
             }
@@ -561,7 +665,7 @@ impl<'a> Builder<'a> {
         let r = depth <= 4
             && ann.resolved
             && !n.starts_with("java.")
-            && self.index.class(n).filter(|c| c.kind == ClassKind::Annotation).is_some_and(|c| {
+            && self.class(n).filter(|c| c.kind == ClassKind::Annotation).is_some_and(|c| {
                 c.annotations.iter().any(|m| &*m.name != n && (m.is("jakarta.inject.Scope") || m.is("javax.inject.Scope") || self.factory_annotation(m, depth + 1)))
             });
         self.factory_ann.insert(ann.name.clone(), r);
@@ -590,7 +694,7 @@ impl<'a> Builder<'a> {
             if BEAN_METHOD_ANNOTATIONS.iter().any(|b| a.is(b)) || !self.factory_annotation(&a, 0) {
                 continue;
             }
-            let Some(c) = self.index.class(&a.name).filter(|c| c.kind == ClassKind::Annotation) else { continue };
+            let Some(c) = self.class(&a.name).filter(|c| c.kind == ClassKind::Annotation) else { continue };
             for m in c.annotations.iter() {
                 if !m.name.starts_with("java.lang.annotation.") && seen.insert(m.name.clone()) {
                     let mut m = m.clone();
@@ -618,7 +722,7 @@ impl<'a> Builder<'a> {
             return *r;
         }
         let r = ann.resolved
-            && self.index.class(&ann.name).is_some_and(|c| c.annotations.iter().any(|m| m.is("jakarta.inject.Qualifier") || m.is("javax.inject.Qualifier") || m.is("org.springframework.beans.factory.annotation.Qualifier")));
+            && self.class(&ann.name).is_some_and(|c| c.annotations.iter().any(|m| m.is("jakarta.inject.Qualifier") || m.is("javax.inject.Qualifier") || m.is("org.springframework.beans.factory.annotation.Qualifier")));
         self.qualifier_ann.insert(ann.name.clone(), r);
         r
     }
@@ -710,7 +814,7 @@ impl<'a> Builder<'a> {
             return true;
         }
         // a project annotation: what its own annotations are
-        if let Some(c) = self.index.class(&q).filter(|c| c.is_source() && c.kind == ClassKind::Annotation) {
+        if let Some(c) = self.class(&q).filter(|c| c.is_source() && c.kind == ClassKind::Annotation) {
             if depth > 4 {
                 return true;
             }
@@ -732,6 +836,17 @@ impl<'a> Builder<'a> {
     /// importing class is in test sources)
     fn unseen_registrations(&mut self, names: &[Name], imported_anywhere: &[(Name, bool)]) {
         let mut unseen: Vec<(Name, bool)> = Vec::new();
+        // modules using CDI (and whether only their tests do): a bean
+        // archive discovered in mode "all" (an empty beans.xml, often added
+        // by a test's deployment) makes every class with a usable
+        // constructor a bean, and the model does not read beans.xml
+        let mut cdi: FxHashMap<String, bool> = FxHashMap::default();
+        for (path, stub) in self.index.files() {
+            if stub.imports.iter().any(|i| i.path.starts_with("jakarta.enterprise.") || i.path.starts_with("javax.enterprise.")) {
+                let only_tests = cdi.entry(module_of(path).to_string()).or_insert(true);
+                *only_tests &= is_test_path(path);
+            }
+        }
         for (n, by_test) in imported_anywhere {
             if !self.model.component_classes.contains_key(n) {
                 // registered where the importing class is
@@ -740,7 +855,7 @@ impl<'a> Builder<'a> {
             }
         }
         for n in names {
-            let Some(c) = self.index.class(n) else { continue };
+            let Some(c) = self.class(n) else { continue };
             let is_test = c.source_file().is_some_and(is_test_path);
             let stub = self.index.raw_class(n).map(|(st, _)| st.clone());
             let skip = c.flags.has(Flags::ANON) || c.kind == ClassKind::Annotation || c.kind == ClassKind::Enum || c.is_inner() || is_framework_class(n);
@@ -756,13 +871,22 @@ impl<'a> Builder<'a> {
             let stereotyped = !c.is_abstract() && anns.iter().any(|a| self.stereotype(a, 0).is_some());
             // (a scan the model cannot read, declared in test sources,
             // registers for test points only)
-            let main_scan = !is_test && (if c.is_interface() { self.unexpanded_mapper_scan } else { self.opaque_filter });
-            let test_scan = if c.is_interface() { self.unexpanded_mapper_scan_in_tests } else { self.opaque_filter_in_tests };
+            let module = c.source_file().map(module_of).unwrap_or("");
+            let code_scan = |tests: bool| !c.is_interface() && self.code_scans.iter().any(|(m, t)| m == module && *t == tests);
+            let main_scan = !is_test && (if c.is_interface() { self.unexpanded_mapper_scan } else { self.opaque_filter } || code_scan(false));
+            let test_scan = (if c.is_interface() { self.unexpanded_mapper_scan_in_tests } else { self.opaque_filter_in_tests }) || code_scan(true);
             let concrete = !c.is_interface() && !c.is_abstract();
             let assignable: Vec<bool> = if concrete { self.filter_types.iter().filter(|(t, _)| self.index.is_subclass(n, t).is_yes()).map(|(_, t)| *t).collect() } else { Vec::new() };
-            if unknown || stereotyped || main_scan || (!is_test && assignable.iter().any(|t| !t)) {
+            // an interface extending a type the model cannot resolve (a
+            // store module's repository base, a client library's interface):
+            // the library defining that type may implement it at runtime
+            let opaque_base = c.is_interface() && self.unresolved_supertype(n);
+            let discoverable = concrete
+                && (c.constructors().next().is_none() || c.constructors().any(|m| m.params.is_empty() || m.annotations.iter().any(|a| a.is("jakarta.inject.Inject") || a.is("javax.inject.Inject"))));
+            let discovered = if discoverable { c.source_file().and_then(|f| cdi.get(module_of(f)).copied()) } else { None };
+            if unknown || stereotyped || main_scan || opaque_base || discovered == Some(false) || (!is_test && assignable.iter().any(|t| !t)) {
                 unseen.push((n.clone(), is_test));
-            } else if (test_scan && (c.is_interface() || concrete)) || !assignable.is_empty() || unknown_in_tests {
+            } else if (test_scan && (c.is_interface() || concrete)) || !assignable.is_empty() || unknown_in_tests || discovered == Some(true) {
                 unseen.push((n.clone(), true));
             }
         }
@@ -771,7 +895,7 @@ impl<'a> Builder<'a> {
         // classify (a plain class's leftover @Bean method registers nothing)
         let mut producers: Vec<(Name, bool)> = Vec::new();
         for n in names {
-            let Some(c) = self.index.class(n) else { continue };
+            let Some(c) = self.class(n) else { continue };
             // in the scope the class is (or may be) registered in: a main
             // class registered only by a test's scan produces for tests only
             let is_test = if self.model.component_classes.contains_key(n) {
@@ -802,6 +926,67 @@ impl<'a> Builder<'a> {
         self.model.unseen_producers = producers;
     }
 
+    /// The type of the object a `FactoryBean` bean of type `ty` makes:
+    /// Spring exposes the bean under its name as that object (the factory
+    /// itself is `&name`). Read from `FactoryBean<T>` or Spring's abstract
+    /// bases, through project superclasses, also without Spring's jar.
+    fn factory_product(&self, ty: &Ty) -> Option<Ty> {
+        const FACTORY: &str = "org.springframework.beans.factory.FactoryBean";
+        let known = |t: Ty| -> Option<Ty> {
+            let t = t.upper_bound();
+            (t.class_name().is_some() && !t.mentions_type_var()).then_some(t)
+        };
+        if let Some(sup) = self.index.as_super(ty, FACTORY) {
+            return sup.args().first().cloned().and_then(known);
+        }
+        let mut cur: Option<Name> = ty.class_name().map(Arc::from);
+        let mut hops = 0;
+        while let Some(x) = cur.take() {
+            let (stub, raw) = self.index.raw_class(&x)?;
+            let scope = self.index.scope_for_raw(stub, raw);
+            for t in raw.superclass.iter().chain(&raw.interfaces) {
+                let TypeSyntax::Named(segs) = t else { continue };
+                let Some((last, args)) = segs.last() else { continue };
+                if !matches!(&**last, "FactoryBean" | "SmartFactoryBean" | "AbstractFactoryBean") {
+                    continue;
+                }
+                let names: Vec<&str> = segs.iter().map(|s| &*s.0).collect();
+                let spring = match self.index.resolve_type_name(&names, &scope) {
+                    Some(q) => q.starts_with("org.springframework.beans.factory."),
+                    None => true,
+                };
+                if spring {
+                    return args.first().map(|a| self.index.resolve_type(a, &scope)).and_then(known);
+                }
+            }
+            hops += 1;
+            cur = self.class(&x).and_then(|c| c.superclass.as_ref().and_then(|s| s.class_name()).map(Arc::from)).filter(|s| hops < 8 && self.index.is_source_class(s));
+        }
+        None
+    }
+
+    /// Does the class's hierarchy reach, through project types, a supertype
+    /// the model cannot resolve (its jar is missing)?
+    fn unresolved_supertype(&self, n: &str) -> bool {
+        let mut stack: Vec<Name> = vec![Arc::from(n)];
+        let mut seen: rustc_hash::FxHashSet<Name> = rustc_hash::FxHashSet::default();
+        while let Some(x) = stack.pop() {
+            if !seen.insert(x.clone()) {
+                continue;
+            }
+            let Some(c) = self.class(&x) else { return true };
+            for t in c.superclass.iter().chain(&c.interfaces) {
+                match t.class_name() {
+                    None => return true,
+                    Some(sn) if self.class(sn).is_none() => return true,
+                    Some(sn) if self.index.is_source_class(sn) => stack.push(Arc::from(sn)),
+                    Some(_) => {}
+                }
+            }
+        }
+        false
+    }
+
     /// Annotations a scan filter names; one declared in main sources
     /// registers everywhere.
     fn add_filter_annotations(&mut self, names: impl IntoIterator<Item = String>, in_tests: bool) {
@@ -818,14 +1003,13 @@ impl<'a> Builder<'a> {
     }
 
     fn scan(&mut self) {
+        self.qualify_sources();
         let names: Vec<Name> = self.index.source_class_names().cloned().collect();
         // frameworks in use and scan roots
         let mut roots = Vec::new();
         // (root package, declared on a conditional class such as @Profile,
         // module declaring it)
         let mut root_conditions: Vec<(String, bool, String)> = Vec::new();
-        // (root package, module declaring it, declared by @SpringBootApplication)
-        let mut boot_scans: Vec<(String, String, bool)> = Vec::new();
         let mut spring = false;
         let mut micronaut = false;
         for (path, stub) in self.index.files() {
@@ -853,48 +1037,19 @@ impl<'a> Builder<'a> {
             }
         }
         for n in &names {
-            let Some(c) = self.index.class(n) else { continue };
+            let Some(c) = self.class(n) else { continue };
             for a in &c.annotations {
                 if a.is("org.springframework.boot.autoconfigure.SpringBootApplication") || a.is("org.springframework.context.annotation.ComponentScan") {
-                    let explicit: Vec<String> = split_packages(["scanBasePackages", "basePackages", "value"].iter().flat_map(|k| a.arg(k).map(|v| v.strings()).unwrap_or_default()).collect());
-                    let classes: Vec<String> = ["scanBasePackageClasses", "basePackageClasses"]
-                        .iter()
-                        .flat_map(|k| a.arg(k).map(|v| v.values().into_iter().filter_map(|x| if let AnnotationValue::Class(t) = x { t.class_name().map(|c| package_of(c).to_string()) } else { None }).collect::<Vec<_>>()).unwrap_or_default())
-                        .collect();
-                    let declared: Vec<String> = if explicit.is_empty() && classes.is_empty() { vec![c.package().to_string()] } else { explicit.into_iter().chain(classes).collect() };
+                    let declared = scan_packages(&c, a);
                     let cond = self.conditional_meta(&c.annotations);
-                    if c.source_file().is_some_and(|f| !is_test_path(f)) && (a.is("org.springframework.boot.autoconfigure.SpringBootApplication") || has_main(&c)) {
-                        self.model.app_modules.insert(c.source_file().map(module_of).unwrap_or("").to_string());
-                    }
                     let module = c.source_file().map(module_of).unwrap_or("").to_string();
-                    let boot = a.is("org.springframework.boot.autoconfigure.SpringBootApplication");
-                    boot_scans.extend(declared.iter().map(|r| (r.clone(), module.clone(), boot)));
                     root_conditions.extend(declared.iter().map(|r| (r.clone(), cond, module.clone())));
                     roots.extend(declared);
                 }
             }
         }
-        // other marks of an application: `@SpringBootConfiguration` (what
-        // @SpringBootApplication is made of), a main method starting a context
-        // (its configuration classes may be elsewhere), a servlet initializer
-        const STARTERS: &[&str] = &["SpringApplication", "SpringApplicationBuilder", "AnnotationConfigApplicationContext", "AnnotationConfigWebApplicationContext", "ClassPathXmlApplicationContext", "GenericApplicationContext"];
-        const INITIALIZERS: &[&str] = &["org.springframework.boot.web.servlet.support.SpringBootServletInitializer", "org.springframework.web.WebApplicationInitializer"];
-        for c in names.iter().filter_map(|n| self.index.class(n)) {
-            let Some(f) = c.source_file() else { continue };
-            if is_test_path(f) {
-                continue;
-            }
-            let starts = has_main(&c) && self.index.file(f).is_some_and(|stub| STARTERS.iter().any(|s| stub.referenced_names.binary_search_by(|n| (**n).cmp(*s)).is_ok()));
-            let config = c.annotations.iter().any(|a| a.is("org.springframework.boot.SpringBootConfiguration"));
-            let initializer = INITIALIZERS.iter().any(|i| self.index.is_subclass(&c.name, i).is_yes());
-            if starts || config || initializer {
-                self.model.app_modules.insert(module_of(f).to_string());
-            }
-        }
-        self.model.spring_application = !self.model.app_modules.is_empty();
-        self.model.app_roots = boot_scans.iter().filter(|(_, m, _)| self.model.app_modules.contains(m)).map(|(r, _, boot)| (r.clone(), *boot)).collect();
         for n in &names {
-            let Some(c) = self.index.class(n) else { continue };
+            let Some(c) = self.class(n) else { continue };
             if c.annotations.iter().any(|a| a.is("org.springframework.boot.autoconfigure.AutoConfiguration") || (!a.resolved && a.simple_name() == "AutoConfiguration"))
                 || self.auto_registered.contains(&**n)
                 || self.auto_registered.contains(&n.replace('$', "."))
@@ -909,14 +1064,13 @@ impl<'a> Builder<'a> {
             self.model.frameworks.push(Framework::Micronaut);
         }
         self.model.scan_roots = roots.clone();
-        self.model.scan_root_modules = root_conditions.iter().map(|(r, _, m)| (r.clone(), m.clone())).collect();
 
         let in_scan = |pkg: &str| roots.is_empty() || roots.iter().any(|r| package_covered(r, pkg));
         // MyBatis @MapperScan: every interface in these packages is a bean
         // (package pattern, declared in test sources: registers test beans)
         let mut mapper_pkgs: Vec<(String, bool)> = Vec::new();
         for n in &names {
-            let Some(c) = self.index.class(n) else { continue };
+            let Some(c) = self.class(n) else { continue };
             let in_tests = c.source_file().is_some_and(is_test_path);
             let mut unexpanded = false;
             for a in c.annotations.iter().filter(|a| a.simple_name() == "MapperScan") {
@@ -1011,7 +1165,7 @@ impl<'a> Builder<'a> {
         // class that is never registered has no effect
         let mut work: Vec<Name> = Vec::new();
         for n in &names {
-            let Some(c) = self.index.class(n) else { continue };
+            let Some(c) = self.class(n) else { continue };
             if !in_scan(c.package()) {
                 continue;
             }
@@ -1021,7 +1175,7 @@ impl<'a> Builder<'a> {
             }
         }
         while let Some(n) = work.pop() {
-            let Some(c) = self.index.class(&n) else { continue };
+            let Some(c) = self.class(&n) else { continue };
             for a in &c.annotations {
                 if !matches!(a.simple_name(), "Import" | "EnableConfigurationProperties") {
                     continue;
@@ -1043,7 +1197,7 @@ impl<'a> Builder<'a> {
         // registered some other way)
         let mut imported_anywhere: Vec<(Name, bool)> = Vec::new();
         for n in &names {
-            let Some(c) = self.index.class(n) else { continue };
+            let Some(c) = self.class(n) else { continue };
             let by_test = c.source_file().is_some_and(is_test_path);
             for a in c.annotations.iter().filter(|a| matches!(a.simple_name(), "Import" | "EnableConfigurationProperties")) {
                 for v in a.arg("value").map(|v| v.values()).unwrap_or_default() {
@@ -1065,6 +1219,14 @@ impl<'a> Builder<'a> {
             let in_tests = is_test_path(path);
             if ["ClassPathXmlApplicationContext", "GenericXmlApplicationContext", "FileSystemXmlApplicationContext", "XmlBeanDefinitionReader", "XmlWebApplicationContext"].iter().any(|n| mentions(n)) {
                 if in_tests { self.model.xml_config_in_tests = true } else { self.model.xml_config = true }
+            }
+            // a scanner run in code (from a BeanFactoryPostProcessor, an
+            // ImportBeanDefinitionRegistrar, ...) registers by its own filters:
+            // any class may be registered
+            // (in its own module: what other modules hold is beyond what the
+            // sources show it scans)
+            if mentions("ClassPathBeanDefinitionScanner") || mentions("ClassPathScanningCandidateComponentProvider") {
+                self.code_scans.push((module_of(path).to_string(), in_tests));
             }
             if mentions("MapperScannerConfigurer") {
                 if in_tests { self.unexpanded_mapper_scan_in_tests = true } else { self.unexpanded_mapper_scan = true }
@@ -1093,8 +1255,28 @@ impl<'a> Builder<'a> {
         // them ambiguous or clashes by name
         let outside_scan = |c: &ClassInfo| !in_scan(c.package()) && !imported.contains(&c.name);
 
+        // HTTP service interfaces @ImportHttpServices registers: the types it
+        // names and the packages it names (one naming neither is left to
+        // the evidence rule: its annotation is a registration the model
+        // cannot classify)
+        let mut http_types: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
+        let mut http_packages: Vec<String> = Vec::new();
         for n in &names {
-            let Some(c) = self.index.class(n) else { continue };
+            let Some(c) = self.class(n) else { continue };
+            let mut stack: Vec<AnnotationInfo> = c.annotations.iter().filter(|a| matches!(a.simple_name(), "ImportHttpServices" | "ImportHttpServiceGroups")).cloned().collect();
+            while let Some(a) = stack.pop() {
+                if a.simple_name() == "ImportHttpServiceGroups" {
+                    stack.extend(a.arg("value").map(|v| v.values()).unwrap_or_default().into_iter().filter_map(|v| if let AnnotationValue::Annotation(x) = v { Some((**x).clone()) } else { None }));
+                    continue;
+                }
+                let classes = |k: &str| a.arg(k).map(|v| v.values()).unwrap_or_default().into_iter().filter_map(|x| if let AnnotationValue::Class(t) = x { t.class_name().map(str::to_string) } else { None }).collect::<Vec<_>>();
+                http_types.extend(classes("types").into_iter().chain(classes("value")));
+                http_packages.extend(split_packages(a.arg("basePackages").map(|v| v.strings()).unwrap_or_default()));
+                http_packages.extend(classes("basePackageClasses").iter().map(|t| package_of(t).to_string()));
+            }
+        }
+        for n in &names {
+            let Some(c) = self.class(n) else { continue };
             let file = c.source_file().map(Arc::from);
             let is_test = file.as_deref().is_some_and(is_test_path);
             // repositories and clients are interfaces
@@ -1130,7 +1312,11 @@ impl<'a> Builder<'a> {
                 for a in &c.annotations {
                     match a.simple_name() {
                         "ConfigurationProperties" | "EachProperty" | "ConfigurationReader" if a.name.starts_with("io.micronaut") || !a.resolved => source = Some((BeanSource::Component, Framework::Micronaut)),
-                        "FeignClient" | "HttpExchange" => source = Some((BeanSource::Client, Framework::Spring)),
+                        "FeignClient" => source = Some((BeanSource::Client, Framework::Spring)),
+                        // an HTTP service interface is a bean only where
+                        // @ImportHttpServices registers its proxy; otherwise a
+                        // @Bean method creates it (HttpServiceProxyFactory)
+                        "HttpExchange" if http_types.contains(&*c.name) || http_packages.iter().any(|p| package_covered(p, c.package())) => source = Some((BeanSource::Client, Framework::Spring)),
                         "Client" if a.name.starts_with("io.micronaut") || !a.resolved => source = Some((BeanSource::Client, Framework::Micronaut)),
                         "Repository" | "JdbcRepository" | "MongoRepository" | "R2dbcRepository" if a.name.starts_with("io.micronaut") => source = Some((BeanSource::Repository, Framework::Micronaut)),
                         // Jakarta Data: the implementation is generated at build time (Hibernate, Quarkus, ...)
@@ -1292,7 +1478,7 @@ impl<'a> Builder<'a> {
             let mut hops = 0;
             while let Some(st) = sup.take() {
                 hops += 1;
-                let Some(sc) = st.class_name().and_then(|sn| self.index.class(sn)).filter(|sc| sc.is_source()) else { break };
+                let Some(sc) = st.class_name().and_then(|sn| self.class(sn)).filter(|sc| sc.is_source()) else { break };
                 // a base that is a bean itself registers its own @Bean methods
                 let base_anns = sc.annotations.clone();
                 if base_anns.iter().any(|a| self.stereotype(a, 0).is_some()) {
@@ -1393,7 +1579,7 @@ impl<'a> Builder<'a> {
             // field injection
             let raw_inits: Vec<Name> = self.index.raw_class(&c.name).map(|(_, r)| r.fields.iter().filter(|f| f.has_initializer).map(|f| f.name.clone()).collect()).unwrap_or_default();
             for f in &c.fields {
-                if f.annotations.iter().any(|a| INJECT_ANNOTATIONS.iter().any(|x| a.is(x))) {
+                if f.annotations.iter().any(|a| injects(a, fw)) {
                     // Micronaut keeps the field's default value when no bean exists
                     let defaulted = fw != Framework::Spring && raw_inits.contains(&f.name);
                     let optional = defaulted || f.annotations.iter().any(|a| a.simple_name() == "Autowired" && a.arg("required").and_then(|v| v.as_bool()) == Some(false));
@@ -1404,7 +1590,7 @@ impl<'a> Builder<'a> {
             }
             // setter / method injection
             for m in &c.methods {
-                if m.is_constructor() || !m.annotations.iter().any(|a| INJECT_ANNOTATIONS.iter().any(|x| a.is(x))) {
+                if m.is_constructor() || !m.annotations.iter().any(|a| injects(a, fw)) {
                     continue;
                 }
                 let optional = m.annotations.iter().any(|a| a.simple_name() == "Autowired" && a.arg("required").and_then(|v| v.as_bool()) == Some(false));
@@ -1420,7 +1606,7 @@ impl<'a> Builder<'a> {
         // test's context
         const MOCKS: &[&str] = &["MockitoBean", "MockitoSpyBean", "MockBean", "SpyBean"];
         for n in &names {
-            let Some(c) = self.index.class(n) else { continue };
+            let Some(c) = self.class(n) else { continue };
             let file = c.source_file().map(Arc::from);
             let mut mocks: Vec<(String, Ty)> = c.fields.iter().filter(|f| f.annotations.iter().any(|a| MOCKS.contains(&a.simple_name()))).map(|f| (f.name.to_string(), f.ty.clone())).collect();
             for a in c.annotations.iter().filter(|a| MOCKS.contains(&a.simple_name())) {
@@ -1473,7 +1659,7 @@ impl<'a> Builder<'a> {
         // sources, the site is or may be a bean)
         let mut replaced: Vec<(Name, String, bool, bool, bool)> = Vec::new();
         for n in &names {
-            let Some(c) = self.index.class(n) else { continue };
+            let Some(c) = self.class(n) else { continue };
             let file = c.source_file().unwrap_or("");
             let module = module_of(file).to_string();
             let class_conditional = self.conditional_meta(&c.annotations);
@@ -1522,6 +1708,18 @@ impl<'a> Builder<'a> {
                 }
             }
         }
+        // a FactoryBean is registered under its name as the object it makes
+        for i in 0..self.model.beans.len() {
+            let b = &self.model.beans[i];
+            if b.framework != Framework::Spring || !matches!(b.source, BeanSource::Component | BeanSource::FactoryMethod(_)) || b.is_test && b.declaring_class.contains('$') {
+                continue;
+            }
+            let Some(product) = self.factory_product(&b.ty.clone()) else { continue };
+            let mut made = self.model.beans[i].clone();
+            made.ty = product;
+            self.model.beans[i].name = format!("&{}", made.name);
+            self.add_bean(made);
+        }
         let mut by_class: FxHashMap<Name, Vec<usize>> = FxHashMap::default();
         for (i, b) in self.model.beans.iter().enumerate() {
             if let Some(n) = b.ty.class_name() {
@@ -1529,7 +1727,266 @@ impl<'a> Builder<'a> {
             }
         }
         self.model.by_class = by_class;
+        self.model.contexts = self.app_contexts(&names);
+        self.model.app_classes = self.model.contexts.iter().flat_map(|c| c.members.iter().cloned()).collect();
+        self.model.spring_application = !self.model.contexts.is_empty();
         self.unseen_registrations(&names, &imported_anywhere);
+    }
+
+    /// The groups of classes Spring application contexts are started from,
+    /// in main sources: what each startup call the stubs read with
+    /// certainty is handed (see `grounds_index::startup`), and a
+    /// `@SpringBootApplication`, `@SpringBootConfiguration` or
+    /// `@ComponentScan` class with a `main` method in a file that starts
+    /// nothing (an empty `main`), and a servlet initializer that is itself a
+    /// configuration. A file with a start the stub could not read with
+    /// certainty names no root: its application's roots are unknown, so
+    /// nothing that depends on them is concluded. An application class
+    /// nothing starts (a sample, a class only tests start) is no root, nor
+    /// is a context read from XML.
+    fn context_roots(&mut self, names: &[Name]) -> Vec<(Vec<Name>, bool)> {
+        const INITIALIZERS: &[&str] = &["org.springframework.boot.web.servlet.support.SpringBootServletInitializer", "org.springframework.web.WebApplicationInitializer"];
+        // (without the jars: the base classes Spring offers, by name)
+        const INITIALIZER_BASES: &[&str] = &[
+            "SpringBootServletInitializer", "WebApplicationInitializer", "AbstractAnnotationConfigDispatcherServletInitializer", "AbstractDispatcherServletInitializer",
+            "AbstractContextLoaderInitializer",
+        ];
+        // (roots, open: the roots are a lower bound and the settings unknown)
+        let mut groups: Vec<(Vec<Name>, bool)> = Vec::new();
+        // files that start something (certain or not)
+        let mut starting: rustc_hash::FxHashSet<Arc<str>> = rustc_hash::FxHashSet::default();
+        let files: Vec<(Arc<str>, Arc<FileStub>)> = self.index.files().map(|(p, s)| (p.clone(), s.clone())).collect();
+        for (path, stub) in &files {
+            if is_test_path(path) || (stub.startups.calls.is_empty() && !stub.startups.uncertain) {
+                continue;
+            }
+            starting.insert(path.clone());
+            let Some(raw) = stub.classes.first() else { continue };
+            let scope = self.index.scope_for_raw(stub, raw);
+            'calls: for call in &stub.startups.calls {
+                let mut g = Vec::new();
+                for written in &call.sources {
+                    let segs: Vec<&str> = written.split('.').collect();
+                    // a class the model cannot see (a library's) makes the
+                    // context's roots unknown
+                    match self.index.resolve_type_name(&segs, &scope).filter(|q| self.index.is_source_class(q) && !self.index.source_file_of(q).is_some_and(|f| is_test_path(f))) {
+                        Some(q) => g.push(q),
+                        None => continue 'calls,
+                    }
+                }
+                groups.push((g, call.open));
+            }
+        }
+        for n in names {
+            let Some(c) = self.class(n) else { continue };
+            let Some(f) = c.source_file().map(Arc::<str>::from) else { continue };
+            if is_test_path(&f) || is_framework_class(n) || c.is_interface() {
+                continue;
+            }
+            let app_annotation = c.annotations.iter().any(|a| {
+                a.is("org.springframework.boot.autoconfigure.SpringBootApplication") || a.is("org.springframework.boot.SpringBootConfiguration") || a.is("org.springframework.context.annotation.ComponentScan")
+            });
+            // a main next to the application annotation, in a file that starts nothing
+            if has_main(&c) && app_annotation && !starting.contains(&f) {
+                groups.push((vec![n.clone()], false));
+            }
+            let initializer = INITIALIZERS.iter().any(|i| self.index.is_subclass(n, i).is_yes())
+                || self.index.raw_class(n).is_some_and(|(_, r)| r.superclass.iter().chain(&r.interfaces).any(|t| t.last_name().is_some_and(|l| INITIALIZER_BASES.contains(&l))));
+            if initializer && self.configuration_like(&c) {
+                groups.push((vec![n.clone()], false));
+            }
+        }
+        for (g, _) in &mut groups {
+            g.sort();
+            g.dedup();
+        }
+        groups.sort();
+        groups.dedup();
+        groups
+    }
+
+    /// Is the class a configuration a context is started from: a
+    /// @Configuration, a scan, an import, or factory methods? (A file that
+    /// starts a context names other classes too, `ctx.getBean(Service.class)`:
+    /// a plain component is not taken for a root.)
+    fn configuration_like(&mut self, c: &ClassInfo) -> bool {
+        const MARKS: &[&str] = &[
+            "org.springframework.context.annotation.Configuration", "org.springframework.context.annotation.ComponentScan", "org.springframework.context.annotation.ComponentScans",
+            "org.springframework.context.annotation.Import", "org.springframework.context.annotation.ImportResource", "org.springframework.boot.autoconfigure.SpringBootApplication",
+            "org.springframework.boot.SpringBootConfiguration", "org.springframework.boot.autoconfigure.EnableAutoConfiguration",
+        ];
+        // (Spring's own, not a project's `com.acme.Configuration`)
+        c.annotations.iter().any(|a| MARKS.iter().any(|m| a.is(m))) || c.methods.iter().any(|m| self.is_factory_method(m))
+    }
+
+    /// The scans declared on a class whose result the model can name:
+    /// (package pattern, declared by `@SpringBootApplication`). A scan with
+    /// exclude filters or without the default filters, or on a conditional
+    /// class, registers what the model cannot name and is left out.
+    fn certain_scans(&self, c: &ClassInfo) -> Vec<(String, bool)> {
+        if self.conditional_meta(&c.annotations) {
+            return Vec::new();
+        }
+        let mut scans: Vec<AnnotationInfo> = Vec::new();
+        // (and the scans project annotations carry: `@EnableServices`
+        // meta-annotated `@ComponentScan("services")`)
+        let mut stack: Vec<(AnnotationInfo, u32)> = c.annotations.iter().map(|a| (a.clone(), 0)).collect();
+        let mut seen: rustc_hash::FxHashSet<Name> = rustc_hash::FxHashSet::default();
+        while let Some((a, depth)) = stack.pop() {
+            if a.is("org.springframework.boot.autoconfigure.SpringBootApplication") || a.is("org.springframework.context.annotation.ComponentScan") {
+                scans.push(a.clone());
+            } else if a.simple_name() == "ComponentScans" {
+                for v in a.arg("value").map(|v| v.values()).unwrap_or_default() {
+                    if let AnnotationValue::Annotation(x) = v {
+                        scans.push((**x).clone());
+                    }
+                }
+            } else if depth < 4 && a.resolved && !a.name.starts_with("java.") && seen.insert(a.name.clone()) {
+                if let Some(ac) = self.class(&a.name).filter(|ac| ac.is_source() && ac.kind == ClassKind::Annotation) {
+                    if self.conditional_meta(&ac.annotations) {
+                        continue;
+                    }
+                    stack.extend(ac.annotations.iter().filter(|m| m.name != a.name).map(|m| (m.clone(), depth + 1)));
+                }
+            }
+        }
+        let mut out = Vec::new();
+        for a in &scans {
+            if a.arg("excludeFilters").is_some() || a.arg("useDefaultFilters").and_then(|v| v.as_bool()) == Some(false) {
+                continue;
+            }
+            let boot = a.is("org.springframework.boot.autoconfigure.SpringBootApplication");
+            out.extend(scan_packages(c, a).into_iter().map(|p| (p, boot)));
+        }
+        out
+    }
+
+    fn app_contexts(&mut self, names: &[Name]) -> Vec<AppContext> {
+        let groups = self.context_roots(names);
+        if groups.is_empty() {
+            return Vec::new();
+        }
+        // module dependencies the sources show: a main-source file naming,
+        // in an import, a class declared once in another module's main sources
+        let mut deps: FxHashMap<String, rustc_hash::FxHashSet<String>> = FxHashMap::default();
+        for (path, stub) in self.index.files() {
+            if is_test_path(path) {
+                continue;
+            }
+            let from = module_of(path);
+            for imp in stub.imports.iter().filter(|i| !i.on_demand) {
+                let owner = if imp.is_static { imp.path.rsplit_once('.').map(|(o, _)| o).unwrap_or("") } else { &imp.path };
+                let Some(bn) = self.index.binary_name_for_dotted(owner) else { continue };
+                if self.index.is_duplicated(&bn) {
+                    continue;
+                }
+                if let Some(f) = self.index.source_file_of(&bn).filter(|f| !is_test_path(f)) {
+                    let to = module_of(f);
+                    if to != from {
+                        deps.entry(from.to_string()).or_default().insert(to.to_string());
+                    }
+                }
+            }
+        }
+        // the components a scan may register, by module: what Spring's
+        // scanner registers (Spring stereotypes and JSR-330 @Named /
+        // @ManagedBean classes, and the repositories, clients and mappers of
+        // the scanned packages), with (class, package, in tests,
+        // auto-configuration); a test's configurations and the classes
+        // nested in tests are excluded from an application's scan
+        // (TypeExcludeFilter)
+        let mut components: FxHashMap<String, Vec<(Name, String, bool, bool)>> = FxHashMap::default();
+        let mut sorted: Vec<(Name, usize)> = self.model.component_classes.iter().map(|(k, &i)| (k.clone(), i)).collect();
+        sorted.sort();
+        for (k, bi) in sorted {
+            let b = &self.model.beans[bi];
+            let Some(file) = b.file.clone() else { continue };
+            let Some(kc) = self.class(&k) else { continue };
+            let test = is_test_path(&file);
+            let scanned_kind = b.framework == Framework::Spring || kc.annotations.iter().any(|a| matches!(a.simple_name(), "Named" | "ManagedBean"));
+            let test_excluded = test && (k.contains('$') || kc.annotations.iter().any(|a| matches!(a.simple_name(), "TestConfiguration" | "TestComponent")));
+            if scanned_kind && !test_excluded {
+                let auto = self.model.auto_configurations.contains(&k);
+                components.entry(module_of(&file).to_string()).or_default().push((k, kc.package().to_string(), test, auto));
+            }
+        }
+        let mut out = Vec::new();
+        for (roots, open) in groups {
+            let root_modules: Vec<String> = roots.iter().filter_map(|r| self.index.source_file_of(r)).map(|f| module_of(f).to_string()).collect();
+            if root_modules.is_empty() {
+                continue;
+            }
+            let mut visible: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
+            // a module and the modules it depends on are on the classpath
+            let reach = |visible: &mut rustc_hash::FxHashSet<String>, from: &str| {
+                let mut stack = vec![from.to_string()];
+                while let Some(m) = stack.pop() {
+                    if visible.insert(m.clone()) {
+                        stack.extend(deps.get(&m).into_iter().flatten().cloned());
+                    }
+                }
+            };
+            for m in &root_modules {
+                reach(&mut visible, m);
+            }
+            let mut ctx = AppContext { root: roots[0].clone(), ..Default::default() };
+            ctx.roots = roots.clone();
+            ctx.open = open;
+            ctx.members.extend(roots.iter().cloned());
+            ctx.registered.extend(roots.iter().cloned());
+            let mut scans: Vec<(String, bool)> = Vec::new();
+            let mut work = roots.clone();
+            loop {
+                while let Some(n) = work.pop() {
+                    let Some(c) = self.class(&n) else { continue };
+                    // @Import and @EnableConfigurationProperties name classes
+                    // registered wherever they live
+                    for a in c.annotations.iter().filter(|a| matches!(a.simple_name(), "Import" | "EnableConfigurationProperties")) {
+                        for v in a.arg("value").map(|v| v.values()).unwrap_or_default() {
+                            if let AnnotationValue::Class(t) = v {
+                                if let Some(t) = t.class_name().filter(|t| self.index.is_source_class(t)) {
+                                    let t: Name = Arc::from(t);
+                                    ctx.registered.insert(t.clone());
+                                    if ctx.members.insert(t.clone()) {
+                                        // (an imported class's module is on the classpath too)
+                                        if let Some(f) = self.index.source_file_of(&t).filter(|f| !is_test_path(f)) {
+                                            reach(&mut visible, module_of(f));
+                                        }
+                                        work.push(t);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    scans.extend(self.certain_scans(&c));
+                }
+                scans.sort();
+                scans.dedup();
+                let mut grew = false;
+                for module in &visible {
+                    for (k, pkg, test, auto) in components.get(module).map(|v| v.as_slice()).unwrap_or(&[]) {
+                        if (*test && !root_modules.contains(module)) || ctx.members.contains(k) || ctx.test_members.contains(k) {
+                            continue;
+                        }
+                        if !scans.iter().any(|(r, boot)| !(*boot && *auto) && package_covered(r, pkg)) {
+                            continue;
+                        }
+                        if *test {
+                            ctx.test_members.insert(k.clone());
+                        } else {
+                            ctx.members.insert(k.clone());
+                            work.push(k.clone());
+                            grew = true;
+                        }
+                    }
+                }
+                if !grew {
+                    break;
+                }
+            }
+            out.push(ctx);
+        }
+        out
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1603,6 +2060,7 @@ impl DiModel {
     pub fn build_with(index: &Index, registered: &[String], auto_registered: &[String]) -> DiModel {
         let mut b = Builder {
             index,
+            qualified: FxHashMap::default(),
             model: DiModel::default(),
             stereo: FxHashMap::default(),
             qualifier_ann: FxHashMap::default(),
@@ -1614,6 +2072,7 @@ impl DiModel {
             filter_types: Vec::new(),
             opaque_filter: false,
             opaque_filter_in_tests: false,
+            code_scans: Vec::new(),
             registered: registered.iter().cloned().collect(),
             auto_registered: auto_registered.iter().cloned().collect(),
         };
@@ -1645,6 +2104,7 @@ impl DiModel {
         m.same_name_factories = m.same_name_factories();
         m.index_providers(index);
         m.ctor_edges = m.constructor_edges(index);
+        m.conflicts = m.compute_name_conflicts();
         m
     }
 
@@ -1747,7 +2207,7 @@ impl DiModel {
             return Resolution::Unknown;
         }
         // a library's beans are wired by the application using it
-        if p.framework == Framework::Spring && !p.file.as_deref().is_some_and(is_test_path) && !self.in_application(p.file.as_deref(), &p.owner) {
+        if p.framework == Framework::Spring && !p.file.as_deref().is_some_and(is_test_path) && !self.in_application(&p.owner) {
             return Resolution::Unknown;
         }
         if let Some(t) = p.ty.class_name() {
@@ -1755,6 +2215,8 @@ impl DiModel {
                 return Resolution::Unknown;
             }
         }
+        // a point held only by open contexts concludes no absence
+        let open_only = p.framework == Framework::Spring && self.held_only_by_open(&p.owner, include_test);
         let (mut cands, mut maybe) = self.candidates(lk, &p.ty, include_test);
         if cands.iter().any(|&i| self.duplicated.contains(&self.beans[i].declaring_class)) {
             return Resolution::Unknown;
@@ -1786,7 +2248,7 @@ impl DiModel {
             }
             if cands.is_empty() {
                 if before.is_empty() {
-                    return if maybe > 0 || self.opaque_imports || p.lazy || !self.provable_type(lk, &p.ty) || self.dynamically_registered(&p.ty, include_test) || self.may_be_registered_unseen(lk, p, include_test) {
+                    return if maybe > 0 || open_only || self.opaque_imports || p.lazy || !self.provable_type(lk, &p.ty) || self.dynamically_registered(&p.ty, include_test) || self.may_be_registered_unseen(lk, p, include_test) {
                         Resolution::Unknown
                     } else if p.optional {
                         Resolution::Absent
@@ -1803,7 +2265,7 @@ impl DiModel {
                 }
                 // a library type may get named beans from its own
                 // auto-configuration (clients configured by properties)
-                if !self.provable_type(lk, &p.ty) || self.dynamically_registered(&p.ty, include_test) || p.lazy || self.may_be_registered_unseen(lk, p, include_test) {
+                if open_only || !self.provable_type(lk, &p.ty) || self.dynamically_registered(&p.ty, include_test) || p.lazy || self.may_be_registered_unseen(lk, p, include_test) {
                     return Resolution::Unknown;
                 }
                 return Resolution::QualifierNotFound { qualifier: q.clone(), candidates: before };
@@ -1846,6 +2308,7 @@ impl DiModel {
                 if p.optional {
                     Resolution::Absent
                 } else if maybe > 0
+                    || open_only
                     || self.opaque_imports
                     || !self.provable_type(lk, &p.ty)
                     || jit_possible()
@@ -1892,6 +2355,15 @@ impl DiModel {
                 // own context; they do not compete with each other
                 if unconditional.iter().any(|&i| self.beans[i].is_test && self.beans[i].declaring_class.contains('$')) {
                     return Resolution::Unknown;
+                }
+                // Spring: only beans of one context compete, and only in a
+                // context that also holds the injecting bean
+                if p.framework == Framework::Spring {
+                    let shared = self.contexts.iter().filter(|ctx| !ctx.open && ctx.holds(&p.owner, include_test)).map(|ctx| unconditional.iter().copied().filter(|&i| self.context_holds(ctx, &self.beans[i], include_test)).collect::<Vec<usize>>()).find(|v| v.len() >= 2);
+                    return match shared {
+                        Some(v) => Resolution::Ambiguous(v),
+                        None => Resolution::Unknown,
+                    };
                 }
                 Resolution::Ambiguous(unconditional)
             }
@@ -1991,48 +2463,79 @@ impl DiModel {
         ty.class_name().is_some_and(|c| self.dynamic_types.contains(simple_name_of(c)) || (include_test && self.dynamic_types_in_tests.contains(simple_name_of(c))))
     }
 
-    fn share_scan_root(&self, a: &Bean, b: &Bean) -> bool {
-        if self.scan_roots.len() < 2 {
-            return true;
-        }
-        let pkg = |x: &Bean| package_of(&x.declaring_class).to_string();
-        let (pa, pb) = (pkg(a), pkg(b));
-        let covers = |r: &str, p: &str| package_covered(r, p);
-        let module = a.file.as_deref().map(module_of).unwrap_or("");
-        let local = self.scan_root_modules.iter().any(|(_, m)| m == module);
-        self.scan_root_modules.iter().filter(|(_, m)| !local || m == module).any(|(r, _)| covers(r, &pa) && covers(r, &pb))
+    /// Is the class registered in an application context the model can name?
+    /// Elsewhere (a library, a context only tests or XML assemble) its
+    /// dependencies are provided by a context the model cannot see.
+    pub fn in_application(&self, class: &str) -> bool {
+        self.app_classes.contains(class)
     }
 
-    /// Code in a module holding an application, or in a package one scans.
-    pub fn in_application(&self, file: Option<&str>, class: &str) -> bool {
-        if file.is_some_and(|f| self.app_modules.contains(module_of(f))) {
-            return true;
-        }
-        let pkg = package_of(class);
-        let auto_configuration = self.auto_configurations.contains(class);
-        self.app_roots.iter().any(|(r, boot)| !(*boot && auto_configuration) && package_covered(r, pkg))
+    /// Is the class held only by open contexts? Their sources are a lower
+    /// bound, so a bean missing from what the model sees may be registered
+    /// all the same: absence needs a closed context.
+    fn held_only_by_open(&self, class: &str, test: bool) -> bool {
+        let mut held = self.contexts.iter().filter(|ctx| ctx.holds(class, test)).peekable();
+        held.peek().is_some() && held.all(|ctx| ctx.open)
     }
 
+    /// Is the bean registered in the context (in a test run with `test`)?
+    fn context_holds(&self, ctx: &AppContext, b: &Bean, test: bool) -> bool {
+        ctx.holds(&b.declaring_class, test)
+    }
+
+    /// Pairs of beans with the same name in one application context
+    /// (Spring refuses to start without overriding enabled). Only beans
+    /// certainly registered in the same context clash: configurations that
+    /// separate contexts load (one per test, one per sample) do not.
     pub fn name_conflicts(&self) -> Vec<(usize, usize)> {
-        // names only clash inside one application (module)
-        let mut seen: FxHashMap<(&str, &str), usize> = FxHashMap::default();
-        let mut out = Vec::new();
+        self.conflicts.clone()
+    }
+
+    /// Computed once at build time (the rule asks for every file).
+    fn compute_name_conflicts(&self) -> Vec<(usize, usize)> {
+        let mut by_class: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
         for (i, b) in self.beans.iter().enumerate() {
-            // in a library, which beans end up in one context is the user's choice
-            if b.framework != Framework::Spring || b.conditional || b.is_test || !self.in_application(b.file.as_deref(), &b.declaring_class) {
-                continue;
+            if b.framework == Framework::Spring && !b.conditional && !b.is_test {
+                by_class.entry(&b.declaring_class).or_default().push(i);
             }
-            let key = (b.file.as_deref().map(module_of).unwrap_or(""), b.name.as_str());
-            match seen.get(&key) {
-                // with several scan roots (separate application contexts are
-                // common, e.g. one per package), both must be under one root
-                Some(&j) if self.share_scan_root(&self.beans[j], b) => out.push((j, i)),
-                Some(_) => {}
-                None => {
-                    seen.insert(key, i);
+        }
+        let mut out: Vec<(usize, usize)> = Vec::new();
+        for ctx in self.contexts.iter().filter(|c| !c.open) {
+            let mut seen: FxHashMap<&str, usize> = FxHashMap::default();
+            // the root is registered before the scan, and the scanner skips
+            // a candidate whose name an explicitly registered bean already
+            // has (ClassPathBeanDefinitionScanner.isCompatible): no clash
+            let roots: Vec<usize> = ctx.roots.iter().filter_map(|r| self.component_classes.get(r).copied()).filter(|&r| {
+                let b = &self.beans[r];
+                b.source == BeanSource::Component && b.framework == Framework::Spring && !b.conditional && !b.is_test
+            }).collect();
+            for &r in &roots {
+                match seen.get(self.beans[r].name.as_str()) {
+                    Some(&j) => out.push((j.min(r), j.max(r))),
+                    None => {
+                        seen.insert(&self.beans[r].name, r);
+                    }
+                }
+            }
+            let mut held: Vec<usize> = ctx.members.iter().filter_map(|c| by_class.get(&**c)).flatten().copied().collect();
+            held.sort_unstable();
+            for i in held {
+                let b = &self.beans[i];
+                if roots.contains(&i) {
+                    continue;
+                }
+                match seen.get(b.name.as_str()) {
+                    // (only a namesake found by scanning: an imported class is registered explicitly too)
+                    Some(&j) if roots.contains(&j) && b.source == BeanSource::Component && !ctx.registered.contains(&b.declaring_class) => {}
+                    Some(&j) => out.push((j.min(i), j.max(i))),
+                    None => {
+                        seen.insert(&b.name, i);
+                    }
                 }
             }
         }
+        out.sort();
+        out.dedup();
         out
     }
 }
@@ -2104,7 +2607,7 @@ mod tests {
              @Configuration class Cfg { @Bean @Primary Clock clock() { return null; } @Bean Clock other() { return null; } }
              interface Clock {}
              @Service class NeedsClock { NeedsClock(Clock c) {} }
-             @org.springframework.boot.autoconfigure.SpringBootApplication class App {}",
+             @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }",
         )]);
         assert_eq!(m.beans.len(), 9);
         let res: Vec<(String, Resolution)> = m.points.iter().map(|p| (format!("{}.{}", simple_name_of(&p.owner), p.name), m.resolve(&idx, p, false))).collect();
@@ -2142,14 +2645,46 @@ mod tests {
     #[test]
     fn an_unrelated_application_leaves_a_library_alone() {
         let (idx, m) = model(&[
-            ("app/src/main/java/other/App.java", "package other; @org.springframework.boot.autoconfigure.SpringBootApplication public class App {}"),
+            ("app/src/main/java/other/App.java", "package other; @org.springframework.boot.autoconfigure.SpringBootApplication public class App { public static void main(String[] args) {} }"),
             ("lib/src/main/java/demo/Config.java", "package demo; @org.springframework.context.annotation.ComponentScan(\"demo\") class Config {}"),
             ("lib/src/main/java/demo/Uses.java", "package demo; interface Supplied {} @org.springframework.stereotype.Service class Uses { Uses(Supplied s) {} }"),
             // a library the application scans is judged
-            ("core/src/main/java/other/core/Svc.java", "package other.core; interface Missing {} @org.springframework.stereotype.Service class Svc { Svc(Missing m) {} }"),
+            ("core/src/main/java/other/core/Svc.java", "package other.core; interface Missing {} @org.springframework.stereotype.Service public class Svc { Svc(Missing m) {} }"),
+            ("app/src/main/java/other/Uses.java", "package other; import other.core.Svc; @org.springframework.stereotype.Service class Uses { Uses(Svc svc) {} }"),
         ]);
         assert_eq!(resolution_of(&idx, &m, "lib/src/main/java/demo/Uses.java", "s"), Resolution::Unknown);
         assert_eq!(resolution_of(&idx, &m, "core/src/main/java/other/core/Svc.java", "m"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn a_scan_root_reaches_only_modules_its_application_depends_on() {
+        // one module's application scans a package other, independent modules
+        // share: what they hold is not in its context
+        let app = ("app/src/main/java/com/x/App.java", "package com.x; @org.springframework.boot.autoconfigure.SpringBootApplication public class App { public static void main(String[] args) {} }");
+        let lib = [
+            ("lib/src/main/java/com/x/lib/GreetingService.java", "package com.x.lib; @org.springframework.stereotype.Component public class GreetingService { @org.springframework.beans.factory.annotation.Autowired private Translator translator; }"),
+            ("lib/src/main/java/com/x/lib/Translator.java", "package com.x.lib; public interface Translator { String translate(String s); }"),
+            // a test's scan is not an application's
+            ("lib/src/test/java/com/x/lib/TestConfig.java", "package com.x.lib; import org.springframework.context.annotation.*;
+             @Configuration @ComponentScan(\"com.x.lib\") class TestConfig { @Bean Translator translator() { return null; } }"),
+        ];
+        let (idx, m) = model(&[app, lib[0], lib[1], lib[2]]);
+        assert_eq!(resolution_of(&idx, &m, "lib/src/main/java/com/x/lib/GreetingService.java", "translator"), Resolution::Unknown);
+        // two modules' components of the same name, scanned by one root
+        // package: only the application's own module is in its context
+        let other = ("other/src/main/java/com/x/web/Controller.java", "package com.x.web; @org.springframework.stereotype.Controller public class Controller {}");
+        let own = ("app/src/main/java/com/x/api/Controller.java", "package com.x.api; @org.springframework.stereotype.Controller public class Controller {}");
+        let (_, m) = model(&[app, own, other]);
+        assert!(m.name_conflicts().is_empty());
+        // an application naming a class of the module depends on it (also
+        // through a module in between): the module is judged
+        let uses = ("app/src/main/java/com/x/Uses.java", "package com.x; import com.x.mid.Mid; @org.springframework.stereotype.Service class Uses { Uses(Mid mid) {} }");
+        let mid = ("mid/src/main/java/com/x/mid/Mid.java", "package com.x.mid; import com.x.lib.Translator; @org.springframework.stereotype.Service public class Mid {}");
+        let (idx, m) = model(&[app, uses, mid, lib[0], lib[1]]);
+        assert_eq!(resolution_of(&idx, &m, "lib/src/main/java/com/x/lib/GreetingService.java", "translator"), Resolution::NotFound);
+        let uses_web = ("app/src/main/java/com/x/Uses.java", "package com.x; import com.x.web.Controller; class Uses {}");
+        let (_, m) = model(&[app, own, other, uses_web]);
+        assert_eq!(m.name_conflicts().len(), 1);
     }
 
     #[test]
@@ -2159,7 +2694,8 @@ mod tests {
         // beans the plugin's consumers provide
         let files = [
             ("org/springframework/boot/autoconfigure/AutoConfiguration.java", "package org.springframework.boot.autoconfigure; @org.springframework.context.annotation.Configuration public @interface AutoConfiguration {}"),
-            ("shop/src/main/java/com/example/shop/App.java", "package com.example.shop; @org.springframework.boot.autoconfigure.SpringBootApplication public class App {}"),
+            // (the application names a class of the plugin: it depends on it)
+            ("shop/src/main/java/com/example/shop/App.java", "package com.example.shop; import com.example.shop.plugin.Extension; @org.springframework.boot.autoconfigure.SpringBootApplication public class App { public static void main(String[] args) {} }"),
             ("shop/plugins/core/src/main/java/com/example/shop/plugin/Extension.java", "package com.example.shop.plugin; public interface Extension<T> {}"),
             (
                 "shop/plugins/core/src/main/java/com/example/shop/plugin/PluginAutoConfiguration.java",
@@ -2187,7 +2723,7 @@ mod tests {
     fn test_sets_are_classified_like_the_workspace() {
         // a functionalTest application does not make the library's main code an application
         let (idx, m) = model(&[
-            ("src/functionalTest/java/demo/TestApp.java", "package demo; @org.springframework.boot.autoconfigure.SpringBootApplication public class TestApp {}"),
+            ("src/functionalTest/java/demo/TestApp.java", "package demo; @org.springframework.boot.autoconfigure.SpringBootApplication public class TestApp { public static void main(String[] args) {} }"),
             ("src/main/java/demo/Uses.java", "package demo; interface Supplied {} @org.springframework.stereotype.Service class Uses { Uses(Supplied s) {} }"),
             ("src/e2e/java/demo/E2e.java", "package demo; interface Missing2 {} @org.springframework.stereotype.Service class E2e { E2e(Missing2 m) {} }"),
         ]);
@@ -2247,7 +2783,7 @@ mod tests {
             ("two/src/main/java/sample/Example.java", "package sample; import java.time.Clock; public class Example { Clock c; }"),
             ("app/src/main/java/billing/Clock.java", "package billing; public interface Clock {}"),
             ("app/src/main/java/billing/Uses.java", "package billing; @org.springframework.stereotype.Service class Uses { Uses(Clock clock) {} }"),
-            ("app/src/main/java/billing/App.java", "package billing; @org.springframework.boot.autoconfigure.SpringBootApplication public class App {}"),
+            ("app/src/main/java/billing/App.java", "package billing; @org.springframework.boot.autoconfigure.SpringBootApplication public class App { public static void main(String[] args) {} }"),
         ]);
         assert_eq!(resolution_of(&idx, &m, "app/src/main/java/billing/Uses.java", "clock"), Resolution::NotFound);
     }
@@ -2269,7 +2805,7 @@ mod tests {
         let (idx, m) = model(&[
             ("org/springframework/beans/factory/ObjectProvider.java", "package org.springframework.beans.factory; public interface ObjectProvider<T> {}"),
             ("jakarta/inject/Provider.java", "package jakarta.inject; public interface Provider<T> { T get(); }"),
-            ("app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication public class App {}"),
+            ("app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication public class App { public static void main(String[] args) {} }"),
             ("app/A.java", "package app; import org.springframework.stereotype.Service; import org.springframework.beans.factory.ObjectProvider; import jakarta.inject.Provider;
              interface Configurer {} interface Missing {}
              @Service class One implements Configurer {} @Service class Two implements Configurer {}
@@ -2439,7 +2975,7 @@ mod tests {
             ("src/main/java/app/A.java", "package app; import org.springframework.stereotype.*;
              interface Missing {}
              @Service class Uses { Uses(Missing missing) {} }
-             @org.springframework.boot.autoconfigure.SpringBootApplication class App {}"),
+             @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }"),
             ("src/main/java/app/Wiring.java", "package app; import com.google.inject.AbstractModule; class Wiring extends AbstractModule {}"),
         ]);
         assert_eq!(point_resolution(&idx, &m, "missing"), Resolution::NotFound);
@@ -2495,7 +3031,7 @@ mod tests {
              @Component class Cache {}
              @Component class Other {}
              @Service class Uses { Uses(Registry reg, Store1 st, Cache cache, Other o) {} }
-             @org.springframework.boot.autoconfigure.SpringBootApplication class App {}"),
+             @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }"),
             // a test configuration's @Bean of the same name exists only in tests
             ("src/test/java/app/TestConfig.java", "package app; import org.springframework.context.annotation.*;
              @Configuration class TestConfig { @Bean Other other() { return new Other(); } }"),
@@ -2563,7 +3099,7 @@ mod tests {
              interface Pipe {}
              @Configuration class Pipes { @Exported Pipe pipe() { return null; } }
              @Service class Uses { Uses(Pipe pipe) {} }
-             @org.springframework.boot.autoconfigure.SpringBootApplication class App {}"),
+             @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }"),
         ]);
         assert!(matches!(point_resolution(&idx, &m, "pipe"), Resolution::Unique(_)));
     }
@@ -2584,7 +3120,7 @@ mod tests {
             ("src/main/java/app/shop/web/Index.java", "package app.shop.web; public interface Index {} @org.springframework.stereotype.Component class IndexPage implements Index {}"),
             ("src/main/java/app/App.java", "package app; import org.springframework.stereotype.*; import app.order.dao.OrderDao; import app.order.Draft; import app.shop.web.Index;
              @org.mybatis.spring.annotation.MapperScan(\"app.**.dao\")
-             @org.springframework.boot.autoconfigure.SpringBootApplication(scanBasePackages = \"app.config, app.*.web\") class App {}"),
+             @org.springframework.boot.autoconfigure.SpringBootApplication(scanBasePackages = \"app.config, app.*.web\") class App { public static void main(String[] args) {} }"),
             ("src/main/java/app/config/Uses.java", "package app.config; import org.springframework.stereotype.*; import app.order.dao.OrderDao; import app.order.Draft; import app.shop.web.Index;
              @Service class Uses { Uses(OrderDao orderDao, Draft draft, Index index) {} }"),
         ]);
@@ -2678,7 +3214,7 @@ mod tests {
 
     #[test]
     fn no_bean_needs_evidence_of_how_beans_of_the_type_are_registered() {
-        let app = ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication class App {}");
+        let app = ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }");
         let uses = ("src/main/java/app/Uses.java", "package app; import org.springframework.stereotype.*; @Service class Uses { Uses(Port port) {} }");
         let resolution = |files: &[(&'static str, &'static str)]| {
             let mut all = vec![app, uses];
@@ -2738,7 +3274,7 @@ mod tests {
 
     #[test]
     fn unseen_registrations_keep_to_their_source_set_and_kind() {
-        let app = ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication class App {}");
+        let app = ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }");
         let port = ("src/main/java/app/Port.java", "package app; public interface Port {}");
         let uses = ("src/main/java/app/Uses.java", "package app; import org.springframework.stereotype.*; @Service class Uses { Uses(Port port) {} }");
         let test_uses = ("src/test/java/app/TestUses.java", "package app; import org.springframework.stereotype.*; @Service class TestUses { TestUses(Port testPort) {} }");
@@ -2787,6 +3323,361 @@ mod tests {
         assert_eq!(point_resolution(&idx, &m, "redis"), Resolution::Unknown);
     }
 
+    /// The bean-name pairs reported, as "Class.name" or "Class" for components.
+    fn conflicts(m: &DiModel) -> Vec<String> {
+        let show = |i: usize| {
+            let b = &m.beans[i];
+            match &b.source {
+                BeanSource::FactoryMethod(f) => format!("{}.{}", simple_name_of(&b.declaring_class), f),
+                _ => simple_name_of(&b.declaring_class).to_string(),
+            }
+        };
+        let mut v: Vec<String> = m
+            .name_conflicts()
+            .into_iter()
+            .map(|(a, b)| {
+                let mut pair = [show(a), show(b)];
+                pair.sort();
+                pair.join(" ")
+            })
+            .collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn independent_contexts_are_judged_apart() {
+        let job = |pkg: &str, class: &str, extra: &str| {
+            format!(
+                "package samples.{pkg}; import org.springframework.context.annotation.*;
+                 {extra} @Configuration public class {class} {{ @Bean public Runnable job() {{ return null; }} }}"
+            )
+        };
+        let starter = "package samples.a; import org.springframework.context.annotation.*;
+             @Configuration @Import(samples.c.CJob.class) public class AJob {
+                 @Bean public Runnable job() { return null; }
+                 public static void main(String[] args) { new AnnotationConfigApplicationContext(AJob.class); }
+             }";
+        // B is loaded on its own by its test: not in the context A starts.
+        // C is imported by A: the clash is real.
+        let (b, c) = (job("b", "BJob", ""), job("c", "CJob", ""));
+        let (_, m) = model(&[("src/main/java/samples/a/AJob.java", starter), ("src/main/java/samples/b/BJob.java", &b), ("src/main/java/samples/c/CJob.java", &c)]);
+        assert_eq!(m.contexts.len(), 1);
+        assert_eq!(conflicts(&m), vec!["AJob.job CJob.job"]);
+        // what the root scans clashes too, what it does not scan does not
+        let scanning = "package samples; import org.springframework.context.annotation.*;
+             @Configuration @ComponentScan(\"samples.b\") public class Main {
+                 public static void main(String[] args) { new AnnotationConfigApplicationContext(Main.class); }
+             }";
+        let d = job("d", "DJob", "");
+        let (_, m) = model(&[("src/main/java/samples/Main.java", scanning), ("src/main/java/samples/b/BJob.java", &b), ("src/main/java/samples/b/B2.java", &job("b", "B2Job", "")), ("src/main/java/samples/d/DJob.java", &d)]);
+        assert_eq!(conflicts(&m), vec!["B2Job.job BJob.job"]);
+        // a scan with exclude filters registers what the model cannot name
+        let filtered = scanning.replace("@ComponentScan(\"samples.b\")", "@ComponentScan(value = \"samples.b\", excludeFilters = @ComponentScan.Filter(Deprecated.class))");
+        let (_, m) = model(&[("src/main/java/samples/Main.java", &filtered), ("src/main/java/samples/b/BJob.java", &b), ("src/main/java/samples/b/B2.java", &job("b", "B2Job", ""))]);
+        assert!(conflicts(&m).is_empty());
+    }
+
+    #[test]
+    fn an_application_class_nothing_starts_is_no_context() {
+        // a rule sample: @SpringBootApplication with no main, started by nothing
+        let sample = ("src/main/java/checks/Sample.java", "package checks; @org.springframework.boot.autoconfigure.SpringBootApplication public final class Sample {}");
+        let configs = [
+            ("src/main/java/checks/SampleA.java", "package checks; import org.springframework.context.annotation.*; @Configuration class SampleA { @Bean String dataSource() { return \"a\"; } }"),
+            ("src/main/java/checks/SampleB.java", "package checks; import org.springframework.context.annotation.*; @Configuration class SampleB { @Bean String dataSource() { return \"b\"; } }"),
+            ("src/main/java/checks/Uses.java", "package checks; interface Missing {} @org.springframework.stereotype.Service class Uses { Uses(Missing m) {} }"),
+        ];
+        let (idx, m) = model(&[sample, configs[0], configs[1], configs[2]]);
+        assert!(!m.spring_application);
+        assert!(conflicts(&m).is_empty());
+        assert_eq!(point_resolution(&idx, &m, "m"), Resolution::Unknown);
+        // with a main, or started from another class, it is an application
+        let with_main = ("src/main/java/checks/Sample.java", "package checks; @org.springframework.boot.autoconfigure.SpringBootApplication class Sample { public static void main(String[] args) {} }");
+        let (idx, m) = model(&[with_main, configs[0], configs[1], configs[2]]);
+        assert_eq!(conflicts(&m), vec!["SampleA.dataSource SampleB.dataSource"]);
+        assert_eq!(point_resolution(&idx, &m, "m"), Resolution::NotFound);
+        let started = ("src/main/java/launch/Main.java", "package launch; import org.springframework.boot.SpringApplication; import checks.Sample;
+             public class Main { public static void main(String[] args) { SpringApplication.run(Sample.class, args); } }");
+        let (_, m) = model(&[sample, started, configs[0], configs[1], configs[2]]);
+        assert_eq!(conflicts(&m), vec!["SampleA.dataSource SampleB.dataSource"]);
+        let war = ("src/main/java/checks/Init.java", "package checks; import org.springframework.boot.builder.SpringApplicationBuilder;
+             public class Init extends org.springframework.boot.web.servlet.support.SpringBootServletInitializer {
+             protected SpringApplicationBuilder configure(SpringApplicationBuilder b) { return b.sources(Sample.class); } }");
+        let (_, m) = model(&[sample, war, configs[0], configs[1], configs[2]]);
+        assert_eq!(conflicts(&m), vec!["SampleA.dataSource SampleB.dataSource"]);
+    }
+
+    #[test]
+    fn beans_compete_only_inside_one_context() {
+        let files = [
+            ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }"),
+            ("src/main/java/app/Store.java", "package app; public interface Store {}"),
+            ("src/main/java/app/DbStore.java", "package app; @org.springframework.stereotype.Service class DbStore implements Store {}"),
+            ("src/main/java/app/MemStore.java", "package app; @org.springframework.stereotype.Service class MemStore implements Store {}"),
+            ("src/main/java/app/Uses.java", "package app; @org.springframework.stereotype.Service class Uses { Uses(Store store) {} }"),
+            // two test configurations, each the root of its own test's
+            // context (a test's scan registers them, for tests only)
+            ("src/test/java/conf/Scan.java", "package conf; @org.springframework.context.annotation.ComponentScan class Scan {}"),
+            ("src/test/java/conf/ConfA.java", "package conf; import org.springframework.context.annotation.*; @Configuration class ConfA { @Bean app.Store a() { return null; } }"),
+            ("src/test/java/conf/ConfB.java", "package conf; import org.springframework.context.annotation.*; @Configuration class ConfB { @Bean app.Store b() { return null; } }"),
+            ("src/test/java/conf/Security.java", "package conf; import org.springframework.context.annotation.*; @Configuration class Security { @Bean Object filter(app.Store testStore) { return null; } }"),
+            // a test component the application's scan picks up in a test run
+            ("src/test/java/app/TestUses.java", "package app; @org.springframework.stereotype.Service class TestUses { TestUses(Store anyStore) {} }"),
+        ];
+        let (idx, m) = model(&files);
+        assert!(matches!(point_resolution(&idx, &m, "store"), Resolution::Ambiguous(v) if v.len() == 2));
+        assert_eq!(point_resolution(&idx, &m, "testStore"), Resolution::Unknown);
+        assert!(matches!(point_resolution(&idx, &m, "anyStore"), Resolution::Ambiguous(v) if v.len() == 2));
+        // two applications in one module, each scanning its own package
+        let (idx, m) = model(&[
+            ("src/main/java/one/App.java", "package one; @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }"),
+            ("src/main/java/one/DbStore.java", "package one; @org.springframework.stereotype.Service class DbStore implements shared.Store {}"),
+            ("src/main/java/one/Uses.java", "package one; @org.springframework.stereotype.Service class Uses { Uses(shared.Store store) {} }"),
+            ("src/main/java/two/App.java", "package two; @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }"),
+            ("src/main/java/two/MemStore.java", "package two; @org.springframework.stereotype.Service class MemStore implements shared.Store {}"),
+            ("src/main/java/shared/Store.java", "package shared; public interface Store {}"),
+        ]);
+        assert_eq!(m.contexts.len(), 2);
+        assert!(!matches!(point_resolution(&idx, &m, "store"), Resolution::Ambiguous(_)));
+    }
+
+    #[test]
+    fn the_class_an_application_starts_from_shadows_a_scanned_namesake() {
+        let demo = ("src/main/java/com/x/demo/DemoApplication.java", "package com.x.demo; @org.springframework.boot.autoconfigure.SpringBootApplication public class DemoApplication { public static void main(String[] a) {} }");
+        let wrapper = ("src/main/java/com/x/wrapper/DemoApplication.java", "package com.x.wrapper; @org.springframework.boot.autoconfigure.SpringBootApplication(scanBasePackages = \"com.x\") public class DemoApplication { public static void main(String[] a) {} }");
+        let (_, m) = model(&[demo, wrapper]);
+        assert!(conflicts(&m).is_empty());
+        // a third application scanning both registers both by scanning: they clash;
+        // so does a @Bean method of the root's name
+        let third = ("src/main/java/com/Third.java", "package com; @org.springframework.boot.autoconfigure.SpringBootApplication public class Third { public static void main(String[] a) {} }");
+        let (_, m) = model(&[demo, wrapper, third]);
+        assert_eq!(conflicts(&m), vec!["DemoApplication DemoApplication"]);
+        let bean = ("src/main/java/com/x/demo/Beans.java", "package com.x.demo; import org.springframework.context.annotation.*; @Configuration class Beans { @Bean Object demoApplication() { return null; } }");
+        let (_, m) = model(&[demo, bean]);
+        assert_eq!(conflicts(&m), vec!["Beans.demoApplication DemoApplication"]);
+    }
+
+    #[test]
+    fn an_unresolved_annotation_is_the_one_its_import_names() {
+        // no jar for JAX-RS or CDI: @Produces is JAX-RS's media type, not a producer
+        let resource = |import: &str| {
+            format!(
+                "package r; import jakarta.enterprise.context.ApplicationScoped; import jakarta.inject.Inject; {import}
+                 public class User {{}}
+                 @ApplicationScoped class UserResource {{
+                     @Produces public User echoUser(User echo) {{ return echo; }}
+                     @Produces public User user() {{ return new User(); }}
+                 }}
+                 @ApplicationScoped class Consumer {{ @Inject User user; }}"
+            )
+        };
+        let jaxrs = resource("import jakarta.ws.rs.Produces;");
+        let (idx, m) = model(&[("r/UserResource.java", &jaxrs)]);
+        assert!(m.beans.iter().all(|b| !matches!(b.source, BeanSource::FactoryMethod(_))));
+        assert!(!matches!(point_resolution(&idx, &m, "user"), Resolution::Ambiguous(_)));
+        // CDI's own, or a simple name the imports do not place: still producers
+        for import in ["import jakarta.enterprise.inject.Produces;", "import jakarta.enterprise.inject.*;"] {
+            let cdi = resource(import);
+            let (idx, m) = model(&[("r/UserResource.java", &cdi)]);
+            assert!(matches!(point_resolution(&idx, &m, "user"), Resolution::Ambiguous(v) if v.len() == 2), "{import}");
+        }
+        // HK2's @Service and @Inject are not Spring's or JSR-330's
+        let app = ("src/main/java/g/App.java", "package g; @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }");
+        let hk2 = ("src/main/java/g/Container.java", "package g; import org.jvnet.hk2.annotations.Service; import org.jvnet.hk2.annotations.Optional;
+             interface Listeners {} @Service class Container { @jakarta.inject.Inject Listeners listeners; }");
+        let (_, m) = model(&[app, hk2]);
+        assert!(m.bean_of_class("g.Container").is_none());
+        let spring = ("src/main/java/g/Container.java", "package g; import org.springframework.stereotype.Service;
+             interface Listeners {} @Service class Container { @jakarta.inject.Inject Listeners listeners; }");
+        let (idx, m) = model(&[app, spring]);
+        assert_eq!(point_resolution(&idx, &m, "listeners"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn a_resource_reference_is_a_bean_lookup_only_in_spring() {
+        let ee = "package g; import jakarta.annotation.Resource; import jakarta.ejb.Singleton; import jakarta.enterprise.context.ApplicationScoped;
+             public interface Group {} interface RegistryFactory {}
+             @ApplicationScoped class LegacyGroupBean implements Group {
+                 @Resource(name = \"clustering/group\") private Group group;
+                 @Resource(name = \"clustering/registry\") private RegistryFactory factory;
+                 @jakarta.inject.Inject private RegistryFactory injected;
+             }";
+        let (idx, m) = model(&[("g/LegacyGroupBean.java", ee)]);
+        assert!(m.points.iter().all(|p| p.name == "injected"));
+        assert_eq!(point_resolution(&idx, &m, "injected"), Resolution::NotFound);
+        // Spring resolves @Resource to beans: still judged
+        let spring = ("src/main/java/s/A.java", "package s; import jakarta.annotation.Resource;
+             interface Group {} @org.springframework.stereotype.Service class GroupBean implements Group {}
+             @org.springframework.stereotype.Service class Uses { @Resource(name = \"clustering/group\") private Group group; }");
+        let app = ("src/main/java/s/App.java", "package s; @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }");
+        let (idx, m) = model(&[app, spring]);
+        assert!(matches!(point_resolution(&idx, &m, "group"), Resolution::QualifierNotFound { .. }));
+    }
+
+    #[test]
+    fn a_plain_class_may_be_a_cdi_bean() {
+        // bean discovery mode "all" (an empty beans.xml a test deployment
+        // adds) makes it one; the model does not read beans.xml
+        let bean = ("src/main/java/v/MyBean2.java", "package v; import javax.enterprise.context.RequestScoped; import javax.inject.Inject;
+             @RequestScoped public class MyBean2 { public MyBean2() {} @Inject public MyBean2(MyParameter value, Missing missing, Port port) {} }");
+        let rest = [
+            ("src/main/java/v/MyParameter.java", "package v; public class MyParameter { public String value; }"),
+            ("src/main/java/v/Missing.java", "package v; public interface Missing {}"),
+            // no usable constructor: never a bean
+            ("src/main/java/v/Port.java", "package v; public class Port { public Port(String host) {} }"),
+        ];
+        let (idx, m) = model(&[bean, rest[0], rest[1], rest[2]]);
+        assert_eq!(point_resolution(&idx, &m, "value"), Resolution::Unknown);
+        assert_eq!(point_resolution(&idx, &m, "missing"), Resolution::NotFound);
+        assert_eq!(point_resolution(&idx, &m, "port"), Resolution::NotFound);
+        // without CDI (JSR-330 in a Micronaut-style project) a plain class is no bean
+        let jsr = ("src/main/java/v/MyBean2.java", "package v; import jakarta.inject.Inject; @jakarta.inject.Singleton public class MyBean2 { @Inject public MyBean2(MyParameter value) {} }");
+        let (idx, m) = model(&[jsr, rest[0]]);
+        assert_eq!(point_resolution(&idx, &m, "value"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn an_ejb_session_bean_may_provide_its_type() {
+        // (fixed by #70; kept as the regression test of the triage's reproducer)
+        let files = [
+            ("e/Ejb.java", "package e; import jakarta.ejb.Stateless; @Stateless public class Ejb {}"),
+            ("e/StartUp.java", "package e; import jakarta.ejb.Singleton; import jakarta.ejb.Startup; import jakarta.inject.Inject;
+             @Singleton @Startup public class StartUp { @Inject private Ejb ejb; }"),
+            ("e/Uses.java", "package e; @jakarta.enterprise.context.ApplicationScoped class Uses { @jakarta.inject.Inject Ejb ejb; @jakarta.inject.Inject Missing missing; } interface Missing {}"),
+        ];
+        let (idx, m) = model(&files);
+        assert!(m.points.iter().filter(|p| p.name == "ejb").all(|p| m.resolve(&idx, p, false) == Resolution::Unknown));
+        assert_eq!(point_resolution(&idx, &m, "missing"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn an_interface_extending_an_unresolved_type_may_be_implemented_by_its_library() {
+        let app = ("src/main/java/com/x/App.java", "package com.x; @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] a) {} }");
+        let files = [
+            app,
+            ("src/main/java/com/x/Employee.java", "package com.x; public class Employee {}"),
+            // a store module's base and one reached through a project @NoRepositoryBean interface
+            ("src/main/java/com/x/EmployeeRepository.java", "package com.x; import org.springframework.data.cassandra.repository.ReactiveCassandraRepository;
+             public interface EmployeeRepository extends ReactiveCassandraRepository<Employee, Integer> {}"),
+            ("src/main/java/com/x/BaseRepository.java", "package com.x; import org.springframework.data.jpa.repository.JpaRepository; import org.springframework.data.repository.NoRepositoryBean;
+             @NoRepositoryBean public interface BaseRepository<T, I> extends JpaRepository<T, I> {}"),
+            ("src/main/java/com/x/ArticleRepository.java", "package com.x; public interface ArticleRepository extends BaseRepository<Employee, Long> {}"),
+            // project interfaces all the way down: nothing implements it
+            ("src/main/java/com/x/Port.java", "package com.x; public interface Port extends Base {} interface Base extends java.io.Serializable {}"),
+            ("src/main/java/com/x/Service.java", "package com.x; @org.springframework.stereotype.Component public class Service { Service(EmployeeRepository employees, ArticleRepository articles, Port port) {} }"),
+        ];
+        let (idx, m) = model(&files);
+        assert_eq!(point_resolution(&idx, &m, "employees"), Resolution::Unknown);
+        assert_eq!(point_resolution(&idx, &m, "articles"), Resolution::Unknown);
+        assert_eq!(point_resolution(&idx, &m, "port"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn beans_registered_in_ways_spring_reads_and_the_model_must_too() {
+        let app = ("src/main/java/com/x/App.java", "package com.x; @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] a) {} }");
+        // a FactoryBean bean is its product under its name, without Spring's jar
+        let factory = [
+            app,
+            ("src/main/java/com/x/Engine.java", "package com.x; public interface Engine {}"),
+            ("src/main/java/com/x/EngineFactoryBean.java", "package com.x; import org.springframework.beans.factory.FactoryBean;
+             public class EngineFactoryBean implements FactoryBean<Engine> { public Engine getObject() { return null; } public Class<?> getObjectType() { return Engine.class; } }"),
+            ("src/main/java/com/x/EngineConfig.java", "package com.x; import org.springframework.context.annotation.*;
+             @Configuration public class EngineConfig {
+                 @Bean(name = \"engine\") public EngineFactoryBean engineFactoryBean() { return new EngineFactoryBean(); }
+                 @Bean public String engineName(Engine engine) { return null; }
+                 @Bean public String other(@org.springframework.beans.factory.annotation.Qualifier(\"engine\") Engine named, Missing missing) { return null; }
+             }
+             interface Missing {}"),
+        ];
+        let (idx, m) = model(&factory);
+        assert!(matches!(point_resolution(&idx, &m, "engine"), Resolution::Unique(_)));
+        assert!(matches!(point_resolution(&idx, &m, "named"), Resolution::Unique(_)));
+        assert_eq!(point_resolution(&idx, &m, "missing"), Resolution::NotFound);
+        assert!(m.name_conflicts().is_empty());
+        // a scanner run in code registers classes by filters the model cannot read
+        let boundary = [
+            app,
+            ("src/main/java/com/x/Boundary.java", "package com.x; public interface Boundary {} class Interactor implements Boundary {}"),
+            ("src/main/java/com/x/Controller.java", "package com.x; @org.springframework.stereotype.Controller class Controller { Controller(Boundary boundary) {} }"),
+        ];
+        let (idx, m) = model(&boundary);
+        assert_eq!(point_resolution(&idx, &m, "boundary"), Resolution::NotFound);
+        let scanner = ("src/main/java/com/x/Scan.java", "package com.x; import org.springframework.context.annotation.ClassPathBeanDefinitionScanner;
+             class Scan { void scan(Object registry) { new ClassPathBeanDefinitionScanner(null).scan(\"com.x\"); } }");
+        let (idx, m) = model(&[boundary[0], boundary[1], boundary[2], scanner]);
+        assert_eq!(point_resolution(&idx, &m, "boundary"), Resolution::Unknown);
+        // (in another module, it does not scan this one)
+        let elsewhere = ("tools/src/main/java/t/Scan.java", "package t; import org.springframework.context.annotation.ClassPathBeanDefinitionScanner; class Scan { ClassPathBeanDefinitionScanner s; }");
+        let (idx, m) = model(&[boundary[0], boundary[1], boundary[2], elsewhere]);
+        assert_eq!(point_resolution(&idx, &m, "boundary"), Resolution::NotFound);
+        // an HTTP service interface is a bean only under @ImportHttpServices
+        let client = [
+            app,
+            ("src/main/java/com/x/JoyClient.java", "package com.x; @org.springframework.web.service.annotation.HttpExchange(\"/joy\") public interface JoyClient {}"),
+            ("src/main/java/com/x/HttpConfig.java", "package com.x; import org.springframework.context.annotation.*; @Configuration class HttpConfig { @Bean JoyClient joyClient() { return null; } }"),
+            ("src/main/java/com/x/Uses.java", "package com.x; @org.springframework.stereotype.Controller class Uses { Uses(JoyClient joy) {} }"),
+        ];
+        let (idx, m) = model(&client);
+        assert!(matches!(point_resolution(&idx, &m, "joy"), Resolution::Unique(_)));
+        // (an import of other services does not make it one)
+        let others = ("src/main/java/com/x/Clients.java", "package com.x; @org.springframework.web.service.registry.ImportHttpServices(group = \"books\", types = Books.class) @org.springframework.context.annotation.Configuration class Clients {} interface Books {}");
+        let (idx, m) = model(&[client[0], client[1], client[2], client[3], others]);
+        assert!(matches!(point_resolution(&idx, &m, "joy"), Resolution::Unique(_)));
+        for import in ["types = JoyClient.class", "basePackages = \"com.x\""] {
+            let imported = format!("package com.x; @org.springframework.web.service.registry.ImportHttpServices({import}) @org.springframework.context.annotation.Configuration class Clients {{}}");
+            let (idx, m) = model(&[client[0], client[1], client[3], ("src/main/java/com/x/Clients.java", &imported)]);
+            assert!(matches!(point_resolution(&idx, &m, "joy"), Resolution::Unique(_)), "{import}");
+            // and with the @Bean method too, two beans
+            let (idx, m) = model(&[client[0], client[1], client[2], client[3], ("src/main/java/com/x/Clients.java", &imported)]);
+            assert!(matches!(point_resolution(&idx, &m, "joy"), Resolution::Ambiguous(_)), "{import}");
+        }
+    }
+
+    #[test]
+    fn an_application_started_from_xml_has_beans_the_model_does_not_read() {
+        // (fixed by #70 and by contexts; kept as the regression test of the triage's reproducer)
+        let controller = |starter: &str| {
+            format!(
+                "package agent; import org.springframework.beans.factory.annotation.Autowired;
+                 @org.springframework.stereotype.Component public class Controller {{
+                     @Autowired public Controller(Registry registry) {{}}
+                     public static void main(String[] args) {{ {starter} }}
+                 }}"
+            )
+        };
+        let rest = [
+            ("src/main/java/agent/Registry.java", "package agent; public interface Registry {}"),
+            ("src/main/java/agent/DefaultRegistry.java", "package agent; public class DefaultRegistry implements Registry {}"),
+        ];
+        let xml = controller("new org.springframework.context.support.ClassPathXmlApplicationContext(\"applicationContext.xml\");");
+        let (idx, m) = model(&[("src/main/java/agent/Controller.java", &xml), rest[0], rest[1]]);
+        assert_eq!(point_resolution(&idx, &m, "registry"), Resolution::Unknown);
+        // started from the class itself, the context is the class's: judged
+        let annotated = controller("new org.springframework.context.annotation.AnnotationConfigApplicationContext(Controller.class);");
+        let (idx, m) = model(&[("src/main/java/agent/Controller.java", &annotated), rest[0], rest[1]]);
+        assert_eq!(point_resolution(&idx, &m, "registry"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn roots_and_modules_come_from_what_spring_is_handed() {
+        // a component the starting file names (ctx.getBean) is not a root
+        let main = ("src/main/java/a/Main.java", "package a; import org.springframework.context.annotation.*;
+             public class Main { public static void main(String[] args) { new AnnotationConfigApplicationContext(Config.class).getBean(Worker.class); } }");
+        let config = ("src/main/java/a/Config.java", "package a; @org.springframework.context.annotation.Configuration class Config {}");
+        let worker = ("src/main/java/a/Worker.java", "package a; interface Missing {} @org.springframework.stereotype.Service class Worker { Worker(Missing m) {} }");
+        let (idx, m) = model(&[main, config, worker]);
+        assert_eq!(m.contexts.iter().map(|c| simple_name_of(&c.root)).collect::<Vec<_>>(), vec!["Config"]);
+        assert_eq!(point_resolution(&idx, &m, "m"), Resolution::Unknown);
+        // an @Import (here fully qualified, no import edge) puts the imported
+        // class's module on the classpath: what that class scans is judged
+        let app = ("app/src/main/java/a/App.java", "package a; @org.springframework.boot.autoconfigure.SpringBootApplication @org.springframework.context.annotation.Import(b.LibConfig.class)
+             public class App { public static void main(String[] args) {} }");
+        let lib = ("lib/src/main/java/b/LibConfig.java", "package b; @org.springframework.context.annotation.Configuration @org.springframework.context.annotation.ComponentScan public class LibConfig {}");
+        let svc = ("lib/src/main/java/b/Svc.java", "package b; interface Missing {} @org.springframework.stereotype.Service class Svc { Svc(Missing m) {} }");
+        let (idx, m) = model(&[app, lib, svc]);
+        assert_eq!(point_resolution(&idx, &m, "m"), Resolution::NotFound);
+    }
+
     #[test]
     fn a_composed_factory_annotation_keeps_the_bean_metadata_it_carries() {
         // a project annotation carrying @Bean("special") names the bean
@@ -2803,7 +3694,7 @@ mod tests {
                @Chosen Hose mainHose() { return null; } @Bean Hose spareHose() { return null; }
                @Plain Valve leftValve() { return null; } @Bean Valve rightValve() { return null; } }
              @Service class Uses { Uses(@Qualifier(\"special\") Pipe special, @Qualifier(\"other\") Pipe other, Hose hose, Valve valve) {} }
-             @org.springframework.boot.autoconfigure.SpringBootApplication class App {}"),
+             @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }"),
         ]);
         let special = point_resolution(&idx, &m, "special");
         assert!(matches!(special, Resolution::Unique(i) if m.beans[i].name == "special"), "{special:?}");
@@ -2860,7 +3751,7 @@ mod tests {
         assert_eq!(ports(Some(replacement)), Resolution::Unknown);
         let conflicts = |extra: Option<(&'static str, &'static str)>| {
             let mut files = vec![
-                ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication class App {}"),
+                ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }"),
                 ("src/main/java/app/a/Exporter.java", "package app.a; @org.springframework.stereotype.Component public class Exporter {}"),
                 ("src/main/java/app/b/Exporter.java", "package app.b; @org.springframework.stereotype.Component public class Exporter {}"),
             ];
@@ -2873,7 +3764,7 @@ mod tests {
 
     #[test]
     fn an_annotation_filter_registers_in_its_own_source_set() {
-        let app = ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication class App {}");
+        let app = ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }");
         let port = ("src/main/java/app/Port.java", "package app; public interface Port {}");
         let uses = ("src/main/java/app/Uses.java", "package app; import org.springframework.stereotype.*; @Service class Uses { Uses(Port port) {} }");
         let test_uses = ("src/test/java/app/TestUses.java", "package app; import org.springframework.stereotype.*; @Service class TestUses { TestUses(Port testPort) {} }");
@@ -2896,7 +3787,7 @@ mod tests {
 
     #[test]
     fn an_unreached_import_registers_in_the_source_set_of_the_importing_class() {
-        let app = ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication class App {}");
+        let app = ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }");
         let port = ("src/main/java/app/Port.java", "package app; public interface Port {}");
         let uses = ("src/main/java/app/Uses.java", "package app; import org.springframework.stereotype.*; @Service class Uses { Uses(Port port) {} }");
         let test_uses = ("src/test/java/app/TestUses.java", "package app; import org.springframework.stereotype.*; @Service class TestUses { TestUses(Port testPort) {} }");
@@ -2916,7 +3807,7 @@ mod tests {
 
     #[test]
     fn a_registration_known_to_make_no_bean_is_evidence_of_no_bean() {
-        let app = ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication class App {}");
+        let app = ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }");
         let uses = ("src/main/java/app/Uses.java", "package app; import org.springframework.stereotype.*; @Service class Uses { Uses(Port port) {} }");
         let resolution = |files: &[(&'static str, &'static str)]| {
             let mut all = vec![app, uses];
@@ -2950,7 +3841,7 @@ mod tests {
              interface Pipe {} interface Hose {}
              @Configuration class Parts { @NamedBean(\"foo\") Pipe pipe() { return null; } @SameBean(name = \"bar\", note = \"x\") Hose hose() { return null; } }
              @Service class Uses { Uses(@Qualifier(\"foo\") Pipe foo, @Qualifier(\"bar\") Hose bar, @Qualifier(\"x\") Hose x) {} }
-             @org.springframework.boot.autoconfigure.SpringBootApplication class App {}"),
+             @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }"),
         ]);
         assert!(matches!(point_resolution(&idx, &m, "foo"), Resolution::Unique(i) if m.beans[i].name == "foo"));
         assert!(matches!(point_resolution(&idx, &m, "bar"), Resolution::Unique(i) if m.beans[i].name == "bar"));
@@ -2981,7 +3872,7 @@ mod tests {
             ("src/main/java/app/A.java", "package app; import org.springframework.context.annotation.*;
              interface Pipe {} interface Hose {}
              @Configuration class Parts { @Exported(\"one\") Pipe pipe() { return null; } @Exported(\"two\") Hose hose() { return null; } }
-             @org.springframework.boot.autoconfigure.SpringBootApplication class App {}"),
+             @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }"),
         ]);
         let names: Vec<&str> = m.beans.iter().filter(|b| matches!(b.source, BeanSource::FactoryMethod(_))).map(|b| b.name.as_str()).collect();
         assert_eq!(names, ["one", "two"]);
@@ -2994,7 +3885,7 @@ mod tests {
              interface Pipe {}
              @Configuration class Parts { @Fixed(\"wrong\") Pipe pipe() { return null; } }
              @Service class Uses { Uses(@Qualifier(\"fixed\") Pipe fixed, @Qualifier(\"wrong\") Pipe wrong) {} }
-             @org.springframework.boot.autoconfigure.SpringBootApplication class App {}"),
+             @org.springframework.boot.autoconfigure.SpringBootApplication class App { public static void main(String[] args) {} }"),
         ]);
         assert!(matches!(point_resolution(&idx, &m, "fixed"), Resolution::Unique(_)));
         assert!(matches!(point_resolution(&idx, &m, "wrong"), Resolution::QualifierNotFound { .. }));
@@ -3031,5 +3922,157 @@ mod tests {
         let edge = |from: &str, to: &str| m.ctor_edges.iter().any(|(a, b, _)| &**a == from && &**b == to);
         assert!(edge("app.DefaultPort", "app.A"));
         assert!(!edge("app.A", "app.DefaultPort"), "{:?}", m.ctor_edges);
+    }
+
+    #[test]
+    fn a_context_is_what_its_startup_call_is_handed() {
+        let configs = [
+            ("src/main/java/app/A.java", "package app; import org.springframework.context.annotation.*; @Configuration public class A { @Bean Object job() { return null; } }"),
+            ("src/main/java/app/B.java", "package app; import org.springframework.context.annotation.*; @Configuration public class B { @Bean Object job() { return null; } }"),
+            ("src/main/java/app/Combined.java", "package app; @org.springframework.context.annotation.Configuration @org.springframework.context.annotation.Import({A.class, B.class}) public class Combined {}"),
+        ];
+        let with = |main: &'static str| {
+            let mut v = vec![("src/main/java/launch/Main.java", main)];
+            v.extend_from_slice(&configs);
+            model(&v)
+        };
+        // S1: a configuration the file merely names (a log line) is no root
+        let (_, m) = with("package launch; import app.*; import org.springframework.boot.SpringApplication;
+             public class Main { public static void main(String[] args) { SpringApplication.run(A.class, args); System.out.println(Combined.class.getName()); } }");
+        assert!(conflicts(&m).is_empty(), "{:?}", conflicts(&m));
+        // S3: all sources of one startup call form one context
+        let (_, m) = with("package launch; import app.*; import org.springframework.boot.SpringApplication;
+             public class Main { public static void main(String[] args) { new SpringApplication(A.class, B.class).run(args); } }");
+        assert_eq!(conflicts(&m), vec!["A.job B.job"]);
+        let (_, m) = with("package launch; import org.springframework.boot.builder.SpringApplicationBuilder;
+             public class Main { public static void main(String[] args) { new SpringApplicationBuilder(app.A.class).sources(app.B.class).run(args); } }");
+        assert_eq!(conflicts(&m), vec!["A.job B.job"]);
+        // S2: a class literal qualified in the call, not imported
+        let boot = [
+            ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication public class App {}"),
+            ("src/main/java/app/Uses.java", "package app; interface Missing {} @org.springframework.stereotype.Service class Uses { Uses(Missing m) {} }"),
+            ("src/main/java/launch/Main.java", "package launch; public class Main { public static void main(String[] args) { org.springframework.boot.SpringApplication.run(app.App.class, args); } }"),
+        ];
+        let (idx, m) = model(&boot);
+        assert_eq!(point_resolution(&idx, &m, "m"), Resolution::NotFound);
+        // a builder made elsewhere: its receiver is not certainly Spring's,
+        // so the roots are unknown and nothing is concluded
+        let (_, m) = with("package launch; import app.*;
+             public class Main { public static void main(String[] args) { Support.builder().sources(A.class, B.class).build(args).run(args); } }");
+        assert!(conflicts(&m).is_empty());
+        // a context built step by step: register on the variable it is held in
+        let (_, m) = with("package launch; import app.*; import org.springframework.context.annotation.AnnotationConfigApplicationContext;
+             public class Main { public static void main(String[] args) { var ctx = new AnnotationConfigApplicationContext(); ctx.register(A.class); ctx.register(B.class); ctx.refresh(); } }");
+        assert_eq!(conflicts(&m), vec!["A.job B.job"]);
+        // a servlet initializer's root configuration classes
+        let init = [
+            ("src/main/java/web/Init.java", "package web; public class Init extends org.springframework.web.servlet.support.AbstractAnnotationConfigDispatcherServletInitializer {
+                 protected Class<?>[] getRootConfigClasses() { return new Class<?>[] { app.A.class, app.B.class }; }
+                 protected Class<?>[] getServletConfigClasses() { return null; } }"),
+        ];
+        let mut v = vec![init[0]];
+        v.extend_from_slice(&configs);
+        let (_, m) = model(&v);
+        assert_eq!(conflicts(&m), vec!["A.job B.job"]);
+    }
+
+    #[test]
+    fn a_scan_carried_by_a_project_annotation_is_a_scan() {
+        // S4: @EnableServices carries @ComponentScan("services")
+        let files = [
+            ("src/main/java/app/EnableServices.java", "package app; @java.lang.annotation.Retention(java.lang.annotation.RetentionPolicy.RUNTIME)
+             @org.springframework.context.annotation.ComponentScan(\"services\") public @interface EnableServices {}"),
+            ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication @EnableServices public class App { public static void main(String[] args) {} }"),
+            ("src/main/java/services/Svc.java", "package services; interface Missing {} @org.springframework.stereotype.Service class Svc { Svc(Missing m) {} }"),
+        ];
+        let (idx, m) = model(&files);
+        assert_eq!(point_resolution(&idx, &m, "m"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn only_a_scanned_namesake_of_the_root_is_skipped() {
+        // S5: an imported configuration named like the root clashes
+        let files = [
+            ("src/main/java/app/App.java", "package app; @org.springframework.boot.autoconfigure.SpringBootApplication @org.springframework.context.annotation.Import(other.Config.class)
+             public class App { public static void main(String[] args) {} }"),
+            ("src/main/java/other/Config.java", "package other; @org.springframework.context.annotation.Configuration(\"app\") public class Config {}"),
+        ];
+        let (_, m) = model(&files);
+        assert_eq!(conflicts(&m), vec!["App Config"]);
+    }
+
+    #[test]
+    fn a_project_annotation_named_configuration_marks_no_root() {
+        let files = [
+            ("src/main/java/com/acme/Configuration.java", "package com.acme; public @interface Configuration {}"),
+            // an initializer carrying a project annotation named like Spring's
+            ("src/main/java/app/Init.java", "package app; @com.acme.Configuration public class Init extends org.springframework.boot.web.servlet.support.SpringBootServletInitializer {}"),
+            ("src/main/java/app/Settings.java", "package app; @com.acme.Configuration public class Settings {}"),
+        ];
+        // it is no Spring configuration: no context
+        let (_, m) = model(&files);
+        assert!(m.contexts.is_empty());
+        let spring = ("src/main/java/app/Init.java", "package app; @org.springframework.context.annotation.Configuration public class Init extends org.springframework.boot.web.servlet.support.SpringBootServletInitializer {}");
+        let (_, m) = model(&[files[0], spring, files[2]]);
+        assert_eq!(m.contexts.len(), 1);
+    }
+
+    #[test]
+    fn an_uncertain_start_names_no_root() {
+        // the application annotation's own main would be a root, but the file
+        // starts something the stub could not read with certainty
+        let files = [
+            ("src/main/java/app/App.java", "package app; import org.springframework.boot.builder.SpringApplicationBuilder;
+             @org.springframework.boot.autoconfigure.SpringBootApplication public class App {
+                 public static void main(String[] args) { new SpringApplicationBuilder(App.class).child(Web.class).run(args); } }"),
+            ("src/main/java/app/Web.java", "package app; @org.springframework.context.annotation.Configuration public class Web {}"),
+            ("src/main/java/app/Uses.java", "package app; interface Missing {} @org.springframework.stereotype.Service class Uses { Uses(Missing m) {} }"),
+        ];
+        let (idx, m) = model(&files);
+        assert!(m.contexts.is_empty());
+        assert_eq!(point_resolution(&idx, &m, "m"), Resolution::Unknown);
+        // a library class among the sources: the roots are unknown too
+        let lib = ("src/main/java/app/App.java", "package app; import org.springframework.boot.SpringApplication;
+             @org.springframework.boot.autoconfigure.SpringBootApplication public class App {
+                 public static void main(String[] args) { SpringApplication.run(new Class<?>[] { App.class, com.acme.LibConfig.class }, args); } }");
+        let (idx, m) = model(&[lib, files[2]]);
+        assert_eq!(point_resolution(&idx, &m, "m"), Resolution::Unknown);
+        // the plain case stays certain
+        let plain = ("src/main/java/app/App.java", "package app; import org.springframework.boot.SpringApplication;
+             @org.springframework.boot.autoconfigure.SpringBootApplication public class App {
+                 public static void main(String[] args) { SpringApplication.run(App.class, args); } }");
+        let (idx, m) = model(&[plain, files[2]]);
+        assert_eq!(point_resolution(&idx, &m, "m"), Resolution::NotFound);
+    }
+
+    #[test]
+    fn an_open_start_holds_its_classes_but_concludes_no_clash() {
+        // the application handed to a library helper (JHipster's
+        // DefaultProfileUtil.addDefaultProfile(app)) may get more sources or
+        // overriding: its classes are held, but no clash, no ambiguity and
+        // no absence is concluded (absence needs a closed context)
+        let app = ("src/main/java/app/App.java", "package app; import org.springframework.boot.SpringApplication;
+             @org.springframework.boot.autoconfigure.SpringBootApplication public class App {
+                 public static void main(String[] args) { var a = new SpringApplication(App.class); Profiles.addDefault(a); a.run(args); } }");
+        let files = [
+            app,
+            ("src/main/java/app/Uses.java", "package app; interface Missing {} interface Port {} @org.springframework.stereotype.Service class Adapter implements Port {}
+                @org.springframework.stereotype.Service class Uses { Uses(Missing m, @org.springframework.beans.factory.annotation.Qualifier(\"other\") Port q) {} }"),
+            ("src/main/java/app/x/Same.java", "package app.x; @org.springframework.stereotype.Service public class Same {}"),
+            ("src/main/java/app/y/Same.java", "package app.y; @org.springframework.stereotype.Service public class Same {}"),
+        ];
+        let (idx, m) = model(&files);
+        assert_eq!(m.contexts.len(), 1);
+        assert!(m.contexts[0].open);
+        assert_eq!(point_resolution(&idx, &m, "m"), Resolution::Unknown);
+        assert_eq!(point_resolution(&idx, &m, "q"), Resolution::Unknown);
+        assert!(m.name_conflicts().is_empty());
+        // the same application started plainly: the absence and the clash are certain
+        let plain = ("src/main/java/app/App.java", "package app; import org.springframework.boot.SpringApplication;
+             @org.springframework.boot.autoconfigure.SpringBootApplication public class App { public static void main(String[] args) { SpringApplication.run(App.class, args); } }");
+        let (idx, m) = model(&[plain, files[1], files[2], files[3]]);
+        assert_eq!(point_resolution(&idx, &m, "m"), Resolution::NotFound);
+        assert!(matches!(point_resolution(&idx, &m, "q"), Resolution::QualifierNotFound { .. }));
+        assert_eq!(m.name_conflicts().len(), 1);
     }
 }

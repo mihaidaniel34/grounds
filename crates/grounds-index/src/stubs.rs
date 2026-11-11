@@ -299,6 +299,10 @@ pub struct FileStub {
     /// edits keep this stable.
     pub signature_hash: u64,
     pub has_syntax_errors: bool,
+    /// Spring application contexts this file starts (see `startup`). Not
+    /// part of the signature: a change makes the DI model stale, nothing else.
+    #[serde(default)]
+    pub startups: crate::startup::Startups,
     /// The `lombok.config` settings the file was extracted with, when not
     /// the defaults: local classes are extracted later, with the same.
     pub lombok: Option<crate::lombok::LombokConfig>,
@@ -399,6 +403,7 @@ pub fn extract_with(file: &ParsedFile, lombok: &crate::lombok::LombokConfig) -> 
     constructed.sort();
     constructed.dedup();
     stub.constructed_names = constructed;
+    stub.startups = crate::startup::extract(root, src, &stub.imports);
     stub.signature_hash = signature_hash(&stub);
     stub
 }

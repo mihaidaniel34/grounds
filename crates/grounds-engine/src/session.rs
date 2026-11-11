@@ -447,6 +447,8 @@ impl Session {
             // refresh_file rebuilds the DI model itself; batch it below instead
             let key = path_key(&p);
             let old = self.project.index.file(&key).map(|s| s.signature_hash);
+            // (the context starts a launcher makes are read with its stub)
+            let old_startups = self.project.index.file(&key).map(|s| s.startups.clone());
             if let Some(stamp) = stamp {
                 // a time seen at an earlier look keeps the margin it began then
                 let stamp = stamp.after(self.stamps.get(&p));
@@ -458,7 +460,7 @@ impl Session {
                     // positions change with body-only edits
                     let decl_change = old != Some(stub.signature_hash);
                     // the DI model stores positions of beans and injection points
-                    di_stale |= decl_change || self.project.di.beans.iter().any(|b| b.file.as_deref() == Some(&*key)) || self.project.di.points.iter().any(|pt| pt.file.as_deref() == Some(&*key));
+                    di_stale |= decl_change || old_startups.as_ref() != Some(&stub.startups) || self.project.di.beans.iter().any(|b| b.file.as_deref() == Some(&*key)) || self.project.di.points.iter().any(|pt| pt.file.as_deref() == Some(&*key));
                     self.project.index.set_file(key, stub);
                     if decl_change {
                         any_decl_change = true;

@@ -42,7 +42,7 @@ fn imported_and_unscanned_configurations() {
     let dir = std::env::temp_dir().join(format!("grounds-di-test-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     write(&dir, "build.gradle", "plugins { id 'java' }\n");
-    write(&dir, "src/main/java/app/App.java", "package app;\nimport org.springframework.boot.autoconfigure.SpringBootApplication;\nimport org.springframework.context.annotation.Import;\n@SpringBootApplication\n@Import(other.ExternalConfig.class)\npublic class App {}\n");
+    write(&dir, "src/main/java/app/App.java", "package app;\nimport org.springframework.boot.autoconfigure.SpringBootApplication;\nimport org.springframework.context.annotation.Import;\n@SpringBootApplication\n@Import(other.ExternalConfig.class)\npublic class App { public static void main(String[] args) {} }\n");
     write(&dir, "src/main/java/app/Consumer.java", "package app;\nimport org.springframework.stereotype.Service;\n@Service\nclass Consumer {\n    Consumer(other.Store store,\n             other.Cache cache,\n             other.Missing missing) {}\n}\n");
     // imported explicitly: a real bean
     write(&dir, "src/main/java/other/ExternalConfig.java", "package other;\nimport org.springframework.context.annotation.*;\n@Configuration\npublic class ExternalConfig {\n    @Bean public Store store() { return new Store(); }\n}\n");
@@ -61,7 +61,7 @@ fn registration_follows_spring() {
     let dir = std::env::temp_dir().join(format!("grounds-di-reg-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     write(&dir, "build.gradle", "plugins { id 'java' }\n");
-    write(&dir, "src/main/java/app/App.java", "package app;\nimport org.springframework.boot.autoconfigure.SpringBootApplication;\nimport org.springframework.context.annotation.Import;\n@SpringBootApplication\n@Import(other.Plain.class)\npublic class App {}\n");
+    write(&dir, "src/main/java/app/App.java", "package app;\nimport org.springframework.boot.autoconfigure.SpringBootApplication;\nimport org.springframework.context.annotation.Import;\n@SpringBootApplication\n@Import(other.Plain.class)\npublic class App { public static void main(String[] args) {} }\n");
     // @Import on a class that is never registered has no effect
     write(&dir, "src/main/java/app/Unused.java", "package app;\n@org.springframework.context.annotation.Import(other.External.class)\nclass Unused {}\n");
     write(&dir, "src/main/java/app/Store.java", "package app;\npublic interface Store {}\n");

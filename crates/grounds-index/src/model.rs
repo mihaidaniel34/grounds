@@ -582,13 +582,21 @@ impl AnnotationInfo {
     pub fn value(&self) -> Option<&AnnotationValue> {
         self.arg("value")
     }
-    /// Match against a fully qualified name; unresolved annotations match by
-    /// simple name.
+    /// Match against a fully qualified name. An unresolved annotation
+    /// written with a simple name matches by simple name (its jar may be
+    /// missing); one whose name says where it comes from (written
+    /// qualified, or qualified by the file's import) matches only that
+    /// name: `jakarta.ws.rs.Produces` is not `jakarta.enterprise.inject.Produces`.
     pub fn is(&self, fqn: &str) -> bool {
-        if self.resolved {
+        if self.resolved || &*self.name == fqn {
             &*self.name == fqn
+        } else if self.name.contains('.') {
+            // written from an outer class (`ComponentScan.Filter`): a suffix;
+            // from a package (`inject.Inject`): the whole name, compared above
+            let outer = self.name.starts_with(|c: char| c.is_uppercase());
+            outer && fqn.len() > self.name.len() && fqn.ends_with(&*self.name) && fqn.as_bytes()[fqn.len() - self.name.len() - 1] == b'.'
         } else {
-            &*self.name == fqn || simple_name_of(&self.name) == simple_name_of(fqn)
+            simple_name_of(&self.name) == simple_name_of(fqn)
         }
     }
 }
@@ -746,7 +754,26 @@ impl ClassInfo {
 
 #[cfg(test)]
 mod tests {
-    use super::simple_name_of;
+    use super::{simple_name_of, AnnotationInfo};
+
+    #[test]
+    fn unresolved_annotations_match_by_what_their_name_says() {
+        let ann = |name: &str, resolved: bool| AnnotationInfo { name: name.into(), resolved, args: Vec::new() };
+        let cdi = "jakarta.enterprise.inject.Produces";
+        assert!(ann(cdi, true).is(cdi));
+        assert!(!ann("jakarta.ws.rs.Produces", true).is(cdi));
+        // a simple name: any package's, as far as we know
+        assert!(ann("Produces", false).is(cdi));
+        // a name that says its package: only that package's
+        assert!(ann(cdi, false).is(cdi));
+        assert!(!ann("jakarta.ws.rs.Produces", false).is(cdi));
+        assert!(!ann("org.jvnet.hk2.annotations.Service", false).is("org.springframework.stereotype.Service"));
+        // partly qualified through an outer class
+        assert!(ann("ComponentScan.Filter", false).is("org.springframework.context.annotation.ComponentScan.Filter"));
+        assert!(!ann("Scan.Filter", false).is("org.springframework.context.annotation.ComponentScan.Filter"));
+        // a package-qualified name is the whole name, not a suffix
+        assert!(!ann("inject.Inject", false).is("jakarta.inject.Inject"));
+    }
 
     #[test]
     fn simple_names() {

@@ -43,7 +43,7 @@ fn lombok_config_fluent_accessors_and_copyable_lazy() {
             ("lombok.config", "config.stopBubbling = true\nlombok.accessors.fluent = true\nlombok.copyableAnnotations += org.springframework.context.annotation.Lazy\n"),
             ("src/main/java/app/Form.java", "package app;\nimport lombok.Getter;\n@Getter\npublic class Form {\n    private String driver;\n}\n"),
             ("src/main/java/app/Page.java", "package app;\nclass Page {\n    String m(Form f) { return f.driver(); }\n}\n"),
-            ("src/main/java/app/App.java", "package app;\n@org.springframework.boot.autoconfigure.SpringBootApplication\npublic class App {}\n"),
+            ("src/main/java/app/App.java", "package app;\n@org.springframework.boot.autoconfigure.SpringBootApplication\npublic class App { public static void main(String[] args) {} }\n"),
             // a cycle broken by @Lazy copied onto the Lombok constructor
             ("src/main/java/app/A.java", "package app;\nimport lombok.RequiredArgsConstructor;\n@org.springframework.stereotype.Service\n@RequiredArgsConstructor\nclass A {\n    @org.springframework.context.annotation.Lazy\n    private final B b;\n}\n"),
             ("src/main/java/app/B.java", "package app;\nimport lombok.RequiredArgsConstructor;\n@org.springframework.stereotype.Service\n@RequiredArgsConstructor\nclass B {\n    private final A a;\n}\n"),
@@ -71,7 +71,7 @@ fn spring_registration_patterns() {
     let dir = project(
         "registration",
         &[
-            ("src/main/java/app/App.java", "package app;\n@org.springframework.boot.autoconfigure.SpringBootApplication\n@org.mybatis.spring.annotation.MapperScan(\"app.mapper\")\npublic class App {}\n"),
+            ("src/main/java/app/App.java", "package app;\n@org.springframework.boot.autoconfigure.SpringBootApplication\n@org.mybatis.spring.annotation.MapperScan(\"app.mapper\")\npublic class App { public static void main(String[] args) {} }\n"),
             // MyBatis: interfaces in @MapperScan packages are beans
             ("src/main/java/app/mapper/OrderMapper.java", "package app.mapper;\npublic interface OrderMapper { int count(); }\n"),
             // a composed annotation carrying a condition makes beans conditional
@@ -109,7 +109,7 @@ fn review_regressions_stay_reported() {
     let dir = project(
         "plain-bean-method",
         &[
-            ("src/main/java/app/App.java", "package app;\n@org.springframework.boot.autoconfigure.SpringBootApplication\npublic class App {}\n"),
+            ("src/main/java/app/App.java", "package app;\n@org.springframework.boot.autoconfigure.SpringBootApplication\npublic class App { public static void main(String[] args) {} }\n"),
             ("src/main/java/app/Missing.java", "package app;\npublic class Missing {}\n"),
             ("src/main/java/app/Forgotten.java", "package app;\nclass Forgotten {\n    @org.springframework.context.annotation.Bean\n    Missing missing() { return new Missing(); }\n}\n"),
             ("src/main/java/app/Consumer.java", "package app;\n@org.springframework.stereotype.Component\nclass Consumer {\n    Consumer(Missing missing) {}\n}\n"),
@@ -158,7 +158,7 @@ fn spring_factories_with_crlf_line_endings() {
         "factories-crlf",
         &[
             ("src/main/resources/META-INF/spring.factories", "org.springframework.boot.autoconfigure.EnableAutoConfiguration=\\\r\napp.ext.FactoryConfig\r\n"),
-            ("src/main/java/app/App.java", "package app;\n@org.springframework.boot.autoconfigure.SpringBootApplication\npublic class App {}\n"),
+            ("src/main/java/app/App.java", "package app;\n@org.springframework.boot.autoconfigure.SpringBootApplication\npublic class App { public static void main(String[] args) {} }\n"),
             ("src/main/java/app/Store.java", "package app;\npublic class Store {}\n"),
             ("src/main/java/app/ext/FactoryConfig.java", "package app.ext;\npublic class FactoryConfig {\n    @org.springframework.context.annotation.Bean\n    public app.Store store() { return new app.Store(); }\n}\n"),
             ("src/main/java/app/Consumer.java", "package app;\n@org.springframework.stereotype.Service\nclass Consumer {\n    Consumer(Store store) {}\n}\n"),
