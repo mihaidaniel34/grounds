@@ -301,7 +301,11 @@ impl Rule for StaticDateFormat {
         let Some(t) = n.field("type") else { return };
         let ty = cx.fm.resolve_type_node(t);
         let bad = ["java.text.DateFormat", "java.util.Calendar", "java.text.MessageFormat", "java.text.NumberFormat"];
-        if is_subtype_any(cx.fm, &ty, &bad) && !only_used_synchronized(n, cx) {
+        // `static SimpleDateFormat formats[]`: an array, as `SimpleDateFormat[]`
+        // is, which this rule does not judge; a declarator without dimensions
+        // is a formatter
+        let scalar = n.kids().into_iter().filter(|k| k.kind() == "variable_declarator").any(|d| d.field("dimensions").is_none());
+        if scalar && is_subtype_any(cx.fm, &ty, &bad) && !only_used_synchronized(n, cx) {
             cx.report(t, format!("`{}` is not thread-safe; a static instance is shared across threads", ty.display_simple()));
         }
     }

@@ -703,7 +703,7 @@ impl Session {
         self.project.index.ensure_resolved();
         files
             .par_iter()
-            .flat_map_iter(|p| match std::fs::read_to_string(p) {
+            .flat_map_iter(|p| match crate::fsutil::read_text(p) {
                 Ok(text) => analyze_text(&self.project, rules, &self.options, p, &text),
                 Err(_) => Vec::new(),
             })
@@ -1057,7 +1057,7 @@ impl Session {
         if hits.is_empty() {
             return Vec::new();
         }
-        let Ok(text) = std::fs::read_to_string(file) else { return Vec::new() };
+        let Ok(text) = crate::fsutil::read_text(file) else { return Vec::new() };
         let pf = ParsedFile::parse(text);
         let fm = grounds_semantic::FileModel::new(&pf, &self.project.index, path_key(file));
         let rel = file.strip_prefix(self.root()).unwrap_or(file).to_string_lossy().to_string();
@@ -1110,12 +1110,14 @@ impl Session {
                         return false;
                     }
                     let qualified = n.parent().is_some_and(|p| matches!(p.kind(), "scoped_type_identifier" | "scoped_identifier") && p.kids().first() != Some(n));
+                    // (an enclosing class with a supertype that is not resolved may
+                    // inherit a member type of that name: unknown, not removed)
                     match n.kind() {
-                        "type_identifier" => !qualified && fm.resolve_type_node(*n).is_unknown(),
+                        "type_identifier" => !qualified && fm.resolve_type_node(*n).is_unknown() && enclosing_complete(&fm, *n),
                         // `Gone.value()` / `Gone.FIELD`: the receiver names no variable or type
                         "identifier" => {
                             let receiver = n.parent().is_some_and(|p| matches!(p.kind(), "method_invocation" | "field_access") && p.field("object") == Some(*n));
-                            receiver && fm.symbol(*n).is_none() && fm.type_of(*n).is_unknown()
+                            receiver && fm.symbol(*n).is_none() && fm.type_of(*n).is_unknown() && enclosing_complete(&fm, *n)
                         }
                         _ => false,
                     }
@@ -1201,7 +1203,7 @@ impl Session {
                     }
                 }
             }
-            if let (Some(stub), Ok(text)) = (self.project.index.file(&path_key(f)), std::fs::read_to_string(f)) {
+            if let (Some(stub), Ok(text)) = (self.project.index.file(&path_key(f)), crate::fsutil::read_text(f)) {
                 let pf = ParsedFile::parse(text);
                 for (n, owner, l) in decls(stub, &pf) {
                     if owner.is_none() {

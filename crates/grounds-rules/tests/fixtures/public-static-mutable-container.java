@@ -14,3 +14,9 @@ class OuterDimension {
     public static final int[][] EMPTY_ROWS = new int[0][3];
     public static final int[][] ROWS = new int[3][0]; // expect
 }
+class ConstantZero {
+    private static final int SIZE = 0;
+    public static final byte[] EMPTY = new byte[SIZE];
+    public static final int[] NONE = new int[1 - 1];
+    public static final int[] ONE = new int[SIZE + 1]; // expect
+}

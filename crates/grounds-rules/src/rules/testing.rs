@@ -33,15 +33,16 @@ fn is_test_method(m: Node, src: &str) -> bool {
     annotation_names(m, src).iter().any(|a| TEST_ANNOTATIONS.contains(a))
 }
 
-/// The class declaring an assertion call: the resolved method's owner, or,
-/// when overloads cannot be told apart (arguments of unknown type), the one
-/// class all candidates come from: the qualifier (`Assert.assertEquals`),
-/// an inherited method (JUnit 3), or a static import.
-fn assertion_class<'t>(cx: &Ctx<'_, 't>, call: Node<'t>) -> Option<Name> {
+/// The classes that may declare an assertion call: the resolved method's
+/// owner, or, when overloads cannot be told apart (arguments of unknown
+/// type), the classes the candidates come from: the qualifier
+/// (`Assert.assertEquals`), an inherited method (JUnit 3), or static imports.
+/// Empty when nothing says (a supertype that is not resolved may declare it).
+fn assertion_classes<'t>(cx: &Ctx<'_, 't>, call: Node<'t>) -> Vec<Name> {
     if let Some(c) = cx.fm.select_method(call) {
-        return Some(c.owner.clone());
+        return vec![c.owner.clone()];
     }
-    let name = cx.fm.call_name(call)?;
+    let Some(name) = cx.fm.call_name(call) else { return Vec::new() };
     let mut owners: Vec<Name> = Vec::new();
     if let Some(o) = call.field("object") {
         match cx.fm.symbol(o) {
@@ -80,11 +81,9 @@ fn assertion_class<'t>(cx: &Ctx<'_, 't>, call: Node<'t>) -> Option<Name> {
             }
         }
     }
+    owners.sort();
     owners.dedup();
-    match owners.as_slice() {
-        [o] => Some(o.clone()),
-        _ => None,
-    }
+    owners
 }
 
 declare_rule!(AssertionArgumentOrder {
@@ -111,17 +110,20 @@ impl Rule for AssertionArgumentOrder {
             return;
         }
         // a project helper named assertEquals may take (actual, expected), and
-        // so may a method called on an object whose type is unknown
-        // (`helper.assertEquals(actual, 42)` with the helper's jar missing); an
-        // unqualified call with an unknown owner is a static import of an
-        // assertion class or an inherited assertion method
-        let owner = assertion_class(cx, n);
-        if owner.is_none() && n.field("object").is_some() {
+        // so may a method whose class is unknown (inherited from a supertype
+        // that is not resolved, or called on an object of unknown type): only
+        // JUnit's, TestNG's and kotlin.test's are judged, and only when every
+        // class it may come from takes the arguments in the same order
+        let owners = assertion_classes(cx, n);
+        let assertion = |o: &str| o.starts_with("org.junit") || o.starts_with("junit.") || o.starts_with("org.testng") || o.starts_with("kotlin.test");
+        let first_message = |o: &str| matches!(o, "org.junit.Assert" | "junit.framework.Assert" | "junit.framework.TestCase");
+        if owners.is_empty() || !owners.iter().all(|o| assertion(o)) {
             return;
         }
-        if owner.as_ref().is_some_and(|o| !(o.starts_with("org.junit") || o.starts_with("junit.") || o.starts_with("org.testng") || o.starts_with("kotlin.test"))) {
+        if !owners.windows(2).all(|w| w[0].starts_with("org.testng") == w[1].starts_with("org.testng") && first_message(&w[0]) == first_message(&w[1])) {
             return;
         }
+        let owner = owners.first().cloned();
         // JUnit 4 (and 3) take an optional leading message String, JUnit 5
         // and TestNG a trailing one
         let message_first = owner.as_ref().is_some_and(|o| matches!(&**o, "org.junit.Assert" | "junit.framework.Assert" | "junit.framework.TestCase"));
