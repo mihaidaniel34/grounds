@@ -45,6 +45,17 @@ class Argv {
         new ProcessBuilder("bash", "--unknown-option", "-c", "cat " + x);
         new ProcessBuilder("bash", "-c", "--", "cat " + x); // expect
         new ProcessBuilder("bash", "-xc", "cat " + x); // expect
+        // -n reads the commands without running them
+        new ProcessBuilder("bash", "-n", "-c", "echo " + x);
+        new ProcessBuilder("sh", "-n", "-c", "echo " + x);
+        new ProcessBuilder("bash", "-nc", "echo " + x);
+        new ProcessBuilder("bash", "-c", "-n", "echo " + x);
+        new ProcessBuilder("bash", "-o", "noexec", "-c", "echo " + x);
+        new ProcessBuilder("zsh", "-onoexec", "-c", "echo " + x);
+        // zsh takes an option's name attached
+        new ProcessBuilder("zsh", "-onounset", "-c", "echo " + x); // expect
+        new ProcessBuilder("zsh", "-oerrexit", "-c", "echo " + x); // expect
+        new ProcessBuilder("bash", "-onounset", "-c", "echo " + x);
     }
     // the program is the first element: echo prints "sh -c cat <file>"
     void notAShell(String file) throws Exception {

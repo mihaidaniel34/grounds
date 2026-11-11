@@ -940,13 +940,18 @@ fn shell_command_in<'a, 't>(argv: &'a [Node<'t>], lit: &dyn Fn(&Node<'t>) -> Opt
         }
         _ => return None,
     }
+    let zsh = name.trim_end_matches(".exe") == "zsh";
     enum Opt {
         Command,
         Value,
         Plain,
         End,
         Unknown,
+        /// `-n`, `-o noexec`: the shell reads the commands without running them
+        NoExec,
     }
+    // (zsh ignores case and underscores in option names: `NO_EXEC`)
+    let noexec = |v: &str| v.replace('_', "").eq_ignore_ascii_case("noexec");
     // the one-letter options of `set` and of the invocation; `o`/`O` take a
     // value and come alone
     const SHORT: &str = "abefhkmnptuvxBCEHPTilrsc";
@@ -954,9 +959,19 @@ fn shell_command_in<'a, 't>(argv: &'a [Node<'t>], lit: &dyn Fn(&Node<'t>) -> Opt
         "--" => Opt::End,
         "-o" | "+o" | "-O" | "+O" | "--rcfile" | "--init-file" => Opt::Value,
         "--login" | "--noprofile" | "--norc" | "--posix" | "--restricted" | "--verbose" | "--noediting" => Opt::Plain,
+        // zsh takes an option's name attached: `-oerrexit`, `+onounset`
+        _ if zsh && f.len() > 2 && (f.starts_with("-o") || f.starts_with("+o")) => {
+            if f.starts_with('-') && noexec(&f[2..]) {
+                Opt::NoExec
+            } else {
+                Opt::Plain
+            }
+        }
         _ => match f.strip_prefix('-').map(|r| (r, true)).or_else(|| f.strip_prefix('+').map(|r| (r, false))) {
             Some((r, minus)) if !r.is_empty() && r.chars().all(|c| SHORT.contains(c)) => {
-                if minus && r.contains('c') {
+                if minus && r.contains('n') {
+                    Opt::NoExec
+                } else if minus && r.contains('c') {
                     Opt::Command
                 } else {
                     Opt::Plain
@@ -965,6 +980,8 @@ fn shell_command_in<'a, 't>(argv: &'a [Node<'t>], lit: &dyn Fn(&Node<'t>) -> Opt
             _ => Opt::Unknown,
         },
     };
+    // an option's value: `-o noexec` runs nothing either
+    let value = |f: &str, v: &str| (f == "-o" && noexec(v)).then_some(());
     let operand = |f: &str| !f.starts_with('-') && !f.starts_with('+');
     // up to the command option
     loop {
@@ -972,11 +989,14 @@ fn shell_command_in<'a, 't>(argv: &'a [Node<'t>], lit: &dyn Fn(&Node<'t>) -> Opt
         match opt(&f) {
             Opt::Command => break,
             Opt::Value => {
-                rest.next().and_then(lit)?;
+                let v = rest.next().and_then(lit)?;
+                if value(&f, &v).is_some() {
+                    return None;
+                }
             }
             Opt::Plain => {}
-            // a script file, `--`, an option not known: no command string
-            Opt::End | Opt::Unknown => return None,
+            // a script file, `--`, an option not known, nothing run
+            Opt::End | Opt::Unknown | Opt::NoExec => return None,
         }
     }
     // then the first operand
@@ -985,9 +1005,13 @@ fn shell_command_in<'a, 't>(argv: &'a [Node<'t>], lit: &dyn Fn(&Node<'t>) -> Opt
         let Some(f) = lit(a) else { return Some(vec![a]) };
         match opt(&f) {
             Opt::Value => {
-                rest.next().and_then(lit)?;
+                let v = rest.next().and_then(lit)?;
+                if value(&f, &v).is_some() {
+                    return None;
+                }
             }
             Opt::Plain | Opt::Command => {}
+            Opt::NoExec => return None,
             Opt::End => return rest.next().map(|a| vec![a]),
             Opt::Unknown if operand(&f) => return Some(vec![a]),
             Opt::Unknown => return None,
