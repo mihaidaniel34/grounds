@@ -299,3 +299,22 @@ fn a_class_declared_in_two_modules_is_judged_inside_its_own_files() {
     );
     assert_eq!(findings_of(&dir, &["replaceall-with-literal"]), vec!["starter-3/src/main/java/p/Post.java:5 replaceall-with-literal".to_string(), "starter/src/main/java/p/Post.java:5 replaceall-with-literal".to_string()]);
 }
+
+#[test]
+fn inside_its_own_file_a_class_reads_its_own_copy() {
+    if !has_jdk() {
+        return;
+    }
+    // test inputs: one default-package class name in many directories, with
+    // the same imports and different supertypes. Inside each file the copy
+    // read is that file's: `Integer` is java.lang's
+    let dir = project(
+        "own-copy",
+        &[
+            ("tests/a/WebTest.java", "import java.io.*;\npublic class WebTest extends Base {\n    Object f() { return new Integer(1); }\n}\n"),
+            ("tests/a/Base.java", "public class Base {}\n"),
+            ("tests/b/WebTest.java", "import java.io.*;\npublic class WebTest {\n    Object f() { return new Integer(2); }\n}\n"),
+        ],
+    );
+    assert_eq!(findings_of(&dir, &["boxed-primitive-constructor"]), vec!["tests/a/WebTest.java:3 boxed-primitive-constructor".to_string(), "tests/b/WebTest.java:3 boxed-primitive-constructor".to_string()]);
+}

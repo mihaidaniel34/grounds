@@ -1317,6 +1317,10 @@ impl Index {
         let Some(files) = self.copies.get(owner) else { return Vec::new() };
         let all: Vec<(&Arc<FileStub>, &RawClass)> = files.iter().filter_map(|f| self.files.get(f)).filter_map(|st| st.classes.iter().find(|c| &*c.name == owner).map(|c| (st, c))).collect();
         if let Some(scope) = scope.filter(|s| s.enclosing.iter().any(|e| &**e == owner)) {
+            // inside its own file a class reads that file's copy, as javac does
+            if let Some(&own) = all.iter().find(|(st, _)| std::ptr::eq(&st.imports, scope.imports)) {
+                return vec![own];
+            }
             let own: Vec<(&Arc<FileStub>, &RawClass)> = all.iter().copied().filter(|(st, _)| *st.package == *scope.package && st.imports.iter().eq(scope.imports.iter())).collect();
             if !own.is_empty() {
                 return own;
