@@ -411,7 +411,8 @@ impl<'t> FileModel<'t> {
                 }
             }
             // found here: an enclosing class further out is not reached
-            if self.class(cn).is_some_and(|ci| !self.methods_named(&ci.this_type(), name).is_empty()) {
+            // (a private method of a supertype is not inherited, JLS 8.2)
+            if self.class(cn).is_some_and(|ci| self.methods_named(&ci.this_type(), name).iter().any(|m| !m.method.flags.is_private() || m.owner == *cn)) {
                 return false;
             }
             cur = self.enclosing_class_node(c);

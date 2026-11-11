@@ -35,3 +35,16 @@ class ShadowedAssertTrue extends ext.Base {
         if (value == null) System.out.println("null"); // expect
     }
 }
+// a private method of a superclass is not inherited: the search goes on
+// outward, to a class whose superclass we cannot see
+class KnownPrivate {
+    private static Object requireNonNull(Object o) { return o; }
+}
+class OuterUnknown extends ext.Base {
+    class Inner extends KnownPrivate {
+        void m(Object value) {
+            requireNonNull(value);
+            if (value == null) System.out.println("still null");
+        }
+    }
+}
