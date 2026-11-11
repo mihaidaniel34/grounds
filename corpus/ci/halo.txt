@@ -351,9 +351,7 @@ application/src/main/java/run/halo/app/theme/service/ThemeUtils.java:99 throw-ge
 application/src/test/java/run/halo/app/PathPrefixPredicateTest.java:34 inner-class-could-be-static
 application/src/test/java/run/halo/app/PathPrefixPredicateTest.java:37 test-without-assertion
 application/src/test/java/run/halo/app/config/ExtensionConfigurationTest.java:73 unused-local-variable
-application/src/test/java/run/halo/app/content/ContentRequestTest.java:104 assertion-argument-order
 application/src/test/java/run/halo/app/content/ContentRequestTest.java:50 deprecated-api-usage
-application/src/test/java/run/halo/app/content/ContentRequestTest.java:78 assertion-argument-order
 application/src/test/java/run/halo/app/content/comment/CommentEmailOwnerTest.java:28 deprecated-api-usage
 application/src/test/java/run/halo/app/content/comment/CommentEmailOwnerTest.java:46 deprecated-api-usage
 application/src/test/java/run/halo/app/content/comment/CommentPermalinkIntegrationTest.java:203 deprecated-api-usage
