@@ -844,17 +844,25 @@ impl Rule for CommandInjection {
                 let short = f.strip_prefix('-').filter(|o| !o.is_empty() && o.chars().all(|c| c.is_ascii_alphabetic()) && o.len() <= 4);
                 (windows && matches!(f, "/c" | "/k" | "-command")) || short.is_some_and(|o| o.contains('c'))
             };
-            let option = |f: &str| f.starts_with('-') || windows && f.starts_with('/');
+            let option = |f: &str| f.starts_with('-') || posix && f.starts_with('+') || windows && f.starts_with('/');
+            // `-o pipefail`, `+o posix` (and bash's `-O`/`+O`, lowercased by
+            // `lit`): the option's value is the next element
+            let takes_value = |f: &str| posix && matches!(f, "-o" | "+o");
             // the options that follow the program, up to the command option;
-            // anything else (an option's value, a script file) leaves which
+            // anything else (a value not known, a script file) leaves which
             // element is the command not known
             let mut rest = argv.iter().skip(1);
             let mut command = false;
-            for a in rest.by_ref() {
+            while let Some(a) = rest.next() {
                 match lit(a) {
                     Some(f) if command_option(&f) => {
                         command = true;
                         break;
+                    }
+                    Some(f) if takes_value(&f) => {
+                        if rest.next().and_then(lit).is_none() {
+                            break;
+                        }
                     }
                     Some(f) if option(&f) => {}
                     _ => break,
@@ -866,7 +874,22 @@ impl Rule for CommandInjection {
             // a POSIX shell takes the first operand after its options as the
             // command; cmd and PowerShell join all that follows into it
             let operands: Vec<&Node<'t>> = if posix {
-                rest.find(|a| !lit(a).is_some_and(|f| option(&f))).into_iter().collect()
+                let mut operand = None;
+                while let Some(a) = rest.next() {
+                    match lit(a) {
+                        Some(f) if takes_value(&f) => {
+                            if rest.next().and_then(lit).is_none() {
+                                break;
+                            }
+                        }
+                        Some(f) if option(&f) => {}
+                        _ => {
+                            operand = Some(a);
+                            break;
+                        }
+                    }
+                }
+                operand.into_iter().collect()
             } else {
                 rest.collect()
             };

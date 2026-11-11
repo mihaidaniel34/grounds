@@ -24,6 +24,10 @@ class Argv {
         new ProcessBuilder(shell, "-c", "cat " + file); // expect
         new ProcessBuilder("bash", "-e", "-c", "cat " + file); // expect
         new ProcessBuilder("cmd", "/c", "type", "x " + file); // expect
+        // an option's value is no command
+        new ProcessBuilder("bash", "-o", "pipefail", "-c", "cat " + file); // expect
+        new ProcessBuilder("bash", "-c", "-o", "pipefail", "cat " + file); // expect
+        new ProcessBuilder("bash", "+O", "extglob", "-c", "cat " + file); // expect
     }
     // the program is the first element: echo prints "sh -c cat <file>"
     void notAShell(String file) throws Exception {
