@@ -748,31 +748,40 @@ impl InfiniteLoop {
                     })
             })
         });
-        // `boolean again = false; do { .. } while (again);` runs once
-        if written || known_bool(cond, cx, 0) == Some(false) {
+        // `boolean again = false; do { .. } while (again);` runs once; a
+        // condition too long a chain to follow is not known to hold either
+        let mut budget = KNOWN_BOOL_BUDGET;
+        if written || known_bool(cond, cx, &mut budget) == Some(false) || budget == 0 {
             return;
         }
         cx.report(n.child(0).unwrap_or(n), "Nothing in this loop changes its condition or leaves it; once entered it never terminates");
     }
 }
 
+/// How many expressions `known_bool` looks at before it gives up.
+const KNOWN_BOOL_BUDGET: u32 = 256;
+
 /// The value of a condition made of constants and locals that keep their
-/// initial value: `done`, `!done` after `boolean done = false;`.
-fn known_bool<'t>(e: Node<'t>, cx: &Ctx<'_, 't>, depth: u8) -> Option<bool> {
+/// initial value: `done`, `!done` after `boolean done = false;`. `budget`
+/// counts the expressions looked at; at 0 the value is not known, and the
+/// caller can tell that from a value that is not a constant (`budget == 0`).
+fn known_bool<'t>(e: Node<'t>, cx: &Ctx<'_, 't>, budget: &mut u32) -> Option<bool> {
     // a chain of locals defined by one another is not worth following far
-    if depth > 6 {
+    // (and in code that does not compile, `boolean a = !a;` has no end)
+    if *budget == 0 {
         return None;
     }
+    *budget -= 1;
     let e = e.unparen();
     if let Some(Constant::Bool(b)) = cx.fm.constant_value(e) {
         return Some(b);
     }
     match e.kind() {
-        "unary_expression" if op(e) == "!" => e.field("operand").and_then(|o| known_bool(o, cx, depth + 1)).map(|b| !b),
+        "unary_expression" if op(e) == "!" => e.field("operand").and_then(|o| known_bool(o, cx, budget)).map(|b| !b),
         // `again == true`
         "binary_expression" if matches!(op(e), "==" | "!=") => {
             let (l, r) = lr(e)?;
-            Some((known_bool(l, cx, depth + 1)? == known_bool(r, cx, depth + 1)?) == (op(e) == "=="))
+            Some((known_bool(l, cx, budget)? == known_bool(r, cx, budget)?) == (op(e) == "=="))
         }
         "identifier" => {
             let i = cx.fm.local_ref(e)?;
@@ -787,7 +796,7 @@ fn known_bool<'t>(e: Node<'t>, cx: &Ctx<'_, 't>, depth: u8) -> Option<bool> {
             if written || !matches!(d.kind, grounds_semantic::LocalKind::Local) {
                 return None;
             }
-            known_bool(d.decl_node.field("value")?, cx, depth + 1)
+            known_bool(d.decl_node.field("value")?, cx, budget)
         }
         _ => None,
     }
