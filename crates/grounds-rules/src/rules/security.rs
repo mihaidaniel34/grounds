@@ -683,7 +683,8 @@ enum SqlLexed {
     Inside,
     /// Where the dialects read it differently: a backslash in a literal
     /// (an escape in MySQL and in PostgreSQL's `E'..'`, a character in
-    /// standard SQL), a `$tag$` (PostgreSQL's dollar quote), a `/*` inside
+    /// standard SQL), a `$` not followed by a digit (PostgreSQL's dollar
+    /// quote `$tag$` may open there), a `/*` inside
     /// a block comment (nested in PostgreSQL, not elsewhere).
     Unknown,
 }
@@ -717,15 +718,9 @@ fn sql_code(text: &str) -> SqlLexed {
                     at = At::Block;
                     out.push(' ');
                 }
-                // `$$` or `$tag$`, not a parameter (`$1`)
-                '$' => {
-                    let tag: String = cs.clone().take_while(|k| k.is_ascii_alphanumeric() || *k == '_').collect();
-                    let after = cs.clone().nth(tag.chars().count());
-                    if after == Some('$') && !tag.starts_with(|k: char| k.is_ascii_digit()) {
-                        return SqlLexed::Unknown;
-                    }
-                    out.push(c);
-                }
+                // a possible dollar quote (`$$`, `$tag$`, a tag in any
+                // letters PostgreSQL takes: `$é$`); a parameter (`$1`) is not
+                '$' if !cs.peek().is_some_and(|k| k.is_ascii_digit()) => return SqlLexed::Unknown,
                 _ => out.push(c),
             },
             At::Quoted(q) => {

@@ -139,6 +139,7 @@ class IdentifiersFromFields {
         if (!java.util.Set.of("id", "name").contains(column)) throw new IllegalArgumentException();
         c.prepareStatement("SELECT $$it's$$ AS note, t." + column + " FROM t WHERE id = ?");
         c.prepareStatement("SELECT $q$it's$q$ AS note, t." + column + " FROM t WHERE id = ?");
+        c.prepareStatement("SELECT $é$it's$é$ AS note, t." + column + " FROM t WHERE id = ?");
         c.prepareStatement("SELECT E'it\\'s' AS note, t." + column + " FROM t WHERE id = ?");
         c.prepareStatement("SELECT 'it\\'s' AS note, t." + column + " FROM t WHERE id = ?");
         c.prepareStatement("SELECT /* outer /* inner */ don't */ t." + column + " FROM t WHERE id = ?");
