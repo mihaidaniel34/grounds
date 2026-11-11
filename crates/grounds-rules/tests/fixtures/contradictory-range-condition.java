@@ -11,6 +11,7 @@ class A {
     final String fixed = "abc";
     volatile String text;
     volatile int[] array;
+    volatile int value;
 
     boolean alwaysFalse(int x, long l, Integer boxed, char c, List<String> list, String s) {
         boolean r = x > 5 && x < 3; // expect
@@ -25,7 +26,7 @@ class A {
         r |= c == 'a' && c == 'b'; // expect
         r |= x > MIN && x < MAX; // expect
         r |= s.length() == 0 && s.length() > 0; // expect
-        r |= this.state == 1 && this.state == 2; // expect
+        r |= this.fixed.length() == 1 && this.fixed.length() == 2; // expect
         r |= Color.RED.ordinal() > 3 && Color.RED.ordinal() < 2; // expect
         var xs = List.of("a", "b");
         r |= xs.size() > 3 && xs.size() < 2; // expect
@@ -70,6 +71,9 @@ class A {
         r |= sb.length() > 3 && sb.length() < 2;
         // another thread may replace the string or the array between the reads
         r |= text.length() > 3 && text.length() < 2;
+        // or a field read twice
+        r |= value > 3 && value < 2;
+        r |= this.state == 1 && this.state == 2;
         r |= array.length > 3 && array.length < 2;
         // a list assigned again, or a mutable one
         var ys = List.of("a");

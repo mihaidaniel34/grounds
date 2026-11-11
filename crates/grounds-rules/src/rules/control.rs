@@ -1554,6 +1554,9 @@ fn const_comparison<'t>(e: Node<'t>, cx: &Ctx<'_, 't>) -> Option<(Node<'t>, &'st
         "method_invocation" => !is_stable_call(d, cx),
         // the length of an array that another thread may replace
         "field_access" if d.field("field").is_some_and(|f| f.text(cx.src) == "length") && cx.type_of(d.field("object").unwrap_or(d)).is_array() => !d.field("object").is_some_and(|o| stable_receiver(o, cx)),
+        // a field another thread may write between the two reads (a final
+        // one, or a constant, keeps its value)
+        "identifier" | "field_access" => cx.fm.field_ref(d).is_some_and(|f| !f.field.flags.is_final()),
         "object_creation_expression" | "assignment_expression" | "update_expression" | "array_creation_expression" | "lambda_expression" => true,
         _ => false,
     });
