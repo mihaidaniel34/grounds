@@ -289,8 +289,8 @@ target for your machine:
 
 ```bash
 target=aarch64-apple-darwin   # x86_64-apple-darwin, x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
-curl -fsSL https://github.com/mihaidaniel34/grounds/releases/download/v0.0.12/grounds-0.0.12-$target.tar.gz | tar -xz
-sudo mv grounds-0.0.12-$target/grounds /usr/local/bin/
+curl -fsSL https://github.com/mihaidaniel34/grounds/releases/download/v0.1.0/grounds-0.1.0-$target.tar.gz | tar -xz
+sudo mv grounds-0.1.0-$target/grounds /usr/local/bin/
 ```
 
 Each archive has a `.sha256` next to it. The macOS binaries are not
@@ -393,8 +393,8 @@ jobs:
         with: { distribution: temurin, java-version: 21 }
       - run: ./gradlew compileJava -q     # dependency jars into the Gradle cache (or: grounds classpath)
       - run: |
-          curl -fsSL https://github.com/mihaidaniel34/grounds/releases/download/v0.0.12/grounds-0.0.12-x86_64-unknown-linux-musl.tar.gz | tar -xz
-          echo "$PWD/grounds-0.0.12-x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
+          curl -fsSL https://github.com/mihaidaniel34/grounds/releases/download/v0.1.0/grounds-0.1.0-x86_64-unknown-linux-musl.tar.gz | tar -xz
+          echo "$PWD/grounds-0.1.0-x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
       - run: grounds changed --base "origin/$BASE_REF" --no-daemon --format sarif --exit-zero > grounds.sarif
         env: { BASE_REF: "${{ github.base_ref }}" }   # never interpolate a branch name into the script
       - uses: github/codeql-action/upload-sarif@v3
