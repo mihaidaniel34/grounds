@@ -206,10 +206,27 @@ fn tracked_but_ignored(root: &Path) -> Vec<PathBuf> {
     }
 }
 
+/// The git directory of the work tree holding `root`: the `.git` directory
+/// of `root` or a directory above it, or the one a `.git` file names (a
+/// linked worktree's, which has its own index and HEAD).
+fn git_dir(root: &Path) -> Option<PathBuf> {
+    for a in root.ancestors() {
+        let dot = a.join(".git");
+        let Ok(meta) = std::fs::metadata(&dot) else { continue };
+        if meta.is_dir() {
+            return Some(dot);
+        }
+        let text = std::fs::read_to_string(&dot).ok()?;
+        let named = PathBuf::from(text.trim().strip_prefix("gitdir:")?.trim());
+        return Some(if named.is_absolute() { named } else { a.join(named) });
+    }
+    None
+}
+
 /// What the list of tracked-but-ignored files depends on besides the
-/// ignore files: git's index and HEAD (None when `.git` is not a directory).
+/// ignore files: git's index and HEAD (None outside a work tree).
 fn index_stamp(root: &Path) -> Option<(std::time::SystemTime, u64, Vec<u8>)> {
-    let git = root.join(".git");
+    let git = git_dir(root)?;
     let index = std::fs::metadata(git.join("index")).ok()?;
     Some((index.modified().ok()?, index.len(), std::fs::read(git.join("HEAD")).ok()?))
 }
@@ -938,6 +955,34 @@ mod tests {
         write("conf/core/build.gradle", "\n");
         assert_eq!(found(&dir.join("conf")), vec!["", "app", "core"]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_index_stamp_is_found_from_a_subdirectory_and_in_a_linked_worktree() {
+        let dir = std::env::temp_dir().join(format!("grounds-index-stamp-{}", std::process::id()));
+        let wt = dir.with_extension("wt");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&wt);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("sub/A.java"), "class A {}").unwrap();
+        let git = |at: &Path, args: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(at).args(["-c", "commit.gpgsign=false", "-c", "core.hooksPath=.no-hooks"]).args(args).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t").env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t").status().is_ok_and(|s| s.success()));
+        git(&dir, &["init", "-q"]);
+        git(&dir, &["add", "."]);
+        git(&dir, &["commit", "-qm", "init"]);
+        git(&dir, &["worktree", "add", "-q", "--detach", wt.to_str().unwrap()]);
+        // the repository's top, a project below it, and a linked worktree
+        for root in [dir.clone(), dir.join("sub"), wt.clone(), wt.join("sub")] {
+            let before = index_stamp(&root);
+            assert!(before.is_some(), "{}", root.display());
+            // the index changes: the stamp does (the cached list is read again)
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            std::fs::write(root.join("B.java"), format!("class B {{}} // {}", root.display())).unwrap();
+            git(&root, &["add", "B.java"]);
+            assert_ne!(index_stamp(&root), before, "{}", root.display());
+        }
+        git(&dir, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&wt);
     }
 
     #[test]
