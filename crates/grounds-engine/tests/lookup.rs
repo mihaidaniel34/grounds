@@ -318,3 +318,34 @@ fn inside_its_own_file_a_class_reads_its_own_copy() {
     );
     assert_eq!(findings_of(&dir, &["boxed-primitive-constructor"]), vec!["tests/a/WebTest.java:3 boxed-primitive-constructor".to_string(), "tests/b/WebTest.java:3 boxed-primitive-constructor".to_string()]);
 }
+
+#[test]
+fn a_group_is_the_projects_only_for_the_module_it_is_stated_or_inferred_for() {
+    let dir = project(
+        "group-evidence",
+        &[
+            ("settings.gradle", "include 'guava', 'lib', 'all', 'app', 'old', 'older'\n"),
+            // a version catalog names dependencies' groups, not the project's
+            ("gradle/libs.versions.toml", "[libraries]\nguava = { group = \"com.google.guava\", name = \"guava\", version = \"33.0.0-jre\" }\n"),
+            ("build.gradle", "subprojects { apply plugin: 'java' }\n"),
+            // a module that happens to be named guava, with a group of its own
+            // and a shim under com/google/guava: Google's guava is not the project's
+            ("guava/build.gradle", "group = 'org.acme'\n"),
+            ("guava/src/main/java/com/google/guava/Shim.java", "package com.google.guava;\npublic class Shim {}\n"),
+            // no group stated: lib's own sources say org.acme
+            ("lib/build.gradle", "\n"),
+            ("lib/src/main/java/org/acme/lib/Thing.java", "package org.acme.lib;\npublic class Thing {}\n"),
+            ("app/build.gradle", "dependencies {\n  implementation 'com.google.guava:guava:33.0.0-jre'\n  implementation project(':lib')\n}\n"),
+            ("app/src/main/java/org/acme/app/App.java", "package org.acme.app;\nimport org.acme.lib.Thing;\nclass App {\n    void f() { new Thing().missing(); }\n}\n"),
+            // an aggregator: no package of its own, its module name says org.acme
+            ("all/build.gradle", "\n"),
+            ("all/src/main/java/module-info.java", "module org.acme.all {\n  requires transitive org.acme.lib;\n}\n"),
+            // a published release of lib (or of the aggregator): its classes are not today's sources
+            ("old/build.gradle", "dependencies { implementation 'org.acme:lib:0.9' }\n"),
+            ("older/build.gradle", "dependencies { implementation 'org.acme:all:0.8' }\n"),
+            ("older/src/main/java/org/acme/older/Older.java", "package org.acme.older;\nimport org.acme.lib.Thing;\nclass Older {\n    void f() { new Thing().missing(); }\n}\n"),
+            ("old/src/main/java/org/acme/old/Old.java", "package org.acme.old;\nimport org.acme.lib.Thing;\nclass Old {\n    void f() { new Thing().missing(); }\n}\n"),
+        ],
+    );
+    assert_eq!(findings(&dir), vec!["app/src/main/java/org/acme/app/App.java:4 unresolved-method".to_string()]);
+}
