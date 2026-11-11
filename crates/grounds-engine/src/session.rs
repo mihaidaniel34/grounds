@@ -427,19 +427,32 @@ impl Session {
         // be others. Asked of git only then; when the list differs, the
         // workspace is walked again, which reads the files that became
         // tracked and drops those that are no longer. (Stamped before git
-        // is asked: a change while it runs shows at the next sync.)
-        if !full && self.walked.git.iter_mut().any(|(p, stamp)| match stamp {
-            Some(stamp) => stamp.changed(p, clock),
-            None => FileStamp::of(p, false).is_some(),
-        }) {
+        // is asked: a change while it runs shows at the next sync.) When git
+        // cannot answer, which files those are is not known: the session
+        // keeps what it holds and the stamps it had, and asks again at the
+        // next sync, walking only once git answers with another list.
+        let moved = |s: &mut Session| {
+            s.walked.git.iter_mut().any(|(p, stamp)| match stamp {
+                Some(stamp) => stamp.changed(p, clock),
+                None => FileStamp::of(p, false).is_some(),
+            })
+        };
+        if !full && (self.walked.tracked_unknown || moved(self)) {
             let stamps: Vec<(PathBuf, Option<FileStamp>)> = self.walked.git.iter().map(|(p, old)| (p.clone(), FileStamp::of(p, true).map(|s| s.after(old.as_ref())))).collect();
-            let tracked = crate::workspace::tracked_but_ignored_cached(&root, true);
-            if tracked == self.walked.tracked {
-                crate::trace::log(|| "sync: git's index changed, the same files tracked although ignored".into());
-                self.walked.git = stamps;
-            } else {
-                crate::trace::log(|| "sync: git tracks other ignored files, walking the workspace".into());
-                full = true;
+            match crate::workspace::tracked_but_ignored_cached(&root, true) {
+                (_, false) => {
+                    crate::trace::log(|| "sync: git could not list the tracked files, asking again at the next sync".into());
+                    self.walked.tracked_unknown = true;
+                }
+                (tracked, true) if tracked == self.walked.tracked => {
+                    crate::trace::log(|| "sync: git's index changed, the same files tracked although ignored".into());
+                    self.walked.git = stamps;
+                    self.walked.tracked_unknown = false;
+                }
+                _ => {
+                    crate::trace::log(|| "sync: git tracks other ignored files, walking the workspace".into());
+                    full = true;
+                }
             }
         }
         let (mut found, mut found_modules) = (Vec::new(), Vec::new());

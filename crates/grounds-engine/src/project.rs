@@ -428,6 +428,10 @@ pub struct Walk {
     /// which files those are, and no directory's time shows it.
     pub git: Vec<(PathBuf, Option<FileStamp>)>,
     pub tracked: Vec<PathBuf>,
+    /// git could not list the tracked-but-ignored files when they were last
+    /// asked for: which they are is not known, and every sync asks again
+    /// (without walking the workspace) until git answers.
+    pub tracked_unknown: bool,
 }
 
 impl Walk {
@@ -480,12 +484,12 @@ impl Walk {
         ignores.extend(listed.iter().map(|p| (p.clone(), ignore(p))));
         ignores.sort_by(|a, b| a.0.cmp(&b.0));
         ignores.dedup_by(|a, b| a.0 == b.0);
-        Walk { dirs, ignores, gits, outer_gits, pending, git, tracked: Vec::new() }
+        Walk { dirs, ignores, gits, outer_gits, pending, git, tracked: Vec::new(), tracked_unknown: false }
     }
 
     /// The same, of a walk of the whole workspace that found `ws`.
     pub fn of_workspace(ws: &Workspace, began: SystemTime, before: &rustc_hash::FxHashMap<PathBuf, FileStamp>, bounds: &rustc_hash::FxHashMap<PathBuf, Option<u8>>) -> Walk {
-        Walk { tracked: ws.tracked.clone(), ..Walk::stamp(&ws.dirs, Some(&ws.root), began, before, bounds) }
+        Walk { tracked: ws.tracked.clone(), tracked_unknown: !ws.tracked_known, ..Walk::stamp(&ws.dirs, Some(&ws.root), began, before, bounds) }
     }
 }
 

@@ -1801,3 +1801,56 @@ fn a_file_git_starts_or_stops_tracking_against_gitignore_is_read_or_dropped() {
     changed_as_fresh(&mut s, &dir, "a commit");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_git_listing_that_fails_is_asked_again_once_git_answers() {
+    // Review of #91 (D1): when git cannot list the files it tracks although
+    // ignored (here a corrupt index; or git missing from PATH), which they
+    // are is not known. The session must not take the failure for an empty
+    // list and accept the index as read: once git answers again, it must
+    // hold what a fresh load holds. The corrupt index has the size and time
+    // of the good one put back, so only asking again can tell.
+    let dir = std::env::temp_dir().join(format!("grounds-session-index-fails-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, ".gitignore", "Hidden.java\nKept.java\n");
+    write(&dir, "src/main/java/Use.java", "class Use {}\n");
+    write(&dir, "src/main/java/Hidden.java", "class Hidden {}\n");
+    write(&dir, "src/main/java/Kept.java", "class Kept {}\n");
+    git(&dir, &["init", "-q"]);
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["add", "-f", "src/main/java/Kept.java"]);
+    git(&dir, &["commit", "-qm", "init"]);
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    set_tree_mtime(&dir, ".", old);
+    set_mtime(&dir, ".git/info/exclude", old);
+    set_mtime(&dir, ".git/index", old);
+    let mut s = Session::open(&dir).unwrap();
+    changed_as_fresh(&mut s, &dir, "the load");
+    git(&dir, &["add", "-f", "src/main/java/Hidden.java"]);
+    git(&dir, &["commit", "-qm", "track"]);
+    write(&dir, "src/main/java/Use.java", "class Use { void test(Hidden h, Kept k) { h.missing(); k.gone(); } }\n");
+    let index = dir.join(".git/index");
+    let good = std::fs::read(&index).unwrap();
+    let mut bad = good.clone();
+    bad[..4].copy_from_slice(b"XXXX");
+    let at = std::time::SystemTime::now() - std::time::Duration::from_secs(1800);
+    std::fs::write(&index, &bad).unwrap();
+    set_mtime(&dir, ".git/index", at);
+    let opts = CheckOptions { mode: Mode::Checkpoint, files: vec![dir.join("src/main/java/Use.java")], all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None };
+    let r = json(&s.check(&opts));
+    // (git failed: the files found tracked before are still held)
+    assert!(r.contains("`Kept` has no method `gone`"), "{r}");
+    // and while git keeps failing, it is asked again without a walk of the workspace
+    let walks = s.full_walks();
+    s.sync(&[]);
+    s.sync(&[]);
+    assert_eq!(s.full_walks(), walks, "no walk of the workspace while git cannot list");
+    std::fs::write(&index, &good).unwrap();
+    set_mtime(&dir, ".git/index", at);
+    let r = json(&s.check(&opts));
+    assert_eq!(r, json(&Session::open(&dir).unwrap().check(&opts)), "once git answers again, the session must report what a fresh run reports");
+    assert!(r.contains("`Hidden` has no method `missing`"), "{r}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

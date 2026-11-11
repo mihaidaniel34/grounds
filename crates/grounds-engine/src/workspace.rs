@@ -44,8 +44,11 @@ pub struct Workspace {
     /// noticed (see `Session::sync`).
     pub dirs: Vec<PathBuf>,
     /// The files git tracks although an ignore file matches them, relative
-    /// to the root, as this discovery read them (`tracked_but_ignored`).
+    /// to the root, as this discovery read them (`tracked_but_ignored`), and
+    /// whether git listed them for the index as it was (`false`: git failed,
+    /// and the last list it gave stood in).
     pub tracked: Vec<PathBuf>,
+    pub tracked_known: bool,
 }
 
 /// The files in a directory that decide which files the discovery skips,
@@ -209,8 +212,10 @@ pub(crate) fn git_listings(root: &Path) -> usize {
 }
 
 /// The `.java` files and build files under `root` that git tracks although
-/// `.gitignore` matches them, relative to `root`. Empty outside a git work tree.
-fn tracked_but_ignored(root: &Path) -> Vec<PathBuf> {
+/// `.gitignore` matches them, relative to `root`. `None` when git could not
+/// list them (not installed, a corrupt index, a lock it could not take):
+/// which files those are is then not known. Empty outside a git work tree.
+fn tracked_but_ignored(root: &Path) -> Option<Vec<PathBuf>> {
     {
         let mut runs = GIT_LISTINGS.lock().unwrap();
         match runs.iter_mut().find(|(r, _)| r == root) {
@@ -220,8 +225,10 @@ fn tracked_but_ignored(root: &Path) -> Vec<PathBuf> {
     }
     let out = std::process::Command::new("git").arg("-C").arg(root).args(["ls-files", "-z", "--cached", "--ignored", "--exclude-standard", "--", "*.java", "*pom.xml", "*build.gradle", "*build.gradle.kts"]).stderr(std::process::Stdio::null()).output();
     match out {
-        Ok(o) if o.status.success() => o.stdout.split(|&b| b == 0).filter(|p| !p.is_empty()).filter_map(|p| std::str::from_utf8(p).ok()).map(PathBuf::from).collect(),
-        _ => Vec::new(),
+        Ok(o) if o.status.success() => Some(o.stdout.split(|&b| b == 0).filter(|p| !p.is_empty()).filter_map(|p| std::str::from_utf8(p).ok()).map(PathBuf::from).collect()),
+        // (git's own answer outside a work tree is a failure: nothing is tracked)
+        _ if git_dir(root).is_none() => Some(Vec::new()),
+        _ => None,
     }
 }
 
@@ -258,22 +265,34 @@ fn index_stamp(root: &Path) -> Option<(std::time::SystemTime, u64, Vec<u8>)> {
 /// session lists a changed directory again at every save, and a git process
 /// over the whole repository costs tens of milliseconds there. A discovery of
 /// the whole workspace (`fresh`: also after an ignore file changes) and a
-/// change of git's index or HEAD read it again.
-pub(crate) fn tracked_but_ignored_cached(root: &Path, fresh: bool) -> Vec<PathBuf> {
+/// change of git's index or HEAD read it again. When git cannot list them,
+/// the last list it gave stands (empty if none), with `false`: not the list
+/// of the index as it is; nothing is kept, and the next call asks again.
+pub(crate) fn tracked_but_ignored_cached(root: &Path, fresh: bool) -> (Vec<PathBuf>, bool) {
     type Cache = std::sync::Mutex<std::collections::HashMap<PathBuf, ((std::time::SystemTime, u64, Vec<u8>), Vec<PathBuf>)>>;
     static CACHE: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
-    let Some(stamp) = index_stamp(root) else { return tracked_but_ignored(root) };
+    let last = || cache.lock().unwrap().get(root).map(|(_, f)| f.clone()).unwrap_or_default();
+    let Some(stamp) = index_stamp(root) else {
+        return match tracked_but_ignored(root) {
+            Some(files) => (files, true),
+            None => (last(), false),
+        };
+    };
     if !fresh {
         if let Some((s, files)) = cache.lock().unwrap().get(root) {
             if *s == stamp {
-                return files.clone();
+                return (files.clone(), true);
             }
         }
     }
-    let files = tracked_but_ignored(root);
-    cache.lock().unwrap().insert(root.to_path_buf(), (stamp, files.clone()));
-    files
+    match tracked_but_ignored(root) {
+        Some(files) => {
+            cache.lock().unwrap().insert(root.to_path_buf(), (stamp, files.clone()));
+            (files, true)
+        }
+        None => (last(), false),
+    }
 }
 
 impl Workspace {
@@ -339,7 +358,7 @@ impl Workspace {
             let Some(parent) = d.parent() else { return true };
             ignore::WalkBuilder::new(parent).hidden(true).git_ignore(true).git_exclude(true).parents(true).max_depth(Some(1)).build().flatten().any(|e| e.path() == d)
         };
-        let tracked = tracked_but_ignored_cached(&root, max_depth.is_none() && start.is_none_or(|s| s == root));
+        let (tracked, tracked_known) = tracked_but_ignored_cached(&root, max_depth.is_none() && start.is_none_or(|s| s == root));
         // (only a start that holds such files can be one: a walked directory
         // that became ignored means an ignore file changed, and a walk of the
         // whole workspace follows)
@@ -417,7 +436,7 @@ impl Workspace {
             let kind = classify(&p);
             files.push(SourceFile { path: p, module, kind });
         }
-        Workspace { root, modules, files, dirs, tracked }
+        Workspace { root, modules, files, dirs, tracked, tracked_known }
     }
 
     pub fn module_of(&self, path: &Path) -> Option<usize> {
