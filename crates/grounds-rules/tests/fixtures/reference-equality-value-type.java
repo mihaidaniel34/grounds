@@ -56,11 +56,16 @@ class Rewriter {
         for (int i = 0; i < 3; i++) m = visit(m, ctx);
         return m != original;
     }
-    // a library value: an equal result is a new object
+    // a library value too: true exactly when round() gave back v itself
     java.math.BigDecimal round(java.math.BigDecimal v) { return v; }
     boolean library(java.math.BigDecimal v) {
         java.math.BigDecimal r = round(v);
-        return r == v; // expect
+        return r == v;
+    }
+    // but not against another value
+    boolean libraryUnrelated(java.math.BigDecimal v, java.math.BigDecimal w) {
+        java.math.BigDecimal r = round(v);
+        return r == w; // expect
     }
     // unrelated values: identity is not a change check
     boolean unrelated(Money a, Money b, Object ctx) {

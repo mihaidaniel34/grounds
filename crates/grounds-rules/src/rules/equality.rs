@@ -1102,9 +1102,10 @@ impl Rule for ReferenceEqualityOnValueType {
                 return;
             }
         }
-        // the change check is an idiom of a project's own immutable trees; for
-        // a library value (`BigDecimal r = round(v); r == v`) identity is a bug
-        if identity_fast_path(n, l, r, cx.src) || c.is_source() && change_check(n, l, r, cx) {
+        // a change check asks whether a computation handed back the object
+        // it was given, whatever the type: `BigDecimal r = round(v); r == v`
+        // is true exactly when `round` returned `v` itself
+        if identity_fast_path(n, l, r, cx.src) || change_check(n, l, r, cx) {
             return;
         }
         cx.report(n, format!("`{}` overrides `equals()`; `{}` compares identity", simple_name_of(ln), op(n)));
