@@ -549,16 +549,10 @@
 
     // ---- install ----
     const repo = 'https://github.com/mihaidaniel34/grounds';
-    const ver = '0.1.0';
-    const binary = (target) => [
-      `v=${ver} t=${target}`,
-      `u=github.com/mihaidaniel34/grounds/releases/download`,
-      `curl -fsSL https://$u/v$v/grounds-$v-$t.tar.gz | tar -xz`,
-      `sudo mv grounds-$v-$t/grounds /usr/local/bin/`,
-    ];
+    const script = [`curl -fsSL \\`, `  https://raw.githubusercontent.com/mihaidaniel34/grounds/master/install.sh | sh`];
     const commands = {
-      mac: binary('$(uname -m | sed s/arm64/aarch64/)-apple-darwin'),
-      linux: binary('$(uname -m)-unknown-linux-musl'),
+      mac: script,
+      linux: script,
       nix: [`nix profile install github:mihaidaniel34/grounds`],
       cargo: [`cargo install --locked \\`, `  --git ${repo} grounds-cli`],
     };

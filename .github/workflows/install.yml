@@ -1,0 +1,45 @@
+name: install
+
+# install.sh, run the way users run it (`curl ... | sh`), on every platform a
+# release has a build for, and on Alpine (busybox sh and wget, no curl or bash).
+# It installs the latest published release, so it also runs when one is published.
+on:
+  pull_request:
+    paths: [install.sh, .github/workflows/install.yml]
+  push:
+    branches: [master]
+    paths: [install.sh, .github/workflows/install.yml]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+jobs:
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: latest release, default directory
+        run: |
+          sh < install.sh
+          ~/.local/bin/grounds --version
+      - name: pinned version, given directory
+        run: |
+          sh -s -- --version 0.1.0 --dir "$RUNNER_TEMP/bin" < install.sh
+          test "$("$RUNNER_TEMP/bin/grounds" --version)" = "grounds 0.1.0"
+      - name: a release that does not exist fails
+        run: "! GROUNDS_VERSION=0.0.0 GROUNDS_INSTALL_DIR=$RUNNER_TEMP/none sh < install.sh"
+
+  alpine:
+    runs-on: ubuntu-latest
+    container: alpine:3.22
+    steps:
+      - uses: actions/checkout@v5
+      - name: busybox sh and wget only
+        run: |
+          ! command -v curl
+          sh < install.sh
+          ~/.local/bin/grounds --version
