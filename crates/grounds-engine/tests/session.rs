@@ -1663,6 +1663,72 @@ fn a_tracked_ignored_source_replaced_by_a_symlink_is_gone_for_both() {
     let _ = std::fs::remove_dir_all(&away);
 }
 
+#[cfg(unix)]
+#[test]
+fn a_tracked_ignored_source_under_a_symlinked_directory_is_gone_for_both() {
+    // Review Q1: the symlink is a directory above the file, not the file.
+    // The walk follows no symlink at any depth; neither does the list of
+    // tracked files a fresh load reads.
+    let dir = restored_project("trackedsymlinkdir");
+    let away = dir.with_extension("away");
+    let _ = std::fs::remove_dir_all(&away);
+    std::fs::create_dir_all(&away).unwrap();
+    write(&dir, ".gitignore", "/gen/\n");
+    write(&dir, "gen/demo/Gen.java", "package demo;\npublic class Gen {}\n");
+    git(&dir, &["add", "-f", ".gitignore", "gen/demo/Gen.java"]);
+    git(&dir, &["commit", "-qm", "generated"]);
+    set_tree_mtime(&dir, ".", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
+    let mut s = settled(&dir);
+    assert!(s.project.index.class_exists("demo.Gen"));
+    for link in ["gen/demo", "gen"] {
+        std::fs::rename(dir.join(link), away.join("moved")).unwrap();
+        std::os::unix::fs::symlink(away.join("moved"), dir.join(link)).unwrap();
+        holds_as_fresh(&mut s, &dir, &format!("{link} replaced by a symlink to it"));
+        holds_as_fresh(&mut s, &dir, "a second sync");
+        assert!(!s.project.index.class_exists("demo.Gen"), "through {link}");
+        std::fs::remove_file(dir.join(link)).unwrap();
+        std::fs::rename(away.join("moved"), dir.join(link)).unwrap();
+        holds_as_fresh(&mut s, &dir, &format!("{link} back as a directory"));
+        assert!(s.project.index.class_exists("demo.Gen"), "{link} back");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&away);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_module_a_listing_misses_but_the_discovery_keeps_does_not_reload_at_every_sync() {
+    // Review Q2: a directory that held a module is listed again and its
+    // build file is not found there. Only a walk of the workspace tells
+    // whether a fresh load lays the modules out otherwise; a reload at every
+    // sync for the same layout is no answer. (Here a tracked, ignored build
+    // file below a symlinked directory that cannot be listed.)
+    if !permissions_bind("a_module_a_listing_misses_but_the_discovery_keeps_does_not_reload_at_every_sync") {
+        return;
+    }
+    let dir = restored_project("modulelisting");
+    let away = dir.with_extension("away");
+    let _ = std::fs::remove_dir_all(&away);
+    std::fs::create_dir_all(&away).unwrap();
+    write(&dir, "lib/build.gradle", "plugins { id 'java-library' }\n");
+    write(&dir, ".gitignore", "lib/\n");
+    git(&dir, &["add", "-f", ".gitignore", "lib/build.gradle"]);
+    git(&dir, &["commit", "-qm", "lib"]);
+    std::fs::rename(dir.join("lib"), away.join("lib")).unwrap();
+    std::os::unix::fs::symlink(away.join("lib"), dir.join("lib")).unwrap();
+    chmod(&away, "lib", 0o111);
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    let mut s = settled(&dir);
+    let began = s.project.load_began;
+    for i in 0..5 {
+        laid_out_as_fresh(&mut s, &dir, &format!("unchanged sync {i}"));
+    }
+    no_reload(&s, began, "unchanged syncs");
+    chmod(&away, "lib", 0o755);
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&away);
+}
+
 #[test]
 fn a_hard_link_to_a_build_file_does_not_reload_the_project() {
     // Review P7: a link changes the build file's change time, and nothing

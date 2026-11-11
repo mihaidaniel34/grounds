@@ -522,12 +522,15 @@ impl Session {
                 let listed = walk(&d, Some(1));
                 // a module here that the listing no longer finds (the
                 // directory cannot be listed now, its build file is ignored)
-                // or finds of another build system: a fresh load lays the
-                // modules out otherwise, and the project is loaded again
+                // or finds of another build system: the workspace is walked,
+                // which loads the project again if a fresh load lays the
+                // modules out otherwise (and only then: a listing of one
+                // directory is not the whole discovery)
                 let held = self.project.workspace.modules.iter().filter(|m| m.dir == d);
                 if held.into_iter().any(|h| !listed.modules.iter().any(|m| m.dir == h.dir && m.build_system == h.build_system)) {
-                    crate::trace::log(|| format!("sync: reload, the module at {} is no longer listed as it was", d.display()));
-                    return (Vec::new(), FxHashSet::default(), true);
+                    crate::trace::log(|| format!("sync: the module at {} is no longer listed as it was", d.display()));
+                    full = true;
+                    break;
                 }
                 // what was held below it by a name it no longer lists exactly
                 // (gone, now a symlink, renamed in case only on a file system
@@ -553,6 +556,11 @@ impl Session {
                 found_modules.extend(modules(&listed));
                 found.extend(files(listed));
             }
+        }
+        // the same for a module in a directory forgotten (gone, now a symlink)
+        if !full && self.project.workspace.modules.iter().any(|m| forgotten.iter().any(|f| m.dir.starts_with(f))) {
+            crate::trace::log(|| "sync: a module's directory is no longer walked".into());
+            full = true;
         }
         if full {
             crate::trace::log(|| "sync: an ignore file changed, walking the workspace".into());
@@ -583,10 +591,6 @@ impl Session {
             found = files(w).collect();
             let all: FxHashSet<&PathBuf> = found.iter().collect();
             gone = self.stamps.keys().filter(|p| !all.contains(p)).cloned().collect();
-        }
-        if !full && self.project.workspace.modules.iter().any(|m| forgotten.iter().any(|f| m.dir.starts_with(f))) {
-            crate::trace::log(|| "sync: reload, a module's directory is no longer walked".into());
-            return (Vec::new(), FxHashSet::default(), true);
         }
         let module = found_modules.iter().find(|d| !self.project.workspace.modules.iter().any(|m| m.dir == **d));
         if let Some(d) = module {
