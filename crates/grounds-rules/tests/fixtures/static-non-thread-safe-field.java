@@ -19,3 +19,14 @@ class UnguardedFormat {
     static synchronized String format(java.util.Date d) { return FORMAT.format(d); }
     static String plain(java.util.Date d) { return FORMAT.format(d); }
 }
+class LocalOfTheSameName {
+    // a local named like the field does not stop the guarded field's suppression
+    private static final java.text.SimpleDateFormat FORMAT = new java.text.SimpleDateFormat("yyyy");
+    static synchronized String format(java.util.Date d) { return FORMAT.format(d); }
+    static String other() { String FORMAT = "x"; return FORMAT; }
+}
+class EscapingLambda {
+    private static final java.text.SimpleDateFormat FORMAT = new java.text.SimpleDateFormat("yyyy"); // expect
+    // the lambda runs after the monitor is released
+    static synchronized Runnable task(java.util.Date d) { return () -> FORMAT.format(d); }
+}

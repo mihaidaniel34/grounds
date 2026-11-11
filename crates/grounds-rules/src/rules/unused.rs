@@ -25,7 +25,9 @@ fn is_write_only(u: Node) -> bool {
         // value is used (`return x += 1`), not as a statement of its own
         Some(p) if p.kind() == "assignment_expression" => {
             p.field("left").map(|l| l.unparen()) == Some(u)
-                && (p.field("operator").is_some_and(|o| o.kind() == "=") || p.parent().is_some_and(|pp| pp.kind() == "expression_statement" || pp.kind() == "for_statement"))
+                && (p.field("operator").is_some_and(|o| o.kind() == "=")
+                    // (a `for` condition uses the value; its init and update do not)
+                    || p.parent().is_some_and(|pp| pp.kind() == "expression_statement" || (pp.kind() == "for_statement" && pp.field("condition") != Some(p))))
         }
         Some(p) if p.kind() == "update_expression" => p.parent().is_some_and(|pp| pp.kind() == "expression_statement" || pp.kind() == "for_statement"),
         _ => false,

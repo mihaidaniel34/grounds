@@ -4,7 +4,7 @@ use crate::framework::*;
 use crate::util::*;
 use crate::{declare_rule, rule_meta};
 use grounds_index::*;
-use grounds_semantic::MethodMatcher;
+use grounds_semantic::{MethodMatcher, Symbol};
 use grounds_syntax::{Node, NodeExt};
 
 pub fn rules() -> Vec<Box<dyn Rule>> {
@@ -315,11 +315,32 @@ fn only_used_synchronized<'t>(field: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
         return false;
     }
     let Some(top) = crate::rules::unused::top_level_decl(field) else { return false };
+    let Some(cls) = owning_type_decl(field).and_then(|d| cx.fm.class_of_decl(d)) else { return false };
     let names: Vec<&str> = field.kids().into_iter().filter(|k| k.kind() == "variable_declarator").filter_map(|d| d.field("name")).map(|x| cx.text(x)).collect();
     let (top_range, own) = (top.byte_range(), field.byte_range());
-    let uses: Vec<Node<'t>> = names.iter().flat_map(|name| cx.fm.occurrences(name).iter().copied().collect::<Vec<_>>()).filter(|o| top_range.contains(&o.start_byte()) && !own.contains(&o.start_byte())).collect();
-    !uses.is_empty()
-        && uses.iter().all(|u| u.ancestors().any(|a| a.kind() == "synchronized_statement" || (a.kind() == "method_declaration" && a.has_modifier("synchronized"))))
+    // the uses of this field, not of a local or another class's field of the same name
+    let this_field = |o: &Node<'t>, name: &str| match cx.fm.symbol(*o) {
+        Some(Symbol::Field(f)) => f.owner == cls.name && &*f.field.name == name,
+        _ => o.parent().is_some_and(|p| p.kind() == "field_access" && p.field("field") == Some(*o) && cx.fm.field_ref(p).is_some_and(|f| f.owner == cls.name && &*f.field.name == name)),
+    };
+    let uses: Vec<Node<'t>> = names
+        .iter()
+        .flat_map(|name| cx.fm.occurrences(name).iter().filter(|o| o.kind() == "identifier" && top_range.contains(&o.start_byte()) && !own.contains(&o.start_byte()) && this_field(o, name)).copied().collect::<Vec<_>>())
+        .collect();
+    // held where the use runs: not inherited by a lambda or a class body
+    // inside the synchronized code, which may run after the monitor is released
+    let guarded = |u: &Node<'t>| {
+        for a in u.ancestors() {
+            match a.kind() {
+                "synchronized_statement" => return true,
+                "method_declaration" => return a.has_modifier("synchronized"),
+                "lambda_expression" | "class_body" | "constructor_declaration" => return false,
+                _ => {}
+            }
+        }
+        false
+    };
+    !uses.is_empty() && uses.iter().all(guarded)
 }
 
 const THREAD_SLEEP: MethodMatcher = MethodMatcher::statics("java.lang.Thread").named(&["sleep"]);

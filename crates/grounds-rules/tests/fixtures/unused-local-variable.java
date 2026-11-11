@@ -21,3 +21,10 @@ class CompoundReads {
         m += 1;
     }
 }
+class LoopConditionRead {
+    boolean next() { return false; }
+    void drain() {
+        boolean more = true;
+        for (; more &= next(); ) { }
+    }
+}
