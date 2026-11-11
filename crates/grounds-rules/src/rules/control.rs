@@ -5,6 +5,7 @@ use crate::util::*;
 use crate::{declare_rule, rule_meta};
 use grounds_index::*;
 use grounds_syntax::{Node, NodeExt};
+use grounds_semantic::MethodMatcher;
 
 pub fn rules() -> Vec<Box<dyn Rule>> {
     vec![
@@ -1446,9 +1447,14 @@ impl Rule for LoopBoundOffByOne {
     }
 }
 
-/// Calls that answer the same twice when nothing in between writes.
+/// Calls that answer the same each time on the same receiver: the length of
+/// a `String` and the ordinal of an enum constant, which never change. Not
+/// any `size()` or `length()` by its name: a collection or a `StringBuilder`
+/// may change between two calls (another thread, a concurrent collection),
+/// and a project's own `size()` may answer differently each time.
 fn is_stable_call<'t>(d: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
-    matches!(cx.fm.call_name(d), Some("size" | "length" | "ordinal")) && cx.fm.args_of(d).is_empty()
+    const STABLE: [MethodMatcher; 2] = [MethodMatcher::exact("java.lang.String").named(&["length"]).arity(0), MethodMatcher::exact("java.lang.Enum").named(&["ordinal"]).arity(0)];
+    d.kind() == "method_invocation" && cx.fm.call_matches_any(d, &STABLE)
 }
 
 /// `x < 3` or `3 > x` as (x, "<", 3): a side-effect-free operand compared

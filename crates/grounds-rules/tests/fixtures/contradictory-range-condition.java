@@ -1,5 +1,7 @@
 import java.util.List;
 
+enum Color { RED, GREEN }
+
 class A {
     static final int MIN = 10;
     static final int MAX = 5;
@@ -17,9 +19,9 @@ class A {
         r |= boxed == 1 && boxed == 2; // expect
         r |= c == 'a' && c == 'b'; // expect
         r |= x > MIN && x < MAX; // expect
-        r |= list.size() > 3 && list.size() < 2; // expect
         r |= s.length() == 0 && s.length() > 0; // expect
         r |= this.state == 1 && this.state == 2; // expect
+        r |= Color.RED.ordinal() > 3 && Color.RED.ordinal() < 2; // expect
         return r;
     }
 
@@ -31,7 +33,7 @@ class A {
         return r;
     }
 
-    boolean fine(int x, int y, double d, List<String> list, java.util.Iterator<Integer> it, java.io.InputStream in) throws Exception {
+    boolean fine(int x, int y, double d, List<String> list, java.util.Iterator<Integer> it, java.io.InputStream in, StringBuilder sb) throws Exception {
         boolean r = x > 3 && x < 5;
         r |= x >= 5 && x <= 5;
         r |= x > 5 && y < 3;
@@ -52,7 +54,19 @@ class A {
         r |= x == 1 && (x = y) == 2 && x == 2;
         r |= state == 1 && advance() && state == 2;
         r |= list.size() == 1 && list.add("x") && list.size() == 2;
+        // a list may change between two calls (another thread, a concurrent
+        // list), and so may a StringBuilder
+        r |= list.size() > 3 && list.size() < 2;
+        r |= sb.length() > 3 && sb.length() < 2;
+        // a size() of the project's own may answer differently each time
+        r |= size() > 3 && size() < 3;
         return r;
+    }
+
+    int size() {
+        int result = state;
+        state -= 2;
+        return result;
     }
 
     boolean advance() {
