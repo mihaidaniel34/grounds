@@ -185,7 +185,9 @@ def main():
         ap.error("--commits must be at least 1")
     if a.budget is not None and not (math.isfinite(a.budget) and a.budget > 0):
         ap.error("--budget must be a positive number of seconds")
-    if not a.timeout > 0:
+    # (infinity passes `> 0` and then overflows in subprocess's polling; NaN
+    # fails every comparison and would never time out)
+    if not (math.isfinite(a.timeout) and a.timeout > 0):
         ap.error("--timeout must be a positive number of seconds")
     TIMEOUT = a.timeout
     d = os.path.abspath(a.dir)
