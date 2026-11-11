@@ -654,8 +654,14 @@ fn format_parts<'t>(fmt: &str, args: &[Node<'t>], out: &mut Vec<SqlPart<'t>>) ->
 /// `into`, `update`, `join`, `table`, or after a qualifier (`t.`)?
 fn identifier_position(before: &str) -> bool {
     // inside a quoted literal (`host = 'www.` + host): a value; inside a
-    // comment (`-- ` + note, `/* ` + note): not a name either
-    let Some(before) = sql_code(before) else { return false };
+    // comment (`-- ` + note, `/* ` + note): not a name either. Where the
+    // dialects disagree about the text before, where it ends is not known,
+    // and the text is taken for a name, which keeps the rule silent.
+    let before = match sql_code(before) {
+        SqlLexed::Code(code) => code,
+        SqlLexed::Inside => return false,
+        SqlLexed::Unknown => return true,
+    };
     let before = before.as_str();
     if before.ends_with('.') {
         return true;
@@ -668,11 +674,22 @@ fn identifier_position(before: &str) -> bool {
     ["from", "into", "update", "join", "table"].iter().any(|k| lower.strip_suffix(k).is_some_and(|rest| !rest.ends_with(|c: char| c.is_alphanumeric() || c == '_')))
 }
 
-/// SQL text as the database reads it, comments (`-- ..`, `/* .. */`) made
-/// blanks, so that an apostrophe in a comment (`/* don't .. */`) does not
-/// open a literal; `None` when the text ends inside a quoted literal or
-/// identifier, or inside a comment. A quote in a literal is doubled (`'it''s'`).
-fn sql_code(text: &str) -> Option<String> {
+/// SQL text as a lexer reads it.
+enum SqlLexed {
+    /// Outside literals and comments: the text, comments made blanks, so
+    /// that an apostrophe in a comment (`/* don't .. */`) opens no literal.
+    Code(String),
+    /// Inside a quoted literal or identifier, or a comment.
+    Inside,
+    /// Where the dialects read it differently: a backslash in a literal
+    /// (an escape in MySQL and in PostgreSQL's `E'..'`, a character in
+    /// standard SQL), a `$tag$` (PostgreSQL's dollar quote), a `/*` inside
+    /// a block comment (nested in PostgreSQL, not elsewhere).
+    Unknown,
+}
+
+/// A quote in a literal is doubled (`'it''s'`), which every dialect reads alike.
+fn sql_code(text: &str) -> SqlLexed {
     #[derive(PartialEq)]
     enum At {
         Code,
@@ -700,9 +717,21 @@ fn sql_code(text: &str) -> Option<String> {
                     at = At::Block;
                     out.push(' ');
                 }
+                // `$$` or `$tag$`, not a parameter (`$1`)
+                '$' => {
+                    let tag: String = cs.clone().take_while(|k| k.is_ascii_alphanumeric() || *k == '_').collect();
+                    let after = cs.clone().nth(tag.chars().count());
+                    if after == Some('$') && !tag.starts_with(|k: char| k.is_ascii_digit()) {
+                        return SqlLexed::Unknown;
+                    }
+                    out.push(c);
+                }
                 _ => out.push(c),
             },
             At::Quoted(q) => {
+                if c == '\\' {
+                    return SqlLexed::Unknown;
+                }
                 out.push(c);
                 if c == q {
                     at = At::Code;
@@ -715,6 +744,9 @@ fn sql_code(text: &str) -> Option<String> {
                 }
             }
             At::Block => {
+                if c == '/' && cs.peek() == Some(&'*') {
+                    return SqlLexed::Unknown;
+                }
                 if c == '*' && cs.peek() == Some(&'/') {
                     cs.next();
                     at = At::Code;
@@ -722,7 +754,11 @@ fn sql_code(text: &str) -> Option<String> {
             }
         }
     }
-    (at == At::Code).then_some(out)
+    if at == At::Code {
+        SqlLexed::Code(out)
+    } else {
+        SqlLexed::Inside
+    }
 }
 
 declare_rule!(SqlInjection {
