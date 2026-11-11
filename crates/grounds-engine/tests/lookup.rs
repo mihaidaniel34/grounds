@@ -366,3 +366,26 @@ fn a_build_that_states_its_group_is_not_given_another_one_by_its_packages() {
     );
     assert_eq!(findings(&dir), vec!["app/src/main/java/org/example/app/App.java:4 unresolved-method".to_string()]);
 }
+
+#[test]
+fn a_supertype_declared_twice_is_read_from_the_copy_the_file_compiles_against() {
+    // a library kept with an old copy of its sources as test data (outside
+    // any source root): in the library's own code, its Node is the one
+    // compiled with it, and names in a subclass resolve as javac resolves them
+    let dir = project(
+        "supertype-copy",
+        &[
+            ("core/src/main/java/p/Base.java", "package p;\npublic class Base {}\n"),
+            ("core/src/main/java/p/Node.java", "package p;\npublic abstract class Node extends Base {}\n"),
+            // (the same package and an on-demand import come after what a
+            // supertype may declare)
+            ("core/src/main/java/p/Thing.java", "package p;\npublic class Thing { public void real() {} }\n"),
+            ("core/src/main/java/r/Other.java", "package r;\npublic class Other { public void real() {} }\n"),
+            ("core/src/main/java/p/Leaf.java", "package p;\nimport r.*;\npublic class Leaf extends Node {\n    void f(Thing t, Other o) { t.real(); t.missing(); o.real(); o.gone(); }\n}\n"),
+            // the old copy: another supertype, which may declare a member type Thing
+            ("core/src/test/test_sourcecode/v1/p/Node.java", "package p;\npublic abstract class Node implements Old {}\n"),
+            ("core/src/test/test_sourcecode/v1/p/Old.java", "package p;\npublic interface Old {}\n"),
+        ],
+    );
+    assert_eq!(findings(&dir), vec!["core/src/main/java/p/Leaf.java:4 unresolved-method".to_string(), "core/src/main/java/p/Leaf.java:4 unresolved-method".to_string()]);
+}

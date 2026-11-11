@@ -1326,7 +1326,29 @@ impl Index {
                 return own;
             }
         }
+        // a supertype declared in several files: the copy the scope's file
+        // certainly compiles against (its module's), when there is one
+        if let Some(file) = scope.and_then(|s| self.scope_file(s)) {
+            if let Some((stub, raw, _)) = self.certain_copy(owner, &file) {
+                return vec![(stub, raw)];
+            }
+        }
         all
+    }
+
+    /// The file whose stub the scope's imports belong to (cached for the
+    /// last scope asked about: a file's lookups ask about the same one).
+    fn scope_file(&self, scope: &Scope) -> Option<Arc<str>> {
+        thread_local! {
+            static LAST: std::cell::RefCell<Option<(usize, u64, usize, Option<Arc<str>>)>> = const { std::cell::RefCell::new(None) };
+        }
+        let key = (self as *const Index as usize, self.generation, scope.imports as *const _ as *const u8 as usize);
+        if let Some(hit) = LAST.with(|l| l.borrow().as_ref().filter(|(i, g, p, _)| (*i, *g, *p) == key).map(|(_, _, _, f)| f.clone())) {
+            return hit;
+        }
+        let file = self.files.iter().find(|(_, st)| std::ptr::eq(&st.imports, scope.imports)).map(|(f, _)| f.clone());
+        LAST.with(|l| *l.borrow_mut() = Some((key.0, key.1, key.2, file.clone())));
+        file
     }
 
     /// Whether the copies of `owner` code in `scope` may read disagree about
@@ -1402,7 +1424,7 @@ impl Index {
             }
         }
         for s in sups {
-            match self.member_type_rec(&s, simple, seen, depth + 1, None) {
+            match self.member_type_rec(&s, simple, seen, depth + 1, scope) {
                 MemberType::Found(n) => return MemberType::Found(n),
                 MemberType::Unknown => unknown = true,
                 MemberType::NotFound => {}
