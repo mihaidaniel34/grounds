@@ -36,6 +36,12 @@ jobs:
       - name: a release that does not exist fails
         run: |
           if GROUNDS_VERSION=0.0.0 GROUNDS_INSTALL_DIR=$RUNNER_TEMP/none sh < install.sh; then exit 1; fi
+      - name: a directory every user may write to is refused unless sticky
+        run: |
+          mkdir -m 777 "$RUNNER_TEMP/open" && chmod 777 "$RUNNER_TEMP/open"
+          if sh -s -- --dir "$RUNNER_TEMP/open" < install.sh; then exit 1; fi
+          chmod +t "$RUNNER_TEMP/open"
+          sh -s -- --dir "$RUNNER_TEMP/open" < install.sh
       - name: without HOME, --dir and --help still work
         run: |
           env -u HOME sh -s -- --help < install.sh
@@ -47,11 +53,12 @@ jobs:
     container: alpine:3.22
     steps:
       - uses: actions/checkout@v5
-      - name: busybox sh and wget only
+      - name: busybox wget alone is refused
         run: |
           if command -v curl; then echo "curl must be absent here" >&2; exit 1; fi
-          # the script trusts this wget only because it checks certificates
-          if wget -q -O /dev/null https://expired.badssl.com/; then echo "wget accepted an expired certificate" >&2; exit 1; fi
-          if wget -q -O /dev/null https://wrong.host.badssl.com/; then echo "wget accepted a certificate for another host" >&2; exit 1; fi
+          if sh < install.sh; then echo "installed with busybox wget" >&2; exit 1; fi
+      - name: busybox sh and curl
+        run: |
+          apk add -q curl
           sh < install.sh
           ~/.local/bin/grounds --version

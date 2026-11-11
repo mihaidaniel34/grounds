@@ -55,24 +55,17 @@ main() {
 			u=$(curl -fsSLI --proto '=https' --tlsv1.2 -o /dev/null -w '%{url_effective}' \
 				"https://github.com/$repo/releases/latest") && echo "${u##*/tag/}"
 		}
-	elif command -v wget >/dev/null 2>&1; then
-		# GNU wget checks TLS certificates. Busybox's does only through Alpine's
-		# ssl_client helper; its built-in TLS and its openssl fallback do not,
-		# and the checksum comes over the same connection, so refuse those.
-		case $(wget --version 2>/dev/null) in
-		*"GNU Wget"*) ;;
-		*) command -v ssl_client >/dev/null 2>&1 ||
-			fail "this wget may not check TLS certificates; install curl (or GNU wget) and run again" ;;
-		esac
-		fetch() { wget -q -O "$2" "$1"; }
-		# The release redirect needs headers wget prints differently per
-		# implementation; the API is limited to 60 requests an hour per address.
+	elif case $(wget --version 2>/dev/null) in "GNU Wget"*) true ;; *) false ;; esac then
+		# Only GNU wget: busybox's may use its own TLS code, which does not
+		# check certificates, and the checksum comes over the same connection.
+		fetch() { wget -q --https-only -O "$2" "$1"; }
 		latest_tag() {
-			wget -q -O - "https://api.github.com/repos/$repo/releases/latest" |
-				sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' | head -n 1
+			wget -q --https-only -S --max-redirect=0 -O /dev/null \
+				"https://github.com/$repo/releases/latest" 2>&1 |
+				sed -n 's|^ *[Ll]ocation: .*/tag/\([^[:space:]]*\).*|\1|p' | tail -n 1
 		}
 	else
-		fail "neither curl nor wget is installed"
+		fail "this needs curl or GNU wget (on Alpine: apk add curl)"
 	fi
 
 	target=$(detect_target)
@@ -109,6 +102,10 @@ main() {
 
 	mkdir -p "$dir" 2>/dev/null || fail "cannot create $dir; choose another with --dir"
 	[ -w "$dir" ] || fail "cannot write to $dir; choose another with --dir (or run with sudo)"
+	# In a directory anyone may write to without the sticky bit, another user
+	# could swap the staging file or the installed binary for their own.
+	[ -z "$(find "$dir" -maxdepth 0 -perm -0002 ! -perm -1000 2>/dev/null)" ] ||
+		fail "$dir is writable by every user and not sticky; choose another with --dir"
 	# Copy to a new file of our own next to the target and rename it over the
 	# target, so a running grounds (the daemon) keeps its file, nobody sees a
 	# half-written one, and nothing someone else put in DIR is written through.

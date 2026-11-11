@@ -286,7 +286,8 @@ Prebuilt binaries on the
 (Apple Silicon and Intel, 11+) and Linux (x86_64 and arm64, statically
 linked, so any distribution works, Alpine and NixOS included). The install
 script picks the one for your machine, checks it against the release's
-SHA-256 sum and puts `grounds` in `~/.local/bin`, without sudo:
+SHA-256 sum and puts `grounds` in `~/.local/bin`, without sudo (it needs curl
+or GNU wget):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/mihaidaniel34/grounds/master/install.sh | sh
