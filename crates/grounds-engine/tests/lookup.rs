@@ -349,3 +349,20 @@ fn a_group_is_the_projects_only_for_the_module_it_is_stated_or_inferred_for() {
     );
     assert_eq!(findings(&dir), vec!["app/src/main/java/org/acme/app/App.java:4 unresolved-method".to_string()]);
 }
+
+#[test]
+fn a_build_that_states_its_group_is_not_given_another_one_by_its_packages() {
+    let dir = project(
+        "group-stated",
+        &[
+            ("settings.gradle", "include 'guava', 'app'\n"),
+            ("build.gradle", "allprojects { group = 'org.example' }\nsubprojects { apply plugin: 'java' }\n"),
+            ("guava/build.gradle", "\n"),
+            ("guava/src/main/java/com/google/guava/Shim.java", "package com.google.guava;\npublic class Shim {}\n"),
+            ("guava/src/main/java/org/example/Thing.java", "package org.example;\npublic class Thing {}\n"),
+            ("app/build.gradle", "dependencies {\n  implementation 'com.google.guava:guava:33.0.0-jre'\n  implementation project(':guava')\n}\n"),
+            ("app/src/main/java/org/example/app/App.java", "package org.example.app;\nimport org.example.Thing;\nclass App {\n    void f() { new Thing().missing(); }\n}\n"),
+        ],
+    );
+    assert_eq!(findings(&dir), vec!["app/src/main/java/org/example/app/App.java:4 unresolved-method".to_string()]);
+}
