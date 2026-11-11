@@ -151,7 +151,9 @@ impl ClassContainer {
                 // the root of a file system (`/`) holds every other
                 // directory, /proc and network mounts too, and is never one
                 // of compiled packages: over the limit without a walk, whose
-                // time would be the file system's to decide
+                // time would be the file system's to decide (and, like any
+                // directory too large to list, it lends no class a name: a
+                // class in it is found only if another entry lists it)
                 if real.parent().is_none() {
                     return None;
                 }
@@ -171,7 +173,8 @@ impl ClassContainer {
                         let link = kind.is_symlink();
                         if kind.is_dir() || (link && p.is_dir()) {
                             let real = if link { p.canonicalize().ok() } else { Some(above.real.join(e.file_name())) };
-                            if let Some(real) = real.filter(|r| !within(r, Some(&above))) {
+                            // (nor is it entered through a link: `up -> /`)
+                            if let Some(real) = real.filter(|r| r.parent().is_some() && !within(r, Some(&above))) {
                                 todo.push((p, std::rc::Rc::new(Above { real, up: Some(above.clone()) })));
                             }
                         // a regular file: a pipe named `A.class` would block the read
@@ -303,6 +306,20 @@ mod tests {
         });
         let none = rx.recv_timeout(std::time::Duration::from_secs(2)).expect("listing / must not walk the file system");
         assert!(none, "/ is no directory of classes");
+    }
+
+    #[test]
+    fn a_link_to_the_root_of_the_file_system_is_not_followed() {
+        // Review round 3 on #101 (H2): `escape -> /` inside a class directory
+        // led the walk to / again.
+        let dir = std::env::temp_dir().join(format!("grounds-classdir-escape-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("p")).unwrap();
+        std::fs::write(dir.join("p/A.class"), b"").unwrap();
+        std::os::unix::fs::symlink("/", dir.join("escape")).unwrap();
+        let names = ClassContainer::open_dir(&dir).class_names_within(DIR_LIMIT);
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(names, Some(vec!["p/A".to_string()]), "the directory is listed, / is not");
     }
     #[test]
     fn a_class_directory_with_a_symlink_loop_is_listed_once() {
