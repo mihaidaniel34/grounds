@@ -78,7 +78,7 @@ declare_rule!(AssertionArgumentOrder {
     name: "Expected and actual swapped in assertEquals",
     category: Testing,
     severity: Warning,
-    maturity: Preview,
+    maturity: Stable,
     scope: Test,
     sources: ["sonar:S3415"],
     kinds: ["method_invocation"],

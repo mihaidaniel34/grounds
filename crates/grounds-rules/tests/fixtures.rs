@@ -156,14 +156,23 @@ fn every_rule_has_a_fixture_and_valid_metadata() {
     assert!(missing.is_empty(), "rules without fixtures: {missing:?}");
 }
 
-/// The stable rules: none yet. The first candidates were the rules that say
-/// code would not compile or the application would not start, which have a
-/// zero-tolerance gate on the corpus. A measurement on 20 projects the rules
-/// were never tuned on (docs/holdout/2026-11.md) found 298 of their 313
-/// findings there false, so they stay preview until the causes are fixed and
-/// a fresh measurement shows it. A rule moves here only with such evidence;
+/// The stable rules, in `grounds check` and `grounds changed` alike. Each has
+/// at least 20 judged findings with at most 1 false on the 60 projects of the
+/// three hold-out sets, which the rules were never tuned on
+/// (docs/holdout/2026-11.md, 2026-11b.md, 2026-11c.md: 8 sampled findings
+/// per rule and set). `fixme-comment` meets the same bar but only marks a
+/// comment, so it stays preview. A rule moves here only with such evidence;
 /// this list makes that a deliberate change.
-const STABLE: &[&str] = &[];
+const STABLE: &[&str] = &[
+    "assertion-argument-order",
+    "public-static-mutable-container",
+    "public-static-non-final-field",
+    "redundant-null-check",
+    "static-non-thread-safe-field",
+    "unused-local-variable",
+    "unused-private-field",
+    "unused-private-method",
+];
 
 /// The rules stable in `grounds changed` only, where their findings are
 /// reported when new with the change: the compile-break rules. A replay of

@@ -5,15 +5,19 @@ coding agent makes. It reports bugs, compile breaks and Spring/Micronaut
 wiring mistakes in changed code in about 0.1–0.3 seconds, without Gradle,
 Maven or a JVM.
 
-**Status: experimental.** The rules were tuned on the open-source codebases
-listed below and measured on 40 more they had never seen. One thing is
-promised: what `grounds changed` reports as no longer compiling because of a
-change, which on 514 commits of those 40 projects reported nothing false (see
-[Stable and preview rules](#stable-and-preview-rules)). Everything else is
-preview: expect false positives on code that looks different from the
-corpus, most of all from `grounds check` over a whole project, and
-unsupported setups. Bug reports with a code snippet are the most useful thing
-you can send.
+**Status: early, with a narrow promise.** The rules were tuned on the
+open-source codebases listed below and measured on 60 more they had never
+seen. Two things are promised (see
+[Stable and preview rules](#stable-and-preview-rules)): what
+`grounds changed` reports as no longer compiling because of a change, which
+after 979 real commits of those 60 projects reported 12 breaks, all right;
+and the findings of eight rules (unused code, mutable or non-final public
+static state, a non-thread-safe static field, a redundant null check,
+swapped assertion arguments), right in 183 of 188 judged findings there.
+Everything else is preview: expect false positives on code that looks
+different from the corpus, most of all from `grounds check` over a whole
+project, and unsupported setups. Bug reports with a code snippet are the
+most useful thing you can send.
 
 ## Why
 
@@ -471,15 +475,26 @@ and uses the release before it, with the same silence about JDK subclasses.
 
 ### Stable and preview rules
 
-**The promise: what `grounds changed` reports as no longer compiling because
-of a change is stable.** That is a place in another file that the change
-broke, or a compile-break finding on a changed line that is new with the
-change. Run over a whole project with `grounds check`, the same rules are
-preview, and so is every other rule, the wiring rules included.
+**The promise has two parts.**
+
+1. **What `grounds changed` reports as no longer compiling because of a
+   change.** That is a place in another file that the change broke, or a
+   compile-break finding on a changed line that is new with the change. Run
+   over a whole project with `grounds check`, the same rules are preview.
+2. **Eight rules, in every mode:** `unused-local-variable`,
+   `unused-private-field`, `unused-private-method`,
+   `public-static-mutable-container`, `public-static-non-final-field`,
+   `static-non-thread-safe-field`, `redundant-null-check` and
+   `assertion-argument-order`. `grounds rules` and
+   [docs/RULES.md](docs/RULES.md) list them as `stable`.
+
+Every other rule is preview, the wiring rules included.
 
 Stable means that a false report is a bug in grounds, to be fixed, and that
 the rate of false reports is measured on projects the rules were never tuned
-on. Preview means that the findings are often right but not held to that.
+on. A rule becomes stable with at least 20 judged findings on such projects,
+at most 1 of them false. Preview means that the findings are often right but
+not held to that.
 
 "No longer compiling" is what six rules claim: `unresolved-method`,
 `unresolved-constructor`, `unresolved-field`, `override-matches-nothing`,
@@ -523,7 +538,23 @@ comparison is measured for them. "New with the change" means:
   new unless an untouched file got the same claim.
 
 The evidence, all on projects the rules were never tuned on
-([corpus/holdout.tsv](corpus/holdout.tsv)):
+([corpus/holdout.tsv](corpus/holdout.tsv)), first for the eight rules:
+
+- **The eight stable rules:** 8 findings of each rule were sampled at random
+  on each of three sets of 20 projects and judged by hand, with a reason for
+  each verdict ([2026-11](docs/holdout/2026-11.md),
+  [2026-11b](docs/holdout/2026-11b.md),
+  [2026-11c](docs/holdout/2026-11c.md)). Of 188 judged findings, 183 were
+  right, and no rule had more than 1 false one: `unused-local-variable`,
+  `unused-private-field` and `public-static-mutable-container` 24 of 24;
+  `unused-private-method`, `public-static-non-final-field`,
+  `redundant-null-check` and `assertion-argument-order` 23 of 24;
+  `static-non-thread-safe-field` 19 of 20. The first two sets were later
+  used to fix other rules, and those verdicts were made before the fixes;
+  only the third set was never used for anything else. `fixme-comment`
+  meets the same bar but only marks a comment, so it stays preview.
+
+Then for what `grounds changed` reports as no longer compiling:
 
 - **Whole project (`grounds check`):** 313 compile-break and wiring findings
   on 20 projects, 298 false; the 15 true ones are in files no build compiles
@@ -539,6 +570,23 @@ The evidence, all on projects the rules were never tuned on
   246 such findings on those projects, 18 of them in files the replayed
   commits edited ([2026-11-replay](docs/holdout/2026-11-replay.md)). A gap in
   the model is there before and after the change alike, and cancels out.
+- **A third, fresh set** of 20 projects, after the fixes made from the
+  first two ([2026-11c](docs/holdout/2026-11c.md)): 465 commits replayed, 12
+  break reports from the stable rules, at two commits that did not compile,
+  and javac agrees with all 12. That makes 979 commits of 60 projects, and
+  12 reports, all right: too few to state a rate of false reports. One false
+  case was found on that set over the whole project (a call to a record
+  whose last component is varargs and which declares a compact constructor,
+  4 findings) and reproduced in `grounds changed`; it is fixed (#85). The
+  daemon and a fresh run agreed at every commit.
+- **Recall:** on 3,551 scripted edits of the same 60 projects that certainly
+  break another file, `grounds changed` reported 85%: 94–100% of renamed,
+  removed, re-parametrised or privatised methods, deleted or renamed
+  classes and renamed fields, about two thirds of new abstract methods, and
+  under one in ten changed return types whose result is used
+  ([2026-11-recall](docs/holdout/2026-11-recall.md), 2026-11c). 720 edits
+  that break nothing got no report. Silence is not evidence that nothing
+  broke.
 - **In CI:** every corpus run replays each corpus project's latest commits
   with Java changes the same way (`scripts/replay.py`); the run that made the
   replay a gate covered 321 commits on 25 projects with no break report and no
@@ -562,14 +610,16 @@ The evidence, all on projects the rules were never tuned on
 
 What is not promised:
 
-- **`grounds check` over a whole project.** The six rules are preview
-  there, for the numbers above.
+- **`grounds check` over a whole project, for the compile-break rules.**
+  The six rules are preview there, for the numbers above. The eight stable
+  rules are stable there too.
 - **The wiring rules**, in either mode, for the reason above. In the replay
   of 514 commits they reported nothing on changed lines either, but their
   comparison is not reliable enough to promise.
 - **Every other rule**, in either mode. In the replay, the findings of the
   other rules on changed lines were 22 true of 73 (warnings 20 of 68, errors
-  2 of 5).
+  2 of 5). On the third set, sampled findings of the preview rules were right
+  62% of the time for warnings and 46% for errors.
 - **New code using a feature the model lacks.** The first use of it in a
   project is reported, and the report is false: say a new Micronaut factory
   method with a project meta-annotation and its first injection point, or a
@@ -600,11 +650,11 @@ preview = false   # only what is stable (true runs preview rules too)
 ```
 
 With `preview = false`, `grounds changed` and the hooks run only the six
-compile-break rules, so in a git repository they report only what a change
-broke so that it no longer compiles (with `--all-lines` or outside git,
-findings of those rules that cannot be compared with a base are reported as
-preview), and
-`grounds check` runs no rule, since none is stable over a whole project. A rule named by its id (or one of its source ids, such as
+compile-break rules and the eight stable rules, so in a git repository they
+report what a change broke so that it no longer compiles, plus the stable
+rules' findings (with `--all-lines` or outside git, findings of the
+compile-break rules that cannot be compared with a base are reported as
+preview), and `grounds check` runs the eight stable rules. A rule named by its id (or one of its source ids, such as
 `sonar:S2259`) in `enable` or in `check --rules` runs whatever its maturity,
 so `grounds check --rules null-dereference` works with `preview = false`.
 Naming a category (`enable = ["bug"]`) selects only its stable rules when

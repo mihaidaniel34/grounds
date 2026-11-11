@@ -286,7 +286,7 @@ declare_rule!(StaticDateFormat {
     name: "Static field of a non-thread-safe type",
     category: Concurrency,
     severity: Warning,
-    maturity: Preview,
+    maturity: Stable,
     sources: ["sonar:S2885", "spotbugs:STCAL_STATIC_SIMPLE_DATE_FORMAT_INSTANCE", "spotbugs:STCAL_STATIC_CALENDAR_INSTANCE", "pmd:UnsynchronizedStaticFormatter"],
     kinds: ["field_declaration"],
     description: "`SimpleDateFormat`, `DateFormat`, `Calendar`, `MessageFormat` and `DecimalFormat` keep internal state; sharing one instance across threads produces garbage results. Use `DateTimeFormatter` or a ThreadLocal.",

@@ -302,7 +302,7 @@ declare_rule!(RedundantNullCheck {
     name: "Null check of a value that cannot be null",
     category: Bug,
     severity: Warning,
-    maturity: Preview,
+    maturity: Stable,
     sources: ["sonar:S2583", "sonar:S2589", "spotbugs:RCN_REDUNDANT_NULLCHECK_OF_NONNULL_VALUE", "spotbugs:RCN_REDUNDANT_NULLCHECK_WOULD_HAVE_BEEN_A_NPE", "spotbugs:RCN_REDUNDANT_NULLCHECK_OF_NULL_VALUE", "intellij:ConstantConditions"],
     kinds: ["<file>"],
     description: "The variable was already dereferenced or assigned a non-null value, so the null check is always true/false. Either the check is dead code, or the earlier dereference should have been guarded.",
