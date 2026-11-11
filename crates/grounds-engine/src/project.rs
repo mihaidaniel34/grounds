@@ -351,15 +351,26 @@ impl Walk {
     /// files in them. The walk does not say when it listed each directory, so
     /// the stamps are taken after it: one whose time is recent as of `began`
     /// may have been written while the walk ran, after its listing, and is
-    /// marked `unread`, to be looked at again at the next sync.
-    pub fn stamp(dirs: &[PathBuf], outer: &[PathBuf], began: SystemTime) -> Walk {
-        let mark = |s: FileStamp| FileStamp { unread: s.unread || recent(s.mtime, began), ..s };
-        let dirs: rustc_hash::FxHashMap<PathBuf, FileStamp> = dirs.par_iter().filter_map(|d| FileStamp::of(d, false).map(|s| (d.clone(), mark(s)))).collect();
+    /// marked `unread`, to be looked at again at the next sync; so is a
+    /// directory that cannot be listed (no permission), until it can.
+    /// `before`: ignore files stamped before the walk began; one the same
+    /// before and after it is what the walk read, and keeps the time it was
+    /// first seen (a time in the future is trusted once seen for the margin).
+    pub fn stamp(dirs: &[PathBuf], outer: &[PathBuf], began: SystemTime, before: &rustc_hash::FxHashMap<PathBuf, FileStamp>) -> Walk {
+        let mark = |p: &Path, s: FileStamp| match before.get(p).filter(|b| b.same(&s)) {
+            Some(b) => s.after(Some(b)),
+            None => FileStamp { unread: s.unread || recent(s.mtime, began), ..s },
+        };
+        let dir_mark = |d: &Path, s: FileStamp| {
+            let s = mark(d, s);
+            FileStamp { unread: s.unread || std::fs::read_dir(d).is_err(), ..s }
+        };
+        let dirs: rustc_hash::FxHashMap<PathBuf, FileStamp> = dirs.par_iter().filter_map(|d| FileStamp::of(d, false).map(|s| (d.clone(), dir_mark(d, s)))).collect();
         let mut ignores: Vec<(PathBuf, Option<FileStamp>)> = dirs
             .par_iter()
-            .flat_map_iter(|(d, _)| crate::workspace::IGNORE_FILES.iter().filter_map(move |n| FileStamp::of(&d.join(n), false).map(|s| (d.join(n), Some(mark(s))))))
+            .flat_map_iter(|(d, _)| crate::workspace::IGNORE_FILES.iter().filter_map(|n| FileStamp::of(&d.join(n), false).map(|s| (d.join(n), Some(mark(&d.join(n), s))))))
             .collect();
-        ignores.extend(outer.iter().map(|p| (p.clone(), FileStamp::of(p, false).map(mark))));
+        ignores.extend(outer.iter().map(|p| (p.clone(), FileStamp::of(p, false).map(|s| mark(p, s)))));
         Walk { dirs, ignores }
     }
 }
@@ -384,7 +395,7 @@ impl Project {
         crate::workspace::set_extra_test_sets(config.test_source_sets.iter().cloned().chain(source_sets.test_sets()).collect());
         crate::workspace::register_project_root(&root.canonicalize().unwrap_or_else(|_| root.to_path_buf()));
         let workspace = Workspace::discover(root, &config.exclude);
-        let walked = Walk::stamp(&workspace.dirs, &crate::workspace::outer_ignore_files(&workspace.root), load_began);
+        let walked = Walk::stamp(&workspace.dirs, &crate::workspace::outer_ignore_files(&workspace.root), load_began, &Default::default());
         stats.t_discover = t.elapsed();
         stats.files = workspace.files.len();
 

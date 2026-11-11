@@ -40,6 +40,8 @@ pub struct Session {
     config_unread: bool,
     /// Classpath warnings already shown in this session.
     warned: bool,
+    /// Full walks of the workspace by `rescan`.
+    full_walks: usize,
 }
 
 /// What a project is loaded from besides its Java sources: the files that
@@ -348,7 +350,7 @@ impl Session {
                 (p, now)
             })
             .collect();
-        Session { project, all_rules, edit_rules, resolution_rules, options, stamps, walked, config, config_unread, warned: false }
+        Session { project, all_rules, edit_rules, resolution_rules, options, stamps, walked, config, config_unread, warned: false, full_walks: 0 }
     }
 
     /// Classpath warnings, the first time they are asked for: agents and
@@ -414,18 +416,27 @@ impl Session {
             None => FileStamp::of(p, false).is_some(),
         });
         let (mut found, mut found_modules) = (Vec::new(), Vec::new());
+        let mut gone: FxHashSet<PathBuf> = FxHashSet::default();
+        // a directory the discovery would not go into (any more): it and all
+        // below it are forgotten, and the source files held there are gone
+        // (their own stamps may not show it: a stamp follows a symlink)
+        let forget = |s: &mut Session, gone: &mut FxHashSet<PathBuf>, d: &Path| {
+            s.walked.dirs.retain(|p, _| !p.starts_with(d));
+            s.walked.ignores.retain(|(p, _)| !p.starts_with(d));
+            gone.extend(s.stamps.keys().filter(|p| p.starts_with(d)).cloned());
+        };
         if !full {
             let mut changed: Vec<PathBuf> = self.walked.dirs.par_iter_mut().filter_map(|(d, stamp)| stamp.changed(d, clock).then(|| d.clone())).collect();
             // (parents first: a directory that went takes those below it along)
             changed.sort();
             for d in changed {
                 let Some(old) = self.walked.dirs.get(&d).copied() else { continue };
-                // the stamp first, then the listing it vouches for
+                // the stamp first, then the listing it vouches for; not
+                // through a symlink, which the discovery does not follow
                 let stamp = FileStamp::of(&d, true).filter(|_| std::fs::symlink_metadata(&d).is_ok_and(|m| m.is_dir()));
-                let Some(stamp) = stamp else {
+                let Some(mut stamp) = stamp else {
                     crate::trace::log(|| format!("sync: directory gone {}", d.display()));
-                    self.walked.dirs.retain(|p, _| !p.starts_with(&d));
-                    self.walked.ignores.retain(|(p, _)| !p.starts_with(&d));
+                    forget(self, &mut gone, &d);
                     continue;
                 };
                 // an ignore file that appeared or went
@@ -435,13 +446,26 @@ impl Session {
                     break;
                 }
                 crate::trace::log(|| format!("sync: directory changed {}", d.display()));
+                // one that cannot be listed (no permission) is listed again
+                // at every sync until it can, as an unreadable file is read
+                stamp.unread = std::fs::read_dir(&d).is_err();
                 self.walked.dirs.insert(d.clone(), stamp.after(Some(&old)));
                 let began = SystemTime::now();
                 let listed = walk(&d, Some(1));
+                // what was held below it by a name it no longer lists exactly
+                // (gone, now a symlink, renamed in case only on a file system
+                // that ignores case) is forgotten
+                let (dirs_now, files_now): (FxHashSet<&PathBuf>, FxHashSet<&PathBuf>) = (listed.dirs.iter().collect(), listed.files.iter().map(|f| &f.path).collect());
+                let lost_dirs: Vec<PathBuf> = self.walked.dirs.keys().filter(|p| p.parent() == Some(d.as_path()) && !dirs_now.contains(p)).cloned().collect();
+                gone.extend(self.stamps.keys().filter(|p| p.parent() == Some(d.as_path()) && !files_now.contains(p)).cloned());
+                for l in lost_dirs {
+                    crate::trace::log(|| format!("sync: directory no longer listed {}", l.display()));
+                    forget(self, &mut gone, &l);
+                }
                 let new_dirs: Vec<&PathBuf> = listed.dirs.iter().filter(|s| **s != d && !self.walked.dirs.contains_key(*s)).collect();
                 for sub in new_dirs {
                     let w = walk(sub, None);
-                    let new = Walk::stamp(&w.dirs, &[], began);
+                    let new = Walk::stamp(&w.dirs, &[], began, &FxHashMap::default());
                     self.walked.dirs.extend(new.dirs);
                     self.walked.ignores.extend(new.ignores);
                     found_modules.extend(modules(&w));
@@ -451,13 +475,26 @@ impl Session {
                 found.extend(files(listed));
             }
         }
-        let mut gone = FxHashSet::default();
         if full {
             crate::trace::log(|| "sync: an ignore file changed, walking the workspace".into());
+            self.full_walks += 1;
+            // ignore files stamped before the walk: one unchanged by its end is
+            // what it read, and keeps the time it was first seen
+            let before: FxHashMap<PathBuf, FileStamp> = self.walked.ignores.iter().filter_map(|(p, old)| FileStamp::of(p, false).map(|s| (p.clone(), s.after(old.as_ref())))).collect();
             let began = SystemTime::now();
             let w = walk(&root, None);
-            self.walked = Walk::stamp(&w.dirs, &outer_ignore_files(&root), began);
-            found_modules = modules(&w);
+            self.walked = Walk::stamp(&w.dirs, &outer_ignore_files(&root), began, &before);
+            // the modules as a fresh load finds them: one added, gone or of
+            // another build system reloads the project
+            let layout = |ms: &[crate::workspace::Module]| {
+                let mut v: Vec<(PathBuf, crate::workspace::BuildSystem)> = ms.iter().map(|m| (m.dir.clone(), m.build_system)).collect();
+                v.sort_by(|a, b| a.0.cmp(&b.0));
+                v
+            };
+            if layout(&w.modules) != layout(&self.project.workspace.modules) {
+                crate::trace::log(|| "sync: reload, the walk finds other modules".into());
+                return (Vec::new(), FxHashSet::default(), true);
+            }
             found = files(w).collect();
             let all: FxHashSet<&PathBuf> = found.iter().collect();
             gone = self.stamps.keys().filter(|p| !all.contains(p)).cloned().collect();
@@ -471,6 +508,12 @@ impl Session {
         found.sort();
         found.dedup();
         (found, gone, false)
+    }
+
+    /// How many times a sync walked the whole workspace (an ignore file
+    /// changed); a directory that changed is listed alone.
+    pub fn full_walks(&self) -> usize {
+        self.full_walks
     }
 
     /// Re-read files that changed since they were read (and the given extra

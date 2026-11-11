@@ -58,11 +58,26 @@ pub fn outer_ignore_files(root: &Path) -> Vec<PathBuf> {
         if d != root {
             v.extend(IGNORE_FILES.iter().map(|n| d.join(n)));
         }
-        if d.join(".git").is_dir() {
-            v.push(d.join(".git/info/exclude"));
+        if let Some(common) = git_common_dir(d) {
+            v.push(common.join("info/exclude"));
         }
     }
     v
+}
+
+/// The git directory whose `info/exclude` applies to a repository at `d`, as
+/// `ignore` finds it: `d/.git`, or for a linked worktree (`.git` a file
+/// naming its `gitdir:`) the common directory that gitdir's `commondir` names.
+fn git_common_dir(d: &Path) -> Option<PathBuf> {
+    let dot = d.join(".git");
+    let meta = std::fs::metadata(&dot).ok()?;
+    if meta.is_dir() {
+        return Some(dot);
+    }
+    let first = |p: &Path| std::fs::read_to_string(p).ok().and_then(|t| t.lines().next().map(str::to_string));
+    let gitdir = PathBuf::from(first(&dot)?.strip_prefix("gitdir: ")?);
+    let common = first(&gitdir.join("commondir"))?;
+    Some(if common.starts_with('.') { gitdir.join(common) } else { PathBuf::from(common) })
 }
 
 const SKIP_DIRS: &[&str] = &["node_modules", ".git", ".gradle", ".idea", "out", ".grounds", "bin"];

@@ -118,7 +118,8 @@ def rename_probes(d, files):
     """Methods to rename so that other files stop compiling, best first: per
     project class among the 20 that the most files import by name, its public
     method declared once that those files call the most (`Class.name(` for a
-    static one, `.name(` else). Yields (file, line index, name)."""
+    static one, `.name(` else). Yields (file, line index, name, (start, end)
+    of the name in that line)."""
     importers = {}
     for l in git(d, "grep", "-E", r"^import [A-Za-z_][A-Za-z0-9_.]*;", "--", "*.java", check=False).splitlines():
         f, _, line = l.partition(":")
@@ -131,14 +132,15 @@ def rename_probes(d, files):
         f = next((f for f in by_name.get(n.rsplit(".", 1)[-1], []) if f == suffix or f.endswith("/" + suffix)), None)
         if f is None:
             continue
-        with open(os.path.join(d, f), encoding="utf-8", errors="replace", newline="") as fh:
+        with open(os.path.join(d, f), encoding="utf-8", errors="surrogateescape", newline="") as fh:
             lines = fh.read().splitlines(keepends=True)
         declared = {}
         for i, l in enumerate(lines):
             m = DECLARATION.match(l)
             if m:
-                declared.setdefault(m.group(1), []).append(i)
-        once = {k: v[0] for k, v in declared.items() if len(v) == 1}
+                declared.setdefault(m.group(1), []).append((i, m.span(1)))
+        once = {k: v[0][0] for k, v in declared.items() if len(v) == 1}
+        span = {k: v[0][1] for k, v in declared.items() if len(v) == 1}
         if not once:
             continue
         simple = n.rsplit(".", 1)[-1]
@@ -154,7 +156,7 @@ def rename_probes(d, files):
                 calls[k] += text.count(call[k])
         name = max(sorted(calls), key=lambda k: calls[k])
         if calls[name]:
-            yield f, once[name], name
+            yield f, once[name], name, span[name]
 
 
 def summary(path):
@@ -323,11 +325,16 @@ def main():
         compare(step, "with them restored", None)
         steps.append(step)
         # (the next candidate while a fresh run reports no broken place: at most three)
-        for f, i, name in itertools.islice(rename_probes(d, files), 3):
+        for f, i, name, (begin, end) in itertools.islice(rename_probes(d, files), 3):
             path = os.path.join(d, f)
             with open(path, encoding="utf-8", errors="surrogateescape", newline="") as fh:
                 lines = fh.read().splitlines(keepends=True)
-            lines[i] = lines[i].replace(f"{name}(", f"{name}ZzReplay(", 1)
+            # (the name where the declaration was matched, not its first
+            # `name(`: `run ()` has none; a file that changed since is skipped)
+            if lines[i][begin:end] != name:
+                print(f"{project}: {name} is not where it was found in {f}; the next candidate")
+                continue
+            lines[i] = lines[i][:begin] + f"{name}ZzReplay" + lines[i][end:]
             dirty = True  # (the checkout is put back below, or by `finally`)
             with open(path, "w", encoding="utf-8", errors="surrogateescape", newline="") as fh:
                 fh.write("".join(lines))
