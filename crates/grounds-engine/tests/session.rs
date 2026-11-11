@@ -1464,7 +1464,9 @@ fn an_ignore_file_that_stays_unreadable_is_read_again_but_not_walked_for() {
     // then its mode set back): walked again, as its content may differ
     // (by path: a file that cannot be opened can still be given a time by its owner)
     let secs = old.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() - 60;
-    assert!(Command::new("touch").arg("-m").arg("-d").arg(format!("@{secs}")).arg(dir.join("src/main/java/demo/sub/.gitignore")).status().unwrap().success());
+    let path = std::ffi::CString::new(dir.join("src/main/java/demo/sub/.gitignore").into_os_string().into_encoded_bytes()).unwrap();
+    let times = [libc::timespec { tv_sec: 0, tv_nsec: libc::UTIME_OMIT }, libc::timespec { tv_sec: secs as libc::time_t, tv_nsec: 0 }];
+    assert_eq!(unsafe { libc::utimensat(libc::AT_FDCWD, path.as_ptr(), times.as_ptr(), 0) }, 0, "{}", std::io::Error::last_os_error());
     holds_as_fresh(&mut s, &dir, "the stamp of an unreadable ignore file changed");
     assert_eq!(s.full_walks(), 2);
     // readable again
