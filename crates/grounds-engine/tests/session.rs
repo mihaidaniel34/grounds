@@ -1166,6 +1166,8 @@ fn a_module_directory_that_appears_is_a_module() {
 #[test]
 fn an_ignore_file_that_changes_changes_the_sources() {
     let dir = restored_project("ignorefile");
+    // (untracked: files git tracks are read whatever .gitignore says)
+    git(&dir, &["rm", "-r", "-q", "--cached", "src/main/java/demo/sub"]);
     let mut s = Session::open(&dir).unwrap();
     write(&dir, ".gitignore", "src/main/java/demo/sub/\n");
     holds_as_fresh(&mut s, &dir, "a .gitignore appeared");
@@ -1244,6 +1246,8 @@ fn the_exclude_file_of_a_linked_worktree_is_followed() {
     let dir = main.with_extension("wt");
     let _ = std::fs::remove_dir_all(&dir);
     git(&main, &["worktree", "add", "-q", "--detach", dir.to_str().unwrap()]);
+    // (untracked: files git tracks are read whatever the exclude file says)
+    git(&dir, &["rm", "-q", "--cached", "src/main/java/demo/Req.java"]);
     let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
     set_tree_mtime(&dir, ".", old);
     let mut s = Session::open(&dir).unwrap();
@@ -1401,6 +1405,8 @@ fn a_worktree_whose_git_file_is_rewritten_follows_the_new_exclude_file() {
     let dir = main.with_extension("wt");
     let _ = std::fs::remove_dir_all(&dir);
     git(&main, &["worktree", "add", "-q", "--detach", dir.to_str().unwrap()]);
+    // (untracked: files git tracks are read whatever the exclude file says)
+    git(&dir, &["rm", "-q", "--cached", "src/main/java/demo/Req.java"]);
     let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
     set_tree_mtime(&dir, ".", old);
     set_mtime(&main, ".git/info/exclude", old);
@@ -1655,4 +1661,32 @@ fn a_short_cycle_beside_a_long_route_is_found() {
     let cyc: Vec<&str> = all.findings.iter().filter(|f| f.rule == "circular-constructor-dependency").map(|f| f.message.as_str()).collect();
     assert_eq!(cyc, ["Circular constructor dependency: S -> A -> R -> S"], "{:?}", all.findings);
     let _ = std::fs::remove_dir_all(&repo);
+}
+
+#[test]
+fn a_tracked_file_in_an_ignored_directory_that_comes_back_is_read_again() {
+    // A fresh load reads files git tracks in a directory .gitignore matches;
+    // the discovery never walks that directory, so the session must watch it
+    // all the same: a tracked file deleted there and restored is found again,
+    // and an untracked one beside it is not (as for a fresh load).
+    let dir = restored_project("tracked-ignored");
+    write(&dir, ".gitignore", "/gen/\n");
+    write(&dir, "gen/demo/Gen.java", "package demo;\npublic class Gen {\n    Req r;\n}\n");
+    git(&dir, &["add", "-f", ".gitignore", "gen/demo/Gen.java"]);
+    git(&dir, &["commit", "-qm", "generated"]);
+    write(&dir, "gen/demo/Untracked.java", "package demo;\npublic class Untracked {}\n");
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    set_tree_mtime(&dir, ".", old);
+    set_mtime(&dir, ".git/info/exclude", old);
+    let gen = "gen/demo/Gen.java";
+    let text = std::fs::read_to_string(dir.join(gen)).unwrap();
+    let mut s = Session::open(&dir).unwrap();
+    assert!(holdings(&s).0.iter().any(|f| f.starts_with(gen)), "a fresh load reads the tracked file: {:?}", holdings(&s).0);
+    std::fs::remove_file(dir.join(gen)).unwrap();
+    holds_as_fresh(&mut s, &dir, "a tracked file in an ignored directory was deleted");
+    write(&dir, gen, &text);
+    set_mtime(&dir, gen, old);
+    holds_as_fresh(&mut s, &dir, "the tracked file in an ignored directory came back");
+    listed_not_walked(&s);
+    let _ = std::fs::remove_dir_all(&dir);
 }

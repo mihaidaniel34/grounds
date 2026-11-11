@@ -206,6 +206,13 @@ fn tracked_but_ignored(root: &Path) -> Vec<PathBuf> {
     }
 }
 
+/// Whether git ignores the directory `dir` of the work tree at `root`.
+fn ignored_dir(root: &Path, dir: &Path) -> bool {
+    let Ok(rel) = dir.strip_prefix(root) else { return false };
+    let rel = format!("{}/", rel.to_string_lossy());
+    std::process::Command::new("git").arg("-C").arg(root).args(["check-ignore", "-q", "--no-index", "--", &rel]).stderr(std::process::Stdio::null()).status().is_ok_and(|s| s.success())
+}
+
 impl Workspace {
     pub fn discover(root: &Path, exclude: &[String]) -> Workspace {
         Self::discover_in(root, None, None, exclude)
@@ -259,7 +266,15 @@ impl Workspace {
             }
             !(is_resource(rel) || excludes.iter().any(|g| g.matches_path(rel)))
         };
-        for entry in walker.flatten() {
+        // a start the discovery would not go into (an ignored directory that
+        // holds tracked files, listed again by a session): only the tracked
+        // files count there, as for a fresh load
+        let base = start.unwrap_or(&root).to_path_buf();
+        let ignored_start = base != root && ignored_dir(&root, &base);
+        if ignored_start {
+            dirs.push(base.clone());
+        }
+        for entry in walker.flatten().take_while(|_| !ignored_start) {
             let p = entry.path();
             if entry.file_type().is_some_and(|t| t.is_dir()) {
                 dirs.push(p.to_path_buf());
@@ -278,11 +293,25 @@ impl Workspace {
         }
         // files git tracks are part of the project whatever .gitignore says
         // (a directory ignored after its files were added): the build compiles them
+        let mut known: std::collections::HashSet<PathBuf> = dirs.iter().cloned().collect();
         for rel in tracked_but_ignored(&root) {
             let skipped = rel.components().any(|c| c.as_os_str().to_str().is_none_or(|n| SKIP_DIRS.contains(&n) || n.starts_with('.')));
             let p = root.join(&rel);
             let Some(name) = rel.file_name().and_then(|n| n.to_str()) else { continue };
-            if skipped || !p.is_file() {
+            // (only below the start, and as deep as the discovery goes)
+            let Ok(below) = p.strip_prefix(&base) else { continue };
+            if skipped {
+                continue;
+            }
+            let within = |q: &Path| max_depth.is_none_or(|d| q.strip_prefix(&base).map_or(usize::MAX, |r| r.components().count()) <= d);
+            // the directories that hold it, which the walk does not go into:
+            // a file deleted or restored there changes their time
+            for a in p.ancestors().skip(1).take_while(|a| a.starts_with(&base)).filter(|a| within(a)) {
+                if known.insert(a.to_path_buf()) {
+                    dirs.push(a.to_path_buf());
+                }
+            }
+            if max_depth.is_some_and(|d| below.components().count() > d) || !p.is_file() {
                 continue;
             }
             match name {
