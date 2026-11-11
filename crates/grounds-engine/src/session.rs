@@ -343,7 +343,7 @@ impl Session {
                     (Some(Some(e)), Some(n)) => e.same(n),
                     (Some(None), None) | (None, None) => true,
                     (Some(_), _) => false,
-                    (None, Some(n)) => !recent(n.mtime, began),
+                    (None, Some(n)) => !recent(n.time(), began),
                 };
                 if !read {
                     crate::trace::log(|| format!("load: {} may have been written during the load", p.display()));
@@ -403,6 +403,13 @@ impl Session {
     /// when one in a directory walked, above the root or in `.git/info`
     /// changes, appears or goes, the whole workspace is walked again.
     ///
+    /// A change of permissions (`chmod`, `chown`, an ACL) moves neither a
+    /// time nor a name, but the change time and the mode are in every stamp:
+    /// a directory that can no longer be listed or entered is listed again
+    /// (and at every sync until it can be), and an ignore file that can no
+    /// longer be read, or can again, walks the workspace. One that stays
+    /// unreadable is read again at each sync, and walks nothing.
+    ///
     /// Not followed: git's global excludes file (`core.excludesFile`), and
     /// file systems that do not change a directory's time when an entry is
     /// added to it.
@@ -414,8 +421,10 @@ impl Session {
         let walk = |start: &Path, depth| Workspace::discover_in(&root, Some(start), depth, &exclude);
         let files = |w: Workspace| w.files.into_iter().map(|f| f.path);
         let modules = |w: &Workspace| w.modules.iter().map(|m| m.dir.clone()).collect::<Vec<_>>();
+        // (one that could not be read is read again, and walks only once it
+        // can be or its stamp changes: see `FileStamp::read_otherwise`)
         let mut full = self.walked.ignores.iter_mut().any(|(p, stamp)| match stamp {
-            Some(stamp) => stamp.changed(p, clock),
+            Some(stamp) => stamp.read_otherwise(p, clock),
             None => FileStamp::of(p, false).is_some(),
         });
         // a repository that starts or ends above the root (`git init`): the
@@ -654,8 +663,16 @@ impl Session {
             // the stamp first, then the text it vouches for; a path that is
             // no longer a file (a directory now), or that the walk no longer
             // finds, is gone, as for a fresh load
-            let file = std::fs::symlink_metadata(&p).is_ok_and(|m| m.is_file());
+            let meta = std::fs::symlink_metadata(&p);
+            let file = meta.as_ref().is_ok_and(|m| m.is_file());
             let (stamp, text) = if file && !gone.contains(&p) { FileStamp::read(&p) } else { (None, None) };
+            // one that cannot be looked at, its directory being readable but
+            // not enterable, is still listed: a fresh load holds it, without
+            // a stub, and so does the session, trying again at every sync
+            // (its directory, which cannot be entered, is listed again at
+            // every sync too, and says when it goes)
+            let unreachable = !gone.contains(&p) && meta.as_ref().is_err_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied);
+            let stamp = stamp.or_else(|| unreachable.then(FileStamp::unreachable));
             // refresh_file rebuilds the DI model itself; batch it below instead
             let key = path_key(&p);
             let old = self.project.index.file(&key).map(|s| s.signature_hash);

@@ -691,6 +691,9 @@ fn a_second_write_at_the_same_time_is_read() {
     // the build file is old, so nothing here loads the project again
     write_at(&dir, "build.gradle", "plugins { id 'java' }\n", long_ago);
     write_at(&dir, "src/main/java/demo/Api.java", "package demo;\npublic class Api {}\n", long_ago);
+    // (setting a time moves the change time, which a load counts as a write:
+    // past the margin, the build file is not one the load may have raced)
+    std::thread::sleep(std::time::Duration::from_millis(2100));
     let methods = |s: &Session| {
         let api = s.project.index.source_class_names().find(|n| n.ends_with("Api")).cloned().unwrap();
         format!("{:?}", s.project.index.class(&api))
@@ -1041,9 +1044,10 @@ fn restored_project(name: &str) -> std::path::PathBuf {
     // (old: a reload or a recent time would read everything again and hide what sync does)
     let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
     set_tree_mtime(&dir, ".", old);
-    // (git's exclude file too: just written, it would have the first sync walk
-    // the whole workspace, and the tests pass without listing a directory)
-    set_mtime(&dir, ".git/info/exclude", old);
+    // (not git's exclude file: just written, it would have the first sync walk
+    // the whole workspace, and the tests pass without listing a directory;
+    // setting an old time on it moves its change time, which counts as much)
+    let _ = std::fs::remove_file(dir.join(".git/info/exclude"));
     dir
 }
 
@@ -1336,6 +1340,158 @@ fn an_ignore_file_that_cannot_be_read_is_read_once_it_can_be() {
     std::thread::sleep(std::time::Duration::from_millis(2100));
     holds_as_fresh(&mut s, &dir, "past the margin");
     assert!(!s.project.index.class_exists("demo.Req"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Whether file permissions bind this process: root reads, lists and enters
+/// whatever the mode says, so a test of permissions proves nothing as root.
+#[cfg(unix)]
+fn permissions_bind(test: &str) -> bool {
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("{test}: skipped: running as root, which permissions do not stop");
+        return false;
+    }
+    true
+}
+
+#[cfg(unix)]
+fn chmod(dir: &Path, rel: &str, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(dir.join(rel), std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_directory_whose_permissions_change_is_held_as_a_fresh_load_holds_it() {
+    // Review D16: `chmod` changes neither a directory's time nor its names.
+    // An aged package directory that cannot be read, entered or both, and
+    // then can again, is held as a fresh load holds it at each step: its
+    // files gone while they cannot be reached, found again once they can.
+    if !permissions_bind("a_directory_whose_permissions_change_is_held_as_a_fresh_load_holds_it") {
+        return;
+    }
+    for (rel, mode) in [("src/main/java/demo/sub", 0o400), ("src/main/java/demo/sub", 0o000), ("src/main/java/demo/sub", 0o300), ("src/main/java/demo", 0o000), ("src/main/java/demo", 0o600)] {
+        let dir = restored_project(&format!("chmoddir{mode:o}{}", rel.len()));
+        let mut s = Session::open(&dir).unwrap();
+        assert!(s.project.index.class_exists("demo.sub.Sub"));
+        chmod(&dir, rel, mode);
+        holds_as_fresh(&mut s, &dir, &format!("{rel} set to mode {mode:o}"));
+        holds_as_fresh(&mut s, &dir, &format!("a second sync with {rel} at mode {mode:o}"));
+        assert!(!s.project.index.class_exists("demo.sub.Sub"), "{rel} at {mode:o}");
+        chmod(&dir, rel, 0o755);
+        holds_as_fresh(&mut s, &dir, &format!("{rel} back from mode {mode:o}"));
+        holds_as_fresh(&mut s, &dir, "a second sync");
+        assert!(s.project.index.class_exists("demo.sub.Sub") && s.project.index.class_exists("demo.Req"), "{rel} back from {mode:o}");
+        listed_not_walked(&s);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn an_ignore_file_whose_permissions_change_is_read_as_a_fresh_load_reads_it() {
+    // Review D16: an aged ignore file, read and trusted, set to mode 000 and
+    // back: neither its time nor its size changes. A fresh load skips an
+    // ignore file it cannot read, so its files are sources while it cannot be
+    // read, and are not once it can again.
+    if !permissions_bind("an_ignore_file_whose_permissions_change_is_read_as_a_fresh_load_reads_it") {
+        return;
+    }
+    let cases = [(".ignore", "Req.java\n", "demo.Req"), ("src/main/java/demo/sub/.ignore", "Sub.java\n", "demo.sub.Sub"), (".git/info/exclude", "Extra.java\n", "demo.Extra")];
+    let mut sessions: Vec<(std::path::PathBuf, Session)> = cases
+        .iter()
+        .enumerate()
+        .map(|(i, (rel, text, class))| {
+            let dir = restored_project(&format!("chmodignore{i}"));
+            // (untracked: files git tracks are read whatever git's exclude file says)
+            write(&dir, "src/main/java/demo/Extra.java", "package demo;\npublic class Extra {}\n");
+            write(&dir, rel, text);
+            set_tree_mtime(&dir, ".", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
+            let s = Session::open(&dir).unwrap();
+            assert!(!s.project.index.class_exists(class), "{rel}");
+            (dir, s)
+        })
+        .collect();
+    // trusted: seen unchanged for the margin
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    for ((rel, _, class), (dir, s)) in cases.into_iter().zip(&mut sessions) {
+        holds_as_fresh(s, dir, &format!("{rel} seen for the margin"));
+        let walks = s.full_walks();
+        chmod(dir, rel, 0o000);
+        holds_as_fresh(s, dir, &format!("{rel} could no longer be read"));
+        holds_as_fresh(s, dir, &format!("a second sync, {rel} unreadable"));
+        assert!(s.project.index.class_exists(class), "{rel} unreadable");
+        assert_eq!(s.full_walks(), walks + 1, "{rel}: one walk when it could no longer be read, and none after");
+        chmod(dir, rel, 0o644);
+        holds_as_fresh(s, dir, &format!("{rel} could be read again"));
+        holds_as_fresh(s, dir, "a second sync");
+        assert!(!s.project.index.class_exists(class), "{rel} readable again");
+        let _ = std::fs::remove_dir_all(&*dir);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn an_ignore_file_that_stays_unreadable_is_read_again_but_not_walked_for() {
+    // Review D17: an ignore file that cannot be read cost a walk of the whole
+    // workspace at every sync, for as long as it stayed so. It is read again
+    // at each sync instead, and the workspace walked only when it can be
+    // read or its stamp changes.
+    if !permissions_bind("an_ignore_file_that_stays_unreadable_is_read_again_but_not_walked_for") {
+        return;
+    }
+    let dir = restored_project("unreadableignorekept");
+    write(&dir, ".ignore", "Req.java\n");
+    write(&dir, "src/main/java/demo/sub/.gitignore", "Sub.java\n");
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    set_tree_mtime(&dir, ".", old);
+    chmod(&dir, ".ignore", 0o000);
+    // (past the margin: the load cannot have raced either file)
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    let mut s = Session::open(&dir).unwrap();
+    for i in 0..5 {
+        holds_as_fresh(&mut s, &dir, &format!("sync {i} with an unreadable ignore file"));
+    }
+    assert_eq!(s.full_walks(), 0, "nothing changed: no walk of the workspace");
+    assert!(s.project.index.class_exists("demo.Req"));
+    // one that becomes unreadable after the load: one walk, then none
+    chmod(&dir, "src/main/java/demo/sub/.gitignore", 0o000);
+    for i in 0..3 {
+        holds_as_fresh(&mut s, &dir, &format!("sync {i} with a second unreadable ignore file"));
+    }
+    assert_eq!(s.full_walks(), 1, "one walk when the second could no longer be read");
+    // its stamp changes though it still cannot be read (a write, by its owner,
+    // then its mode set back): walked again, as its content may differ
+    // (by path: a file that cannot be opened can still be given a time by its owner)
+    let secs = old.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() - 60;
+    assert!(Command::new("touch").arg("-m").arg("-d").arg(format!("@{secs}")).arg(dir.join("src/main/java/demo/sub/.gitignore")).status().unwrap().success());
+    holds_as_fresh(&mut s, &dir, "the stamp of an unreadable ignore file changed");
+    assert_eq!(s.full_walks(), 2);
+    // readable again
+    chmod(&dir, ".ignore", 0o644);
+    holds_as_fresh(&mut s, &dir, "the ignore file could be read again");
+    assert_eq!(s.full_walks(), 3);
+    assert!(!s.project.index.class_exists("demo.Req"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_source_file_whose_permissions_change_is_held_as_a_fresh_load_holds_it() {
+    // The same for a source file: a fresh load holds no stub of a file it
+    // cannot read, and the file's time and size stay as they were.
+    if !permissions_bind("a_source_file_whose_permissions_change_is_held_as_a_fresh_load_holds_it") {
+        return;
+    }
+    let dir = restored_project("chmodfile");
+    let mut s = Session::open(&dir).unwrap();
+    chmod(&dir, "src/main/java/demo/Req.java", 0o000);
+    holds_as_fresh(&mut s, &dir, "a source file could no longer be read");
+    assert!(!s.project.index.class_exists("demo.Req"));
+    chmod(&dir, "src/main/java/demo/Req.java", 0o644);
+    holds_as_fresh(&mut s, &dir, "the source file could be read again");
+    assert!(s.project.index.class_exists("demo.Req"));
+    listed_not_walked(&s);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1680,7 +1836,9 @@ fn a_tracked_file_in_an_ignored_directory_that_comes_back_is_read_again() {
     write(&dir, "gen/demo/Untracked.java", "package demo;\npublic class Untracked {}\n");
     let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
     set_tree_mtime(&dir, ".", old);
-    set_mtime(&dir, ".git/info/exclude", old);
+    // (setting a time moves the change time: past the margin, the load cannot
+    // have raced the .gitignore, and the first sync has no walk to make)
+    std::thread::sleep(std::time::Duration::from_millis(2100));
     let gen = "gen/demo/Gen.java";
     let text = std::fs::read_to_string(dir.join(gen)).unwrap();
     let mut s = Session::open(&dir).unwrap();
