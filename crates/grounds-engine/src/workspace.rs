@@ -58,17 +58,41 @@ pub fn outer_ignore_files(root: &Path) -> Vec<PathBuf> {
         if d != root {
             v.extend(IGNORE_FILES.iter().map(|n| d.join(n)));
         }
-        if let Some(common) = git_common_dir(d) {
-            v.push(common.join("info/exclude"));
-        }
+        v.extend(repo_inputs(d));
     }
     v
 }
 
-/// Whether `d` has a `.git` entry, and of which kind (`true`: a directory):
-/// a repository starts there, and the ignore files only count inside one.
-pub fn git_kind(d: &Path) -> Option<bool> {
-    std::fs::symlink_metadata(d.join(".git")).ok().map(|m| m.is_dir())
+/// What makes `d` the top of a repository for `ignore`, whose ignore files
+/// count only inside one: a `.git` directory (1), a `.git` file naming a
+/// gitdir (2), a `.jj` (4); `None` for none of them. (Through symlinks, as
+/// `ignore` looks.)
+pub fn boundary(d: &Path) -> Option<u8> {
+    let git = std::fs::metadata(d.join(".git")).ok().map_or(0, |m| if m.is_dir() { 1 } else { 2 });
+    let jj = if d.join(".jj").exists() { 4 } else { 0 };
+    (git | jj != 0).then_some(git | jj)
+}
+
+/// The files a repository at `d` reads its excludes through: its
+/// `info/exclude` and, for a `.git` file, that file and the `commondir` of the
+/// gitdir it names, whether they exist or not.
+pub fn repo_inputs(d: &Path) -> Vec<PathBuf> {
+    let mut v = Vec::new();
+    let dot = d.join(".git");
+    if std::fs::metadata(&dot).is_ok_and(|m| m.is_file()) {
+        if let Some(gitdir) = gitdir_of(&dot) {
+            v.push(gitdir.join("commondir"));
+        }
+        v.push(dot);
+    }
+    v.extend(exclude_file(d));
+    v
+}
+
+/// The gitdir a `.git` file names, as `ignore` reads it.
+fn gitdir_of(dot: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(dot).ok()?;
+    Some(PathBuf::from(text.lines().next()?.strip_prefix("gitdir: ")?))
 }
 
 /// The `info/exclude` that applies to a repository at `d` (see `git_common_dir`).
@@ -102,9 +126,8 @@ fn git_common_dir(d: &Path) -> Option<PathBuf> {
     if meta.is_dir() {
         return Some(dot);
     }
-    let first = |p: &Path| std::fs::read_to_string(p).ok().and_then(|t| t.lines().next().map(str::to_string));
-    let gitdir = PathBuf::from(first(&dot)?.strip_prefix("gitdir: ")?);
-    let common = first(&gitdir.join("commondir"))?;
+    let gitdir = gitdir_of(&dot)?;
+    let common = std::fs::read_to_string(gitdir.join("commondir")).ok()?.lines().next()?.to_string();
     Some(if common.starts_with('.') { gitdir.join(common) } else { PathBuf::from(common) })
 }
 

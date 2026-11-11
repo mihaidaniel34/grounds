@@ -404,7 +404,7 @@ impl Session {
     /// file systems that do not change a directory's time when an entry is
     /// added to it.
     fn rescan(&mut self) -> (Vec<PathBuf>, FxHashSet<PathBuf>, bool) {
-        use crate::workspace::{git_kind, listable, Workspace, IGNORE_FILES};
+        use crate::workspace::{boundary, listable, Workspace, IGNORE_FILES};
         let clock = SystemTime::now();
         let root = self.project.workspace.root.clone();
         let exclude = self.project.config.exclude.clone();
@@ -416,8 +416,9 @@ impl Session {
             None => FileStamp::of(p, false).is_some(),
         });
         // a repository that starts or ends above the root (`git init`): the
-        // ignore files count only inside one
-        full |= self.walked.outer_gits.iter().any(|(a, kind)| git_kind(a) != *kind);
+        // ignore files count only inside one; or one that did during the
+        // last walk
+        full |= self.walked.pending || self.walked.outer_gits.iter().any(|(a, kind)| boundary(a) != *kind);
         let (mut found, mut found_modules) = (Vec::new(), Vec::new());
         let mut gone: FxHashSet<PathBuf> = FxHashSet::default();
         // a directory the discovery would not go into (any more): it and all
@@ -452,7 +453,7 @@ impl Session {
                 // a repository that starts or ends here, or a `.git` of
                 // another kind: which ignore files count, and which exclude
                 // file, is decided again
-                if git_kind(&d) != self.walked.gits.get(&d).copied() {
+                if boundary(&d) != self.walked.gits.get(&d).copied() {
                     full = true;
                     break;
                 }
@@ -477,7 +478,7 @@ impl Session {
                 let new_dirs: Vec<&PathBuf> = listed.dirs.iter().filter(|s| **s != d && !self.walked.dirs.contains_key(*s)).collect();
                 for sub in new_dirs {
                     let w = walk(sub, None);
-                    let new = Walk::stamp(&w.dirs, None, began, &FxHashMap::default());
+                    let new = Walk::stamp(&w.dirs, None, began, &FxHashMap::default(), &FxHashMap::default());
                     self.walked.dirs.extend(new.dirs);
                     self.walked.ignores.extend(new.ignores);
                     self.walked.gits.extend(new.gits);
@@ -494,9 +495,14 @@ impl Session {
             // ignore files stamped before the walk: one unchanged by its end is
             // what it read, and keeps the time it was first seen
             let before: FxHashMap<PathBuf, FileStamp> = self.walked.ignores.iter().filter_map(|(p, old)| FileStamp::of(p, true).map(|s| (p.clone(), s.after(old.as_ref())))).collect();
+            // and where repositories start, in the directories known before
+            // the walk and above the root: one that starts or ends while it
+            // runs leaves another walk to do
+            let mut bounds: FxHashMap<PathBuf, Option<u8>> = self.walked.dirs.par_iter().map(|(d, _)| (d.clone(), boundary(d))).collect();
+            bounds.extend(root.ancestors().skip(1).map(|a| (a.to_path_buf(), boundary(a))));
             let began = SystemTime::now();
             let w = walk(&root, None);
-            self.walked = Walk::stamp(&w.dirs, Some(&root), began, &before);
+            self.walked = Walk::stamp(&w.dirs, Some(&root), began, &before, &bounds);
             // the modules as a fresh load finds them: one added, gone or of
             // another build system reloads the project
             let layout = |ms: &[crate::workspace::Module]| {

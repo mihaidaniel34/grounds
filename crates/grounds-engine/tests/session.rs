@@ -1301,6 +1301,73 @@ fn a_repository_that_starts_or_ends_around_the_workspace_changes_what_is_ignored
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn a_jj_repository_counts_as_a_repository() {
+    // `ignore` applies `.gitignore` inside a `.jj` repository as inside a git one
+    let dir = std::env::temp_dir().join(format!("grounds-session-jj-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, ".gitignore", "Req.java\n");
+    write(&dir, "src/main/java/demo/Req.java", "package demo;\npublic class Req {}\n");
+    write(&dir, "src/main/java/demo/Biz.java", "package demo;\npublic class Biz {}\n");
+    set_tree_mtime(&dir, ".", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
+    let mut s = Session::open(&dir).unwrap();
+    std::fs::create_dir(dir.join(".jj")).unwrap();
+    holds_as_fresh(&mut s, &dir, "a .jj directory made");
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    holds_as_fresh(&mut s, &dir, "past the margin");
+    assert!(!s.project.index.class_exists("demo.Req"));
+    std::fs::remove_dir(dir.join(".jj")).unwrap();
+    holds_as_fresh(&mut s, &dir, "the .jj directory removed");
+    assert!(s.project.index.class_exists("demo.Req"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_worktree_whose_git_file_is_rewritten_follows_the_new_exclude_file() {
+    // The main repository moves: the worktree's `.git` file names a gitdir
+    // that is gone, so no exclude file applies; `git worktree repair` writes
+    // the new one, still a file, and the main repository's exclude applies again.
+    let main = restored_project("wtrepair");
+    write(&main, ".git/info/exclude", "Req.java\n");
+    let dir = main.with_extension("wt");
+    let _ = std::fs::remove_dir_all(&dir);
+    git(&main, &["worktree", "add", "-q", "--detach", dir.to_str().unwrap()]);
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    set_tree_mtime(&dir, ".", old);
+    set_mtime(&main, ".git/info/exclude", old);
+    let mut s = Session::open(&dir).unwrap();
+    assert!(!s.project.index.class_exists("demo.Req"));
+    let moved = main.with_extension("moved");
+    let _ = std::fs::remove_dir_all(&moved);
+    std::fs::rename(&main, &moved).unwrap();
+    holds_as_fresh(&mut s, &dir, "the main repository moved");
+    git(&moved, &["worktree", "repair", dir.to_str().unwrap()]);
+    holds_as_fresh(&mut s, &dir, "the worktree repaired");
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    holds_as_fresh(&mut s, &dir, "past the margin");
+    assert!(!s.project.index.class_exists("demo.Req"));
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&moved);
+}
+
+#[test]
+fn a_repository_that_starts_or_ends_while_the_walk_runs_leaves_a_walk_to_do() {
+    // The walk filtered by where repositories started before it; if that
+    // differs by the time it is stamped, it is done again at the next sync.
+    use grounds_engine::project::Walk;
+    let dir = restored_project("walkrace");
+    let root = dir.canonicalize().unwrap();
+    let began = std::time::SystemTime::now();
+    let before: rustc_hash::FxHashMap<std::path::PathBuf, Option<u8>> = [(root.clone(), Some(1))].into_iter().collect();
+    let none = rustc_hash::FxHashMap::default();
+    assert!(!Walk::stamp(std::slice::from_ref(&root), Some(&root), began, &none, &before).pending, "the same repository: done");
+    std::fs::remove_dir_all(root.join(".git")).unwrap();
+    assert!(Walk::stamp(std::slice::from_ref(&root), Some(&root), began, &none, &before).pending, "the repository ended during the walk");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The same place, a different claim: a changed return type turns "`Old` has
 /// no method `missing`" (there before the change) into "`New` has no method
 /// `missing`" on an unchanged line of another file. That is a new break.
