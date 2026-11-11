@@ -22,6 +22,17 @@ class Argv {
         new ProcessBuilder("sh", "-c", "date");
         String shell = "/bin/sh";
         new ProcessBuilder(shell, "-c", "cat " + file); // expect
+        new ProcessBuilder("bash", "-e", "-c", "cat " + file); // expect
+        new ProcessBuilder("cmd", "/c", "type", "x " + file); // expect
+    }
+    // the program is the first element: echo prints "sh -c cat <file>"
+    void notAShell(String file) throws Exception {
+        new ProcessBuilder("/bin/echo", "sh", "-c", "cat " + file);
+        Runtime.getRuntime().exec(new String[] {"ssh-keygen", "-C", "sh -c " + file, "-f", "/tmp/" + file});
+    }
+    // after the command string come the script's own arguments
+    void positional(String file) throws Exception {
+        new ProcessBuilder("sh", "-c", "cat \"$1\"", "sh", "./" + file);
     }
     // one string: Runtime.exec splits it on spaces
     void single(String file) throws Exception {

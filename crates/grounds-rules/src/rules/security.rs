@@ -767,24 +767,53 @@ impl Rule for CommandInjection {
         if let Some(argv) = argv {
             // each element reaches the program as one argument, whatever it
             // contains (`"--target=" + dir`); only a shell parses it again
-            // (`"sh", "-c", "cat " + file`)
+            // (`"sh", "-c", "cat " + file`), and only the shell's command
+            // operand: the program is `argv[0]` (`"/bin/echo", "sh", "-c",
+            // ...` runs echo), and the elements after the command string are
+            // the script's own arguments (`"sh", "-c", "cat \"$1\"", "sh", file`)
             // (through a local: `String shell = "/bin/sh";`)
             let lit = |a: &Node<'t>| match cx.fm.constant_value(sole_value(a.unparen(), cx).unwrap_or(*a)) {
                 Some(Constant::Str(s)) => Some(s.to_ascii_lowercase()),
                 _ => None,
             };
-            let shell = argv.iter().filter_map(lit).any(|c| {
-                let c = c.rsplit(['/', '\\']).next().unwrap_or("");
-                matches!(c.trim_end_matches(".exe"), "sh" | "bash" | "zsh" | "ksh" | "dash" | "cmd" | "powershell" | "pwsh")
-            }) && argv.iter().filter_map(lit).any(|f| {
-                // `-c`, or combined short options with c: `bash -lc`, `sh -ec`
+            let program = argv.first().and_then(lit).map(|c| c.rsplit(['/', '\\']).next().unwrap_or("").trim_end_matches(".exe").to_string());
+            let (posix, windows) = match program.as_deref() {
+                Some("sh" | "bash" | "zsh" | "ksh" | "dash") => (true, false),
+                Some("cmd" | "powershell" | "pwsh") => (false, true),
+                _ => return,
+            };
+            // `-c`, or combined short options with c: `bash -lc`, `sh -ec`
+            let command_option = |f: &str| {
                 let short = f.strip_prefix('-').filter(|o| !o.is_empty() && o.chars().all(|c| c.is_ascii_alphabetic()) && o.len() <= 4);
-                matches!(f.as_str(), "/c" | "/k" | "-command") || short.is_some_and(|o| o.contains('c'))
-            });
-            if !shell {
+                (windows && matches!(f, "/c" | "/k" | "-command")) || short.is_some_and(|o| o.contains('c'))
+            };
+            let option = |f: &str| f.starts_with('-') || windows && f.starts_with('/');
+            // the options that follow the program, up to the command option;
+            // anything else (an option's value, a script file) leaves which
+            // element is the command not known
+            let mut rest = argv.iter().skip(1);
+            let mut command = false;
+            for a in rest.by_ref() {
+                match lit(a) {
+                    Some(f) if command_option(&f) => {
+                        command = true;
+                        break;
+                    }
+                    Some(f) if option(&f) => {}
+                    _ => break,
+                }
+            }
+            if !command {
                 return;
             }
-            if let Some(a) = argv.iter().find(|a| dynamically_built(**a, cx)) {
+            // a POSIX shell takes the first operand after its options as the
+            // command; cmd and PowerShell join all that follows into it
+            let operands: Vec<&Node<'t>> = if posix {
+                rest.find(|a| !lit(a).is_some_and(|f| option(&f))).into_iter().collect()
+            } else {
+                rest.collect()
+            };
+            if let Some(a) = operands.into_iter().find(|a| dynamically_built(**a, cx)) {
                 cx.report(*a, "Shell command built by string concatenation; pass arguments separately, without a shell");
             }
             return;
