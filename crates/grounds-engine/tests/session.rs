@@ -2295,3 +2295,93 @@ fn a_lombok_config_that_appears_in_a_package_tree_applies_as_in_a_fresh_load() {
     assert!(form(&s).contains("getValue"), "{}", form(&s));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The C50 tree: a Lombok class and its caller in a directory that is not a
+/// module, with old times.
+fn nested_lombok_project(name: &str) -> std::path::PathBuf {
+    let dir = restored_project(name);
+    write(&dir, "nested/src/main/java/p/Form.java", "package p;\n@lombok.Getter\npublic class Form {\n    private String value;\n}\n");
+    write(&dir, "nested/src/main/java/p/Use.java", "package p;\nclass Use { String m(Form f) { return f.getValue(); } }\n");
+    set_tree_mtime(&dir, ".", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
+    dir
+}
+
+fn form(s: &Session) -> String {
+    format!("{:?}", s.project.index.class("p.Form"))
+}
+
+#[test]
+fn a_lombok_config_that_could_not_be_read_applies_once_it_can_be() {
+    // A permission change does not touch the directory, and the load could
+    // not read the file to stamp what it said: the session must try it again.
+    let dir = nested_lombok_project("lombokunread");
+    let cfg = dir.join("nested/lombok.config");
+    let text = "lombok.accessors.fluent = true\n";
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(1800);
+    use std::os::unix::fs::PermissionsExt;
+    // without permission where that binds, else as bytes that are not UTF-8
+    // (of the same size, and given back the same time below)
+    let by_permission = unsafe { libc::geteuid() } != 0;
+    if by_permission {
+        write(&dir, "nested/lombok.config", text);
+    } else {
+        let mut bytes = text.as_bytes().to_vec();
+        bytes[0] = 0xff;
+        std::fs::write(&cfg, bytes).unwrap();
+    }
+    // (the times first: a file without permission cannot be opened to set its own)
+    set_tree_mtime(&dir, "nested", old);
+    if by_permission {
+        std::fs::set_permissions(&cfg, std::fs::Permissions::from_mode(0o000)).unwrap();
+    }
+    let mut s = Session::open(&dir).unwrap();
+    holds_as_fresh(&mut s, &dir, "the load");
+    holds_as_fresh(&mut s, &dir, "a second sync");
+    assert!(form(&s).contains("getValue"), "unread, the config applies to nothing: {}", form(&s));
+    // while it cannot be read, nothing loads the project again
+    let began = s.project.load_began;
+    for i in 0..3 {
+        s.sync(&[]);
+        no_reload(&s, began, &format!("sync {i} while the lombok.config cannot be read"));
+    }
+    if by_permission {
+        std::fs::set_permissions(&cfg, std::fs::Permissions::from_mode(0o644)).unwrap();
+    } else {
+        std::fs::write(&cfg, text).unwrap();
+        std::fs::File::open(&cfg).unwrap().set_modified(old).unwrap();
+    }
+    holds_as_fresh(&mut s, &dir, "the lombok.config became readable");
+    assert!(!form(&s).contains("getValue"), "fluent accessors: {}", form(&s));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn an_ignored_lombok_config_does_not_reload_the_project_at_every_sync() {
+    // A fresh load does not read a lombok.config an ignore file leaves out;
+    // seen by the rescan, it reloads the project once, not at every sync
+    // (here the directory's time is in the future, so it is listed each time).
+    let dir = nested_lombok_project("lombokignored");
+    write(&dir, ".gitignore", "lombok.config\n");
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    set_mtime(&dir, ".gitignore", old);
+    git(&dir, &["add", ".gitignore"]);
+    git(&dir, &["commit", "-qm", "ignore"]);
+    set_tree_mtime(&dir, ".", old);
+    let mut s = Session::open(&dir).unwrap();
+    holds_as_fresh(&mut s, &dir, "the load");
+    write(&dir, "nested/lombok.config", "lombok.accessors.fluent = true\n");
+    set_mtime(&dir, "nested/lombok.config", old);
+    std::fs::File::open(dir.join("nested")).unwrap().set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(3600)).unwrap();
+    holds_as_fresh(&mut s, &dir, "an ignored lombok.config appeared");
+    assert!(form(&s).contains("getValue"), "ignored, the config applies to nothing: {}", form(&s));
+    let began = s.project.load_began;
+    for i in 0..10 {
+        s.sync(&[]);
+        no_reload(&s, began, &format!("sync {i} after an ignored lombok.config appeared"));
+    }
+    // once the ignore file no longer leaves it out, it applies
+    write(&dir, ".gitignore", "*.log\n");
+    holds_as_fresh(&mut s, &dir, "the .gitignore no longer lists it");
+    assert!(!form(&s).contains("getValue"), "fluent accessors: {}", form(&s));
+    let _ = std::fs::remove_dir_all(&dir);
+}
