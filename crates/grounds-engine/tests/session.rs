@@ -2459,3 +2459,48 @@ fn a_lombok_config_symlink_whose_target_comes_within_reach_applies() {
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&outside);
 }
+
+#[test]
+fn a_lombok_config_whose_directory_could_not_be_listed_at_the_load_applies_once_it_can_be() {
+    // Review round 3 (H1): the directory is unlistable (0111) already when
+    // the session loads; the config's name can be looked at, and was met.
+    if !permissions_bind("a_lombok_config_whose_directory_could_not_be_listed_at_the_load_applies_once_it_can_be") {
+        return;
+    }
+    use std::os::unix::fs::PermissionsExt;
+    let dir = nested_lombok_project("lombokunlistedload");
+    // (a source at the root too: the release plan does not depend on nested/)
+    write(&dir, "src/main/java/demo/Root.java", "package demo;\npublic class Root {}\n");
+    write(&dir, "nested/lombok.config", "lombok.accessors.fluent = true\n");
+    let nested = dir.join("nested");
+    std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o111)).unwrap();
+    let mut s = Session::open(&dir).unwrap();
+    s.sync(&[]);
+    s.sync(&[]);
+    std::fs::set_permissions(&nested, std::fs::Permissions::from_mode(0o755)).unwrap();
+    holds_as_fresh(&mut s, &dir, "the directory can be listed again");
+    assert!(!form(&s).contains("getValue"), "fluent accessors: {}", form(&s));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_lombok_config_under_an_ignored_directory_does_not_reload() {
+    // Review round 3 (H5): nested/ is ignored, its sources tracked (so a
+    // fresh load reads them), and a lombok.config created in it is one the
+    // Lombok discovery never finds: no reload, the same model as fresh.
+    let dir = nested_lombok_project("lombokignoreddir");
+    write(&dir, ".gitignore", "nested/\n");
+    git(&dir, &["add", "-f", ".gitignore", "nested"]);
+    git(&dir, &["commit", "-qm", "ignored but tracked"]);
+    set_tree_mtime(&dir, ".", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
+    let mut s = Session::open(&dir).unwrap();
+    holds_as_fresh(&mut s, &dir, "the load");
+    holds_as_fresh(&mut s, &dir, "a second sync");
+    let began = s.project.load_began;
+    write(&dir, "nested/lombok.config", "lombok.accessors.fluent = true\n");
+    s.sync(&[]);
+    no_reload(&s, began, "a lombok.config appeared under an ignored directory");
+    holds_as_fresh(&mut s, &dir, "a lombok.config appeared under an ignored directory");
+    assert!(form(&s).contains("getValue"), "a fresh discovery does not read it: {}", form(&s));
+    let _ = std::fs::remove_dir_all(&dir);
+}

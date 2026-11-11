@@ -171,16 +171,30 @@ impl LombokConfigs {
     /// directory is one it walks (`reads_dir`), and the ignore files leave
     /// the file in, as the walk of its directory decides. `None` when that
     /// walk fails (the directory cannot be listed): not known.
+    ///
+    /// The walk of a directory lists the directory itself whatever the
+    /// ignore files say, so each directory from the root down to the
+    /// config's is looked for in the walk of its parent, as the source
+    /// discovery does (`Workspace::discover_in`): a config under an ignored
+    /// directory is not found.
     pub fn would_find(root: &Path, cfg: &Path) -> Option<bool> {
         let dir = cfg.parent()?;
         if !Self::reads_dir(root, dir) {
             return Some(false);
         }
-        let mut found = false;
-        for e in ignore::WalkBuilder::new(dir).hidden(false).max_depth(Some(1)).build() {
-            found |= e.ok()?.path() == cfg;
+        let listed = |parent: &Path, child: &Path| -> Option<bool> {
+            let mut found = false;
+            for e in ignore::WalkBuilder::new(parent).hidden(false).max_depth(Some(1)).build() {
+                found |= e.ok()?.path() == child;
+            }
+            Some(found)
+        };
+        for a in cfg.ancestors().skip(1).take_while(|a| *a != root && a.starts_with(root)) {
+            if !listed(a.parent()?, a)? {
+                return Some(false);
+            }
         }
-        Some(found)
+        listed(dir, cfg)
     }
 
     fn skipped(name: &str) -> bool {
