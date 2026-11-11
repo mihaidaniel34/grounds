@@ -1915,3 +1915,34 @@ fn an_unreadable_changed_file_hides_removals_of_its_own_package_only() {
     }
     let _ = std::fs::remove_dir_all(&repo);
 }
+
+#[test]
+fn a_lombok_config_that_appears_in_a_package_tree_applies_as_in_a_fresh_load() {
+    // A fresh load reads the `lombok.config` of every directory above the
+    // sources; one created later in a directory that had none (not the root,
+    // not a module) must change the session's model the same way.
+    let dir = restored_project("lombokconfig");
+    write(&dir, "nested/src/main/java/p/Form.java", "package p;\n@lombok.Getter\npublic class Form {\n    private String value;\n}\n");
+    write(&dir, "nested/src/main/java/p/Use.java", "package p;\nclass Use { String m(Form f) { return f.getValue(); } }\n");
+    set_tree_mtime(&dir, "nested", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
+    let mut s = Session::open(&dir).unwrap();
+    holds_as_fresh(&mut s, &dir, "the load");
+    let form = |s: &Session| format!("{:?}", s.project.index.class("p.Form"));
+    assert!(form(&s).contains("getValue"), "{}", form(&s));
+    write(&dir, "nested/lombok.config", "lombok.accessors.fluent = true\n");
+    holds_as_fresh(&mut s, &dir, "a lombok.config appeared in an existing directory");
+    assert!(!form(&s).contains("getValue"), "fluent accessors: {}", form(&s));
+    let opts = CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None };
+    let daemon: Vec<String> = s.check(&opts).findings.iter().map(|f| format!("{}:{} {}", f.path, f.line, f.message)).collect();
+    let fresh: Vec<String> = Session::open(&dir).unwrap().check(&opts).findings.iter().map(|f| format!("{}:{} {}", f.path, f.line, f.message)).collect();
+    assert_eq!(daemon, fresh);
+    // a new directory that comes with its own lombok.config
+    write(&dir, "extra/lombok.config", "lombok.accessors.fluent = true\n");
+    write(&dir, "extra/src/main/java/q/Bean.java", "package q;\n@lombok.Getter\npublic class Bean {\n    private int size;\n}\n");
+    holds_as_fresh(&mut s, &dir, "a directory with a lombok.config appeared");
+    // and one that goes
+    std::fs::remove_file(dir.join("nested/lombok.config")).unwrap();
+    holds_as_fresh(&mut s, &dir, "a lombok.config went");
+    assert!(form(&s).contains("getValue"), "{}", form(&s));
+    let _ = std::fs::remove_dir_all(&dir);
+}

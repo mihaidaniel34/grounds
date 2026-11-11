@@ -55,10 +55,11 @@ pub struct Session {
 ///   added or removed.
 ///
 /// Listed whether they exist or not, so that one appearing counts as a
-/// change. Not followed: class directories on the classpath (a build writes
-/// into them without touching the directory itself, and the project's own
-/// classes are read from source anyway), and a `lombok.config` created later
-/// in a package directory that had none.
+/// change. A `lombok.config` that appears in another directory is noticed
+/// by `Session::rescan`, by the time of the directory. Not followed: class
+/// directories on the classpath (a build writes into them without touching
+/// the directory itself, and the project's own classes are read from source
+/// anyway).
 fn config_files(project: &Project) -> Vec<PathBuf> {
     let ws = &project.workspace;
     let cfg = &project.config;
@@ -466,6 +467,20 @@ impl Session {
             s.walked.gits.retain(|p, _| !p.starts_with(d));
             gone.extend(s.stamps.keys().filter(|p| p.starts_with(d)).cloned());
         };
+        // A `lombok.config` the load did not read, in a directory whose
+        // listing is read again here, changes the stubs of every source file
+        // below it: the project is loaded again, as a new session would load
+        // it. (One the load read is a configuration file, its change seen by
+        // its own stamp.)
+        let known: FxHashSet<PathBuf> = self.config.iter().map(|(p, _)| p.clone()).collect();
+        let new_lombok = |d: &Path| -> bool {
+            let cfg = d.join("lombok.config");
+            let new = crate::project::LombokConfigs::reads_dir(&root, d) && !known.contains(&cfg) && std::fs::metadata(&cfg).is_ok_and(|m| m.is_file());
+            if new {
+                crate::trace::log(|| format!("sync: reload, {} appeared", cfg.display()));
+            }
+            new
+        };
         if !full {
             let mut changed: Vec<PathBuf> = self.walked.dirs.par_iter_mut().filter_map(|(d, stamp)| stamp.changed(d, clock).then(|| d.clone())).collect();
             // (parents first: a directory that went takes those below it along)
@@ -493,6 +508,9 @@ impl Session {
                     full = true;
                     break;
                 }
+                if new_lombok(&d) {
+                    return (Vec::new(), FxHashSet::default(), true);
+                }
                 crate::trace::log(|| format!("sync: directory changed {}", d.display()));
                 // one that cannot be listed or entered (no permission) is
                 // listed again at every sync until it can, as an unreadable
@@ -514,6 +532,9 @@ impl Session {
                 let new_dirs: Vec<&PathBuf> = listed.dirs.iter().filter(|s| **s != d && !self.walked.dirs.contains_key(*s)).collect();
                 for sub in new_dirs {
                     let w = walk(sub, None);
+                    if w.dirs.iter().any(|d| new_lombok(d)) {
+                        return (Vec::new(), FxHashSet::default(), true);
+                    }
                     let new = Walk::stamp(&w.dirs, None, began, &FxHashMap::default(), &FxHashMap::default());
                     self.walked.dirs.extend(new.dirs);
                     self.walked.ignores.extend(new.ignores);
@@ -549,6 +570,12 @@ impl Session {
             };
             if layout(&w.modules) != layout(&self.project.workspace.modules) {
                 crate::trace::log(|| "sync: reload, the walk finds other modules".into());
+                return (Vec::new(), FxHashSet::default(), true);
+            }
+            // (an ignore file decides which `lombok.config` files a load reads, too)
+            let configs = |l: &crate::project::LombokConfigs| l.files().collect::<FxHashSet<PathBuf>>();
+            if configs(&crate::project::LombokConfigs::discover(&root)) != configs(&self.project.lombok) {
+                crate::trace::log(|| "sync: reload, a load reads other lombok.config files".into());
                 return (Vec::new(), FxHashSet::default(), true);
             }
             found = files(w).collect();

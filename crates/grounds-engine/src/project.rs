@@ -146,11 +146,25 @@ impl LombokConfigs {
         self.dirs.iter().map(|(d, _)| d.join("lombok.config"))
     }
 
+    /// Whether a `lombok.config` in directory `dir` (under `root`) is one
+    /// `discover` reads: none of the directories from the root down to it
+    /// is hidden, build output, a source tree or one the source discovery
+    /// skips. Those that are hold no sources whose settings it could
+    /// change; and leaving out what the source discovery does not walk lets
+    /// a session notice every one that appears (`Session::rescan`).
+    pub fn reads_dir(root: &Path, dir: &Path) -> bool {
+        dir.strip_prefix(root).is_ok_and(|rel| rel.components().all(|c| c.as_os_str().to_str().is_some_and(|n| !Self::skipped(n))))
+    }
+
+    fn skipped(name: &str) -> bool {
+        name.starts_with('.') || matches!(name, "build" | "target" | "src") || crate::workspace::SKIP_DIRS.contains(&name)
+    }
+
     pub fn discover(root: &Path) -> LombokConfigs {
         let mut dirs = Vec::new();
         let walker = ignore::WalkBuilder::new(root)
             .hidden(false)
-            .filter_entry(|e| !matches!(e.file_name().to_str(), Some(".git" | "build" | "target" | "node_modules" | ".gradle" | "out" | "src")))
+            .filter_entry(|e| e.depth() == 0 || !(e.file_type().is_some_and(|t| t.is_dir()) && e.file_name().to_str().is_none_or(Self::skipped)))
             .build();
         for e in walker.flatten() {
             if e.file_name() == "lombok.config" {
@@ -599,7 +613,7 @@ impl Project {
         let t = Instant::now();
         let mut di = grounds_di::DiModel::build_with(&index, &registered, &auto_registered);
         stats.t_di = t.elapsed();
-        di.lombok_copies_qualifiers = lombok_copies_qualifiers(&workspace.root);
+        di.lombok_copies_qualifiers = lombok_copies_qualifiers(&lombok);
         di.bean_overriding_allowed = bean_overriding_allowed(&workspace);
         let classpath_warnings = crate::classpath::warnings(&workspace, &config, &index);
         Ok(Project { config, workspace, index, stats, di, source_sets, lombok, registered, auto_registered, classpath_warnings, classpath_entries: entries, stamps, walked, load_began, releases, release_inputs })
@@ -688,29 +702,9 @@ fn bean_overriding_allowed(ws: &Workspace) -> bool {
     })
 }
 
-fn lombok_copies_qualifiers(root: &Path) -> bool {
-    let mut stack = vec![root.to_path_buf()];
-    let mut depth = 0;
-    while let Some(d) = stack.pop() {
-        let cfg = d.join("lombok.config");
-        if let Ok(t) = crate::fsutil::read_text(&cfg) {
-            if t.lines().any(|l| l.contains("copyableAnnotations") && (l.contains("Qualifier") || l.contains("Value"))) {
-                return true;
-            }
-        }
-        depth += 1;
-        if depth > 200 {
-            break;
-        }
-        if let Ok(rd) = std::fs::read_dir(&d) {
-            for e in rd.flatten() {
-                let p = e.path();
-                let name = e.file_name().to_string_lossy().to_string();
-                if p.is_dir() && !name.starts_with('.') && !matches!(name.as_str(), "build" | "target" | "node_modules" | "out" | "src") {
-                    stack.push(p);
-                }
-            }
-        }
-    }
-    false
+/// Whether a `lombok.config` of the project copies qualifier or `@Value`
+/// annotations onto generated constructors. Read from the configurations
+/// `LombokConfigs::discover` found, the ones a session follows.
+fn lombok_copies_qualifiers(lombok: &LombokConfigs) -> bool {
+    lombok.dirs.iter().flat_map(|(_, entries)| entries).any(|(k, op, v)| k == "lombok.copyableannotations" && op == "+=" && (v.contains("Qualifier") || v.contains("Value")))
 }
