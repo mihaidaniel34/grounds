@@ -474,6 +474,14 @@ pub fn modules_built_against_own_release(ws: &Workspace) -> Vec<PathBuf> {
         for (path, body) in blocks {
             declarations.push((ws.root.join(path), body));
         }
+        // `configure(...) { }`, `subprojects.each { }`: modules chosen by an
+        // expression, taken as every module the script could reach
+        let (own_text, reaching) = crate::java_release::reaching_blocks(&own_text);
+        for body in reaching {
+            for m in gradle_dirs.iter().filter(|m| m.starts_with(dir)) {
+                declarations.push((m.to_path_buf(), body.clone()));
+            }
+        }
         // a script's `subprojects { }` and `allprojects { }` declare for the
         // modules below it (and itself, for `allprojects`): which of them a
         // block really reaches is the build's business, so all of them
@@ -684,6 +692,12 @@ mod tests {
         write("proj/app/build.gradle", "\n");
         write("proj/core/build.gradle", "\n");
         assert!(found(&dir.join("proj")).is_empty());
+        // configure(...) { }: every module the script could reach
+        write("conf/settings.gradle", "include 'core', 'app'\n");
+        write("conf/build.gradle", "allprojects { group = 'org.example' }\nconfigure(subprojects.findAll { it.name == 'app' }) {\n  dependencies { implementation 'org.example:core:0.1' }\n}\n");
+        write("conf/app/build.gradle", "\n");
+        write("conf/core/build.gradle", "\n");
+        assert_eq!(found(&dir.join("conf")), vec!["", "app", "core"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -696,7 +710,7 @@ mod tests {
             std::fs::create_dir_all(p.parent().unwrap()).unwrap();
             std::fs::write(p, text).unwrap();
         }
-        let git = |args: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(&dir).args(args).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t").env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t").status().is_ok_and(|s| s.success()));
+        let git = |args: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(&dir).args(["-c", "commit.gpgsign=false", "-c", "core.hooksPath=.no-hooks"]).args(args).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t").env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t").status().is_ok_and(|s| s.success()));
         git(&["init", "-q"]);
         git(&["add", "-f", "."]);
         git(&["commit", "-qm", "init"]);

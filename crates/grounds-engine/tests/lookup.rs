@@ -166,7 +166,7 @@ fn files_git_tracks_are_read_whatever_gitignore_says() {
         ],
     );
     let git = |args: &[&str]| {
-        let ok = std::process::Command::new("git").arg("-C").arg(&dir).args(args).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t").env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t").status().is_ok_and(|s| s.success());
+        let ok = std::process::Command::new("git").arg("-C").arg(&dir).args(["-c", "commit.gpgsign=false", "-c", "core.hooksPath=.no-hooks"]).args(args).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t").env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t").status().is_ok_and(|s| s.success());
         assert!(ok, "git {args:?}");
     };
     git(&["init", "-q"]);

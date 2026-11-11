@@ -109,6 +109,15 @@ pub fn module_evidence(ws: &Workspace) -> Vec<Evidence> {
                 for (path, body) in blocks {
                     targeted.push((ws.root.join(path), GradleSettings::read(&body)));
                 }
+                // which modules these reach is the build's business: what they
+                // set is unknown for this module and every one below it
+                let (own, reaching) = reaching_blocks(&own);
+                for body in reaching {
+                    let g = GradleSettings::read(&body).opaque();
+                    for d in ws.modules.iter().filter(|o| o.build_system == BuildSystem::Gradle && o.dir.starts_with(&m.dir)) {
+                        targeted.push((d.dir.clone(), g));
+                    }
+                }
                 scripts.push((m.dir.clone(), own));
             }
         }
@@ -179,6 +188,71 @@ pub(crate) fn project_blocks(text: &str) -> (String, Vec<(String, String)>) {
     }
     own.push_str(&text[last.min(text.len())..]);
     (own, found)
+}
+
+/// A script's blocks that configure modules chosen by an expression
+/// (`configure(subprojects.findAll { ... }) { }`, `subprojects.each { }`,
+/// `allprojects.forEach { }`): the script without them, and their bodies.
+pub(crate) fn reaching_blocks(text: &str) -> (String, Vec<String>) {
+    // the index just past the bracket matching the one at `open`
+    let close = |open: usize| -> Option<usize> {
+        let (o, c) = match text[open..].chars().next()? {
+            '(' => ('(', ')'),
+            _ => ('{', '}'),
+        };
+        let mut depth = 0;
+        for (j, ch) in text[open..].char_indices() {
+            if ch == o {
+                depth += 1;
+            } else if ch == c {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(open + j + 1);
+                }
+            }
+        }
+        None
+    };
+    let word_before = |i: usize| text[..i].chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.');
+    let mut cuts: Vec<(usize, usize, String)> = Vec::new();
+    let mut from = 0;
+    while from < text.len() {
+        let next = ["configure(", "subprojects.", "allprojects."].iter().filter_map(|k| text[from..].find(k).map(|i| (from + i, *k))).min();
+        let Some((start, key)) = next else { break };
+        from = start + key.len();
+        if word_before(start) {
+            continue;
+        }
+        // the block's opening brace: after `configure(...)`, or after `.each` / `.forEach(...)`
+        let mut at = if key == "configure(" {
+            match close(start + key.len() - 1) {
+                Some(e) => e,
+                None => break,
+            }
+        } else {
+            from + text[from..].find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(text.len() - from)
+        };
+        let rest = text[at..].trim_start();
+        at = text.len() - rest.len();
+        if key != "configure(" && rest.starts_with('(') {
+            let Some(e) = close(at) else { break };
+            at = e + (text[e..].len() - text[e..].trim_start().len());
+        }
+        if !text[at..].starts_with('{') {
+            continue;
+        }
+        let Some(end) = close(at) else { break };
+        cuts.push((start, end, text[at + 1..end - 1].to_string()));
+        from = end;
+    }
+    let mut own = String::new();
+    let mut last = 0;
+    for (s, e, _) in &cuts {
+        own.push_str(&text[last..*s]);
+        last = *e;
+    }
+    own.push_str(&text[last..]);
+    (own, cuts.into_iter().map(|(_, _, b)| b).collect())
 }
 
 /// A script without its `name { ... }` blocks.
@@ -373,6 +447,12 @@ impl GradleSettings {
             s
         };
         GradleSettings { release: get(&["options.release"]), toolchain: get(&["languageVersion", "jvmToolchain"]), compat: get(&["targetCompatibility", "sourceCompatibility"]) }
+    }
+
+    /// The same settings, each one that is set made opaque.
+    fn opaque(self) -> GradleSettings {
+        let o = |s: Setting| if s.is_set() { Setting { literal: None, opaque: true, mixed: false } } else { s };
+        GradleSettings { release: o(self.release), toolchain: o(self.toolchain), compat: o(self.compat) }
     }
 
     fn merge(&mut self, o: &GradleSettings) {
@@ -1087,6 +1167,19 @@ mod tests {
             ],
         );
         assert_eq!(evidence_of(&dir), vec![(":".into(), Unknown), ("lib".into(), Exact(11)), ("plugin".into(), Unknown)]);
+        // `configure(...) { }` and `subprojects.each { }` reach modules no
+        // reader can list: not the script's own settings, and every module
+        // below it that could be reached is unknown for what they set
+        let dir = temp(
+            "configure-blocks",
+            &[
+                ("build.gradle", "configure(subprojects.findAll { it.name != 'docs' }) {\n  compileJava { options.release = 11 }\n}\n"),
+                ("app/build.gradle", "compileJava { options.release = 17 }\n"),
+                ("each/build.gradle", "subprojects.each { p -> p.compileJava { options.release = 8 } }\n"),
+                ("each/lib/build.gradle", "dependencies { }\n"),
+            ],
+        );
+        assert_eq!(evidence_of(&dir), vec![(":".into(), Unknown), ("app".into(), Unknown), ("each".into(), Unknown), ("each/lib".into(), Unknown)]);
         // Maven: --release is exact, source/target a lower bound, an
         // unresolvable property or a parent outside the repository unknown
         let pom = |inner: &str| format!("<project>{inner}</project>");
