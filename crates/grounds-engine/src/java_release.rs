@@ -105,16 +105,26 @@ pub fn module_evidence(ws: &Workspace) -> Vec<Evidence> {
     for m in ws.modules.iter().filter(|m| m.build_system == BuildSystem::Gradle) {
         for f in ["build.gradle", "build.gradle.kts"] {
             if let Ok(t) = crate::fsutil::read_text(m.dir.join(f)) {
-                let (own, blocks) = project_blocks(&strip_script_comments(&t, false));
-                for (path, body) in blocks {
+                let (own, targets) = project_blocks(&strip_script_comments(&t, false));
+                for (path, body) in targets {
                     targeted.push((ws.root.join(path), GradleSettings::read(&body)));
                 }
                 // which modules these reach is the build's business: what they
-                // set is unknown for this module and every one below it
-                let (own, reaching) = reaching_blocks(&own);
-                for body in reaching {
+                // set is unknown for every module below this one (and this
+                // one, unless only its subprojects can be reached)
+                let (mut own, mut reaching) = reaching_blocks(&own);
+                // a nested module's `subprojects { }` and `allprojects { }`
+                // likewise (the root's are read as the settings its modules
+                // inherit)
+                if m.dir != ws.root {
+                    for (name, itself) in [("subprojects", false), ("allprojects", true)] {
+                        reaching.extend(blocks(&own, name).into_iter().map(|b| (b.to_string(), itself)));
+                        own = without_blocks(&own, name);
+                    }
+                }
+                for (body, itself) in reaching {
                     let g = GradleSettings::read(&body).opaque();
-                    for d in ws.modules.iter().filter(|o| o.build_system == BuildSystem::Gradle && o.dir.starts_with(&m.dir)) {
+                    for d in ws.modules.iter().filter(|o| o.build_system == BuildSystem::Gradle && o.dir.starts_with(&m.dir) && (itself || o.dir != m.dir)) {
                         targeted.push((d.dir.clone(), g));
                     }
                 }
@@ -193,7 +203,7 @@ pub(crate) fn project_blocks(text: &str) -> (String, Vec<(String, String)>) {
 /// A script's blocks that configure modules chosen by an expression
 /// (`configure(subprojects.findAll { ... }) { }`, `subprojects.each { }`,
 /// `allprojects.forEach { }`): the script without them, and their bodies.
-pub(crate) fn reaching_blocks(text: &str) -> (String, Vec<String>) {
+pub(crate) fn reaching_blocks(text: &str) -> (String, Vec<(String, bool)>) {
     // the index just past the bracket matching the one at `open`
     let close = |open: usize| -> Option<usize> {
         let (o, c) = match text[open..].chars().next()? {
@@ -214,7 +224,7 @@ pub(crate) fn reaching_blocks(text: &str) -> (String, Vec<String>) {
         None
     };
     let word_before = |i: usize| text[..i].chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '.');
-    let mut cuts: Vec<(usize, usize, String)> = Vec::new();
+    let mut cuts: Vec<(usize, usize, String, bool)> = Vec::new();
     let mut from = 0;
     while from < text.len() {
         let next = ["configure(", "subprojects.", "allprojects."].iter().filter_map(|k| text[from..].find(k).map(|i| (from + i, *k))).min();
@@ -241,18 +251,49 @@ pub(crate) fn reaching_blocks(text: &str) -> (String, Vec<String>) {
         if !text[at..].starts_with('{') {
             continue;
         }
-        let Some(end) = close(at) else { break };
-        cuts.push((start, end, text[at + 1..end - 1].to_string()));
+        let Some(mut end) = close(at) else { break };
+        let mut body = text[at + 1..end - 1].to_string();
+        // a chain (`.findAll { }.each { }`, `.matching { }.configureEach { }`)
+        // reaches the same modules: every block of it is cut
+        loop {
+            let rest = text[end..].trim_start();
+            let Some(after) = rest.strip_prefix('.') else { break };
+            let name = after.find(|c: char| !(c.is_alphanumeric() || c == '_')).unwrap_or(after.len());
+            if name == 0 {
+                break;
+            }
+            let mut next = text.len() - after.len() + name;
+            next += text[next..].len() - text[next..].trim_start().len();
+            if text[next..].starts_with('(') {
+                let Some(e) = close(next) else { break };
+                next = e + (text[e..].len() - text[e..].trim_start().len());
+            }
+            let block = if text[next..].starts_with('{') { close(next) } else { None };
+            match block {
+                Some(e) => {
+                    body.push('\n');
+                    body.push_str(&text[next + 1..e - 1]);
+                    end = e;
+                }
+                // `.each(fn)`: no block, the chain ends here
+                None => {
+                    end = next.max(end);
+                    break;
+                }
+            }
+        }
+        // (`subprojects.` never reaches the declaring project itself)
+        cuts.push((start, end, body, key != "subprojects."));
         from = end;
     }
     let mut own = String::new();
     let mut last = 0;
-    for (s, e, _) in &cuts {
+    for (s, e, _, _) in &cuts {
         own.push_str(&text[last..*s]);
         last = *e;
     }
     own.push_str(&text[last..]);
-    (own, cuts.into_iter().map(|(_, _, b)| b).collect())
+    (own, cuts.into_iter().map(|(_, _, b, itself)| (b, itself)).collect())
 }
 
 /// A script without its `name { ... }` blocks.
@@ -1180,6 +1221,23 @@ mod tests {
             ],
         );
         assert_eq!(evidence_of(&dir), vec![(":".into(), Unknown), ("app".into(), Unknown), ("each".into(), Unknown), ("each/lib".into(), Unknown)]);
+        // a chain after `subprojects.`: every block of it reaches the subprojects
+        let dir = temp("chained-blocks", &[("build.gradle", "java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }\nsubprojects.findAll { it.name != 'docs' }.each { p -> p.compileJava { options.release = 11 } }\n"), ("app/build.gradle", "dependencies { }\n")]);
+        assert_eq!(evidence_of(&dir), vec![(":".into(), Exact(21)), ("app".into(), Unknown)]);
+        // `subprojects { }` and `allprojects { }` of a nested module's script
+        // are not its own settings: they reach the modules below it (and
+        // itself, for `allprojects`)
+        let dir = temp(
+            "nested-blocks",
+            &[
+                ("build.gradle", "java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }\n"),
+                ("group/build.gradle", "java { toolchain { languageVersion = JavaLanguageVersion.of(17) } }\nsubprojects { compileJava { options.release = 8 } }\n"),
+                ("group/lib/build.gradle", "dependencies { }\n"),
+                ("other/build.gradle", "allprojects { compileJava { options.release = 11 } }\n"),
+                ("other/lib/build.gradle", "dependencies { }\n"),
+            ],
+        );
+        assert_eq!(evidence_of(&dir), vec![(":".into(), Exact(21)), ("group".into(), Exact(17)), ("group/lib".into(), Unknown), ("other".into(), Unknown), ("other/lib".into(), Unknown)]);
         // Maven: --release is exact, source/target a lower bound, an
         // unresolvable property or a parent outside the repository unknown
         let pom = |inner: &str| format!("<project>{inner}</project>");

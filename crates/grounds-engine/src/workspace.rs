@@ -601,8 +601,8 @@ pub fn modules_built_against_own_release(ws: &Workspace) -> Vec<PathBuf> {
         // `configure(...) { }`, `subprojects.each { }`: modules chosen by an
         // expression, taken as every module the script could reach
         let (own_text, reaching) = crate::java_release::reaching_blocks(&own_text);
-        for body in reaching {
-            for m in gradle_dirs.iter().filter(|m| m.starts_with(dir)) {
+        for (body, itself) in reaching {
+            for m in gradle_dirs.iter().filter(|m| m.starts_with(dir) && (itself || *m != dir)) {
                 declarations.push((m.to_path_buf(), body.clone()));
             }
         }
@@ -668,22 +668,49 @@ pub fn modules_built_against_own_release(ws: &Workspace) -> Vec<PathBuf> {
             }
         }
     }
-    // a package prefix of the project's own sources (not a nested module's)
-    let package_prefix = |g: &str, d: &Path| {
-        let dir = format!("/java/{}/", g.replace('.', "/"));
-        let nested = |m: &Path| m != d && m.starts_with(d);
-        // or of its module name (an aggregator's only source is its module-info)
-        let module_name = |f: &Path| -> Option<String> {
-            let text = crate::fsutil::read_text(f).ok()?;
-            let text = strip_script_comments(&text, false);
-            let i = text.find("module ")?;
-            Some(text[i + "module ".len()..].split(|c: char| c.is_whitespace() || c == '{').next()?.to_string())
-        };
-        let named = || {
-            std::fs::read_dir(d.join("src")).into_iter().flatten().flatten().any(|set| module_name(&set.path().join("java/module-info.java")).is_some_and(|m| m == g || m.starts_with(&format!("{g}."))))
-        };
-        g.contains('.') && (ws.files.iter().any(|f| f.path.starts_with(d) && !nested(&ws.modules[f.module].dir) && f.path.to_string_lossy().contains(&dir)) || named())
+    // the package prefixes of each such project's own sources (not a nested
+    // module's), and of its module name (an aggregator's only source is its
+    // module-info), computed once
+    let module_name = |f: &Path| -> Option<String> {
+        let text = crate::fsutil::read_text(f).ok()?;
+        let text = strip_script_comments(&text, false);
+        let i = text.find("module ")?;
+        Some(text[i + "module ".len()..].split(|c: char| c.is_whitespace() || c == '{').next()?.to_string())
     };
+    let add_prefixes = |set: &mut std::collections::HashSet<String>, dotted: &str| {
+        let mut acc = String::new();
+        for part in dotted.split('.').filter(|p| !p.is_empty()) {
+            if !acc.is_empty() {
+                acc.push('.');
+            }
+            acc.push_str(part);
+            set.insert(acc.clone());
+        }
+    };
+    let mut prefixes: std::collections::HashMap<&Path, std::collections::HashSet<String>> = std::collections::HashMap::new();
+    for (_, d) in &undeclared {
+        if prefixes.contains_key(d) {
+            continue;
+        }
+        let mut set = std::collections::HashSet::new();
+        let nested = |m: &Path| m != *d && m.starts_with(d);
+        for f in ws.files.iter().filter(|f| f.path.starts_with(d) && !nested(&ws.modules[f.module].dir)) {
+            let path = f.path.to_string_lossy().replace('\\', "/");
+            for (i, _) in path.match_indices("/java/") {
+                let package = &path[i + "/java/".len()..];
+                if let Some((dir, _)) = package.rsplit_once('/') {
+                    add_prefixes(&mut set, &dir.replace('/', "."));
+                }
+            }
+        }
+        for sset in std::fs::read_dir(d.join("src")).into_iter().flatten().flatten() {
+            if let Some(m) = module_name(&sset.path().join("java/module-info.java")) {
+                add_prefixes(&mut set, &m);
+            }
+        }
+        prefixes.insert(d, set);
+    }
+    let package_prefix = |g: &str, d: &Path| g.contains('.') && prefixes.get(d).is_some_and(|s| s.contains(g));
     let own = |coordinate: &str| -> bool {
         let mut parts = coordinate.split(':');
         let (Some(g), Some(a)) = (parts.next(), parts.next()) else { return false };
