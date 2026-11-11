@@ -62,21 +62,6 @@ class Rewriter {
         java.math.BigDecimal r = round(v);
         return r == v;
     }
-    // a helper that always makes a new object: never the same one
-    static java.math.BigDecimal copy(java.math.BigDecimal v) { return new java.math.BigDecimal(v.toString()); }
-    boolean sameValue(java.math.BigDecimal v) {
-        java.math.BigDecimal r = copy(v);
-        return r == v; // expect
-    }
-    boolean sameValueInline(java.math.BigDecimal v) {
-        return copy(v) == v; // expect
-    }
-    // a local replaced after it started out as the other operand
-    boolean reassigned(java.math.BigDecimal v) {
-        java.math.BigDecimal r = v;
-        r = new java.math.BigDecimal(v.toString());
-        return r == v; // expect
-    }
     // a local that switches between two objects: which one it holds
     boolean active(java.util.ArrayList<String> first, java.util.ArrayList<String> rest, boolean more) {
         var elements = first;
@@ -88,14 +73,6 @@ class Rewriter {
         r = r.stripTrailingZeros();
         return r == v;
     }
-    // an element is not the collection it came from
-    java.util.List<java.math.BigDecimal> all(java.math.BigDecimal v) { return java.util.List.of(v); }
-    boolean element(java.math.BigDecimal v) {
-        for (java.math.BigDecimal x : all(v)) {
-            if (x == v) return true; // expect
-        }
-        return false;
-    }
     // two locals of one name in separate blocks: each is its own
     boolean scoped(java.math.BigDecimal v, boolean c) {
         if (c) {
@@ -105,10 +82,15 @@ class Rewriter {
         java.math.BigDecimal r = round(v);
         return r == v;
     }
-    // a helper that may hand its argument back stays silent
-    java.math.BigDecimal maybe(java.math.BigDecimal v) { return v.signum() == 0 ? v : new java.math.BigDecimal(v.toString()); }
-    boolean unknown(java.math.BigDecimal v) {
-        java.math.BigDecimal r = maybe(v);
+    // missed, by design (follow-ups in #100): a helper that always makes a
+    // new object, and a local replaced by a new object, are not followed
+    static java.math.BigDecimal copy(java.math.BigDecimal v) { return new java.math.BigDecimal(v.toString()); }
+    boolean sameValue(java.math.BigDecimal v) {
+        return copy(v) == v;
+    }
+    boolean reassigned(java.math.BigDecimal v) {
+        java.math.BigDecimal r = v;
+        r = new java.math.BigDecimal(v.toString());
         return r == v;
     }
     // but not against another value

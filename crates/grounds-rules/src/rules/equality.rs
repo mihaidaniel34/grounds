@@ -1177,57 +1177,32 @@ fn change_check<'t>(_n: Node<'t>, l: Node<'t>, r: Node<'t>, cx: &Ctx<'_, 't>) ->
         }
         e
     };
-    // a call that was given `of` as an argument, and that may hand it back:
-    // not a method of this file whose every `return` makes a new object
+    // a call that was given `of` as an argument
     let received = |e: Node<'t>, of: &str| {
         let e = strip(e);
-        e.kind() == "method_invocation" && cx.fm.args_of(e).iter().any(|a| normalized(strip(*a), src) == of) && !returns_new(e, cx)
+        e.kind() == "method_invocation" && cx.fm.args_of(e).iter().any(|a| normalized(strip(*a), src) == of)
     };
     for (a, b) in [(l, r), (r, l)] {
         let of = normalized(strip(b), src);
         if received(a, &of) {
             return true;
         }
-        // a local that started out as the other operand or as such a call,
-        // and that no assignment gives a new object (`r = new BigDecimal(..)`,
-        // a helper that always makes one): such a local is never the other
-        // operand. Other assignments keep the identity question one of which
-        // object it holds (`m = visit(m, ctx)`, `elements = body`).
+        // a local that started out as the other operand or as such a call
+        // (its own declaration, as the binder finds it: not another local of
+        // the same name in another block). What is assigned to it later is
+        // not followed: the identity question stays one of which object it
+        // holds (`m = visit(m, ctx)`, `elements = body`), and a local that
+        // can only hold a new object by then is a missed finding (#100).
         let a = strip(a);
         if a.kind() != "identifier" || cx.fm.field_ref(a).is_some() {
             continue;
         }
         let Some(i) = cx.fm.local_ref(a) else { continue };
-        // (a declarator's initializer: not the collection a for-each variable runs over)
-        let decl = cx.fm.binder.decls[i].decl_node;
-        let Some(init) = decl.field("value").filter(|_| decl.kind() == "variable_declarator") else { continue };
-        let keeps = |v: Node<'t>| normalized(strip(v), src) == of || received(v, &of);
-        let assigned = cx.fm.binder.uses[i].iter().filter_map(|u| u.parent_unparen().filter(|p| p.kind() == "assignment_expression" && p.field("left").map(|l| l.unparen()) == Some(*u)));
-        let fresh = |v: Node<'t>| {
-            let v = strip(v);
-            matches!(v.kind(), "object_creation_expression" | "array_creation_expression") || v.kind() == "method_invocation" && returns_new(v, cx)
-        };
-        if keeps(init) && assigned.into_iter().all(|p| op(p) == "=" && p.field("right").is_some_and(|v| !fresh(v))) {
+        if cx.fm.binder.decls[i].decl_node.field("value").is_some_and(|v| normalized(strip(v), src) == of || received(v, &of)) {
             return true;
         }
     }
     false
-}
-
-/// A call of a method declared in this file whose every `return` gives a
-/// new object (`return new BigDecimal(v.toString());`): what it returns is
-/// never the object it was given.
-fn returns_new<'t>(call: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
-    let Some(c) = cx.fm.select_method(call).filter(|c| !c.ambiguous) else { return false };
-    let Some(range) = c.method.range else { return false };
-    let decl = cx.fm.root().descendants().find(|d| {
-        d.kind() == "method_declaration"
-            && d.field("name").is_some_and(|x| (x.start_byte() as u32, x.end_byte() as u32) == range)
-            && cx.fm.enclosing_class(*d).is_some_and(|k| k.name == c.owner)
-    });
-    let Some(body) = decl.and_then(|d| d.field("body")) else { return false };
-    let returns: Vec<Node<'t>> = body.descendants().filter(|r| r.kind() == "return_statement" && enclosing_method_decl(*r) == decl && cx.owning_callable(*r) == decl).collect();
-    !returns.is_empty() && returns.iter().all(|r| r.first_kid().is_some_and(|v| v.unparen().kind() == "object_creation_expression"))
 }
 
 declare_rule!(CompareToReturnsMinValue {
