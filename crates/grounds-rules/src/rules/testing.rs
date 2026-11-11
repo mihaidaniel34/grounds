@@ -37,14 +37,43 @@ fn is_test_method(m: Node, src: &str) -> bool {
 /// owner, or, when overloads cannot be told apart (arguments of unknown
 /// type), the classes the candidates come from: the qualifier
 /// (`Assert.assertEquals`), an inherited method (JUnit 3), or static imports.
-/// Empty when nothing says (a supertype that is not resolved may declare it).
+/// Empty when nothing says: an unresolved supertype the code names by no
+/// known name may declare it.
 fn assertion_classes<'t>(cx: &Ctx<'_, 't>, call: Node<'t>) -> Vec<Name> {
-    if let Some(c) = cx.fm.select_method(call) {
-        return vec![c.owner.clone()];
-    }
     let Some(name) = cx.fm.call_name(call) else { return Vec::new() };
     let mut owners: Vec<Name> = Vec::new();
-    if let Some(o) = call.field("object") {
+    // the unresolved supertypes of the enclosing classes may declare it (and
+    // would hide a static import): each by the name the code writes for it,
+    // or, when that is not known, nothing is known
+    if call.field("object").is_none() {
+        for decl in call.ancestors().filter(|a| grounds_syntax::is_type_declaration(a.kind())) {
+            if cx.fm.class_name_of_decl(decl).is_some_and(|cn| cx.fm.hierarchy_complete(cn)) {
+                continue;
+            }
+            if decl.field("interfaces").is_some() {
+                return Vec::new();
+            }
+            let Some(sup) = decl.field("superclass").and_then(|s| s.kids().into_iter().find(|k| k.is_named())) else { return Vec::new() };
+            let written: String = cx.text(sup).split('<').next().unwrap_or("").chars().filter(|c| !c.is_whitespace()).collect();
+            let full = if written.contains('.') {
+                written
+            } else if let Some(i) = cx.fm.stub.imports.iter().find(|i| !i.is_static && !i.on_demand && i.is_named(&written)) {
+                i.path.to_string()
+            } else {
+                return Vec::new();
+            };
+            owners.push(Name::from(full.as_str()));
+        }
+    }
+    // a method of an enclosing class (declared or inherited) hides the static
+    // imports (JLS 15.12.1): they count only when that is not settled
+    let unsettled = !owners.is_empty();
+    let mut member = false;
+    // (a guessed overload may be another class's: every candidate counts)
+    if let Some(c) = cx.fm.select_method(call).filter(|c| !c.ambiguous) {
+        member = call.field("object").is_none() && !c.via_type;
+        owners.push(c.owner.clone());
+    } else if let Some(o) = call.field("object") {
         match cx.fm.symbol(o) {
             Some(Symbol::Type(t)) => owners.push(t),
             // a class that is not on the classpath: named by its import
@@ -64,20 +93,24 @@ fn assertion_classes<'t>(cx: &Ctx<'_, 't>, call: Node<'t>) -> Vec<Name> {
         }
     } else {
         for cls in call.ancestors().filter(|a| grounds_syntax::is_type_declaration(a.kind())).filter_map(|d| cx.fm.class_of_decl(d)) {
-            owners.extend(cx.fm.methods_named(&cls.this_type(), name).into_iter().map(|m| m.owner));
-            if !owners.is_empty() {
+            let found: Vec<Name> = cx.fm.methods_named(&cls.this_type(), name).into_iter().map(|m| m.owner).collect();
+            if !found.is_empty() {
+                owners.extend(found);
+                member = true;
                 break;
             }
         }
-        if owners.is_empty() {
-            for i in cx.fm.stub.imports.iter().filter(|i| i.is_static) {
-                let class = if i.on_demand { &*i.path } else if i.is_named(name) { i.path.rsplit_once('.').map_or("", |x| x.0) } else { continue };
-                match cx.fm.index.binary_name_for_dotted(class) {
-                    Some(b) if !i.on_demand || !cx.fm.methods_named(&Ty::class(&b), name).is_empty() => owners.push(b),
-                    Some(_) => {}
-                    // not on the classpath: it may provide the method
-                    None => owners.push(Name::from(class)),
-                }
+    }
+    // an unqualified call: every static import that may provide the name,
+    // including one of a class that is not on the classpath
+    if call.field("object").is_none() && (unsettled || !member) {
+        for i in cx.fm.stub.imports.iter().filter(|i| i.is_static) {
+            let class = if i.on_demand { &*i.path } else if i.is_named(name) { i.path.rsplit_once('.').map_or("", |x| x.0) } else { continue };
+            match cx.fm.index.binary_name_for_dotted(class) {
+                Some(b) if !i.on_demand || !cx.fm.methods_named(&Ty::class(&b), name).is_empty() => owners.push(b),
+                Some(_) => {}
+                // not on the classpath: it may provide the method
+                None => owners.push(Name::from(class)),
             }
         }
     }

@@ -388,6 +388,37 @@ impl<'t> FileModel<'t> {
         }
     }
 
+    /// An unqualified call whose method may be another than the one found: an
+    /// enclosing class, inside the one that declares or inherits what was found
+    /// (or any of them, for a static import), has a supertype that is not
+    /// resolved and may declare a method of the name, which javac would bind
+    /// instead (JLS 15.12.1). Without the JDK only `Object`'s methods can come
+    /// from the implicit supertype.
+    pub fn import_may_be_shadowed(&self, call: Node<'t>) -> bool {
+        if call.kind() != "method_invocation" || call.field("object").is_some() {
+            return false;
+        }
+        let Some(name) = call.field("name").map(|n| n.text(self.src)) else { return false };
+        const OBJECT_METHODS: &[&str] = &["equals", "hashCode", "toString", "getClass", "notify", "notifyAll", "wait", "clone", "finalize"];
+        let mut cur = self.enclosing_class_node(call);
+        while let Some(c) = cur {
+            let Some(cn) = self.class_name_of_decl(c) else { return true };
+            if !self.hierarchy_complete(cn) {
+                // only the implicit `Object` is missing: it declares few names
+                let explicit = c.field("superclass").is_some() || c.field("interfaces").is_some() || c.kind() != "class_declaration";
+                if explicit || OBJECT_METHODS.contains(&name) {
+                    return true;
+                }
+            }
+            // found here: an enclosing class further out is not reached
+            if self.class(cn).is_some_and(|ci| !self.methods_named(&ci.this_type(), name).is_empty()) {
+                return false;
+            }
+            cur = self.enclosing_class_node(c);
+        }
+        false
+    }
+
     /// Candidate methods for a method invocation and the receiver type.
     pub(crate) fn candidates(&self, call: Node<'t>) -> (Vec<MethodRef>, Option<Ty>, bool) {
         let Some(name_node) = call.field("name") else { return (Vec::new(), None, false) };
@@ -1776,7 +1807,10 @@ impl<'t> FileModel<'t> {
         } else {
             Choice::ErasureOnly
         };
-        Some((pool.swap_remove(w).0, choice, blind && !(single || sure || only)))
+        // overloads of different classes alike in what they return: the
+        // result's type is known, but not whose method is called
+        let owners_differ = !(single || sure || only) && pool.iter().any(|(m, _)| m.owner != pool[0].0.owner);
+        Some((pool.swap_remove(w).0, choice, (blind || owners_differ) && !(single || sure || only)))
     }
 
     /// Overload selection only (no lambda-body inference). Receiver type

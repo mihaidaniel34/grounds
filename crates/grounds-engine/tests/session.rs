@@ -1857,3 +1857,61 @@ fn a_git_listing_that_fails_is_asked_again_once_git_answers() {
     assert!(r.contains("`Hidden` has no method `missing`"), "{r}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_changed_file_whose_parse_is_abandoned_removes_no_class() {
+    // a valid file too costly to parse is not read; the classes it declared
+    // are then unknown, not removed by the change
+    let repo = std::env::temp_dir().join(format!("grounds-cut-off-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&repo);
+    write(&repo, "build.gradle", "plugins { id 'java' }\n");
+    write(&repo, "src/main/java/p/A.java", "package p;\npublic class A {}\n");
+    write(&repo, "src/main/java/q/Use.java", "package q;\nimport p.A;\nclass Use { A a; }\n");
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "init"]);
+    write(&repo, "src/main/java/p/A.java", &format!("package p; public class A {{ void padding() {{ {} }} }}\n", ";".repeat(2_500_000)));
+    let mut s = Session::open(&repo).unwrap();
+    // (the parse was abandoned: the stub is unreadable and declares nothing)
+    let stub = s.project.index.files().find(|(p, _)| p.ends_with("p/A.java")).map(|(_, st)| st.clone()).expect("A.java is indexed");
+    assert!(stub.has_syntax_errors && stub.classes.is_empty());
+    let r = s.check(&CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: Some("HEAD".into()) });
+    assert!(r.pending.iter().all(|f| f.rule != "removed-class-still-used") && r.breaks.is_empty(), "{:?} {:?}", r.pending, r.breaks);
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+#[test]
+fn an_unreadable_changed_file_hides_removals_of_its_own_package_only() {
+    // p.Gone is deleted; q/Broken.java, also changed, has a syntax error but a
+    // package declaration: it cannot declare p.Gone, so the removal stands.
+    // r/Unread.java cannot be read at all: then which classes are gone is not known
+    let repo = std::env::temp_dir().join(format!("grounds-unreadable-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&repo);
+    write(&repo, "build.gradle", "plugins { id 'java' }\n");
+    write(&repo, "src/main/java/p/Gone.java", "package p;\npublic class Gone {}\n");
+    write(&repo, "src/main/java/q/Broken.java", "package q;\nclass Broken {}\n");
+    write(&repo, "src/main/java/q/Use.java", "package q;\nimport p.Gone;\nclass Use { Gone g; }\n");
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "init"]);
+    std::fs::remove_file(repo.join("src/main/java/p/Gone.java")).unwrap();
+    write(&repo, "src/main/java/q/Broken.java", "package q;\nclass Broken { void m( }\n");
+    let opts = CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: Some("HEAD".into()) };
+    let removed = |r: &grounds_engine::session::Report| r.pending.iter().filter(|f| f.rule == "removed-class-still-used").count();
+    let r = Session::open(&repo).unwrap().check(&opts);
+    assert_eq!(removed(&r), 1, "{:?}", r.pending);
+    // a changed file that cannot be read: unknown, whatever its package
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let broken = repo.join("src/main/java/q/Broken.java");
+        write(&repo, "src/main/java/q/Broken.java", "package q;\nclass Broken { int x; }\n");
+        std::fs::set_permissions(&broken, std::fs::Permissions::from_mode(0o000)).unwrap();
+        if std::fs::read(&broken).is_err() {
+            let r = Session::open(&repo).unwrap().check(&opts);
+            assert_eq!(removed(&r), 0, "{:?}", r.pending);
+        }
+        std::fs::set_permissions(&broken, std::fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    let _ = std::fs::remove_dir_all(&repo);
+}

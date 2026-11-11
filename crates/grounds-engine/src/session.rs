@@ -1044,8 +1044,24 @@ impl Session {
         });
         let mut found: Vec<Finding> = now.into_iter().filter(|f| !before.contains(&place_claim(f))).collect();
         // classes the change deleted or renamed: references to them are unknown
-        // types, which the rules leave alone (a missing jar looks the same)
-        let removed: Vec<Name> = base_classes.into_iter().filter(|c| self.project.index.class(c).is_none()).collect();
+        // types, which the rules leave alone (a missing jar looks the same).
+        // A changed file that cannot be read now (syntax errors, a parse
+        // abandoned for taking too long) may still declare any of them, so
+        // then which classes are gone is not known
+        // (a file read with a package declaration makes only that package's
+        // classes uncertain; one that could not be read at all, or whose
+        // package is not known, any class)
+        let mut uncertain_packages: Vec<String> = Vec::new();
+        let mut uncertain_all = false;
+        for f in changed.iter().filter(|f| f.exists()) {
+            match self.project.index.file(&path_key(f)) {
+                Some(s) if !s.has_syntax_errors => {}
+                Some(s) if !s.package.is_empty() => uncertain_packages.push(s.package.to_string()),
+                _ => uncertain_all = true,
+            }
+        }
+        let in_uncertain = |c: &str| uncertain_all || uncertain_packages.iter().any(|p| c.rsplit_once('.').map_or("", |x| x.0) == p);
+        let removed: Vec<Name> = base_classes.into_iter().filter(|c| self.project.index.class(c).is_none() && !in_uncertain(c)).collect();
         if !removed.is_empty() {
             found.extend(others.par_iter().flat_map_iter(|f| self.removed_class_uses(f, &removed)).collect::<Vec<_>>());
         }
