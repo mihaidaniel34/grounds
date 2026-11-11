@@ -17,12 +17,13 @@ being one.
   sample    draw up to N findings per rule across all projects, spread over
             projects, deterministically for a seed; every finding of the
             rules named by --all (default: the compile-break and wiring
-            rules); write OUT/sample.tsv and OUT/sample.md with 12 lines of
+            rules), or with --all-max N a seeded sample of N of a rule that
+            has more; write OUT/sample.tsv and OUT/sample.md with 12 lines of
             source context around each finding.
 
   python3 -I scripts/holdout.py [--dir ~/grounds-holdout] [--out target/holdout]
       [--only a,b] [--after 'second set, 2026-11'] [--grounds target/release/grounds] [--timeout 1800]
-  python3 -I scripts/holdout.py --sample 8 --seed 1 [--min-severity warning]
+  python3 -I scripts/holdout.py --sample 8 --seed 1 [--min-severity warning] [--all a,b] [--all-max 60]
 
 Without --sample it runs; with --sample it only samples the last run.
 """
@@ -191,7 +192,10 @@ def sample(a):
         if rule not in take_all and SEVERITIES.get(sev.get(rule, "info"), 0) < SEVERITIES[a.min_severity]:
             continue
         per = by_rule[rule]
+        n = a.sample
         if rule in take_all:
+            n = a.all_max
+        if rule in take_all and (a.all_max is None or sum(len(v) for v in per.values()) <= a.all_max):
             chosen = [(p, f) for p in sorted(per) for f in per[p]]
         else:
             # round-robin over projects in a seeded order, findings shuffled within each
@@ -202,9 +206,9 @@ def sample(a):
             for p in order:
                 rng.shuffle(pools[p])
             chosen = []
-            while len(chosen) < a.sample and any(pools.values()):
+            while len(chosen) < n and any(pools.values()):
                 for p in order:
-                    if pools[p] and len(chosen) < a.sample:
+                    if pools[p] and len(chosen) < n:
                         chosen.append((p, pools[p].pop()))
         total = sum(len(v) for v in per.values())
         for p, f in sorted(chosen, key=lambda x: (x[0], x[1]["path"], x[1]["line"])):
@@ -236,6 +240,9 @@ def main():
     ap.add_argument("--seed", default="1")
     ap.add_argument("--min-severity", default="warning", choices=sorted(SEVERITIES))
     ap.add_argument("--all", default=HARD_RULES, help="rules whose findings are all taken (comma separated)")
+    ap.add_argument("--all-max", type=int, default=None, metavar="N",
+                    help="take every finding of an --all rule only up to N; above N, a seeded sample of N drawn "
+                         "like the others (default: no limit)")
     a = ap.parse_args()
     a.grounds = os.path.abspath(a.grounds)
     return sample(a) if a.sample is not None else run(a)
