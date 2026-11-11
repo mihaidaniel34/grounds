@@ -830,71 +830,11 @@ impl Rule for CommandInjection {
             // the script's own arguments (`"sh", "-c", "cat \"$1\"", "sh", file`)
             // (through a local: `String shell = "/bin/sh";`)
             let lit = |a: &Node<'t>| match cx.fm.constant_value(sole_value(a.unparen(), cx).unwrap_or(*a)) {
-                Some(Constant::Str(s)) => Some(s.to_ascii_lowercase()),
+                Some(Constant::Str(s)) => Some(s.to_string()),
                 _ => None,
             };
-            let program = argv.first().and_then(lit).map(|c| c.rsplit(['/', '\\']).next().unwrap_or("").trim_end_matches(".exe").to_string());
-            let (posix, windows) = match program.as_deref() {
-                Some("sh" | "bash" | "zsh" | "ksh" | "dash") => (true, false),
-                Some("cmd" | "powershell" | "pwsh") => (false, true),
-                _ => return,
-            };
-            // `-c`, or combined short options with c: `bash -lc`, `sh -ec`
-            let command_option = |f: &str| {
-                let short = f.strip_prefix('-').filter(|o| !o.is_empty() && o.chars().all(|c| c.is_ascii_alphabetic()) && o.len() <= 4);
-                (windows && matches!(f, "/c" | "/k" | "-command")) || short.is_some_and(|o| o.contains('c'))
-            };
-            let option = |f: &str| f.starts_with('-') || posix && f.starts_with('+') || windows && f.starts_with('/');
-            // `-o pipefail`, `+o posix` (and bash's `-O`/`+O`, lowercased by
-            // `lit`): the option's value is the next element
-            let takes_value = |f: &str| posix && matches!(f, "-o" | "+o");
-            // the options that follow the program, up to the command option;
-            // anything else (a value not known, a script file) leaves which
-            // element is the command not known
-            let mut rest = argv.iter().skip(1);
-            let mut command = false;
-            while let Some(a) = rest.next() {
-                match lit(a) {
-                    Some(f) if command_option(&f) => {
-                        command = true;
-                        break;
-                    }
-                    Some(f) if takes_value(&f) => {
-                        if rest.next().and_then(lit).is_none() {
-                            break;
-                        }
-                    }
-                    Some(f) if option(&f) => {}
-                    _ => break,
-                }
-            }
-            if !command {
-                return;
-            }
-            // a POSIX shell takes the first operand after its options as the
-            // command; cmd and PowerShell join all that follows into it
-            let operands: Vec<&Node<'t>> = if posix {
-                let mut operand = None;
-                while let Some(a) = rest.next() {
-                    match lit(a) {
-                        Some(f) if takes_value(&f) => {
-                            if rest.next().and_then(lit).is_none() {
-                                break;
-                            }
-                        }
-                        Some(f) if option(&f) => {}
-                        _ => {
-                            operand = Some(a);
-                            break;
-                        }
-                    }
-                }
-                operand.into_iter().collect()
-            } else {
-                rest.collect()
-            };
-            if let Some(a) = operands.into_iter().find(|a| dynamically_built(**a, cx)) {
-                cx.report(*a, "Shell command built by string concatenation; pass arguments separately, without a shell");
+            if let Some(command) = shell_command(&argv, &lit).into_iter().find(|a| dynamically_built(**a, cx)) {
+                cx.report(*command, "Shell command built by string concatenation; pass arguments separately, without a shell");
             }
             return;
         }
@@ -903,6 +843,118 @@ impl Rule for CommandInjection {
                 cx.report(a, "Command built by string concatenation; pass arguments separately");
                 return;
             }
+        }
+    }
+}
+
+/// The element of an argument vector that a shell runs as its command
+/// string, when that is known: the program at `argv[0]` (or after a plain
+/// `env [-i] [-u NAME] [NAME=value].. [--]`) is a shell, the options before
+/// the command option are ones the shell is known to take, and the command
+/// is the first operand after it for a POSIX shell (`$1`.. follow), or all
+/// that follows it for cmd and PowerShell, which join it into one command. Options are read as
+/// the shell reads them: `-C` is not `-c`, `--` ends the options, `-o`,
+/// `--rcfile` take the next element. Anything else leaves the command not
+/// known: `None`.
+fn shell_command<'a, 't>(argv: &'a [Node<'t>], lit: &dyn Fn(&Node<'t>) -> Option<String>) -> Vec<&'a Node<'t>> {
+    shell_command_in(argv, lit).unwrap_or_default()
+}
+
+fn shell_command_in<'a, 't>(argv: &'a [Node<'t>], lit: &dyn Fn(&Node<'t>) -> Option<String>) -> Option<Vec<&'a Node<'t>>> {
+    let base = |c: &str| c.rsplit(['/', '\\']).next().unwrap_or("").to_string();
+    let mut rest = argv.iter();
+    let mut program = rest.next().and_then(lit)?;
+    if base(&program) == "env" {
+        loop {
+            let f = rest.next().and_then(lit)?;
+            let assignment = f.split_once('=').is_some_and(|(n, _)| !n.is_empty() && !n.starts_with(|c: char| c.is_ascii_digit()) && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
+            match f.as_str() {
+                "-i" | "--ignore-environment" => {}
+                "-u" => {
+                    rest.next().and_then(lit)?;
+                }
+                "--" => {
+                    program = rest.next().and_then(lit)?;
+                    break;
+                }
+                _ if f.starts_with('-') => return None,
+                _ if assignment => {}
+                _ => {
+                    program = f;
+                    break;
+                }
+            }
+        }
+    }
+    let name = base(&program).to_ascii_lowercase();
+    match name.trim_end_matches(".exe") {
+        "sh" | "bash" | "zsh" | "ksh" | "dash" => {}
+        "cmd" | "powershell" | "pwsh" => {
+            // options are case-insensitive here; the command follows /c, /k or -Command
+            for a in rest.by_ref() {
+                let f = lit(a)?.to_ascii_lowercase();
+                if matches!(f.as_str(), "/c" | "/k" | "-command" | "-c") {
+                    return Some(rest.collect());
+                }
+                if !(f.starts_with('/') || f.starts_with('-')) {
+                    return None;
+                }
+            }
+            return None;
+        }
+        _ => return None,
+    }
+    enum Opt {
+        Command,
+        Value,
+        Plain,
+        End,
+        Unknown,
+    }
+    // the one-letter options of `set` and of the invocation; `o`/`O` take a
+    // value and come alone
+    const SHORT: &str = "abefhkmnptuvxBCEHPTilrsc";
+    let opt = |f: &str| match f {
+        "--" => Opt::End,
+        "-o" | "+o" | "-O" | "+O" | "--rcfile" | "--init-file" => Opt::Value,
+        "--login" | "--noprofile" | "--norc" | "--posix" | "--restricted" | "--verbose" | "--noediting" => Opt::Plain,
+        _ => match f.strip_prefix('-').map(|r| (r, true)).or_else(|| f.strip_prefix('+').map(|r| (r, false))) {
+            Some((r, minus)) if !r.is_empty() && r.chars().all(|c| SHORT.contains(c)) => {
+                if minus && r.contains('c') {
+                    Opt::Command
+                } else {
+                    Opt::Plain
+                }
+            }
+            _ => Opt::Unknown,
+        },
+    };
+    let operand = |f: &str| !f.starts_with('-') && !f.starts_with('+');
+    // up to the command option
+    loop {
+        let f = rest.next().and_then(lit)?;
+        match opt(&f) {
+            Opt::Command => break,
+            Opt::Value => {
+                rest.next().and_then(lit)?;
+            }
+            Opt::Plain => {}
+            // a script file, `--`, an option not known: no command string
+            Opt::End | Opt::Unknown => return None,
+        }
+    }
+    // then the first operand
+    loop {
+        let a = rest.next()?;
+        let Some(f) = lit(a) else { return Some(vec![a]) };
+        match opt(&f) {
+            Opt::Value => {
+                rest.next().and_then(lit)?;
+            }
+            Opt::Plain | Opt::Command => {}
+            Opt::End => return rest.next().map(|a| vec![a]),
+            Opt::Unknown if operand(&f) => return Some(vec![a]),
+            Opt::Unknown => return None,
         }
     }
 }

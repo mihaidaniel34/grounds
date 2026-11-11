@@ -29,6 +29,23 @@ class Argv {
         new ProcessBuilder("bash", "-c", "-o", "pipefail", "cat " + file); // expect
         new ProcessBuilder("bash", "+O", "extglob", "-c", "cat " + file); // expect
     }
+    // through env: the shell still gets the command string
+    void env(String file) throws Exception {
+        new ProcessBuilder("env", "sh", "-c", "cat " + file); // expect
+        new ProcessBuilder("/usr/bin/env", "bash", "-c", "cat " + file); // expect
+        new ProcessBuilder("env", "-i", "LANG=C", "--", "sh", "-c", "cat " + file); // expect
+        new ProcessBuilder("env", "-S", "sh -c", "cat " + file);
+    }
+    // options as the shell reads them: -C is noclobber, -- ends the options,
+    // --rcfile takes "-c" as its file, an option not known says nothing
+    void options(String x) throws Exception {
+        new ProcessBuilder("bash", "-C", "script-" + x);
+        new ProcessBuilder("bash", "--", "-c", "arg-" + x);
+        new ProcessBuilder("bash", "--rcfile", "-c", "script-" + x);
+        new ProcessBuilder("bash", "--unknown-option", "-c", "cat " + x);
+        new ProcessBuilder("bash", "-c", "--", "cat " + x); // expect
+        new ProcessBuilder("bash", "-xc", "cat " + x); // expect
+    }
     // the program is the first element: echo prints "sh -c cat <file>"
     void notAShell(String file) throws Exception {
         new ProcessBuilder("/bin/echo", "sh", "-c", "cat " + file);
