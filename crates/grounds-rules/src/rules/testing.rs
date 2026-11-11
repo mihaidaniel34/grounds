@@ -111,9 +111,14 @@ impl Rule for AssertionArgumentOrder {
             return;
         }
         // a project helper named assertEquals may take (actual, expected), and
-        // so may a method whose owner is unknown (its jar is missing)
-        let Some(owner) = assertion_class(cx, n) else { return };
-        let owner = Some(owner);
+        // so may a method called on an object whose type is unknown
+        // (`helper.assertEquals(actual, 42)` with the helper's jar missing); an
+        // unqualified call with an unknown owner is a static import of an
+        // assertion class or an inherited assertion method
+        let owner = assertion_class(cx, n);
+        if owner.is_none() && n.field("object").is_some() {
+            return;
+        }
         if owner.as_ref().is_some_and(|o| !(o.starts_with("org.junit") || o.starts_with("junit.") || o.starts_with("org.testng") || o.starts_with("kotlin.test"))) {
             return;
         }
