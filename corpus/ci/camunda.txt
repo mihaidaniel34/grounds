@@ -179,8 +179,6 @@ clients/java/src/main/java/io/camunda/client/impl/oauth/OAuthCredentialsProvider
 clients/java/src/main/java/io/camunda/client/impl/oauth/OAuthCredentialsProvider.java:475 throw-generic-exception
 clients/java/src/main/java/io/camunda/client/impl/oauth/OAuthCredentialsProvider.java:509 catch-return-null
 clients/java/src/main/java/io/camunda/client/impl/oauth/OAuthCredentialsProviderBuilder.java:508 trim-isempty
-clients/java/src/main/java/io/camunda/client/impl/oauth/OAuthCredentialsProviderBuilder.java:673 deprecated-api-usage
-clients/java/src/main/java/io/camunda/client/impl/oauth/OAuthCredentialsProviderBuilder.java:830 deprecated-api-usage
 clients/java/src/main/java/io/camunda/client/impl/oauth/OAuthCredentialsProviderBuilder.java:855 catch-null-pointer
 clients/java/src/main/java/io/camunda/client/impl/response/BrokerInfoImpl.java:124 complex-boolean-expression
 clients/java/src/main/java/io/camunda/client/impl/response/BrokerInfoImpl.java:55 todo-comment
