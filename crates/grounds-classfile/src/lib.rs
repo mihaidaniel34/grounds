@@ -147,7 +147,15 @@ impl ClassContainer {
                     }
                     false
                 };
-                let top = std::rc::Rc::new(Above { real: root.canonicalize().unwrap_or_else(|_| root.clone()), up: None });
+                let real = root.canonicalize().unwrap_or_else(|_| root.clone());
+                // the root of a file system (`/`) holds every other
+                // directory, /proc and network mounts too, and is never one
+                // of compiled packages: over the limit without a walk, whose
+                // time would be the file system's to decide
+                if real.parent().is_none() {
+                    return None;
+                }
+                let top = std::rc::Rc::new(Above { real, up: None });
                 let mut todo = vec![(root.clone(), top)];
                 let mut seen = 0usize;
                 while let Some((d, above)) = todo.pop() {
@@ -283,6 +291,19 @@ pub fn find_java_home() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_root_of_the_file_system_is_not_walked_for_classes() {
+        // A classpath entry of `/` (the robustness fuzzer's seed 1 case 354)
+        // walked the file system up to the limit, following links, and took
+        // 21 to 40 s on CI. It is over any limit without a walk.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(ClassContainer::open_dir(std::path::Path::new("/")).class_names_within(usize::MAX).is_none());
+        });
+        let none = rx.recv_timeout(std::time::Duration::from_secs(2)).expect("listing / must not walk the file system");
+        assert!(none, "/ is no directory of classes");
+    }
     #[test]
     fn a_class_directory_with_a_symlink_loop_is_listed_once() {
         // found by scripts/fuzz_robust.py: `[classpath] entries = ["/"]` never ended
