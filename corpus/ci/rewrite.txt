@@ -2121,7 +2121,6 @@ rewrite-java/src/main/java/org/openrewrite/java/VariableNameUtils.java:149 legac
 rewrite-java/src/main/java/org/openrewrite/java/VariableNameUtils.java:158 complex-boolean-expression
 rewrite-java/src/main/java/org/openrewrite/java/VariableNameUtils.java:174 reference-equality-value-type
 rewrite-java/src/main/java/org/openrewrite/java/VariableNameUtils.java:217 local-variable-naming
-rewrite-java/src/main/java/org/openrewrite/java/VariableNameUtils.java:66 unused-local-variable
 rewrite-java/src/main/java/org/openrewrite/java/cleanup/RenameJavaDocParamNameVisitor.java:72 collapsible-if
 rewrite-java/src/main/java/org/openrewrite/java/cleanup/SimplifyBooleanExpressionVisitor.java:162 cognitive-complexity
 rewrite-java/src/main/java/org/openrewrite/java/cleanup/SimplifyBooleanExpressionVisitor.java:195 cognitive-complexity
