@@ -1724,18 +1724,20 @@ mod tests {
                 ("b/src/main/java/B.java", "class B {}\n"),
             ],
         );
+        // (paths from the workspace's root, which is canonical: a temporary
+        // directory may be reached through a symlink, `/var` on macOS)
         let ws = Workspace::discover(&dir, &[]);
         let m = |name: &str| ws.modules.iter().position(|m| m.name == name).unwrap();
         let p = plan(&ws, None, &[], Some(21));
         // the API loaded serves the tests' release too
         assert_eq!(p.load, 17);
-        let at = |rel: &str| p.exact_release(&dir.join(rel));
+        let at = |rel: &str| p.exact_release(&ws.root.join(rel));
         assert_eq!((at("a/src/main/java/A.java"), at("a/src/test/java/ATest.java"), at("a/A.java"), at("b/src/main/java/B.java")), (Some(8), Some(17), None, Some(8)));
         // a record in tests said to compile for 8 would be no news; in main code it is
         let p = plan(&ws, None, &[(m("a"), Scope::Test, 16)], Some(21));
-        assert_eq!(p.exact_release(&dir.join("a/src/test/java/ATest.java")), Some(17));
+        assert_eq!(p.exact_release(&ws.root.join("a/src/test/java/ATest.java")), Some(17));
         let p = plan(&ws, None, &[(m("a"), Scope::Main, 16)], Some(21));
-        assert_eq!((p.exact_release(&dir.join("a/src/main/java/A.java")), p.exact_release(&dir.join("a/src/test/java/ATest.java"))), (None, None));
+        assert_eq!((p.exact_release(&ws.root.join("a/src/main/java/A.java")), p.exact_release(&ws.root.join("a/src/test/java/ATest.java"))), (None, None));
     }
 
     #[test]
