@@ -20,3 +20,9 @@ class ImportOnly {
         org.junit.jupiter.api.Assertions.assertEquals(actual, 42); // expect
     }
 }
+// JUnit's inherited assertEquals hides a TestNG static import: JUnit's order
+class InheritedJUnitOverImport extends org.junit.Assert {
+    @org.junit.Test void test(int actual) {
+        assertEquals(actual, 42); // expect
+    }
+}

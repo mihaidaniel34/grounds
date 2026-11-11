@@ -65,8 +65,13 @@ fn assertion_classes<'t>(cx: &Ctx<'_, 't>, call: Node<'t>) -> Vec<Name> {
             owners.push(Name::from(full.as_str()));
         }
     }
+    // a method of an enclosing class (declared or inherited) hides the static
+    // imports (JLS 15.12.1): they count only when that is not settled
+    let unsettled = !owners.is_empty();
+    let mut member = false;
     // (a guessed overload may be another class's: every candidate counts)
     if let Some(c) = cx.fm.select_method(call).filter(|c| !c.ambiguous) {
+        member = call.field("object").is_none() && !c.via_type;
         owners.push(c.owner.clone());
     } else if let Some(o) = call.field("object") {
         match cx.fm.symbol(o) {
@@ -91,13 +96,14 @@ fn assertion_classes<'t>(cx: &Ctx<'_, 't>, call: Node<'t>) -> Vec<Name> {
             let found: Vec<Name> = cx.fm.methods_named(&cls.this_type(), name).into_iter().map(|m| m.owner).collect();
             if !found.is_empty() {
                 owners.extend(found);
+                member = true;
                 break;
             }
         }
     }
     // an unqualified call: every static import that may provide the name,
     // including one of a class that is not on the classpath
-    if call.field("object").is_none() {
+    if call.field("object").is_none() && (unsettled || !member) {
         for i in cx.fm.stub.imports.iter().filter(|i| i.is_static) {
             let class = if i.on_demand { &*i.path } else if i.is_named(name) { i.path.rsplit_once('.').map_or("", |x| x.0) } else { continue };
             match cx.fm.index.binary_name_for_dotted(class) {

@@ -1048,8 +1048,20 @@ impl Session {
         // A changed file that cannot be read now (syntax errors, a parse
         // abandoned for taking too long) may still declare any of them, so
         // then which classes are gone is not known
-        let unreadable = changed.iter().any(|f| self.project.index.file(&path_key(f)).is_some_and(|s| s.has_syntax_errors));
-        let removed: Vec<Name> = if unreadable { Vec::new() } else { base_classes.into_iter().filter(|c| self.project.index.class(c).is_none()).collect() };
+        // (a file read with a package declaration makes only that package's
+        // classes uncertain; one that could not be read at all, or whose
+        // package is not known, any class)
+        let mut uncertain_packages: Vec<String> = Vec::new();
+        let mut uncertain_all = false;
+        for f in changed.iter().filter(|f| f.exists()) {
+            match self.project.index.file(&path_key(f)) {
+                Some(s) if !s.has_syntax_errors => {}
+                Some(s) if !s.package.is_empty() => uncertain_packages.push(s.package.to_string()),
+                _ => uncertain_all = true,
+            }
+        }
+        let in_uncertain = |c: &str| uncertain_all || uncertain_packages.iter().any(|p| c.rsplit_once('.').map_or("", |x| x.0) == p);
+        let removed: Vec<Name> = base_classes.into_iter().filter(|c| self.project.index.class(c).is_none() && !in_uncertain(c)).collect();
         if !removed.is_empty() {
             found.extend(others.par_iter().flat_map_iter(|f| self.removed_class_uses(f, &removed)).collect::<Vec<_>>());
         }

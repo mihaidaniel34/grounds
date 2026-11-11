@@ -151,3 +151,11 @@ class ShadowedImport extends ext.Base {
         if (value == null) { } // expect
     }
 }
+
+// soft assertions collect failures instead of throwing: no contract
+class Soft extends org.assertj.core.api.SoftAssertions {
+    void f(Object value) {
+        assertThat(value).isNotNull();
+        if (value == null) { }
+    }
+}

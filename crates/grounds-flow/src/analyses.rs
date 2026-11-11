@@ -433,7 +433,11 @@ impl<'a, 't> NullnessAnalysis<'a, 't> {
     /// Validate.isTrue/validState, JUnit assertTrue, `@Contract("false -> fail")`,
     /// or a non-overridable project method starting with `if (!ok) throw`.
     fn throws_on_false(&self, call: Node<'t>) -> bool {
-        let Some(c) = self.fm.select_method(call) else { return false };
+        // (a guessed overload, or one an unresolved supertype may hide, is not known to throw)
+        let Some(c) = self.fm.select_method(call).filter(|c| !c.ambiguous) else { return false };
+        if self.fm.import_may_be_shadowed(call) {
+            return false;
+        }
         let name = &*c.method.name;
         let known = match &*c.owner {
             "org.springframework.util.Assert" => matches!(name, "state" | "isTrue"),
@@ -916,7 +920,7 @@ impl<'a, 't> Analysis<'t> for NullnessAnalysis<'a, 't> {
                 {
                     // (and the `assertThat` it starts from, not a project
                     // method returning the library's assertion for another value)
-                    let subject = assert_that_root(self.fm, e.field("object")).filter(|r| self.fm.select_method(*r).is_some_and(|c| !c.ambiguous && assertion_library(&c.owner)) && !self.fm.import_may_be_shadowed(*r));
+                    let subject = assert_that_root(self.fm, e.field("object")).filter(|r| self.fm.select_method(*r).is_some_and(|c| !c.ambiguous && c.method.flags.has(Flags::STATIC) && assertion_library(&c.owner)) && !self.fm.import_may_be_shadowed(*r));
                     if let Some(a) = subject.and_then(|o| self.fm.args_of(o).first().map(|a| a.unparen())).filter(|a| a.kind() == "identifier") {
                         if let Some(i) = self.fm.binder.decl_index_of_ref(a) {
                             f.insert(i, Nullness::NonNull);
