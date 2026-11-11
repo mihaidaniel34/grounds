@@ -89,10 +89,18 @@ impl Default for ReportConfig {
 pub const DEFAULT_JAVA_RELEASE: u32 = 21;
 
 impl Config {
-    /// The release to check against: grounds.toml's, else the one the build
-    /// compiles for, else [`DEFAULT_JAVA_RELEASE`].
+    /// The release whose JDK API is loaded: grounds.toml's, else the one
+    /// [`crate::java_release::plan`] picks from the build (without what the
+    /// code itself shows; see [`Config::release_plan`]).
     pub fn java_release(&self, ws: &crate::workspace::Workspace) -> u32 {
-        self.java_release.or_else(|| crate::java_release::infer(ws)).unwrap_or(DEFAULT_JAVA_RELEASE)
+        self.release_plan(ws, &[]).load
+    }
+
+    /// The JDK API to load and the modules that compile for an exact
+    /// release, given the lowest release each module's code needs.
+    pub fn release_plan(&self, ws: &crate::workspace::Workspace, needs: &[(usize, u32)]) -> crate::java_release::ReleasePlan {
+        let installed = self.java_home.clone().or_else(grounds_classfile::find_java_home).and_then(|h| grounds_classfile::jdk_feature_release(&h));
+        crate::java_release::plan(ws, self.java_release, needs, installed)
     }
 
     pub fn load(root: &Path) -> anyhow::Result<Config> {

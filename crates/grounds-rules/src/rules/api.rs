@@ -1084,6 +1084,18 @@ impl Rule for DeprecatedApiUsage {
         if own && !for_removal {
             return;
         }
+        // a JDK deprecation newer than the lowest release the module may
+        // compile for: not deprecated there (the API loaded may be newer)
+        // (a library's `since` is its own version, not a Java release)
+        if !own && cx.fm.index.classpath.is_jdk_class(&c.owner) {
+            let since = |anns: &[AnnotationInfo]| anns.iter().find(|a| a.simple_name() == "Deprecated").and_then(|a| a.arg("since")).and_then(|v| v.as_str().map(str::to_string)).and_then(|v| v.trim_start_matches("1.").split('.').next()?.parse::<u32>().ok());
+            let deprecated_in = if method_dep { since(&c.method.annotations) } else { owner.as_ref().and_then(|o| since(&o.annotations)) };
+            if let (Some(d), Some(r)) = (deprecated_in, cx.fm.index.release_floor(&cx.info.path)) {
+                if d > r {
+                    return;
+                }
+            }
+        }
         // usage from inside the deprecated class itself is not interesting
         if let Some(enc) = cx.fm.enclosing_class_name(n) {
             if enc.starts_with(&*c.owner) {

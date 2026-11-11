@@ -44,12 +44,21 @@ fn closed_class<'t>(cx: &Ctx<'_, 't>, name: &str) -> Option<std::sync::Arc<Class
     if supertypes.len() > 200 {
         return None;
     }
+    // a module built against a published release of the project sees that
+    // release's classes, not the sources of other modules
+    let release_module = cx.fm.index.built_against_release(&cx.fm.path);
     for t in supertypes {
         let Some(n) = t.class_name() else { return None };
-        if !cx.fm.copy_is_certain(n) {
+        // a project class in a JDK package: not compiled with the JDK's
+        if !cx.fm.copy_is_certain(n) || cx.fm.index.in_jdk_package(n) {
             return None;
         }
         let file = cx.fm.class(n).and_then(|k| k.source_file().map(|f| f.to_string()));
+        if let (Some(module), Some(f)) = (release_module, &file) {
+            if !cx.fm.index.in_module(f, module) {
+                return None;
+            }
+        }
         if file.is_some_and(|f| cx.fm.index.file(&f).is_some_and(|s| s.has_syntax_errors)) {
             return None;
         }
@@ -368,14 +377,18 @@ declare_rule!(MissingJdkImport {
     tier: Edit,
     sources: ["javac:doesnt.exist", "javac:cant.resolve.location"],
     kinds: ["import_declaration"],
-    description: "The imported `java.*` class or package is not public API in the project's Java release, so the code does not compile for that release: a class added in a later release (`java.util.SequencedCollection` is Java 21), one removed since, or one the JDK does not export. Checked only when the JDK's API for the release is read exactly (see the JDK warnings).",
+    description: "The imported `java.*` class or package is not public API in the project's Java release, so the code does not compile for that release: a class added in a later release (`java.util.SequencedCollection` is Java 21), one removed since, or one the JDK does not export. Checked only in modules whose build states the release exactly (`--release`, `maven.compiler.release`, `options.release`, a toolchain) and whose code does not contradict it, against that release's API from the JDK.",
 });
 
 impl Rule for MissingJdkImport {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
-        let cp = &cx.fm.index.classpath;
-        let Some(release) = cp.exact_jdk_release() else { return };
+        let index = &cx.fm.index;
+        let cp = &index.classpath;
+        // only where the build states the release exactly and the code agrees:
+        // with -source/-target alone, or a release grounds cannot read, the
+        // API is that of whichever JDK runs the build
+        let Some(release) = index.exact_release(&cx.info.path) else { return };
         // multi-release sources (`src/main/java24`) compile for their own, newer release
         let own_release = cx.info.path.split(['/', '\\']).filter_map(|d| d.strip_prefix("java")).filter_map(|v| v.strip_prefix('-').unwrap_or(v).parse::<u32>().ok()).max();
         if own_release.is_some_and(|v| v > release) {
@@ -398,14 +411,18 @@ impl Rule for MissingJdkImport {
         let segs: Vec<&str> = text.split('.').collect();
         // the type the import names: all of it, or all but the static member
         let ty = if is_static && !on_demand { &segs[..segs.len() - 1] } else { &segs[..] };
-        let index = &cx.fm.index;
+        // in the sources, a jar, or the release's API; None: that API cannot be read
+        let has_class = |name: &str| if index.is_source_class(name) || cp.contains_outside_jdk(name) { Some(true) } else { cp.jdk_has_class(release, name) };
+        let has_package = |p: &str| if index.has_source_package(p) || cp.has_package_outside_jdk(p) { Some(true) } else { cp.jdk_has_package(release, p) };
         // `a.b.Outer.Inner`: some prefix is the package
         let class_at = |k: usize| format!("{}.{}", ty[..k].join("."), ty[k..].join("$"));
-        if (1..ty.len()).any(|k| index.class_exists(&class_at(k))) {
-            return;
+        for k in 1..ty.len() {
+            if has_class(&class_at(k)) != Some(false) {
+                return;
+            }
         }
         // `import java.util.*;` names a package
-        if on_demand && !is_static && index.package_exists(&ty.join(".")) {
+        if on_demand && !is_static && has_package(&ty.join(".")) != Some(false) {
             return;
         }
         // the package, by convention the lowercase segments: a class missing
@@ -413,8 +430,10 @@ impl Rule for MissingJdkImport {
         let pkg_len = ty.iter().take_while(|s| s.starts_with(|c: char| c.is_ascii_lowercase())).count();
         let what = if on_demand && !is_static { format!("package `{}`", ty.join(".")) } else { format!("`{}`", ty.join(".")) };
         // a JDK cut down by jlink lacks whole modules, so their packages
-        if !index.package_exists(&ty[..pkg_len].join(".")) && !cp.jdk_is_full() {
-            return;
+        match has_package(&ty[..pkg_len].join(".")) {
+            None => return,
+            Some(false) if !cp.jdk_is_full() => return,
+            _ => {}
         }
         cx.report(path, format!("{what} is not public API in Java {release}"));
     }

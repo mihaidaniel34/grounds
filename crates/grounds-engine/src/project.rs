@@ -207,6 +207,31 @@ impl LombokConfigs {
     }
 }
 
+/// The lowest release a file's declarations need: a record needs Java 16,
+/// a sealed class 17, a module import 25. Multi-release sources
+/// (`src/main/java17`) compile for their own release and say nothing about
+/// their module's.
+fn code_needs(path: &Path, stub: &FileStub) -> Option<u32> {
+    use grounds_index::{ClassKind, Flags};
+    let comps: Vec<_> = path.components().collect();
+    if comps.windows(3).any(|w| w[0].as_os_str() == "src" && w[2].as_os_str().to_str().and_then(|d| d.strip_prefix("java")).is_some_and(|v| !v.is_empty() && v.trim_start_matches('-').chars().all(|c| c.is_ascii_digit()))) {
+        return None;
+    }
+    let mut need = None;
+    for c in &stub.classes {
+        if c.kind == ClassKind::Record {
+            need = need.max(Some(16));
+        }
+        if c.flags.has(Flags::SEALED) || c.flags.has(Flags::NON_SEALED) || !c.permits.is_empty() {
+            need = need.max(Some(17));
+        }
+    }
+    if stub.imports.iter().any(|i| i.from_module) {
+        need = need.max(Some(25));
+    }
+    need
+}
+
 pub fn path_key(p: &Path) -> Arc<str> {
     Arc::from(p.to_string_lossy().as_ref())
 }
@@ -431,22 +456,6 @@ impl Project {
         stats.files = workspace.files.len();
 
         let t = Instant::now();
-        let entries = crate::classpath::collect(&workspace, &config);
-        stats.classpath_entries = entries.len();
-        let java_home = config.java_home.clone().or_else(grounds_classfile::find_java_home);
-        stats.java_release = config.java_release(&workspace);
-        let classpath = Arc::new(Classpath::build(java_home.as_deref(), stats.java_release, &entries));
-        // a JDK home without lib/ct.sym is reported by the classpath warnings
-        if !classpath.contains("java.lang.Object") && java_home.is_none() {
-            static WARNED: std::sync::Once = std::sync::Once::new();
-            WARNED.call_once(|| {
-                eprintln!("grounds: warning: no JDK found (set JAVA_HOME, put `java` on PATH, or `java_home` in grounds.toml); checks that need the JDK's classes stay silent");
-            });
-        }
-        stats.classpath_classes = classpath.len();
-        stats.t_classpath = t.elapsed();
-
-        let t = Instant::now();
         let lombok = LombokConfigs::discover(&workspace.root);
         let cache = StubCache::load(&workspace.root);
         // (with the stamp of each file, taken before it is read)
@@ -480,7 +489,30 @@ impl Project {
         stats.t_stubs = t.elapsed();
 
         let t = Instant::now();
+        let entries = crate::classpath::collect(&workspace, &config);
+        stats.classpath_entries = entries.len();
+        let java_home = config.java_home.clone().or_else(grounds_classfile::find_java_home);
+        // the release the build states, checked against what the code uses
+        let module_of: std::collections::HashMap<&Path, usize> = workspace.files.iter().map(|f| (f.path.as_path(), f.module)).collect();
+        let needs: Vec<(usize, u32)> = results.iter().filter_map(|(p, _, stub, _)| Some((*module_of.get(p.as_path())?, code_needs(p, stub)?))).collect();
+        let releases = config.release_plan(&workspace, &needs);
+        stats.java_release = releases.load;
+        let classpath = Arc::new(Classpath::build(java_home.as_deref(), stats.java_release, &entries));
+        // a JDK home without lib/ct.sym is reported by the classpath warnings
+        if !classpath.contains("java.lang.Object") && java_home.is_none() {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                eprintln!("grounds: warning: no JDK found (set JAVA_HOME, put `java` on PATH, or `java_home` in grounds.toml); checks that need the JDK's classes stay silent");
+            });
+        }
+        stats.classpath_classes = classpath.len();
+        stats.t_classpath = t.elapsed();
+
+        let t = Instant::now();
         let mut index = Index::new(classpath);
+        index.set_release_floors(releases.floors.iter().map(|(d, r)| (d.to_string_lossy().to_string(), *r)).collect());
+        index.set_exact_releases(releases.exact.iter().map(|(d, r)| (d.to_string_lossy().to_string(), *r)).collect());
+        index.set_modules_built_against_release(crate::workspace::modules_built_against_own_release(&workspace).iter().map(|d| d.to_string_lossy().to_string()).collect());
         let mut new_cache = StubCache::load(&workspace.root);
         new_cache.retain(|_| false);
         for (p, h, stub, was_cached) in results {

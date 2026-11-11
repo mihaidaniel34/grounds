@@ -46,6 +46,13 @@ pub enum JdkApi {
     Unreadable { release: u32 },
 }
 
+/// Another release's JDK API, from ct.sym: its classes and packages.
+struct OtherRelease {
+    container: ClassContainer,
+    classes: FxHashSet<Name>,
+    packages: FxHashSet<Name>,
+}
+
 /// Immutable classpath: JDK symbols plus dependency jars and class dirs.
 pub struct Classpath {
     containers: Vec<ClassContainer>,
@@ -58,6 +65,15 @@ pub struct Classpath {
     /// Whether the JDK home has `lib/ct.sym`, which only a full JDK has: a
     /// runtime image cut down by jlink lacks modules, and their packages.
     jdk_full: bool,
+    /// Every package of the JDK: those of the API loaded, and those of the
+    /// installed JDK's runtime image, exported or not.
+    jdk_packages: FxHashSet<Name>,
+    /// The packages of the JDK API loaded (exported ones), and of the jars.
+    api_packages: FxHashSet<Name>,
+    jar_packages: FxHashSet<Name>,
+    jdk_home: Option<std::path::PathBuf>,
+    /// The classes and packages of other releases' APIs, read from ct.sym when asked.
+    other_releases: DashMap<u32, Option<Arc<OtherRelease>>>,
     /// Directory entries too large to be directories of classes
     /// (`grounds_classfile::DIR_LIMIT`); nothing was read from them.
     pub oversized: Vec<std::path::PathBuf>,
@@ -71,7 +87,7 @@ impl std::fmt::Debug for Classpath {
 
 impl Classpath {
     pub fn empty() -> Classpath {
-        Classpath { containers: Vec::new(), names: FxHashMap::default(), packages: FxHashSet::default(), cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false, oversized: Vec::new() }
+        Classpath { containers: Vec::new(), names: FxHashMap::default(), packages: FxHashSet::default(), cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false, jdk_packages: FxHashSet::default(), api_packages: FxHashSet::default(), jar_packages: FxHashSet::default(), jdk_home: None, other_releases: DashMap::new(), oversized: Vec::new() }
     }
 
     /// Build from containers in priority order (first definition wins).
@@ -117,7 +133,7 @@ impl Classpath {
             }
         }
         let oversized = oversized.into_iter().map(|(_, d)| d).collect();
-        Classpath { containers, names, packages, cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false, oversized }
+        Classpath { containers, names, packages, cache: DashMap::new(), jdk: JdkApi::Complete, jdk_release: None, jdk_full: false, jdk_packages: FxHashSet::default(), api_packages: FxHashSet::default(), jar_packages: FxHashSet::default(), jdk_home: None, other_releases: DashMap::new(), oversized }
     }
 
     /// JDK classes for a release (see `ClassContainer::open_jdk`), followed by the given jars/dirs.
@@ -126,8 +142,22 @@ impl Classpath {
         let mut jdk = JdkApi::Complete;
         let mut jdk_release = None;
         let mut jdk_full = false;
+        let mut jdk_packages: FxHashSet<Name> = FxHashSet::default();
         if let Some(home) = java_home {
-            if let Ok(c) = ClassContainer::open_jdk(home, release) {
+            // a release newer than the JDK: the JDK's own API is the closest at hand
+            let read_as = grounds_classfile::jdk_feature_release(home).filter(|&i| release > i).unwrap_or(release);
+            let opened = ClassContainer::open_jdk(home, read_as);
+            // the image lists every package, the internal ones too
+            let mut image_packages = |j: &grounds_classfile::jimage::JImage| jdk_packages.extend(j.all_packages().map(|p| Arc::from(p.replace('/', ".").as_str())));
+            match &opened {
+                Ok(ClassContainer::JImage(j)) => image_packages(j),
+                _ => {
+                    if let Ok(j) = grounds_classfile::jimage::JImage::open(&home.join("lib/modules")) {
+                        image_packages(&j);
+                    }
+                }
+            }
+            if let Ok(c) = opened {
                 jdk_release = Some(release);
                 jdk_full = home.join("lib/ct.sym").is_file();
                 // the JDK's own release is read exactly from its image; a newer one has no signatures anywhere
@@ -150,10 +180,123 @@ impl Classpath {
             }
         }
         let mut cp = Classpath::from_containers(containers);
+        let with_parents = |set: &mut FxHashSet<Name>, n: &str| {
+            let mut p = n;
+            while let Some(i) = p.rfind('.') {
+                p = &p[..i];
+                if !set.insert(Arc::from(p)) {
+                    break;
+                }
+            }
+        };
+        let (mut api_packages, mut jar_packages) = (FxHashSet::default(), FxHashSet::default());
+        for (n, &i) in &cp.names {
+            if jdk_release.is_some() && i == 0 {
+                with_parents(&mut api_packages, n);
+            } else {
+                with_parents(&mut jar_packages, n);
+            }
+        }
+        // the API's packages: a JDK older than 9 has no image
+        jdk_packages.extend(api_packages.iter().cloned());
+        cp.api_packages = api_packages;
+        cp.jar_packages = jar_packages;
+        cp.jdk_home = java_home.map(Path::to_path_buf);
         cp.jdk = jdk;
         cp.jdk_release = jdk_release;
         cp.jdk_full = jdk_full;
+        cp.jdk_packages = jdk_packages;
         cp
+    }
+
+    /// Whether the JDK's API (an exported package of the release loaded)
+    /// has the class. javac does not compile a source class in such a
+    /// package together with the code ("package exists in another module"),
+    /// so the code compiles against the JDK's.
+    pub fn is_jdk_class(&self, name: &str) -> bool {
+        self.jdk_release.is_some() && self.names.get(name) == Some(&0)
+    }
+
+    /// Whether the JDK's API (the release loaded) has the package: javac
+    /// refuses a source file in it when compiling the code.
+    pub fn is_jdk_api_package(&self, package: &str) -> bool {
+        self.api_packages.contains(package)
+    }
+
+    /// Whether a package belongs to the JDK, exported or not.
+    pub fn is_jdk_package(&self, package: &str) -> bool {
+        self.jdk_packages.contains(package)
+    }
+
+    /// Whether a jar or class directory (not the JDK) has the class.
+    pub fn contains_outside_jdk(&self, name: &str) -> bool {
+        self.names.get(name).is_some_and(|&i| self.jdk_release.is_none() || i != 0)
+    }
+
+    /// Whether a jar or class directory (not the JDK) has the package.
+    pub fn has_package_outside_jdk(&self, package: &str) -> bool {
+        self.jar_packages.contains(package)
+    }
+
+    /// Whether the JDK API of `release` has the public class. The loaded
+    /// release when its API is exact, another from the JDK's ct.sym (8 up to
+    /// the JDK's own); None when that API cannot be read.
+    pub fn jdk_has_class(&self, release: u32, name: &str) -> Option<bool> {
+        if self.exact_jdk_release() == Some(release) {
+            return Some(self.is_jdk_class(name) && self.contains(name));
+        }
+        Some(self.other_release(release)?.classes.contains(name))
+    }
+
+    /// Whether the JDK API of `release` has the package (see `jdk_has_class`).
+    pub fn jdk_has_package(&self, release: u32, package: &str) -> Option<bool> {
+        if self.exact_jdk_release() == Some(release) {
+            return Some(self.api_packages.contains(package));
+        }
+        Some(self.other_release(release)?.packages.contains(package))
+    }
+
+    /// Whether the JDK class has, in the API of `release`, a method of that
+    /// name whose parameters erase to `params` (see `jdk_has_class`).
+    pub fn jdk_has_method(&self, release: u32, class: &str, name: &str, params: &[Ty]) -> Option<bool> {
+        let has = |c: &ClassInfo| c.methods.iter().any(|m| &*m.name == name && m.params.len() == params.len() && m.params.iter().zip(params).all(|(a, b)| a.ty.erasure() == b.erasure()));
+        if self.exact_jdk_release() == Some(release) {
+            return Some(self.is_jdk_class(class) && self.class(class).is_some_and(|c| has(&c)));
+        }
+        let other = self.other_release(release)?;
+        let cf = other.container.read_class(&class.replace('.', "/"));
+        Some(cf.is_some_and(|cf| has(&binary::lower_class(&cf, 0))))
+    }
+
+    fn other_release(&self, release: u32) -> Option<Arc<OtherRelease>> {
+        if let Some(r) = self.other_releases.get(&release) {
+            return r.clone();
+        }
+        let api = (|| {
+            let home = self.jdk_home.as_deref()?;
+            // ct.sym holds signatures for releases older than the JDK's own
+            let installed = grounds_classfile::jdk_feature_release(home)?;
+            if release < 8 || release >= installed {
+                return None;
+            }
+            let ct = ClassContainer::open_ct_sym(&home.join("lib/ct.sym"), release).ok()?;
+            let mut classes = FxHashSet::default();
+            let mut packages = FxHashSet::default();
+            for n in ct.class_names() {
+                let b = binary::internal_to_binary(&n);
+                let mut p = b.as_str();
+                while let Some(i) = p.rfind('.') {
+                    p = &p[..i];
+                    if !packages.insert(Arc::from(p)) {
+                        break;
+                    }
+                }
+                classes.insert(Arc::from(b.as_str()));
+            }
+            Some(Arc::new(OtherRelease { container: ct, classes, packages }))
+        })();
+        self.other_releases.insert(release, api.clone());
+        api
     }
 
     /// Whether `name` is a JDK class whose API may be newer than the one
@@ -283,6 +426,16 @@ pub struct Index {
     defs: FxHashMap<Name, u32>,
     /// The files declaring each duplicated class name (`defs` > 1).
     copies: FxHashMap<Name, Vec<Arc<str>>>,
+    /// Directories (ending in `/`) of modules whose build states the release
+    /// they compile for exactly, with that release.
+    exact_releases: Vec<(String, Option<u32>)>,
+    release_floors: Vec<(String, Option<u32>)>,
+    /// Number of files in a variant source set (see `in_variant_set`)
+    /// declaring each class name.
+    variant_defs: FxHashMap<Name, u32>,
+    /// Directories (ending in `/`) of modules that compile against a
+    /// published release of the project itself, not its sources.
+    release_modules: Vec<String>,
     pub generation: u64,
     // the generation resolve_ordered last filled the cache at
     resolved_at: AtomicU64,
@@ -369,13 +522,17 @@ impl Drop for Resolving<'_> {
 
 impl Index {
     pub fn new(classpath: Arc<Classpath>) -> Index {
-        Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), copies: FxHashMap::default(), generation: 0, resolved_at: AtomicU64::new(u64::MAX), plan: parking_lot::Mutex::new(None), extended: parking_lot::Mutex::new(None) }
+        Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), copies: FxHashMap::default(), variant_defs: FxHashMap::default(), exact_releases: Vec::new(), release_floors: Vec::new(), release_modules: Vec::new(), generation: 0, resolved_at: AtomicU64::new(u64::MAX), plan: parking_lot::Mutex::new(None), extended: parking_lot::Mutex::new(None) }
     }
 
     pub fn set_file(&mut self, path: Arc<str>, stub: Arc<FileStub>) {
         let body_only = self.files.get(&path).is_some_and(|old| old.signature_hash == stub.signature_hash);
         self.remove_file_inner(&path);
         for (i, c) in stub.classes.iter().enumerate() {
+            // a stand-in for a class of the JDK's API is not the class
+            if self.is_jdk_standin(&c.name) {
+                continue;
+            }
             if let Some((other, _)) = self.classes.get(&c.name) {
                 let files = self.copies.entry(c.name.clone()).or_default();
                 if files.is_empty() {
@@ -395,6 +552,9 @@ impl Index {
                 }
             }
             *self.defs.entry(c.name.clone()).or_insert(0) += 1;
+            if in_variant_set(&path) {
+                *self.variant_defs.entry(c.name.clone()).or_insert(0) += 1;
+            }
         }
         let mut p: &str = &stub.package;
         loop {
@@ -434,6 +594,14 @@ impl Index {
     fn remove_file_inner(&mut self, path: &str) {
         if let Some(old) = self.files.remove(path) {
             for c in &old.classes {
+                if in_variant_set(path) {
+                    if let Some(v) = self.variant_defs.get_mut(&c.name) {
+                        *v -= 1;
+                        if *v == 0 {
+                            self.variant_defs.remove(&c.name);
+                        }
+                    }
+                }
                 if let Some(d) = self.defs.get_mut(&c.name) {
                     *d -= 1;
                     let left = *d;
@@ -471,6 +639,60 @@ impl Index {
         }
     }
 
+    /// Every module with the release it compiles for exactly, None when
+    /// that is not known: (directory, release).
+    pub fn set_exact_releases(&mut self, modules: Vec<(String, Option<u32>)>) {
+        self.exact_releases = innermost_first(modules);
+    }
+
+    /// The release a file's module states exactly (`--release`, a
+    /// toolchain), the code not contradicting it. None when its build leaves
+    /// the JDK API to the JDK running it, or grounds cannot tell; the module
+    /// nearest the file decides, not an enclosing one.
+    pub fn exact_release(&self, file: &str) -> Option<u32> {
+        self.exact_releases.iter().find(|(d, _)| file.starts_with(d.as_str()))?.1
+    }
+
+    /// The lowest release a file's module may compile for: its exact
+    /// release, or the `source`/`target` it states. A JDK member newer than
+    /// that may not exist where the code is built, though the API loaded has it.
+    pub fn release_floor(&self, file: &str) -> Option<u32> {
+        self.release_floors.iter().find(|(d, _)| file.starts_with(d.as_str()))?.1
+    }
+
+    /// Every module's floor (see `release_floor`): (directory, release).
+    pub fn set_release_floors(&mut self, modules: Vec<(String, Option<u32>)>) {
+        self.release_floors = innermost_first(modules);
+    }
+
+    /// Whether some source file is in the package (or one below it).
+    pub fn has_source_package(&self, package: &str) -> bool {
+        self.packages.contains_key(package)
+    }
+
+    /// Mark the modules whose build compiles against a published release of
+    /// the project itself (kafka's `streams/upgrade-system-tests-22` against
+    /// `kafka-streams:2.2`): their code does not see the project's sources.
+    pub fn set_modules_built_against_release(&mut self, dirs: Vec<String>) {
+        let sep = std::path::MAIN_SEPARATOR;
+        self.release_modules = dirs.into_iter().map(|d| if d.ends_with(['/', sep]) { d } else { format!("{d}{sep}") }).collect();
+        // (innermost first: a module nested in another is its own)
+        self.release_modules.sort_by_key(|d| std::cmp::Reverse(d.len()));
+    }
+
+    /// For a file of a module that compiles against a published release of
+    /// the project, the module's directory: a project class declared outside
+    /// it may differ from the one the file compiles against.
+    pub fn built_against_release(&self, file: &str) -> Option<&str> {
+        self.release_modules.iter().find(|d| file.starts_with(d.as_str())).map(String::as_str)
+    }
+
+    /// Whether `file` belongs to the module at `dir` itself, not to a module
+    /// nested below it (module directories come from `set_exact_releases`).
+    pub fn in_module(&self, file: &str, dir: &str) -> bool {
+        file.starts_with(dir) && self.exact_releases.iter().find(|(d, _)| file.starts_with(d.as_str())).is_none_or(|(d, _)| d.len() <= dir.len())
+    }
+
     pub fn file(&self, path: &str) -> Option<&Arc<FileStub>> {
         self.files.get(path)
     }
@@ -487,9 +709,33 @@ impl Index {
         self.classes.keys()
     }
 
-    /// Is this class name defined in more than one source file?
+    /// Is this class name defined in more than one source file? A source
+    /// class in a package of the JDK counts as declared twice: the JDK has
+    /// the package too (`com.sun.tools.javac.util`, not exported, which javac
+    /// compiles from sources; a stub of it that a build replaces with the
+    /// JDK's), so which declaration the code compiles against is a guess.
     pub fn is_duplicated(&self, name: &str) -> bool {
-        self.defs.get(name).is_some_and(|d| *d > 1)
+        self.defs.get(name).is_some_and(|d| *d > 1) || (self.classes.contains_key(name) && name.rfind('.').is_some_and(|i| self.classpath.is_jdk_package(&name[..i])))
+    }
+
+    /// A source class in a package of the JDK (exported or not): code that
+    /// javac compiles only in special builds (GWT emulation, `--patch-module`,
+    /// a compile-only stub).
+    pub fn in_jdk_package(&self, name: &str) -> bool {
+        self.classes.contains_key(name) && name.rfind('.').is_some_and(|i| self.classpath.is_jdk_package(&name[..i]))
+    }
+
+    /// A source class standing in for a class of the JDK's API, or nested in
+    /// one: it is not indexed, so every file sees the JDK's. javac refuses a
+    /// source class in an exported JDK package ("package exists in another
+    /// module"): no build compiles it with the code that uses the class (a
+    /// test input, a compile-only stub, a GWT emulation of `java.lang`).
+    fn is_jdk_standin(&self, name: &str) -> bool {
+        let top = match name.rfind('.') {
+            Some(i) => name[i..].find('$').map_or(name, |j| &name[..i + j]),
+            None => name.split('$').next().unwrap_or(name),
+        };
+        self.classpath.is_jdk_class(top)
     }
 
     /// The copy of a class declared in several files that the file at
@@ -497,16 +743,20 @@ impl Index {
     /// build's module dependencies: the copy in the file's own module and
     /// source set, else the only copy in its module when that one is main
     /// code and the file a test (tests see their module's main classes).
-    /// None for a class declared once, or when the choice would be a guess.
+    /// Only files under a source root of a module count (see `source_root`):
+    /// elsewhere (`guava/src/com/...`, a GWT `src-super` copy, test data
+    /// under `src/test/test_sourcecode`) neither the module nor the source
+    /// set is known. None for a class declared once, or when the choice
+    /// would be a guess.
     pub fn certain_copy(&self, name: &str, from: &str) -> Option<(&Arc<FileStub>, &RawClass, &Arc<str>)> {
-        use crate::sources::{is_test_set, source_set_of};
-        let set = |p: &str| source_set_of(std::path::Path::new(p)).map(str::to_string);
+        use crate::sources::is_test_set;
         let files = self.copies.get(name)?;
-        let mine: Vec<&Arc<str>> = files.iter().filter(|f| module_dir(f) == module_dir(from)).collect();
-        let same_set: Vec<&Arc<str>> = mine.iter().copied().filter(|f| set(f) == set(from)).collect();
+        let (module, set) = source_root(from)?;
+        let mine: Vec<(&Arc<str>, &str)> = files.iter().filter_map(|f| source_root(f).filter(|r| r.0 == module).map(|r| (f, r.1))).collect();
+        let same_set: Vec<&Arc<str>> = mine.iter().filter(|f| f.1 == set).map(|f| f.0).collect();
         let pick = match (same_set.as_slice(), mine.as_slice()) {
             ([one], _) => *one,
-            ([], [one]) if set(from).is_some_and(|s| is_test_set(&s)) && set(one).as_deref() == Some("main") => *one,
+            ([], [(one, "main")]) if is_test_set(set) => *one,
             _ => return None,
         };
         let stub = self.files.get(&**pick)?;
@@ -967,7 +1217,7 @@ impl Index {
             return None;
         }
         let dotted = segs.join(".");
-        self.binary_name_for_dotted(&dotted)
+        self.binary_name_for_dotted(&dotted).filter(|n| self.variant_visible(n, scope))
     }
 
     /// `java.util.Map.Entry` -> `java.util.Map$Entry`
@@ -1013,6 +1263,7 @@ impl Index {
     }
 
     /// Member type `simple` of class `owner`, including inherited member types.
+    /// None also when that is unknown (see `member_lookup`).
     pub fn member_type(&self, owner: &str, simple: &str) -> Option<Name> {
         match self.member_type_in(owner, simple) {
             MemberType::Found(n) => Some(n),
@@ -1023,6 +1274,15 @@ impl Index {
     /// Member type `simple` of class `owner`, declared or inherited (JLS
     /// 8.5), and whether an unresolved supertype leaves it unknown.
     pub fn member_type_in(&self, owner: &str, simple: &str) -> MemberType {
+        self.member_lookup(owner, simple, None)
+    }
+
+    /// Member type `simple` of class `owner`, including inherited ones. For
+    /// a class declared in several files the index holds one copy, which need
+    /// not be the one a file reads: when the copies disagree about the member
+    /// the answer is unknown. `scope`, when `owner` encloses it, narrows the
+    /// copies to those with the scope's package and imports (the file's own).
+    fn member_lookup(&self, owner: &str, simple: &str, scope: Option<&Scope>) -> MemberType {
         // Resolving a supertype resolves names, which can come back here for
         // the same lookup (classes nested in and extending each other): a
         // re-entrant lookup is "not found" instead of unbounded recursion.
@@ -1049,10 +1309,66 @@ impl Index {
         }
         let _pop = Pop;
         let mut seen = FxHashSet::default();
-        self.member_type_rec(owner, simple, &mut seen, 0)
+        self.member_type_rec(owner, simple, &mut seen, 0, scope)
     }
 
-    fn member_type_rec(&self, owner: &str, simple: &str, seen: &mut FxHashSet<Name>, depth: u32) -> MemberType {
+    /// The copies of a class declared in several files that code in `scope`
+    /// may read: those with the scope's package and imports when `owner`
+    /// encloses the scope and some do, else all. Empty for a class declared once.
+    fn copies_read(&self, owner: &str, scope: Option<&Scope>) -> Vec<(&Arc<FileStub>, &RawClass)> {
+        let Some(files) = self.copies.get(owner) else { return Vec::new() };
+        let all: Vec<(&Arc<FileStub>, &RawClass)> = files.iter().filter_map(|f| self.files.get(f)).filter_map(|st| st.classes.iter().find(|c| &*c.name == owner).map(|c| (st, c))).collect();
+        if let Some(scope) = scope.filter(|s| s.enclosing.iter().any(|e| &**e == owner)) {
+            // inside its own file a class reads that file's copy, as javac does
+            if let Some(&own) = all.iter().find(|(st, _)| std::ptr::eq(&st.imports, scope.imports)) {
+                return vec![own];
+            }
+            let own: Vec<(&Arc<FileStub>, &RawClass)> = all.iter().copied().filter(|(st, _)| *st.package == *scope.package && st.imports.iter().eq(scope.imports.iter())).collect();
+            if !own.is_empty() {
+                return own;
+            }
+        }
+        // a supertype declared in several files: the copy the scope's file
+        // certainly compiles against (its module's), when there is one
+        if let Some(file) = scope.and_then(|s| self.scope_file(s)) {
+            if let Some((stub, raw, _)) = self.certain_copy(owner, &file) {
+                return vec![(stub, raw)];
+            }
+        }
+        all
+    }
+
+    /// The file whose stub the scope's imports belong to (cached for the
+    /// last scope asked about: a file's lookups ask about the same one).
+    fn scope_file(&self, scope: &Scope) -> Option<Arc<str>> {
+        // (index address, generation, imports address, file found)
+        type LastScope = (usize, u64, usize, Option<Arc<str>>);
+        thread_local! {
+            static LAST: std::cell::RefCell<Option<LastScope>> = const { std::cell::RefCell::new(None) };
+        }
+        let key = (self as *const Index as usize, self.generation, scope.imports as *const _ as *const u8 as usize);
+        if let Some(hit) = LAST.with(|l| l.borrow().as_ref().filter(|(i, g, p, _)| (*i, *g, *p) == key).map(|(_, _, _, f)| f.clone())) {
+            return hit;
+        }
+        let file = self.files.iter().find(|(_, st)| std::ptr::eq(&st.imports, scope.imports)).map(|(f, _)| f.clone());
+        LAST.with(|l| *l.borrow_mut() = Some((key.0, key.1, key.2, file.clone())));
+        file
+    }
+
+    /// Whether the copies of `owner` code in `scope` may read disagree about
+    /// a member type `simple`: some declare it and some do not, or their
+    /// supertypes differ.
+    fn copies_disagree(&self, owner: &str, simple: &str, scope: &Scope) -> bool {
+        let copies = self.copies_read(owner, Some(scope));
+        if copies.len() < 2 {
+            return false;
+        }
+        let direct = format!("{owner}${simple}");
+        let declaring = copies.iter().filter(|(st, _)| st.classes.iter().any(|c| *c.name == *direct)).count();
+        (declaring > 0 && declaring < copies.len()) || !copies.windows(2).all(|w| w[0].1.superclass == w[1].1.superclass && w[0].1.interfaces == w[1].1.interfaces)
+    }
+
+    fn member_type_rec(&self, owner: &str, simple: &str, seen: &mut FxHashSet<Name>, depth: u32, scope: Option<&Scope>) -> MemberType {
         if depth > 20 {
             return MemberType::Unknown;
         }
@@ -1060,11 +1376,25 @@ impl Index {
             return MemberType::NotFound;
         }
         let direct = format!("{owner}${simple}");
-        if self.class_exists(&direct) {
-            // private member types are not inherited (JLS 8.2, 8.5)
-            let private = depth > 0 && self.raw_class(&direct).map(|(_, r)| r.flags).or_else(|| self.class(&direct).map(|c| c.flags)).is_some_and(|f| f.is_private());
-            if !private {
+        // private member types are not inherited (JLS 8.2, 8.5)
+        let private = || depth > 0 && self.raw_class(&direct).map(|(_, r)| r.flags).or_else(|| self.class(&direct).map(|c| c.flags)).is_some_and(|f| f.is_private());
+        let copies = self.copies_read(owner, scope);
+        if copies.is_empty() {
+            if self.class_exists(&direct) && !private() {
                 return MemberType::Found(Arc::from(direct.as_str()));
+            }
+        } else {
+            let declaring = copies.iter().filter(|(st, _)| st.classes.iter().any(|c| *c.name == *direct)).count();
+            if declaring == copies.len() && !private() {
+                return MemberType::Found(Arc::from(direct.as_str()));
+            }
+            if declaring > 0 && declaring < copies.len() {
+                return MemberType::Unknown;
+            }
+            // what the supertypes provide depends on the copy: absent from one
+            // copy's supertypes is no answer for the others
+            if !copies.windows(2).all(|w| w[0].1.superclass == w[1].1.superclass && w[0].1.interfaces == w[1].1.interfaces) {
+                return MemberType::Unknown;
             }
         }
         let mut sups: Vec<Name> = Vec::new();
@@ -1073,8 +1403,17 @@ impl Index {
             Ty::Class { name, .. } => sups.push(name.clone()),
             _ => unknown = true,
         };
-        match self.class(owner) {
-            Some(c) => {
+        let header = |push: &mut dyn FnMut(&Ty), stub: &FileStub, raw: &RawClass| {
+            let mut scope = self.scope_for_raw(stub, raw);
+            scope.enclosing.remove(0);
+            for ts in raw.superclass.iter().chain(raw.interfaces.iter()) {
+                push(&self.resolve_type(ts, &scope));
+            }
+        };
+        match (copies.as_slice(), self.class(owner)) {
+            // the one copy read, which need not be the index's
+            ([(stub, raw)], _) => header(&mut push, stub, raw),
+            (_, Some(c)) => {
                 if let Some(t) = &c.superclass {
                     push(t);
                 }
@@ -1082,18 +1421,14 @@ impl Index {
                     push(i);
                 }
             }
-            None => {
+            (_, None) => {
                 // the class is being lowered right now: resolve its header from the stub
                 let Some((stub, raw)) = self.raw_class(owner) else { return MemberType::Unknown };
-                let mut scope = self.scope_for_raw(stub, raw);
-                scope.enclosing.remove(0);
-                for ts in raw.superclass.iter().chain(raw.interfaces.iter()) {
-                    push(&self.resolve_type(ts, &scope));
-                }
+                header(&mut push, stub, raw);
             }
         }
         for s in sups {
-            match self.member_type_rec(&s, simple, seen, depth + 1) {
+            match self.member_type_rec(&s, simple, seen, depth + 1, scope) {
                 MemberType::Found(n) => return MemberType::Found(n),
                 MemberType::Unknown => unknown = true,
                 MemberType::NotFound => {}
@@ -1113,6 +1448,42 @@ impl Index {
     /// None when not found, or when a supertype that is not resolved may
     /// declare the name (unknown).
     pub fn resolve_simple_type(&self, simple: &str, scope: &Scope) -> Option<Name> {
+        self.resolve_simple_type_anywhere(simple, scope).filter(|n| self.variant_visible(n, scope))
+    }
+
+    /// Whether code in `scope` sees the class `name`. A class declared only
+    /// in variant source sets (see `in_variant_set`: an Android flavor, a set
+    /// of stubs for a library some builds lack) is seen only from those sets:
+    /// elsewhere the build may compile against something else under that name.
+    fn variant_visible(&self, name: &str, scope: &Scope) -> bool {
+        if self.variant_defs.is_empty() {
+            return true;
+        }
+        let top = |n: &str| -> String { n.rfind('.').map_or_else(|| n.split('$').next().unwrap_or(n).to_string(), |i| n[i..].find('$').map_or(n.to_string(), |j| n[..i + j].to_string())) };
+        let name = top(name);
+        let Some(&variants) = self.variant_defs.get(name.as_str()) else { return true };
+        let files = |n: &str| -> Vec<&Arc<str>> {
+            match self.copies.get(n) {
+                Some(files) => files.iter().collect(),
+                None => self.source_file_of(n).into_iter().collect(),
+            }
+        };
+        let there = files(&name);
+        // a copy in main or test code: the ordinary rules apply
+        if there.len() as u32 > variants {
+            return true;
+        }
+        let sets: Vec<(&str, &str)> = there.iter().filter_map(|f| source_root(f)).collect();
+        // in a class header the class is not yet enclosing: the file whose
+        // imports the scope reads
+        let here: Vec<&Arc<str>> = match scope.enclosing.last() {
+            Some(e) => files(&top(e)),
+            None => self.files.iter().filter(|(_, st)| std::ptr::eq(&st.imports, scope.imports)).map(|(f, _)| f).collect(),
+        };
+        !here.is_empty() && here.iter().all(|f| source_root(f).is_some_and(|r| sets.contains(&r)))
+    }
+
+    fn resolve_simple_type_anywhere(&self, simple: &str, scope: &Scope) -> Option<Name> {
         let local = |level: &dyn Fn(usize) -> bool| scope.local_types.iter().find(|(s, _, l)| &**s == simple && level(*l)).map(|(_, b, _)| b.clone());
         // a member type may be inherited from a supertype that is not resolved
         let mut uncertain = false;
@@ -1135,8 +1506,11 @@ impl Index {
                 uncertain |= lc.unknown_super;
                 continue;
             }
-            match self.member_type_in(e, simple) {
+            match self.member_lookup(e, simple, Some(scope)) {
                 MemberType::Found(n) => return Some(n),
+                // copies of a class declared twice disagree: not an import's class
+                // either (an unresolved supertype is the case below)
+                MemberType::Unknown if self.copies_disagree(e, simple, scope) => return None,
                 MemberType::Unknown => uncertain = true,
                 MemberType::NotFound => {}
             }
@@ -1174,6 +1548,13 @@ impl Index {
         // package and on-demand imports
         // same package
         let same = if scope.package.is_empty() { simple.to_string() } else { format!("{}.{}", scope.package, simple) };
+        // the default package of another directory: compiled with this file
+        // or not (test inputs are compiled one directory at a time), so its
+        // class and whatever an import or java.lang provides are both
+        // possible, and the name is unknown
+        if scope.package.is_empty() && self.classes.contains_key(simple) && self.default_package_visible(simple, scope) != Some(true) {
+            return None;
+        }
         if uncertain && scope.unknown_if_inherited {
             // java.lang is kept unless the package or an on-demand import has
             // the name too, which would shadow it
@@ -1206,6 +1587,36 @@ impl Index {
             return Some(Arc::from(jl.as_str()));
         }
         None
+    }
+
+    /// Whether the default-package class `simple` is declared in the
+    /// directory of the code in `scope`: that of the files declaring its
+    /// top-level class, or, in a class header, of the file whose imports the
+    /// scope reads. Visible when the file cannot be told. None when copies of
+    /// either class sit in directories that only partly match.
+    fn default_package_visible(&self, simple: &str, scope: &Scope) -> Option<bool> {
+        let dir = |f: &str| f.rfind(['/', '\\']).map_or("", |i| &f[..i]).to_string();
+        let dirs = |name: &str| -> Vec<String> {
+            let files: Vec<&Arc<str>> = match self.copies.get(name) {
+                Some(files) => files.iter().collect(),
+                None => self.source_file_of(name).into_iter().collect(),
+            };
+            files.into_iter().map(|f| dir(f)).collect()
+        };
+        let here: Vec<String> = match scope.enclosing.last() {
+            Some(top) => dirs(&top[..top.find('$').unwrap_or(top.len())]),
+            None => self.files.iter().filter(|(_, st)| st.package.is_empty() && std::ptr::eq(&st.imports, scope.imports)).map(|(f, _)| dir(f)).collect(),
+        };
+        let there = dirs(simple);
+        if here.is_empty() {
+            return Some(true);
+        }
+        let shared = here.iter().filter(|d| there.contains(d)).count();
+        match shared {
+            0 => Some(false),
+            n if n == here.len() => Some(true),
+            _ => None,
+        }
     }
 
     fn resolve_on_demand(&self, simple: &str, scope: &Scope) -> Option<Name> {
@@ -1291,6 +1702,33 @@ pub fn module_dir(path: &str) -> &str {
         Some(&i) => &path[..i],
         None => "",
     }
+}
+
+/// Module directories ending in `/`, the innermost first.
+fn innermost_first<T>(modules: Vec<(String, T)>) -> Vec<(String, T)> {
+    let sep = std::path::MAIN_SEPARATOR;
+    let mut modules: Vec<(String, T)> = modules.into_iter().map(|(d, r)| (if d.ends_with(['/', sep]) { d } else { format!("{d}{sep}") }, r)).collect();
+    modules.sort_by_key(|(d, _)| std::cmp::Reverse(d.len()));
+    modules
+}
+
+/// A file in a source set that is neither main code nor tests
+/// (`app/src/fdroid/java`, `src/androidx-stubs/java`): an Android flavor or
+/// a set that some builds use instead of a library, or not at all.
+pub fn in_variant_set(path: &str) -> bool {
+    source_root(path).is_some_and(|(_, set)| set != "main" && !crate::sources::is_test_set(set))
+}
+
+/// The module directory and source set of a file under a source root of a
+/// module, `<module>/src/<set>/<java|kotlin|groovy|scala>/...` (the last such
+/// root: the checkout itself may sit below a directory named `src`). None
+/// for a file anywhere else.
+pub fn source_root(path: &str) -> Option<(&str, &str)> {
+    const LANGS: &[&str] = &["java", "kotlin", "groovy", "scala"];
+    let starts = path.match_indices("src/").map(|(i, _)| i).filter(|&i| i == 0 || path[..i].ends_with('/'));
+    let i = starts.filter(|&i| path[i + 4..].split('/').nth(1).is_some_and(|l| LANGS.contains(&l)) && path[i + 4..].split('/').count() > 2).last()?;
+    let set = path[i + 4..].split('/').next()?;
+    Some((path[..i].trim_end_matches('/'), set))
 }
 
 /// Convert a folded constant to the representation of the declared type.
@@ -1386,6 +1824,35 @@ mod resolving_tests {
         idx.set_file(Arc::from("/w/src/r/b/src/main/java/p/B.java"), stub(b));
         assert_eq!(pick(&idx, "/w/src/r/b/src/test/java/p/T.java").as_deref(), Some("/w/src/r/b/src/main/java/p/B.java"));
         assert_eq!(pick(&idx, "/w/src/r/c/src/test/java/p/T.java"), None);
+    }
+
+    #[test]
+    fn copies_outside_source_roots_are_never_certain() {
+        use crate::stubs::extract;
+        use grounds_syntax::ParsedFile;
+        let stub = |src: &str| Arc::new(extract(&ParsedFile::parse(src)));
+        let pick = |idx: &Index, from: &str| idx.certain_copy("p.C", from).map(|(_, _, f)| f.to_string());
+        let c = "package p; public class C {}";
+        // guava: plain `src/` and `test/` trees, a GWT super-source copy
+        let mut idx = Index::new(Arc::new(Classpath::empty()));
+        idx.set_file(Arc::from("/r/core/src/p/C.java"), stub(c));
+        idx.set_file(Arc::from("/r/gwt/src-super/p/C.java"), stub(c));
+        assert_eq!(pick(&idx, "/r/tests/bench/p/B.java"), None);
+        assert_eq!(pick(&idx, "/r/core/src/p/B.java"), None);
+        // javaparser: test data under src/test/ next to the module's tests
+        let mut idx = Index::new(Arc::new(Classpath::empty()));
+        idx.set_file(Arc::from("/r/core/src/main/java/p/C.java"), stub(c));
+        idx.set_file(Arc::from("/r/solver/src/test/test_sourcecode/p/C.java"), stub(c));
+        assert_eq!(pick(&idx, "/r/solver/src/test/java/t/T.java"), None);
+        assert_eq!(pick(&idx, "/r/solver/src/test/test_sourcecode/t/T.java"), None);
+        // still certain: the own module's source set, or its main code for a test
+        idx.set_file(Arc::from("/r/solver/src/main/java/p/C.java"), stub(c));
+        assert_eq!(pick(&idx, "/r/solver/src/test/java/t/T.java").as_deref(), Some("/r/solver/src/main/java/p/C.java"));
+        assert_eq!(pick(&idx, "/r/core/src/main/java/t/M.java").as_deref(), Some("/r/core/src/main/java/p/C.java"));
+        assert_eq!(source_root("/w/src/r/a/src/test/java/p/B.java"), Some(("/w/src/r/a", "test")));
+        assert_eq!(source_root("src/main/kotlin/p/B.java"), Some(("", "main")));
+        assert_eq!(source_root("/r/a/src/main/java"), None);
+        assert_eq!(source_root("/r/a/src/p/B.java"), None);
     }
 
     #[test]

@@ -196,6 +196,75 @@ impl SourceSets {
     }
 }
 
+/// How many times the discovery ran `git ls-files` in each work tree (for
+/// tests of its cost; per root, as tests run in parallel).
+static GIT_LISTINGS: std::sync::Mutex<Vec<(PathBuf, usize)>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn git_listings(root: &Path) -> usize {
+    GIT_LISTINGS.lock().unwrap().iter().find(|(r, _)| r == root).map_or(0, |(_, n)| *n)
+}
+
+/// The `.java` files and build files under `root` that git tracks although
+/// `.gitignore` matches them, relative to `root`. Empty outside a git work tree.
+fn tracked_but_ignored(root: &Path) -> Vec<PathBuf> {
+    {
+        let mut runs = GIT_LISTINGS.lock().unwrap();
+        match runs.iter_mut().find(|(r, _)| r == root) {
+            Some((_, n)) => *n += 1,
+            None => runs.push((root.to_path_buf(), 1)),
+        }
+    }
+    let out = std::process::Command::new("git").arg("-C").arg(root).args(["ls-files", "-z", "--cached", "--ignored", "--exclude-standard", "--", "*.java", "*pom.xml", "*build.gradle", "*build.gradle.kts"]).stderr(std::process::Stdio::null()).output();
+    match out {
+        Ok(o) if o.status.success() => o.stdout.split(|&b| b == 0).filter(|p| !p.is_empty()).filter_map(|p| std::str::from_utf8(p).ok()).map(PathBuf::from).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The git directory of the work tree holding `root`: the `.git` directory
+/// of `root` or a directory above it, or the one a `.git` file names (a
+/// linked worktree's, which has its own index and HEAD).
+fn git_dir(root: &Path) -> Option<PathBuf> {
+    // the nearest repository at or above the root, as `boundary` finds one
+    let top = root.ancestors().find(|a| boundary(a).is_some_and(|b| b & 3 != 0))?;
+    let dot = top.join(".git");
+    match boundary(top)? & 3 {
+        1 => Some(dot),
+        _ => gitdir_of(&dot).map(|g| if g.is_absolute() { g } else { top.join(g) }),
+    }
+}
+
+/// What the list of tracked-but-ignored files depends on besides the
+/// ignore files: git's index and HEAD (None outside a work tree).
+fn index_stamp(root: &Path) -> Option<(std::time::SystemTime, u64, Vec<u8>)> {
+    let git = git_dir(root)?;
+    let index = std::fs::metadata(git.join("index")).ok()?;
+    Some((index.modified().ok()?, index.len(), std::fs::read(git.join("HEAD")).ok()?))
+}
+
+/// `tracked_but_ignored`, kept between discoveries of one work tree: a
+/// session lists a changed directory again at every save, and a git process
+/// over the whole repository costs tens of milliseconds there. A discovery of
+/// the whole workspace (`fresh`: also after an ignore file changes) and a
+/// change of git's index or HEAD read it again.
+fn tracked_but_ignored_cached(root: &Path, fresh: bool) -> Vec<PathBuf> {
+    type Cache = std::sync::Mutex<std::collections::HashMap<PathBuf, ((std::time::SystemTime, u64, Vec<u8>), Vec<PathBuf>)>>;
+    static CACHE: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
+    let cache = CACHE.get_or_init(Default::default);
+    let Some(stamp) = index_stamp(root) else { return tracked_but_ignored(root) };
+    if !fresh {
+        if let Some((s, files)) = cache.lock().unwrap().get(root) {
+            if *s == stamp {
+                return files.clone();
+            }
+        }
+    }
+    let files = tracked_but_ignored(root);
+    cache.lock().unwrap().insert(root.to_path_buf(), (stamp, files.clone()));
+    files
+}
+
 impl Workspace {
     pub fn discover(root: &Path, exclude: &[String]) -> Workspace {
         Self::discover_in(root, None, None, exclude)
@@ -235,7 +304,42 @@ impl Workspace {
             .build();
         let mut module_dirs: Vec<(PathBuf, BuildSystem)> = Vec::new();
         let mut java_files: Vec<PathBuf> = Vec::new();
-        for entry in walker.flatten() {
+        let source = |p: &Path, name: &str| -> bool {
+            if !name.ends_with(".java") || name == "module-info.java" || name == "package-info.java" {
+                return false;
+            }
+            // skip non-generated build outputs: a `build`/`target` directory
+            // inside the project and above `src` (not the folders the
+            // project sits in, nor a package named `build`)
+            let rel = p.strip_prefix(&root).unwrap_or(p);
+            let output = rel.components().map(|c| c.as_os_str()).take_while(|c| *c != "src").any(|c| c == "build" || c == "target");
+            if output && classify(p) != SourceKind::Generated {
+                return false;
+            }
+            !(is_resource(rel) || excludes.iter().any(|g| g.matches_path(rel)))
+        };
+        // a start the discovery would not go into (an ignored directory that
+        // holds tracked files, listed again by a session): only the tracked
+        // files count there, as for a fresh load
+        let base = start.unwrap_or(&root).to_path_buf();
+        // (a directory is ignored when the walk of its parent, as the
+        // discovery walks it, does not list it: at some level from the root)
+        let listed_in_parent = |d: &Path| -> bool {
+            let Some(parent) = d.parent() else { return true };
+            ignore::WalkBuilder::new(parent).hidden(true).git_ignore(true).git_exclude(true).parents(true).max_depth(Some(1)).build().flatten().any(|e| e.path() == d)
+        };
+        let tracked = tracked_but_ignored_cached(&root, max_depth.is_none() && start.is_none_or(|s| s == root));
+        // (only a start that holds such files can be one: a walked directory
+        // that became ignored means an ignore file changed, and a walk of the
+        // whole workspace follows)
+        let ignored_start = base != root
+            && base.starts_with(&root)
+            && tracked.iter().any(|r| root.join(r).starts_with(&base))
+            && base.ancestors().take_while(|a| *a != root).any(|a| !listed_in_parent(a));
+        if ignored_start {
+            dirs.push(base.clone());
+        }
+        for entry in walker.flatten().take_while(|_| !ignored_start) {
             let p = entry.path();
             if entry.file_type().is_some_and(|t| t.is_dir()) {
                 dirs.push(p.to_path_buf());
@@ -247,24 +351,43 @@ impl Workspace {
                     "pom.xml" => module_dirs.push((p.parent().unwrap().to_path_buf(), BuildSystem::Maven)),
                     _ => {}
                 }
-                if name.ends_with(".java") && name != "module-info.java" && name != "package-info.java" {
-                    // skip non-generated build outputs: a `build`/`target` directory
-                    // inside the project and above `src` (not the folders the
-                    // project sits in, nor a package named `build`)
-                    let rel = p.strip_prefix(&root).unwrap_or(p);
-                    let output = rel.components().map(|c| c.as_os_str()).take_while(|c| *c != "src").any(|c| c == "build" || c == "target");
-                    if output && classify(p) != SourceKind::Generated {
-                        continue;
-                    }
-                    if let Ok(rel) = p.strip_prefix(&root) {
-                        if is_resource(rel) || excludes.iter().any(|g| g.matches_path(rel)) {
-                            continue;
-                        }
-                    }
+                if source(p, name) {
                     java_files.push(p.to_path_buf());
                 }
             }
         }
+        // files git tracks are part of the project whatever .gitignore says
+        // (a directory ignored after its files were added): the build compiles them
+        let mut known: std::collections::HashSet<PathBuf> = dirs.iter().cloned().collect();
+        for rel in tracked {
+            let skipped = rel.components().any(|c| c.as_os_str().to_str().is_none_or(|n| SKIP_DIRS.contains(&n) || n.starts_with('.')));
+            let p = root.join(&rel);
+            let Some(name) = rel.file_name().and_then(|n| n.to_str()) else { continue };
+            // (only below the start, and as deep as the discovery goes)
+            let Ok(below) = p.strip_prefix(&base) else { continue };
+            if skipped {
+                continue;
+            }
+            let within = |q: &Path| max_depth.is_none_or(|d| q.strip_prefix(&base).map_or(usize::MAX, |r| r.components().count()) <= d);
+            // the directories that hold it, which the walk does not go into:
+            // a file deleted or restored there changes their time
+            for a in p.ancestors().skip(1).take_while(|a| a.starts_with(&base)).filter(|a| within(a)) {
+                if known.insert(a.to_path_buf()) {
+                    dirs.push(a.to_path_buf());
+                }
+            }
+            if max_depth.is_some_and(|d| below.components().count() > d) || !p.is_file() {
+                continue;
+            }
+            match name {
+                "build.gradle" | "build.gradle.kts" => module_dirs.push((p.parent().unwrap_or(&root).to_path_buf(), BuildSystem::Gradle)),
+                "pom.xml" => module_dirs.push((p.parent().unwrap_or(&root).to_path_buf(), BuildSystem::Maven)),
+                _ if source(&p, name) => java_files.push(p),
+                _ => {}
+            }
+        }
+        java_files.sort();
+        java_files.dedup();
         module_dirs.sort_by(|a, b| a.0.cmp(&b.0));
         module_dirs.dedup_by(|a, b| a.0 == b.0);
         if !module_dirs.iter().any(|(d, _)| *d == root) {
@@ -297,5 +420,611 @@ impl Workspace {
             }
         }
         best.map(|b| b.0)
+    }
+}
+
+/// Directories of modules whose build compiles against a published release
+/// of the project itself: a dependency on an artifact the repository builds
+/// (same group and artifact), not on its sources. kafka's
+/// `streams/upgrade-system-tests-22` compiles against `kafka-streams:2.2`
+/// from Maven Central, while the repository's `streams` sources are today's.
+/// For code in such a module, the project's classes from other modules are
+/// not what it compiles against.
+pub fn modules_built_against_own_release(ws: &Workspace) -> Vec<PathBuf> {
+    use crate::java_release::{element, elements, strip_comments, strip_script_comments};
+    let fixture = |p: &Path| p.strip_prefix(&ws.root).is_ok_and(|r| r.components().any(|c| c.as_os_str() == "src" || c.as_os_str() == "buildSrc" || c.as_os_str() == "build-logic"));
+    let read = |p: &Path| crate::fsutil::read_text(p).ok();
+    // the coordinates the repository itself builds: (group, artifact)
+    let mut coordinates: Vec<(String, String)> = Vec::new();
+    let mut out: Vec<PathBuf> = Vec::new();
+
+    // Maven: the coordinates of every pom, then dependencies on one of them
+    // at a version not shown to be the sibling's own
+    struct Pom {
+        path: PathBuf,
+        dir: PathBuf,
+        version: Option<String>,
+        parent_version: Option<String>,
+        group: Option<String>,
+        artifact: Option<String>,
+        deps: Vec<(String, String, Option<String>)>,
+        /// dependencyManagement entries: (group, artifact, version)
+        managed: Vec<(String, String, String)>,
+    }
+    let mut poms: Vec<Pom> = Vec::new();
+    let mut cache = crate::java_release::PomCache::default();
+    for m in ws.modules.iter().filter(|m| m.build_system == BuildSystem::Maven && !fixture(&m.dir)) {
+        let path = m.dir.join("pom.xml");
+        let Some(text) = read(&path) else { continue };
+        let text = strip_comments(&text, "", "<!--", "-->");
+        let parent = element(&text, "parent").unwrap_or("").to_string();
+        let mut own = text.clone();
+        for block in ["parent", "dependencies", "dependencyManagement", "build", "profiles", "reporting", "plugins"] {
+            let (open, close) = (format!("<{block}>"), format!("</{block}>"));
+            while let (Some(s), Some(e)) = (own.find(&open), own.find(&close)) {
+                if e < s {
+                    break;
+                }
+                own.replace_range(s..e + close.len(), "");
+            }
+        }
+        let group = element(&own, "groupId").or_else(|| element(&parent, "groupId")).map(str::to_string);
+        let version = element(&own, "version").or_else(|| element(&parent, "version")).map(str::to_string);
+        let artifact = element(&own, "artifactId").map(str::to_string);
+        if let (Some(g), Some(a)) = (group.clone(), artifact.as_deref()) {
+            coordinates.push((g, a.to_string()));
+        }
+        // profiles' too: whether one is active is the build's business
+        let managed = elements(&text, "dependencyManagement")
+            .into_iter()
+            .flat_map(|dm| elements(dm, "dependency"))
+            .filter_map(|d| Some((element(d, "groupId")?.to_string(), element(d, "artifactId")?.to_string(), element(d, "version")?.to_string())))
+            .collect();
+        let mut main = text.clone();
+        for block in ["dependencyManagement", "profiles", "build"] {
+            let (open, close) = (format!("<{block}>"), format!("</{block}>"));
+            while let (Some(s), Some(e)) = (main.find(&open), main.find(&close)) {
+                if e < s {
+                    break;
+                }
+                main.replace_range(s..e + close.len(), "");
+            }
+        }
+        // a runtime dependency says nothing about what the code compiles against
+        let deps = elements(&main, "dependency")
+            .into_iter()
+            .filter(|d| element(d, "scope") != Some("runtime"))
+            .filter_map(|d| Some((element(d, "groupId")?.to_string(), element(d, "artifactId")?.to_string(), element(d, "version").map(str::to_string))))
+            .collect();
+        poms.push(Pom { path, dir: m.dir.clone(), version, parent_version: element(&parent, "version").map(str::to_string), group, artifact, deps, managed });
+    }
+    // `${...}` resolved against a pom's properties and its parents'; None
+    // when a reference cannot be resolved
+    let resolve = |cache: &mut crate::java_release::PomCache, pom: &Pom, value: &str| -> Option<String> {
+        let mut v = value.trim().to_string();
+        for (names, with) in [(&["${project.version}", "${pom.version}", "${version}"][..], &pom.version), (&["${project.parent.version}", "${parent.version}"][..], &pom.parent_version), (&["${project.groupId}", "${pom.groupId}", "${groupId}"][..], &pom.group)] {
+            for n in names {
+                if v.contains(n) {
+                    v = v.replace(n, with.as_deref()?);
+                }
+            }
+        }
+        if v.contains("${") { cache.resolve(&pom.path, &v) } else { Some(v) }
+    };
+    // the reactor siblings: (group, artifact, version), resolved
+    let mut siblings: Vec<(Option<String>, String, Option<String>)> = Vec::new();
+    for pom in &poms {
+        let (Some(g), Some(a)) = (&pom.group, &pom.artifact) else { continue };
+        let v = pom.version.as_deref().and_then(|v| resolve(&mut cache, pom, v));
+        siblings.push((resolve(&mut cache, pom, g), a.clone(), v));
+    }
+    let index_of = |path: &Path| poms.iter().position(|p| p.path == path || p.path.canonicalize().ok().as_deref() == Some(path));
+    for pom in &poms {
+        // the dependencyManagement that may apply: this pom's and its parents', all of them
+        let mut chain = vec![pom];
+        let mut cur = pom.path.clone();
+        for _ in 0..10 {
+            let Some(parent) = cache.parent_of(&cur) else { break };
+            let Some(i) = parent.canonicalize().ok().and_then(|p| index_of(&p)) else { break };
+            chain.push(&poms[i]);
+            cur = parent;
+        }
+        let mut old = false;
+        for (g, a, v) in &pom.deps {
+            let g = resolve(&mut cache, pom, g);
+            // a sibling at its own version comes from the reactor, built from the
+            // sources; several modules may have these coordinates (a jre and an
+            // android flavor), and the version of any of them is the reactor's
+            let own_versions: Vec<Option<String>> = siblings.iter().filter(|(sg, sa, _)| sa == a && sg.is_some() && *sg == g).map(|(_, _, v)| v.clone()).collect();
+            if own_versions.is_empty() {
+                continue;
+            }
+            let consumer_version = pom.version.as_deref().and_then(|v| resolve(&mut cache, pom, v));
+            let own_versions: Vec<Option<String>> = own_versions.into_iter().map(|v| v.or_else(|| consumer_version.clone())).collect();
+            let candidates: Vec<Option<String>> = match v {
+                Some(v) => vec![resolve(&mut cache, pom, v)],
+                None => {
+                    let mut c = Vec::new();
+                    // inherited entries are interpolated in the consumer's
+                    // properties, as Maven's effective POM does
+                    for decl in &chain {
+                        for (mg, ma, mv) in &decl.managed {
+                            if ma == a && resolve(&mut cache, pom, mg) == g {
+                                c.push(resolve(&mut cache, pom, mv));
+                            }
+                        }
+                    }
+                    c
+                }
+            };
+            if candidates.iter().any(|c| c.is_none() || !own_versions.contains(c)) {
+                old = true;
+            }
+        }
+        if old {
+            out.push(pom.dir.clone());
+        }
+    }
+
+    // Gradle: the group, the project names and archive names, then external
+    // coordinates of those, written out or through an alias
+    let mut scripts: Vec<(PathBuf, String)> = Vec::new();
+    let mut seen_dirs: Vec<&Path> = Vec::new();
+    for m in ws.modules.iter().filter(|m| m.build_system == BuildSystem::Gradle && !fixture(&m.dir)) {
+        seen_dirs.push(&m.dir);
+        for f in ["build.gradle", "build.gradle.kts"] {
+            if let Some(t) = read(&m.dir.join(f)) {
+                scripts.push((m.dir.clone(), strip_script_comments(&t, false)));
+            }
+        }
+    }
+    if scripts.is_empty() {
+        return out;
+    }
+    let mut extra: Vec<String> = Vec::new();
+    for f in ["gradle/libs.versions.toml", "gradle/dependencies.gradle", "settings.gradle", "settings.gradle.kts"] {
+        if let Some(t) = read(&ws.root.join(f)) {
+            extra.push(strip_script_comments(&t, f.ends_with(".toml")));
+        }
+    }
+    // groups stated for every Gradle project
+    let mut global_groups: Vec<String> = Vec::new();
+    if let Some(t) = read(&ws.root.join("gradle.properties")) {
+        global_groups.extend(t.lines().filter_map(|l| l.trim().strip_prefix("group")).filter_map(|r| r.trim_start().strip_prefix('=')).map(|g| g.trim().to_string()));
+    }
+    let quoted = |text: &str| -> Vec<(usize, String)> {
+        let mut v = Vec::new();
+        let b = text.as_bytes();
+        let mut i = 0;
+        while i < b.len() {
+            if b[i] == b'\'' || b[i] == b'"' {
+                if let Some(e) = text[i + 1..].find(b[i] as char) {
+                    let s = &text[i + 1..i + 1 + e];
+                    if !s.contains('\n') {
+                        v.push((i, s.to_string()));
+                        i += e + 2;
+                        continue;
+                    }
+                }
+            }
+            i += 1;
+        }
+        v
+    };
+    // the word before `=`, `:` or a space that precedes a string at `at`
+    let key_before = |text: &str, at: usize| -> Option<String> {
+        let before = text[..at].trim_end();
+        let before = before.strip_suffix('=').or_else(|| before.strip_suffix(':')).unwrap_or(before).trim_end();
+        let start = before.rfind(|c: char| !(c.is_alphanumeric() || c == '_' || c == '-' || c == '.')).map_or(0, |i| i + 1);
+        let key = &before[start..];
+        (!key.is_empty()).then(|| key.to_string())
+    };
+    // a module's declarations: its own script, and `project(':path') { ... }` blocks anywhere
+    let mut declarations: Vec<(PathBuf, String)> = Vec::new();
+    let gradle_dirs: Vec<PathBuf> = seen_dirs.iter().map(|d| d.to_path_buf()).collect();
+    for (dir, text) in &scripts {
+        let (own_text, blocks) = crate::java_release::project_blocks(text);
+        for (path, body) in blocks {
+            declarations.push((ws.root.join(path), body));
+        }
+        // `configure(...) { }`, `subprojects.each { }`: modules chosen by an
+        // expression, taken as every module the script could reach
+        let (own_text, reaching) = crate::java_release::reaching_blocks(&own_text);
+        for (body, itself) in reaching {
+            for m in gradle_dirs.iter().filter(|m| m.starts_with(dir) && (itself || *m != dir)) {
+                declarations.push((m.to_path_buf(), body.clone()));
+            }
+        }
+        // a script's `subprojects { }` and `allprojects { }` declare for the
+        // modules below it (and itself, for `allprojects`): which of them a
+        // block really reaches is the build's business, so all of them
+        for (block, itself) in [("subprojects", false), ("allprojects", true)] {
+            for body in crate::java_release::blocks(&own_text, block) {
+                for m in &gradle_dirs {
+                    if m.starts_with(dir) && (itself || m != dir) {
+                        declarations.push((m.to_path_buf(), body.to_string()));
+                    }
+                }
+            }
+        }
+        let own_text = crate::java_release::without_blocks(&crate::java_release::without_blocks(&own_text, "subprojects"), "allprojects");
+        declarations.push((dir.clone(), own_text));
+    }
+    let all: Vec<&str> = scripts.iter().map(|(_, t)| t.as_str()).chain(extra.iter().map(String::as_str)).collect();
+    // (a version catalog's `group = "..."` is a dependency's, not the project's)
+    // each Gradle module's names (its directory, an included path's last
+    // segment, `archivesName`/`artifactId`) with the groups stated for it
+    // (in its declarations, or for every project); none stated: the module
+    // may be published under a package prefix of its own sources
+    // the projects: modules with a script, included paths, and the targets
+    // of `project(':x') { }` blocks (a project need not have a script)
+    let mut projects: Vec<PathBuf> = seen_dirs.iter().map(|d| d.to_path_buf()).collect();
+    for text in &extra {
+        if let Some(i) = text.find("include") {
+            projects.extend(quoted(&text[i..]).into_iter().map(|(_, inc)| ws.root.join(inc.trim_start_matches(':').replace(':', "/"))));
+        }
+    }
+    projects.extend(declarations.iter().map(|(d, _)| d.clone()));
+    projects.sort();
+    projects.dedup();
+    let mut undeclared: Vec<(String, &Path)> = Vec::new();
+    for d in &projects {
+        let mut names: Vec<String> = d.file_name().and_then(|n| n.to_str()).map(str::to_string).into_iter().collect();
+        for text in &extra {
+            if let Some(i) = text.find("include") {
+                for (_, inc) in quoted(&text[i..]) {
+                    if ws.root.join(inc.trim_start_matches(':').replace(':', "/")) == *d {
+                        names.extend(inc.rsplit(':').next().map(str::to_string));
+                    }
+                }
+            }
+        }
+        let mut own_groups = global_groups.clone();
+        for (_, text) in declarations.iter().filter(|(dir, _)| dir == d) {
+            for (at, s) in quoted(text) {
+                match key_before(text, at).as_deref() {
+                    Some("group") if s.contains('.') && !s.contains(' ') => own_groups.push(s),
+                    Some(k) if k.ends_with("archivesName") || k.ends_with("archivesBaseName") || k.ends_with("artifactId") => names.push(s),
+                    _ => {}
+                }
+            }
+        }
+        for n in names {
+            if own_groups.is_empty() {
+                undeclared.push((n, d));
+            } else {
+                coordinates.extend(own_groups.iter().map(|g| (g.clone(), n.clone())));
+            }
+        }
+    }
+    // the package prefixes of each such project's own sources (not a nested
+    // module's), and of its module name (an aggregator's only source is its
+    // module-info), computed once
+    let module_name = |f: &Path| -> Option<String> {
+        let text = crate::fsutil::read_text(f).ok()?;
+        let text = strip_script_comments(&text, false);
+        let i = text.find("module ")?;
+        Some(text[i + "module ".len()..].split(|c: char| c.is_whitespace() || c == '{').next()?.to_string())
+    };
+    let add_prefixes = |set: &mut std::collections::HashSet<String>, dotted: &str| {
+        let mut acc = String::new();
+        for part in dotted.split('.').filter(|p| !p.is_empty()) {
+            if !acc.is_empty() {
+                acc.push('.');
+            }
+            acc.push_str(part);
+            set.insert(acc.clone());
+        }
+    };
+    let mut prefixes: std::collections::HashMap<&Path, std::collections::HashSet<String>> = undeclared.iter().map(|(_, d)| (*d, std::collections::HashSet::new())).collect();
+    // each file counts for the nearest such project above it (not one above a
+    // nested module: a nested module's files are its own)
+    let module_dirs: std::collections::HashSet<&Path> = ws.modules.iter().map(|m| m.dir.as_path()).collect();
+    for f in &ws.files {
+        let Some(d) = f.path.ancestors().skip(1).take_while(|a| a.starts_with(&ws.root)).find(|a| prefixes.contains_key(a) || module_dirs.contains(a)).filter(|a| prefixes.contains_key(a)) else { continue };
+        let path = f.path.to_string_lossy().replace('\\', "/");
+        let set = prefixes.get_mut(d).unwrap();
+        for (i, _) in path.match_indices("/java/") {
+            if let Some((dir, _)) = path[i + "/java/".len()..].rsplit_once('/') {
+                add_prefixes(set, &dir.replace('/', "."));
+            }
+        }
+    }
+    for (d, set) in prefixes.iter_mut() {
+        for sset in std::fs::read_dir(d.join("src")).into_iter().flatten().flatten() {
+            if let Some(m) = module_name(&sset.path().join("java/module-info.java")) {
+                add_prefixes(set, &m);
+            }
+        }
+    }
+    let package_prefix = |g: &str, d: &Path| g.contains('.') && prefixes.get(d).is_some_and(|s| s.contains(g));
+    let own = |coordinate: &str| -> bool {
+        let mut parts = coordinate.split(':');
+        let (Some(g), Some(a)) = (parts.next(), parts.next()) else { return false };
+        coordinates.iter().any(|(og, oa)| og == g && oa == a) || undeclared.iter().any(|(n, d)| n == a && package_prefix(g, d))
+    };
+    // aliases of external coordinates: `name: "g:a:v"`, `name = "g:a:v"`, `name = { module = "g:a", ... }`
+    let mut aliases: Vec<String> = Vec::new();
+    for text in &all {
+        for (at, s) in quoted(text) {
+            if s.split(':').count() < 2 || s.contains(' ') || !own(&s) {
+                continue;
+            }
+            let key = match key_before(text, at) {
+                Some(k) if k == "module" => {
+                    let line_start = text[..at].rfind('\n').map_or(0, |i| i + 1);
+                    text[line_start..at].split('=').next().map(|k| k.trim().to_string())
+                }
+                k => k,
+            };
+            if let Some(k) = key.filter(|k| !k.is_empty() && !matches!(k.as_str(), "implementation" | "api" | "compile")) {
+                aliases.push(k.replace(['-', '_'], "."));
+                aliases.push(k);
+            }
+        }
+    }
+    // `testImplementation "g:a:v"`, `implementation("g:a:v")`, `api libs.x`
+    let configuration_before = |text: &str, at: usize| -> bool {
+        let before = text[..at].trim_end();
+        let before = before.strip_suffix('(').unwrap_or(before).trim_end();
+        let start = before.rfind(|c: char| !(c.is_alphanumeric() || c == '_')).map_or(0, |i| i + 1);
+        let word = before[start..].to_ascii_lowercase();
+        // not `runtimeOnly`: what the code compiles against is the question
+        ["implementation", "api", "compileonly", "compile"].iter().any(|c| word.ends_with(c))
+    };
+    for (dir, text) in declarations {
+        let direct = quoted(&text).into_iter().any(|(at, s)| s.split(':').count() >= 2 && !s.contains(' ') && own(&s) && configuration_before(&text, at));
+        let through_alias = aliases.iter().any(|a| {
+            text.match_indices(&format!(".{a}")).any(|(i, m)| {
+                let whole = text[i + m.len()..].chars().next().is_none_or(|c| !(c.is_alphanumeric() || c == '_' || c == '.'));
+                let start = text[..i].rfind(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.')).map_or(0, |j| j + 1);
+                whole && configuration_before(&text, start)
+            })
+        });
+        if (direct || through_alias) && !out.contains(&dir) {
+            out.push(dir);
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maven_modules_depending_on_an_older_release_of_the_project() {
+        let dir = std::env::temp_dir().join(format!("grounds-own-release-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let pom = |groupless: bool, artifact: &str, deps: &str| {
+            let group = if groupless { String::new() } else { "<groupId>org.example</groupId>".to_string() };
+            format!("<project><parent><groupId>org.example</groupId><artifactId>parent</artifactId><version>3.0-SNAPSHOT</version></parent>{group}<artifactId>{artifact}</artifactId><dependencies>{deps}</dependencies></project>")
+        };
+        let dep = |artifact: &str, version: &str| format!("<dependency><groupId>org.example</groupId><artifactId>{artifact}</artifactId><version>{version}</version></dependency>");
+        for (rel, text) in [
+            ("pom.xml", "<project><groupId>org.example</groupId><artifactId>parent</artifactId><version>3.0-SNAPSHOT</version></project>".to_string()),
+            ("core/pom.xml", pom(true, "core", "")),
+            ("app/pom.xml", pom(false, "app", &dep("core", "${project.version}"))),
+            ("pinned/pom.xml", pom(true, "pinned", &dep("core", "3.0-SNAPSHOT"))),
+            ("compat/pom.xml", pom(true, "compat", &(dep("core", "2.1.0") + &dep("junit", "4.13")))),
+            ("other/pom.xml", pom(true, "other", "<dependency><groupId>com.acme</groupId><artifactId>core</artifactId><version>1.0</version></dependency>")),
+        ] {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        }
+        let ws = Workspace::discover(&dir, &[]);
+        let found: Vec<String> = modules_built_against_own_release(&ws).iter().map(|d| d.strip_prefix(&ws.root).unwrap().to_string_lossy().to_string()).collect();
+        assert_eq!(found, vec!["compat"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_reactor_sibling_at_its_own_version_or_a_runtime_dependency_is_no_published_release() {
+        let dir = std::env::temp_dir().join(format!("grounds-own-release-2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let write = |rel: &str, text: &str| {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        // Maven: app at version 2 depends on its sibling lib, whose own version is 1
+        write("pom.xml", "<project><groupId>g</groupId><artifactId>root</artifactId><version>1</version><modules><module>lib</module><module>app</module></modules></project>");
+        write("lib/pom.xml", "<project><groupId>g</groupId><artifactId>lib</artifactId><version>1</version></project>");
+        write("app/pom.xml", "<project><groupId>g</groupId><artifactId>app</artifactId><version>2</version><dependencies><dependency><groupId>g</groupId><artifactId>lib</artifactId><version>1</version></dependency></dependencies></project>");
+        // Gradle: the project dependency compiles; a published copy at run time only
+        write("gr/settings.gradle", "include 'lib', 'app'\n");
+        write("gr/build.gradle", "allprojects { group = 'org.example' }\n");
+        write("gr/app/build.gradle", "dependencies {\n  implementation project(':lib')\n  runtimeOnly 'org.example:lib:0.1'\n}\n");
+        write("gr/lib/build.gradle", "\n");
+        let ws = Workspace::discover(&dir, &[]);
+        assert!(modules_built_against_own_release(&ws).is_empty(), "{:?}", modules_built_against_own_release(&ws));
+        let ws = Workspace::discover(&dir.join("gr"), &[]);
+        assert!(modules_built_against_own_release(&ws).is_empty(), "{:?}", modules_built_against_own_release(&ws));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn managed_versions_count_and_the_roots_subprojects_block_is_not_the_root() {
+        let dir = std::env::temp_dir().join(format!("grounds-own-release-3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let write = |rel: &str, text: &str| {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        // the old version comes from the root's dependencyManagement
+        write("pom.xml", "<project><groupId>g</groupId><artifactId>root</artifactId><version>3</version><modules><module>core</module><module>compat</module></modules><dependencyManagement><dependencies><dependency><groupId>g</groupId><artifactId>core</artifactId><version>2</version></dependency></dependencies></dependencyManagement></project>");
+        write("core/pom.xml", "<project><parent><groupId>g</groupId><artifactId>root</artifactId><version>3</version></parent><artifactId>core</artifactId></project>");
+        write("compat/pom.xml", "<project><parent><groupId>g</groupId><artifactId>root</artifactId><version>3</version></parent><artifactId>compat</artifactId><dependencies><dependency><groupId>g</groupId><artifactId>core</artifactId></dependency></dependencies></project>");
+        // Gradle: a published release declared for the subprojects marks no root
+        write("gr/settings.gradle", "include 'lib', 'app'\n");
+        write("gr/build.gradle", "allprojects { group = 'org.example' }\nsubprojects {\n  dependencies { testImplementation 'org.example:lib:0.1' }\n}\n");
+        write("gr/app/build.gradle", "\n");
+        write("gr/lib/build.gradle", "\n");
+        let ws = Workspace::discover(&dir, &[]);
+        let found: Vec<String> = modules_built_against_own_release(&ws).iter().map(|d| d.strip_prefix(&ws.root).unwrap().to_string_lossy().to_string()).collect();
+        // (the `gr` build's subprojects block reaches its subprojects)
+        assert_eq!(found, vec!["compat", "gr/app", "gr/lib"]);
+        let ws = Workspace::discover(&dir.join("gr"), &[]);
+        assert!(!modules_built_against_own_release(&ws).contains(&ws.root));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn every_managed_version_counts_and_properties_are_resolved_before_comparing() {
+        let dir = std::env::temp_dir().join(format!("grounds-own-release-5-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let write = |rel: &str, text: &str| {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        let found = |root: &Path| -> Vec<String> {
+            let ws = Workspace::discover(root, &[]);
+            let mut v: Vec<String> = modules_built_against_own_release(&ws).iter().map(|d| d.strip_prefix(&ws.root).unwrap().to_string_lossy().to_string()).collect();
+            v.sort();
+            v
+        };
+        let managed = |v: &str| format!("<dependencyManagement><dependencies><dependency><groupId>g</groupId><artifactId>core</artifactId><version>{v}</version></dependency></dependencies></dependencyManagement>");
+        let uses_core = "<dependencies><dependency><groupId>g</groupId><artifactId>core</artifactId></dependency></dependencies>";
+        let child = |dir: &str, parent: &str, rest: &str| format!("<project><parent><groupId>g</groupId><artifactId>{parent}</artifactId><version>3</version><relativePath>../pom.xml</relativePath></parent><artifactId>{dir}</artifactId>{rest}</project>");
+        // the root manages core at its own version 3, a child overrides to 2
+        write("m/pom.xml", &format!("<project><groupId>g</groupId><artifactId>root</artifactId><version>3</version>{}</project>", managed("3")));
+        write("m/core/pom.xml", &child("core", "root", ""));
+        write("m/same/pom.xml", &child("same", "root", uses_core));
+        write("m/old/pom.xml", &child("old", "root", &(managed("2") + uses_core)));
+        assert_eq!(found(&dir.join("m")), vec!["old"]);
+        // an inherited managed version is read in the consumer's properties:
+        // the parent manages core at ${core.version} = 2, a child sets it to 3
+        write("p/pom.xml", &format!("<project><groupId>g</groupId><artifactId>root</artifactId><version>3</version><properties><core.version>2</core.version></properties>{}</project>", managed("${core.version}")));
+        write("p/core/pom.xml", &child("core", "root", ""));
+        write("p/current/pom.xml", &child("current", "root", &format!("<properties><core.version>3</core.version></properties>{uses_core}")));
+        write("p/old/pom.xml", &child("old", "root", uses_core));
+        assert_eq!(found(&dir.join("p")), vec!["old"]);
+        // ${revision}: resolved before the reactor version is compared
+        write("r/pom.xml", "<project><groupId>g</groupId><artifactId>root</artifactId><version>${revision}</version><properties><revision>3</revision><old>2</old></properties></project>");
+        let dep = |a: &str, v: &str| format!("<dependencies><dependency><groupId>g</groupId><artifactId>{a}</artifactId><version>{v}</version></dependency></dependencies>");
+        let rchild = |a: &str, rest: &str| format!("<project><parent><groupId>g</groupId><artifactId>root</artifactId><version>${{revision}}</version></parent><artifactId>{a}</artifactId>{rest}</project>");
+        write("r/core/pom.xml", &rchild("core", ""));
+        write("r/explicit/pom.xml", &rchild("explicit", &dep("core", "3")));
+        write("r/project/pom.xml", &rchild("project", &dep("core", "${project.version}")));
+        write("r/property/pom.xml", &rchild("property", &dep("core", "${old}")));
+        write("r/unknown/pom.xml", &rchild("unknown", &dep("core", "${somewhere.else}")));
+        write("r/literal/pom.xml", &rchild("literal", &dep("core", "2")));
+        assert_eq!(found(&dir.join("r")), vec!["literal", "property", "unknown"]);
+        // two reactor modules with the same coordinates (a jre and an android
+        // flavor): a version of either one is the reactor's
+        write("f/pom.xml", "<project><groupId>g</groupId><artifactId>root</artifactId><version>3-jre</version></project>");
+        write("f/core/pom.xml", "<project><groupId>g</groupId><artifactId>core</artifactId><version>3-jre</version></project>");
+        write("f/android/core/pom.xml", "<project><groupId>g</groupId><artifactId>core</artifactId><version>3-android</version></project>");
+        write("f/testlib/pom.xml", &format!("<project><groupId>g</groupId><artifactId>testlib</artifactId><version>3-jre</version>{}</project>", dep("core", "${project.version}")));
+        write("f/android/testlib/pom.xml", &format!("<project><groupId>g</groupId><artifactId>testlib</artifactId><version>3-android</version>{}</project>", dep("core", "3-android")));
+        write("f/compat/pom.xml", &format!("<project><groupId>g</groupId><artifactId>compat</artifactId><version>3-jre</version>{}</project>", dep("core", "2-jre")));
+        assert_eq!(found(&dir.join("f")), vec!["compat"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_shared_block_applies_its_dependencies_to_the_modules_it_targets() {
+        let dir = std::env::temp_dir().join(format!("grounds-own-release-4-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let write = |rel: &str, text: &str| {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        let found = |root: &Path| -> Vec<String> {
+            let ws = Workspace::discover(root, &[]);
+            let mut v: Vec<String> = modules_built_against_own_release(&ws).iter().map(|d| d.strip_prefix(&ws.root).unwrap().to_string_lossy().to_string()).collect();
+            v.sort();
+            v
+        };
+        // subprojects { }: every module below the root, not the root
+        write("sub/settings.gradle", "include 'core', 'app'\n");
+        write("sub/build.gradle", "allprojects { group = 'org.example' }\nsubprojects {\n  dependencies { implementation 'org.example:core:0.1' }\n}\n");
+        write("sub/app/build.gradle", "\n");
+        write("sub/core/build.gradle", "\n");
+        assert_eq!(found(&dir.join("sub")), vec!["app", "core"]);
+        // allprojects { }: the root too
+        write("all/settings.gradle", "include 'core', 'app'\n");
+        write("all/build.gradle", "allprojects {\n  group = 'org.example'\n  dependencies { api 'org.example:core:0.1' }\n}\n");
+        write("all/app/build.gradle", "\n");
+        write("all/core/build.gradle", "\n");
+        assert_eq!(found(&dir.join("all")), vec!["", "app", "core"]);
+        // a project dependency in a shared block is the sources: nothing
+        write("proj/settings.gradle", "include 'core', 'app'\n");
+        write("proj/build.gradle", "allprojects { group = 'org.example' }\nsubprojects {\n  dependencies { implementation project(':core') }\n}\n");
+        write("proj/app/build.gradle", "\n");
+        write("proj/core/build.gradle", "\n");
+        assert!(found(&dir.join("proj")).is_empty());
+        // configure(...) { }: every module the script could reach
+        write("conf/settings.gradle", "include 'core', 'app'\n");
+        write("conf/build.gradle", "allprojects { group = 'org.example' }\nconfigure(subprojects.findAll { it.name == 'app' }) {\n  dependencies { implementation 'org.example:core:0.1' }\n}\n");
+        write("conf/app/build.gradle", "\n");
+        write("conf/core/build.gradle", "\n");
+        assert_eq!(found(&dir.join("conf")), vec!["", "app", "core"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_index_stamp_is_found_from_a_subdirectory_and_in_a_linked_worktree() {
+        let dir = std::env::temp_dir().join(format!("grounds-index-stamp-{}", std::process::id()));
+        let wt = dir.with_extension("wt");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&wt);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("sub/A.java"), "class A {}").unwrap();
+        let git = |at: &Path, args: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(at).args(["-c", "commit.gpgsign=false", "-c", "core.hooksPath=.no-hooks"]).args(args).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t").env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t").status().is_ok_and(|s| s.success()));
+        git(&dir, &["init", "-q"]);
+        git(&dir, &["add", "."]);
+        git(&dir, &["commit", "-qm", "init"]);
+        git(&dir, &["worktree", "add", "-q", "--detach", wt.to_str().unwrap()]);
+        // the repository's top, a project below it, and a linked worktree
+        for root in [dir.clone(), dir.join("sub"), wt.clone(), wt.join("sub")] {
+            let before = index_stamp(&root);
+            assert!(before.is_some(), "{}", root.display());
+            // a session lists the directory of an atomic save: no git process
+            let root = root.canonicalize().unwrap();
+            let listed = |start: &Path| Workspace::discover_in(&root, Some(start), Some(1), &[]);
+            Workspace::discover(&root, &[]);
+            let start = if root.ends_with("sub") { root.clone() } else { root.join("sub") };
+            let a = start.join("A.java");
+            std::fs::write(start.join("A.java.tmp"), "class A { int x; }").unwrap();
+            std::fs::rename(start.join("A.java.tmp"), &a).unwrap();
+            let runs = git_listings(&root);
+            assert!(listed(&start).files.iter().any(|f| f.path == a));
+            assert_eq!(git_listings(&root), runs, "a listing after a save ran git: {}", root.display());
+            // the index changes: the stamp does (the cached list is read again)
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            std::fs::write(root.join("B.java"), format!("class B {{}} // {}", root.display())).unwrap();
+            git(&root, &["add", "B.java"]);
+            assert_ne!(index_stamp(&root), before, "{}", root.display());
+            // and the next listing reads the list again
+            listed(&start);
+            assert_eq!(git_listings(&root), runs + 1, "the index changed: {}", root.display());
+        }
+        git(&dir, &["worktree", "remove", "--force", wt.to_str().unwrap()]);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&wt);
+    }
+
+    #[test]
+    fn a_tracked_build_file_in_an_ignored_directory_makes_a_module() {
+        let dir = std::env::temp_dir().join(format!("grounds-tracked-module-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (rel, text) in [(".gitignore", "/ignored/\n"), ("pom.xml", "<project/>"), ("ignored/pom.xml", "<project/>"), ("ignored/src/main/java/p/A.java", "package p; class A {}")] {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        }
+        let git = |args: &[&str]| assert!(std::process::Command::new("git").arg("-C").arg(&dir).args(["-c", "commit.gpgsign=false", "-c", "core.hooksPath=.no-hooks"]).args(args).env("GIT_AUTHOR_NAME", "t").env("GIT_AUTHOR_EMAIL", "t@t").env("GIT_COMMITTER_NAME", "t").env("GIT_COMMITTER_EMAIL", "t@t").status().is_ok_and(|s| s.success()));
+        git(&["init", "-q"]);
+        git(&["add", "-f", "."]);
+        git(&["commit", "-qm", "init"]);
+        let ws = Workspace::discover(&dir, &[]);
+        let file = ws.files.iter().find(|f| f.path.ends_with("A.java")).expect("the tracked file");
+        assert_eq!(ws.modules[file.module].name, "ignored");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -368,6 +368,10 @@ mod tests {
         }
         // only exported packages: ct.sym does not carry jdk.internal.misc
         assert!(c.read_class("jdk/internal/misc/Unsafe").is_none());
+        // ...while the image knows every package, internal ones included
+        let ClassContainer::JImage(image) = &c else { unreachable!() };
+        let packages: Vec<&str> = image.all_packages().collect();
+        assert!(packages.contains(&"jdk/internal/misc") && packages.contains(&"com/sun/tools/javac/util") && packages.contains(&"java/lang"), "{}", packages.len());
         // only public classes: ImmutableCollections is package-private; a protected nested class is public
         assert!(c.read_class("java/util/ImmutableCollections").is_none());
         assert!(c.read_class("java/awt/Container$AccessibleAWTContainer").is_some());
