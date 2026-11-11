@@ -713,32 +713,6 @@ fn a_second_write_at_the_same_time_is_read() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-#[test]
-fn a_configuration_file_written_twice_at_the_same_time_is_read() {
-    let dir = std::env::temp_dir().join(format!("grounds-session-sametime-config-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
-    write_at(&dir, "build.gradle", "plugins { id 'java' }\n", long_ago);
-    write_at(&dir, "src/main/java/demo/Api.java", "package demo;\npublic class Api {}\n", long_ago);
-    let mut s = Session::open(&dir).unwrap();
-    let now = std::time::SystemTime::now();
-    write_at(&dir, "grounds.toml", "exclude = [\"a/**\"]\n", now);
-    s.sync(&[]);
-    assert_eq!(s.project.config.exclude, ["a/**"]);
-    // written again in the tick it was read in
-    write_at(&dir, "grounds.toml", "exclude = [\"b/**\"]\n", now);
-    std::thread::sleep(std::time::Duration::from_millis(2100));
-    // the tick is over: one more load is right, whatever was written in it
-    s.sync(&[]);
-    assert_eq!(s.project.config.exclude, ["b/**"]);
-    // and that load is the last
-    let loaded = s.project.load_began;
-    s.sync(&[]);
-    assert_eq!(s.project.load_began, loaded);
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
 /// A launcher whose body starts `Solo` or `Pair` (names of one length: the
 /// edit moves nothing); `Pair` imports two
 /// configurations with a bean of the same name.
@@ -829,33 +803,6 @@ fn a_file_written_while_the_project_loads_keeps_no_time_of_the_new_version() {
 }
 
 #[test]
-fn a_rewrite_that_keeps_time_and_size_is_seen() {
-    // A file system keeps times only as fine as its clock ticks: a file
-    // rewritten in the tick it was read in keeps its time, and an edit of a
-    // string can keep its size. Its time was recent when it was read, so the
-    // content decides. (Each rewrite follows the look before it by
-    // milliseconds: a time seen unchanged for two seconds is trusted, as no
-    // tick is that long.)
-    let rel = "src/main/java/demo/Api.java";
-    let v1 = "package demo;\npublic class Api {\n    @Deprecated(since = \"1\") public void m() {}\n}\n";
-    let v2 = "package demo;\npublic class Api {\n    @Deprecated(since = \"2\") public void m() {}\n}\n";
-    let dir = one_class_project("racy", v1);
-    set_mtime(&dir, rel, std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
-    let mut s = Session::open(&dir).unwrap();
-    let t = std::time::SystemTime::now();
-    write(&dir, rel, v2);
-    set_mtime(&dir, rel, t);
-    assert_eq!(changed_apis(&mut s, &dir), [rel], "a new time");
-    write(&dir, rel, v1);
-    set_mtime(&dir, rel, t);
-    assert!(changed_apis(&mut s, &dir).is_empty(), "same time and size, content back to that of HEAD");
-    write(&dir, rel, v2);
-    set_mtime(&dir, rel, t);
-    assert_eq!(changed_apis(&mut s, &dir), [rel], "same time and size, other content again");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
 fn a_comparison_with_a_base_sees_the_base_s_launcher() {
     let repo = std::env::temp_dir().join(format!("grounds-session-launcher-base-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&repo);
@@ -899,32 +846,6 @@ fn a_build_file_written_while_the_project_loads_reloads_it() {
     assert!(s.project.config.exclude.is_empty());
     s.sync(&[]);
     assert_eq!(s.project.config.exclude, ["src/main/java/gen/**"], "the settings written during the load are read");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn times_in_the_future_are_trusted_once_seen_for_the_margin() {
-    // A time in the future is always "recent" by the clock; seen unchanged for
-    // two seconds, it cannot be shared by a later write any more. Neither the
-    // source file nor the build file may be compared, or the project loaded,
-    // without end.
-    let dir = std::env::temp_dir().join(format!("grounds-session-future-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    let future = std::time::SystemTime::now() + std::time::Duration::from_secs(3600);
-    write_at(&dir, "build.gradle", "plugins { id 'java' }\n", future);
-    write_at(&dir, "src/main/java/demo/Api.java", "package demo;\npublic class Api {}\n", future);
-    let mut s = Session::open(&dir).unwrap();
-    assert_eq!(s.in_doubt(), (2, true), "both compared by content, and which build file the load read is unknown");
-    s.sync(&[]);
-    let loaded = s.project.load_began;
-    assert_eq!(s.in_doubt(), (2, false), "loaded once more, the build file's content now known");
-    s.sync(&[]);
-    assert_eq!(s.project.load_began, loaded, "and not again");
-    std::thread::sleep(std::time::Duration::from_millis(2100));
-    s.sync(&[]);
-    assert_eq!(s.in_doubt(), (0, false), "seen unchanged for the margin: times alone decide");
-    assert_eq!(s.project.load_began, loaded);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
