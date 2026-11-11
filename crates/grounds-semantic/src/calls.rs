@@ -388,6 +388,25 @@ impl<'t> FileModel<'t> {
         }
     }
 
+    /// An unqualified call that resolves only through a static import while an
+    /// enclosing class has a supertype that is not resolved: that supertype
+    /// may declare a method of the name, which javac would bind instead
+    /// (JLS 15.12.1), so which method is called is not known.
+    pub fn import_may_be_shadowed(&self, call: Node<'t>) -> bool {
+        if call.kind() != "method_invocation" || call.field("object").is_some() {
+            return false;
+        }
+        let mut cur = self.enclosing_class_node(call);
+        while let Some(c) = cur {
+            match self.class_name_of_decl(c) {
+                Some(cn) if self.hierarchy_complete(cn) => {}
+                _ => return true,
+            }
+            cur = self.enclosing_class_node(c);
+        }
+        false
+    }
+
     /// Candidate methods for a method invocation and the receiver type.
     pub(crate) fn candidates(&self, call: Node<'t>) -> (Vec<MethodRef>, Option<Ty>, bool) {
         let Some(name_node) = call.field("name") else { return (Vec::new(), None, false) };

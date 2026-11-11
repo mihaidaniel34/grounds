@@ -914,7 +914,9 @@ impl<'a, 't> Analysis<'t> for NullnessAnalysis<'a, 't> {
                 if matches!(self.fm.call_name(e), Some("isNotNull" | "isNotEmpty" | "isNotBlank" | "isInstanceOf"))
                     && self.fm.select_method(e).is_some_and(|c| !c.ambiguous && assertion_library(&c.owner))
                 {
-                    let subject = assert_that_root(self.fm, e.field("object"));
+                    // (and the `assertThat` it starts from, not a project
+                    // method returning the library's assertion for another value)
+                    let subject = assert_that_root(self.fm, e.field("object")).filter(|r| self.fm.select_method(*r).is_some_and(|c| !c.ambiguous && assertion_library(&c.owner)) && !self.fm.import_may_be_shadowed(*r));
                     if let Some(a) = subject.and_then(|o| self.fm.args_of(o).first().map(|a| a.unparen())).filter(|a| a.kind() == "identifier") {
                         if let Some(i) = self.fm.binder.decl_index_of_ref(a) {
                             f.insert(i, Nullness::NonNull);

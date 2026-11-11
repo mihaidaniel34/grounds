@@ -130,3 +130,24 @@ class EqualsByOwner {
         }
     }
 }
+
+// a project `assertThat` returning the library's assertion for another value:
+// the chain ends in AssertJ, but the argument is not its subject
+class WrapperAssertThat {
+    static org.assertj.core.api.ObjectAssert<Object> assertThat(Object value) {
+        return org.assertj.core.api.Assertions.assertThat((Object) "fallback");
+    }
+    void f(Object value) {
+        assertThat(value).isNotNull();
+        if (value == null) { }
+    }
+}
+
+// `requireNonNull` imported statically, in a class whose superclass we cannot
+// see: that superclass may declare its own `requireNonNull`, which javac binds
+class ShadowedImport extends ext.Base {
+    void f(Object value) {
+        Objects.requireNonNull(value);
+        if (value == null) { } // expect
+    }
+}

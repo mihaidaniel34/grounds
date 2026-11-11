@@ -1857,3 +1857,22 @@ fn a_git_listing_that_fails_is_asked_again_once_git_answers() {
     assert!(r.contains("`Hidden` has no method `missing`"), "{r}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_changed_file_whose_parse_is_abandoned_removes_no_class() {
+    // a valid file too costly to parse is not read; the classes it declared
+    // are then unknown, not removed by the change
+    let repo = std::env::temp_dir().join(format!("grounds-cut-off-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&repo);
+    write(&repo, "build.gradle", "plugins { id 'java' }\n");
+    write(&repo, "src/main/java/p/A.java", "package p;\npublic class A {}\n");
+    write(&repo, "src/main/java/q/Use.java", "package q;\nimport p.A;\nclass Use { A a; }\n");
+    git(&repo, &["init", "-q", "-b", "main"]);
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "init"]);
+    write(&repo, "src/main/java/p/A.java", &format!("package p; public class A {{ void padding() {{ {} }} }}\n", ";".repeat(2_500_000)));
+    let mut s = Session::open(&repo).unwrap();
+    let r = s.check(&CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: Some("HEAD".into()) });
+    assert!(r.pending.iter().all(|f| f.rule != "removed-class-still-used") && r.breaks.is_empty(), "{:?} {:?}", r.pending, r.breaks);
+    let _ = std::fs::remove_dir_all(&repo);
+}

@@ -1044,8 +1044,12 @@ impl Session {
         });
         let mut found: Vec<Finding> = now.into_iter().filter(|f| !before.contains(&place_claim(f))).collect();
         // classes the change deleted or renamed: references to them are unknown
-        // types, which the rules leave alone (a missing jar looks the same)
-        let removed: Vec<Name> = base_classes.into_iter().filter(|c| self.project.index.class(c).is_none()).collect();
+        // types, which the rules leave alone (a missing jar looks the same).
+        // A changed file that cannot be read now (syntax errors, a parse
+        // abandoned for taking too long) may still declare any of them, so
+        // then which classes are gone is not known
+        let unreadable = changed.iter().any(|f| self.project.index.file(&path_key(f)).is_some_and(|s| s.has_syntax_errors));
+        let removed: Vec<Name> = if unreadable { Vec::new() } else { base_classes.into_iter().filter(|c| self.project.index.class(c).is_none()).collect() };
         if !removed.is_empty() {
             found.extend(others.par_iter().flat_map_iter(|f| self.removed_class_uses(f, &removed)).collect::<Vec<_>>());
         }

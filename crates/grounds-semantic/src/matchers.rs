@@ -115,6 +115,9 @@ impl<'t> FileModel<'t> {
             }
         }
         match self.select_method(call) {
+            // found through a static import that an unresolved supertype's
+            // method of the same name may hide: not known to be this method
+            Some(c) if c.via_type && self.import_may_be_shadowed(call) => false,
             // a guessed overload may be another class's method altogether
             // (`wait(future)` declared by a superclass next to `Object.wait(long)`)
             // unless every overload it may be is the same class's and matches
