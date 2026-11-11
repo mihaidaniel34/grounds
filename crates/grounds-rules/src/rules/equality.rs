@@ -1165,7 +1165,7 @@ fn identity_fast_path(n: Node<'_>, l: Node<'_>, r: Node<'_>, src: &str) -> bool 
 /// was computed from the other, so the identity test asks whether the
 /// computation handed back the object it was given. `equals()` would answer
 /// a different question (and walk both values to do it).
-fn change_check<'t>(n: Node<'t>, l: Node<'t>, r: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+fn change_check<'t>(_n: Node<'t>, l: Node<'t>, r: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
     let src = cx.src;
     let strip = |e: Node<'t>| {
         let mut e = e.unparen();
