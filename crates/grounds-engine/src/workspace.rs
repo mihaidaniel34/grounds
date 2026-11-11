@@ -38,6 +38,97 @@ pub struct Workspace {
     pub root: PathBuf,
     pub modules: Vec<Module>,
     pub files: Vec<SourceFile>,
+    /// The directories the discovery went into: those whose entries it
+    /// looked at. Adding, removing or renaming an entry changes a directory's
+    /// time, so they are where a source file that appears, or comes back, is
+    /// noticed (see `Session::sync`).
+    pub dirs: Vec<PathBuf>,
+}
+
+/// The files in a directory that decide which files the discovery skips,
+/// besides `.git/info/exclude` and git's global excludes file.
+pub const IGNORE_FILES: &[&str] = &[".gitignore", ".ignore"];
+
+/// The ignore files that apply to a discovery of `root` besides those in the
+/// directories it goes into: those of the directories above it and git's
+/// `info/exclude`, whether they exist or not.
+pub fn outer_ignore_files(root: &Path) -> Vec<PathBuf> {
+    let mut v = Vec::new();
+    for d in root.ancestors() {
+        if d != root {
+            v.extend(IGNORE_FILES.iter().map(|n| d.join(n)));
+        }
+        v.extend(repo_inputs(d));
+    }
+    v
+}
+
+/// What makes `d` the top of a repository for `ignore`, whose ignore files
+/// count only inside one: a `.git` directory (1), a `.git` file naming a
+/// gitdir (2), a `.jj` (4); `None` for none of them. (Through symlinks, as
+/// `ignore` looks.)
+pub fn boundary(d: &Path) -> Option<u8> {
+    let git = std::fs::metadata(d.join(".git")).ok().map_or(0, |m| if m.is_dir() { 1 } else { 2 });
+    let jj = if d.join(".jj").exists() { 4 } else { 0 };
+    (git | jj != 0).then_some(git | jj)
+}
+
+/// The files a repository at `d` reads its excludes through: its
+/// `info/exclude` and, for a `.git` file, that file and the `commondir` of the
+/// gitdir it names, whether they exist or not.
+pub fn repo_inputs(d: &Path) -> Vec<PathBuf> {
+    let mut v = Vec::new();
+    let dot = d.join(".git");
+    if std::fs::metadata(&dot).is_ok_and(|m| m.is_file()) {
+        if let Some(gitdir) = gitdir_of(&dot) {
+            v.push(gitdir.join("commondir"));
+        }
+        v.push(dot);
+    }
+    v.extend(exclude_file(d));
+    v
+}
+
+/// The gitdir a `.git` file names, as `ignore` reads it.
+fn gitdir_of(dot: &Path) -> Option<PathBuf> {
+    let text = std::fs::read_to_string(dot).ok()?;
+    Some(PathBuf::from(text.lines().next()?.strip_prefix("gitdir: ")?))
+}
+
+/// The `info/exclude` that applies to a repository at `d` (see `git_common_dir`).
+pub fn exclude_file(d: &Path) -> Option<PathBuf> {
+    git_common_dir(d).map(|c| c.join("info/exclude"))
+}
+
+/// Whether the entries of directory `d` can be listed and looked at: a
+/// directory that can be read but not entered (no execute permission) lists
+/// names whose files cannot be reached. (The permission is the directory's,
+/// so its first entry tells.)
+pub fn listable(d: &Path) -> bool {
+    match std::fs::read_dir(d) {
+        Ok(mut entries) => match entries.next() {
+            Some(Ok(e)) => std::fs::symlink_metadata(e.path()).is_ok(),
+            Some(Err(_)) => false,
+            None => true,
+        },
+        Err(_) => false,
+    }
+}
+
+/// The git directory whose `info/exclude` applies to a repository at `d`, as
+/// `ignore` finds it: `d/.git`, or for a linked worktree (`.git` a file
+/// naming its `gitdir:`) the common directory that gitdir's `commondir` names.
+/// (A submodule's gitdir has no `commondir`: `ignore` then reads no exclude
+/// file for it, and neither is one watched.)
+fn git_common_dir(d: &Path) -> Option<PathBuf> {
+    let dot = d.join(".git");
+    let meta = std::fs::metadata(&dot).ok()?;
+    if meta.is_dir() {
+        return Some(dot);
+    }
+    let gitdir = gitdir_of(&dot)?;
+    let common = std::fs::read_to_string(gitdir.join("commondir")).ok()?.lines().next()?.to_string();
+    Some(if common.starts_with('.') { gitdir.join(common) } else { PathBuf::from(common) })
 }
 
 const SKIP_DIRS: &[&str] = &["node_modules", ".git", ".gradle", ".idea", "out", ".grounds", "bin"];
@@ -117,16 +208,27 @@ fn tracked_but_ignored(root: &Path) -> Vec<PathBuf> {
 
 impl Workspace {
     pub fn discover(root: &Path, exclude: &[String]) -> Workspace {
+        Self::discover_in(root, None, None, exclude)
+    }
+
+    /// The discovery of the workspace at `root` in one of its directories,
+    /// `start` (canonical), and `max_depth` levels below it: the source files
+    /// and build files there, as `discover` finds them (with the ignore files
+    /// of `start` and the directories above it), and the directories it went
+    /// into.
+    pub fn discover_in(root: &Path, start: Option<&Path>, max_depth: Option<usize>, exclude: &[String]) -> Workspace {
         let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         let mut modules: Vec<Module> = Vec::new();
         let mut files = Vec::new();
+        let mut dirs = Vec::new();
         let excludes: Vec<glob::Pattern> = exclude.iter().filter_map(|g| glob::Pattern::new(g).ok()).collect();
 
-        let walker = ignore::WalkBuilder::new(&root)
+        let walker = ignore::WalkBuilder::new(start.unwrap_or(&root))
             .hidden(true)
             .git_ignore(true)
             .git_exclude(true)
             .parents(true)
+            .max_depth(max_depth)
             .filter_entry(|e| {
                 let name = e.file_name().to_string_lossy();
                 if e.file_type().is_some_and(|t| t.is_dir()) {
@@ -159,6 +261,9 @@ impl Workspace {
         };
         for entry in walker.flatten() {
             let p = entry.path();
+            if entry.file_type().is_some_and(|t| t.is_dir()) {
+                dirs.push(p.to_path_buf());
+            }
             let Some(name) = p.file_name().and_then(|n| n.to_str()) else { continue };
             if entry.file_type().is_some_and(|t| t.is_file()) {
                 match name {
@@ -207,7 +312,7 @@ impl Workspace {
             let kind = classify(&p);
             files.push(SourceFile { path: p, module, kind });
         }
-        Workspace { root, modules, files }
+        Workspace { root, modules, files, dirs }
     }
 
     pub fn module_of(&self, path: &Path) -> Option<usize> {
