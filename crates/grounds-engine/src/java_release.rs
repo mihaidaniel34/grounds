@@ -235,7 +235,15 @@ fn fixture_module(ws: &Workspace, dir: &Path) -> bool {
 /// installed JDK's release.
 pub fn plan(ws: &Workspace, configured: Option<u32>, needs: &[(usize, u32)], installed: Option<u32>) -> ReleasePlan {
     if let Some(r) = configured {
-        return ReleasePlan { load: r, exact: vec![(ws.root.clone(), Some(r))], floors: vec![(ws.root.clone(), Some(r))] };
+        // every module listed, with the one release: the list is also how a
+        // file's module is told from an enclosing module's (`Index::in_module`)
+        let all: Vec<(PathBuf, Option<u32>)> = std::iter::once(ws.root.clone()).chain(ws.modules.iter().map(|m| m.dir.clone())).fold(Vec::new(), |mut v, d| {
+            if !v.iter().any(|(e, _)| *e == d) {
+                v.push((d, Some(r)));
+            }
+            v
+        });
+        return ReleasePlan { load: r, exact: all.clone(), floors: all };
     }
     let mut evidence = module_evidence(ws);
     // the modules that hold code (an aggregator pom without sources says nothing)
@@ -1126,7 +1134,9 @@ mod tests {
         let p = plan(&ws, None, &[(m("a"), 16)], Some(21));
         assert_eq!(exact(&p), vec![("b".to_string(), 17)]);
         // grounds.toml decides for every module
-        assert_eq!(plan(&ws, Some(17), &[], Some(21)), ReleasePlan { load: 17, exact: vec![(ws.root.clone(), Some(17))], floors: vec![(ws.root.clone(), Some(17))] });
+        let p = plan(&ws, Some(17), &[], Some(21));
+        assert_eq!((p.load, p.exact.len(), p.floors.len()), (17, 4, 4));
+        assert!(p.exact.iter().chain(&p.floors).all(|(_, r)| *r == Some(17)));
         // every module exact: the highest of them
         std::fs::write(dir.join("c/build.gradle"), "compileJava { options.release = 8 }\n").unwrap();
         let ws = Workspace::discover(&dir, &[]);
