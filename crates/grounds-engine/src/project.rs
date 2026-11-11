@@ -436,8 +436,21 @@ impl FileStamp {
         }
         let Ok(meta) = std::fs::metadata(path) else { return true };
         let Some((mtime, ctime, mode, size)) = attrs(&meta) else { return true };
-        if (mtime, ctime, mode, size) != (self.mtime, self.ctime, self.mode, self.size) {
+        if (mtime, mode, size) != (self.mtime, self.mode, self.size) {
             return true;
+        }
+        if ctime != self.ctime {
+            // only the change time moved (a hard link, `chown`, an ACL, an
+            // extended attribute): a file whose content is still read as it
+            // was is the same file. (Not a directory: whether it can be
+            // entered is not in its names, and listing it again is cheap.)
+            if meta.is_dir() || self.hash.is_none() || content_of(path, false).0 != self.hash {
+                return true;
+            }
+            self.ctime = ctime;
+            self.seen = Instant::now();
+            self.racy = recent(self.time(), clock);
+            return false;
         }
         if !self.racy {
             return false;
@@ -535,7 +548,21 @@ impl Walk {
         };
         let dirs: rustc_hash::FxHashMap<PathBuf, FileStamp> = dirs.par_iter().filter_map(|d| FileStamp::of(d, false).map(|s| (d.clone(), dir_mark(d, s)))).collect();
         let gits: rustc_hash::FxHashMap<PathBuf, u8> = dirs.par_iter().filter_map(|(d, _)| boundary(d).map(|k| (d.clone(), k))).collect();
-        let mut ignores: Vec<(PathBuf, Option<FileStamp>)> = dirs.par_iter().flat_map_iter(|(d, _)| IGNORE_FILES.iter().filter_map(|n| ignore(&d.join(n)).map(|s| (d.join(n), Some(s))))).collect();
+        // (an entry that is there but cannot be looked at, a symlink whose
+        // target is gone or out of reach, is kept without a stamp: a fresh
+        // load reads none, and the first sync that can look at it walks)
+        let mut ignores: Vec<(PathBuf, Option<FileStamp>)> = dirs
+            .par_iter()
+            .flat_map_iter(|(d, _)| {
+                IGNORE_FILES.iter().filter_map(|n| {
+                    let p = d.join(n);
+                    match ignore(&p) {
+                        Some(s) => Some((p, Some(s))),
+                        None => std::fs::symlink_metadata(&p).is_ok().then_some((p, None)),
+                    }
+                })
+            })
+            .collect();
         // what every repository the walk went into reads its excludes
         // through, there or not
         let mut listed: Vec<PathBuf> = gits.keys().flat_map(|d| repo_inputs(d)).collect();

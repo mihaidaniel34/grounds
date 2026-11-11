@@ -1500,6 +1500,183 @@ fn an_ignore_file_that_stays_unreadable_is_read_again_but_not_walked_for() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The modules a session lays out, with their build systems.
+fn modules_of(s: &Session) -> Vec<String> {
+    let mut v: Vec<String> = s.project.workspace.modules.iter().map(|m| format!("{} {:?}", m.name, m.build_system)).collect();
+    v.sort();
+    v
+}
+
+/// After `what`, the session holds what a fresh one holds, modules included.
+fn laid_out_as_fresh(s: &mut Session, dir: &Path, what: &str) {
+    holds_as_fresh(s, dir, what);
+    assert_eq!(modules_of(s), modules_of(&Session::open(dir).unwrap()), "after {what}, the session must lay out the modules a fresh load finds");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_symlinked_ignore_file_whose_target_comes_within_reach_is_read() {
+    // Review P1: `.ignore` is a symlink to a file outside the workspace, in a
+    // directory that cannot be entered. A fresh load reads no ignore file
+    // there; once the target can be reached, it applies. Nothing in the
+    // workspace changes when it does.
+    if !permissions_bind("a_symlinked_ignore_file_whose_target_comes_within_reach_is_read") {
+        return;
+    }
+    let dir = restored_project("symlinkignore");
+    let outside = dir.with_extension("outside");
+    let _ = std::fs::remove_dir_all(&outside);
+    write(&outside, "locked/rules", "Req.java\n");
+    // (times first: setting one follows a symlink)
+    set_tree_mtime(&dir, ".", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
+    std::os::unix::fs::symlink(outside.join("locked/rules"), dir.join(".ignore")).unwrap();
+    chmod(&outside, "locked", 0o000);
+    // (past the margin: the root, whose time the link just moved, is not
+    // listed again, and nothing in the workspace says the target changed)
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    let mut s = settled(&dir);
+    // (and past the margin again: the load wrote its cache in the root)
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    s.sync(&[]);
+    let began = s.project.load_began;
+    let walks = s.full_walks();
+    s.sync(&[]);
+    assert_eq!(s.full_walks(), walks, "nothing changed: no walk");
+    assert!(s.project.index.class_exists("demo.Req"));
+    chmod(&outside, "locked", 0o755);
+    holds_as_fresh(&mut s, &dir, "the target of a symlinked ignore file came within reach");
+    holds_as_fresh(&mut s, &dir, "a second sync");
+    assert!(!s.project.index.class_exists("demo.Req"));
+    chmod(&outside, "locked", 0o000);
+    holds_as_fresh(&mut s, &dir, "the target went out of reach again");
+    holds_as_fresh(&mut s, &dir, "a second sync");
+    assert!(s.project.index.class_exists("demo.Req"));
+    no_reload(&s, began, "the target's permissions");
+    chmod(&outside, "locked", 0o755);
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&outside);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_dangling_ignore_symlink_in_a_directory_that_cannot_be_listed_walks_nothing() {
+    // Review P4: the entry is there, what it names is not. It is no ignore
+    // file for a fresh load, and no reason to walk the workspace at every
+    // sync (the directory, which cannot be listed, is listed at every sync).
+    if !permissions_bind("a_dangling_ignore_symlink_in_a_directory_that_cannot_be_listed_walks_nothing") {
+        return;
+    }
+    let dir = restored_project("danglingignore");
+    std::os::unix::fs::symlink("missing", dir.join("src/main/java/demo/sub/.ignore")).unwrap();
+    chmod(&dir, "src/main/java/demo/sub", 0o111);
+    let mut s = settled(&dir);
+    let walks = s.full_walks();
+    for i in 0..5 {
+        holds_as_fresh(&mut s, &dir, &format!("unchanged sync {i}"));
+    }
+    assert_eq!(s.full_walks(), walks, "nothing changed: no walk of the workspace");
+    chmod(&dir, "src/main/java/demo/sub", 0o755);
+    holds_as_fresh(&mut s, &dir, "the directory could be listed again");
+    assert!(s.project.index.class_exists("demo.sub.Sub"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_module_whose_directory_can_no_longer_be_listed_is_no_module() {
+    // Review P2: `lib` can be entered but not listed. Its build file is still
+    // there by path, but a fresh load finds no build file in it: no module
+    // `lib`. A module without sources (nothing else changes, and nothing
+    // else reloads the project), then one whose only source git tracks
+    // though ignored (found by path either way: it moves to the root module).
+    if !permissions_bind("a_module_whose_directory_can_no_longer_be_listed_is_no_module") {
+        return;
+    }
+    for tracked in [false, true] {
+        let dir = restored_project(&format!("unlistablemodule{tracked}"));
+        write(&dir, "lib/build.gradle", "plugins { id 'java-library' }\n");
+        if tracked {
+            write(&dir, "lib/src/main/java/lib/L.java", "package lib;\npublic class L {}\n");
+            write(&dir, ".gitignore", "L.java\n");
+            git(&dir, &["add", "-f", ".gitignore", "lib"]);
+            git(&dir, &["commit", "-qm", "lib"]);
+        }
+        set_tree_mtime(&dir, ".", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
+        let mut s = settled(&dir);
+        assert!(modules_of(&s).iter().any(|m| m.starts_with("lib ")));
+        chmod(&dir, "lib", 0o111);
+        laid_out_as_fresh(&mut s, &dir, &format!("a module directory could no longer be listed (tracked source: {tracked})"));
+        laid_out_as_fresh(&mut s, &dir, "a second sync");
+        assert!(!modules_of(&s).iter().any(|m| m.starts_with("lib ")));
+        chmod(&dir, "lib", 0o755);
+        laid_out_as_fresh(&mut s, &dir, "the module directory could be listed again");
+        laid_out_as_fresh(&mut s, &dir, "a second sync");
+        assert!(modules_of(&s).iter().any(|m| m.starts_with("lib ")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_module_directory_replaced_by_a_symlink_is_no_module() {
+    // The discovery does not follow symlinks; the build file is still found
+    // through one by path, which must not keep the module. (A module without
+    // sources: none that go would reload the project.)
+    let dir = restored_project("symlinkmodule");
+    let away = dir.with_extension("away");
+    let _ = std::fs::remove_dir_all(&away);
+    std::fs::create_dir_all(&away).unwrap();
+    write(&dir, "lib/build.gradle", "plugins { id 'java-library' }\n");
+    set_tree_mtime(&dir, ".", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
+    let mut s = settled(&dir);
+    std::fs::rename(dir.join("lib"), away.join("lib")).unwrap();
+    std::os::unix::fs::symlink(away.join("lib"), dir.join("lib")).unwrap();
+    laid_out_as_fresh(&mut s, &dir, "a module directory replaced by a symlink to it");
+    assert!(!modules_of(&s).iter().any(|m| m.starts_with("lib ")));
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&away);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_tracked_ignored_source_replaced_by_a_symlink_is_gone_for_both() {
+    // Review P3: git still tracks the path, but it is a symlink now; the walk
+    // follows none, nor does the list of tracked files a fresh load reads.
+    let dir = restored_project("trackedsymlink");
+    let away = dir.with_extension("away");
+    let _ = std::fs::remove_dir_all(&away);
+    write(&away, "Gen.java", "package demo;\npublic class Gen {}\n");
+    write(&dir, ".gitignore", "/gen/\n");
+    write(&dir, "gen/demo/Gen.java", "package demo;\npublic class Gen {}\n");
+    git(&dir, &["add", "-f", ".gitignore", "gen/demo/Gen.java"]);
+    git(&dir, &["commit", "-qm", "generated"]);
+    set_tree_mtime(&dir, ".", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    let mut s = Session::open(&dir).unwrap();
+    assert!(s.project.index.class_exists("demo.Gen"));
+    std::fs::remove_file(dir.join("gen/demo/Gen.java")).unwrap();
+    std::os::unix::fs::symlink(away.join("Gen.java"), dir.join("gen/demo/Gen.java")).unwrap();
+    holds_as_fresh(&mut s, &dir, "a tracked, ignored source replaced by a symlink");
+    holds_as_fresh(&mut s, &dir, "a second sync");
+    assert!(!s.project.index.class_exists("demo.Gen"));
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&away);
+}
+
+#[test]
+fn a_hard_link_to_a_build_file_does_not_reload_the_project() {
+    // Review P7: a link changes the build file's change time, and nothing
+    // that a load reads.
+    let dir = restored_project("hardlink");
+    let mut s = Session::open(&dir).unwrap();
+    s.sync(&[]);
+    let began = s.project.load_began;
+    std::fs::hard_link(dir.join("build.gradle"), dir.join("build.link")).unwrap();
+    holds_as_fresh(&mut s, &dir, "a hard link to the build file");
+    assert_eq!(s.project.load_began, began, "the same build file: no reload");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[cfg(unix)]
 #[test]
 fn a_source_file_whose_permissions_change_is_held_as_a_fresh_load_holds_it() {

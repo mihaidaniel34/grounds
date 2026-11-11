@@ -406,7 +406,9 @@ impl Workspace {
                     dirs.push(a.to_path_buf());
                 }
             }
-            if max_depth.is_some_and(|d| below.components().count() > d) || !p.is_file() {
+            // (not through a symlink, which the walk does not follow either,
+            // and which a sync takes as gone)
+            if max_depth.is_some_and(|d| below.components().count() > d) || !std::fs::symlink_metadata(&p).is_ok_and(|m| m.is_file()) {
                 continue;
             }
             match name {
