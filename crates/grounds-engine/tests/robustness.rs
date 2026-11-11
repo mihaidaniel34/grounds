@@ -200,9 +200,10 @@ fn a_package_name_of_half_a_million_segments_is_not_indexed() {
 
 #[test]
 fn a_source_file_replaced_by_a_pipe_is_refused_and_not_taken_as_read() {
-    // fsutil refuses a pipe; for a source file the session already knows,
-    // that is a read that failed: no stub, and tried again at every sync
-    // until a read succeeds, never a stamp that vouches for it
+    // A pipe is no source file: a fresh load does not list it, so for the
+    // session the file is gone (never read, which would block, nor kept as
+    // one to read again); a regular file there again is found by the time
+    // of its directory, and read
     let dir = project("source-fifo", &[("src/main/java/p/B.java", "package p;\nclass B {}\n"), ("src/main/java/p/Pipe.java", "package p;\nclass Pipe {}\n")]);
     // old times: nothing here loads the project again, which would not list the pipe at all
     let old = std::time::SystemTime::now() - Duration::from_secs(3600);
@@ -231,9 +232,8 @@ fn a_source_file_replaced_by_a_pipe_is_refused_and_not_taken_as_read() {
     let got = rx.recv_timeout(Duration::from_secs(60));
     assert!(got.is_ok(), "a session blocked on a pipe");
     let ((stub, unread), still, back, none) = got.unwrap();
-    assert!(!stub, "no stub for a file that cannot be read, as a fresh load");
-    assert_eq!(unread, [pipe.clone()]);
-    assert_eq!(still, [pipe], "still unread at the next sync");
-    assert!(back && none.is_empty(), "read once it can be");
+    assert!(!stub, "no stub for a pipe, as a fresh load");
+    assert!(unread.is_empty() && still.is_empty(), "a pipe is no file to read again: {unread:?} {still:?} ({})", pipe.display());
+    assert!(back && none.is_empty(), "read once it is a file again");
     let _ = std::fs::remove_dir_all(&dir);
 }
