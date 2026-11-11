@@ -1177,30 +1177,51 @@ fn change_check<'t>(n: Node<'t>, l: Node<'t>, r: Node<'t>, cx: &Ctx<'_, 't>) -> 
         }
         e
     };
-    // a call that was given `of` as an argument
+    // a call that was given `of` as an argument, and that may hand it back:
+    // not a method of this file whose every `return` makes a new object
     let received = |e: Node<'t>, of: &str| {
         let e = strip(e);
-        e.kind() == "method_invocation" && cx.fm.args_of(e).iter().any(|a| normalized(strip(*a), src) == of)
+        e.kind() == "method_invocation" && cx.fm.args_of(e).iter().any(|a| normalized(strip(*a), src) == of) && !returns_new(e, cx)
     };
     for (a, b) in [(l, r), (r, l)] {
         let of = normalized(strip(b), src);
         if received(a, &of) {
             return true;
         }
-        // a local that started out as the other operand or as such a call
+        // a local that started out as the other operand or as such a call,
+        // and that every later assignment keeps one (`m = visit(m, ctx)` in
+        // a loop): an assignment of anything else (`r = new BigDecimal(..)`)
+        // means the comparison may not ask what the initializer did
         let a = strip(a);
         if a.kind() != "identifier" || cx.fm.field_ref(a).is_some() {
             continue;
         }
-        let Some(m) = enclosing_method_decl(n).or_else(|| cx.owning_callable(n)) else { continue };
-        let mut named = m.descendants().filter(|d| d.kind() == "variable_declarator" && d.start_byte() < n.start_byte() && d.field("name").is_some_and(|x| cx.text(x) == cx.text(a)));
-        if let (Some(d), None) = (named.next(), named.next()) {
-            if d.field("value").is_some_and(|v| normalized(strip(v), src) == of || received(v, &of)) {
-                return true;
-            }
+        let Some(i) = cx.fm.local_ref(a) else { continue };
+        let name = normalized(a, src);
+        let Some(init) = cx.fm.binder.decls[i].decl_node.field("value") else { continue };
+        let keeps = |v: Node<'t>| normalized(strip(v), src) == of || received(v, &of);
+        let assigned = cx.fm.binder.uses[i].iter().filter_map(|u| u.parent_unparen().filter(|p| p.kind() == "assignment_expression" && p.field("left").map(|l| l.unparen()) == Some(*u)));
+        if keeps(init) && assigned.into_iter().all(|p| op(p) == "=" && p.field("right").is_some_and(|v| keeps(v) || received(v, &name))) {
+            return true;
         }
     }
     false
+}
+
+/// A call of a method declared in this file whose every `return` gives a
+/// new object (`return new BigDecimal(v.toString());`): what it returns is
+/// never the object it was given.
+fn returns_new<'t>(call: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+    let Some(c) = cx.fm.select_method(call).filter(|c| !c.ambiguous) else { return false };
+    let Some(range) = c.method.range else { return false };
+    let decl = cx.fm.root().descendants().find(|d| {
+        d.kind() == "method_declaration"
+            && d.field("name").is_some_and(|x| (x.start_byte() as u32, x.end_byte() as u32) == range)
+            && cx.fm.enclosing_class(*d).is_some_and(|k| k.name == c.owner)
+    });
+    let Some(body) = decl.and_then(|d| d.field("body")) else { return false };
+    let returns: Vec<Node<'t>> = body.descendants().filter(|r| r.kind() == "return_statement" && enclosing_method_decl(*r) == decl && cx.owning_callable(*r) == decl).collect();
+    !returns.is_empty() && returns.iter().all(|r| r.first_kid().is_some_and(|v| v.unparen().kind() == "object_creation_expression"))
 }
 
 declare_rule!(CompareToReturnsMinValue {

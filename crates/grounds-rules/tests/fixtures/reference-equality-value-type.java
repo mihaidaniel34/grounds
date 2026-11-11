@@ -62,6 +62,27 @@ class Rewriter {
         java.math.BigDecimal r = round(v);
         return r == v;
     }
+    // a helper that always makes a new object: never the same one
+    static java.math.BigDecimal copy(java.math.BigDecimal v) { return new java.math.BigDecimal(v.toString()); }
+    boolean sameValue(java.math.BigDecimal v) {
+        java.math.BigDecimal r = copy(v);
+        return r == v; // expect
+    }
+    boolean sameValueInline(java.math.BigDecimal v) {
+        return copy(v) == v; // expect
+    }
+    // a local replaced after it started out as the other operand
+    boolean reassigned(java.math.BigDecimal v) {
+        java.math.BigDecimal r = v;
+        r = new java.math.BigDecimal(v.toString());
+        return r == v; // expect
+    }
+    // a helper that may hand its argument back stays silent
+    java.math.BigDecimal maybe(java.math.BigDecimal v) { return v.signum() == 0 ? v : new java.math.BigDecimal(v.toString()); }
+    boolean unknown(java.math.BigDecimal v) {
+        java.math.BigDecimal r = maybe(v);
+        return r == v;
+    }
     // but not against another value
     boolean libraryUnrelated(java.math.BigDecimal v, java.math.BigDecimal w) {
         java.math.BigDecimal r = round(v);
