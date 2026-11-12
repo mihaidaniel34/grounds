@@ -34,6 +34,9 @@ use grounds_index::*;
 use grounds_syntax::{Node, NodeExt};
 use std::sync::Arc;
 
+#[cfg(test)]
+mod tests;
+
 /// What a compile-break finding asserts, in the words `grounds changed`
 /// compares before and after an edit. Only this module makes one, each from
 /// a proof that the world it speaks of is closed.
