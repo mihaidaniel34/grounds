@@ -10,6 +10,16 @@ use grounds_index::*;
 use grounds_syntax::{Node, NodeExt};
 use std::sync::Arc;
 
+/// What a simple name used as a case label denotes (see `simple_case_label`).
+enum CaseLabel {
+    /// the constant of the selector's enum
+    Constant(FieldRef),
+    /// an expression name, resolved as anywhere else
+    Expression,
+    /// the selector's type is unknown, or its enum lacks the constant
+    Unknown,
+}
+
 pub fn binary_promotion(a: Prim, b: Prim) -> Prim {
     if a == Prim::Double || b == Prim::Double {
         Prim::Double
@@ -450,9 +460,47 @@ impl<'t> FileModel<'t> {
         }
     }
 
+    /// What a simple name that is a case label of a switch means, by the
+    /// type of the switch's selector (JLS 14.11.1). On an enum, the label is
+    /// the name of one of its constants, whatever else the name means in
+    /// scope (a field, a local, a static import): an identifier is never
+    /// resolved as an expression there. On another known type it is an
+    /// ordinary constant expression. With the selector's type unknown it
+    /// may be either. `None` for a node that is not such a label. A
+    /// qualified label (`case Kind.ON`, which Java 21 allows on a selector
+    /// of any type the constant's enum is assignable to) names its enum
+    /// itself and is resolved as the qualified name it is.
+    fn simple_case_label(&self, n: Node<'t>) -> Option<CaseLabel> {
+        if n.kind() != "identifier" {
+            return None;
+        }
+        let label = self.parent_of(n).filter(|p| p.kind() == "switch_label")?;
+        let switch = self.parent_of(label).and_then(|g| self.parent_of(g)).and_then(|b| self.parent_of(b)).filter(|s| s.kind() == "switch_expression")?;
+        let Some(selector) = switch.field("condition") else { return Some(CaseLabel::Unknown) };
+        let name = n.text(self.src);
+        Some(match self.type_of(selector) {
+            Ty::Prim(_) => CaseLabel::Expression,
+            Ty::Class { name: cn, .. } => match self.class(&cn) {
+                // an enum's constants are declared in it, never inherited
+                Some(c) if c.is_enum() => match c.fields.iter().find(|f| *f.name == *name && f.flags.has(Flags::ENUM_CONSTANT)) {
+                    Some(f) => CaseLabel::Constant(FieldRef { owner: c.name.clone(), field: f.clone() }),
+                    None => CaseLabel::Unknown,
+                },
+                Some(_) => CaseLabel::Expression,
+                None => CaseLabel::Unknown,
+            },
+            _ => CaseLabel::Unknown,
+        })
+    }
+
     fn compute_symbol(&self, n: Node<'t>) -> Option<Symbol<'t>> {
         match n.kind() {
             "identifier" => {
+                match self.simple_case_label(n) {
+                    Some(CaseLabel::Constant(f)) => return Some(Symbol::Field(f)),
+                    Some(CaseLabel::Unknown) => return None,
+                    Some(CaseLabel::Expression) | None => {}
+                }
                 if let Some(i) = self.binder.decl_index_of_ref(n) {
                     return Some(Symbol::Local(i, self.binder.decls[i].clone()));
                 }
@@ -651,6 +699,15 @@ impl<'t> FileModel<'t> {
         if n.kind() == "identifier" {
             if self.shadow_unknown.contains(&n.id()) {
                 doubt::note(Doubt::IncompleteHierarchy);
+            }
+            // a case label names a local only where it is an expression
+            match self.simple_case_label(n) {
+                Some(CaseLabel::Constant(_)) => return None,
+                Some(CaseLabel::Unknown) => {
+                    doubt::note(Doubt::UnresolvedName);
+                    return None;
+                }
+                Some(CaseLabel::Expression) | None => {}
             }
             self.binder.decl_index_of_ref(n)
         } else {

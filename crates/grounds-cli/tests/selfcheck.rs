@@ -46,17 +46,28 @@ fn a_disagreement_exits_2() {
         eprintln!("skipped: no javac (set JAVA_HOME or put javac on PATH)");
         return;
     };
-    let dir = project("disagree", &[("src/main/java/demo/Signal.java", SIGNAL)]);
-    let out = Command::new(javac).arg("--release").arg("17").arg("-d").arg(dir.join("target/classes")).arg(dir.join("src/main/java/demo/Signal.java")).env_remove("JAVA_TOOL_OPTIONS").output().unwrap();
+    let lib = "src/main/java/demo/Lib.java";
+    let caller = "src/main/java/demo/Caller.java";
+    let dir = project(
+        "disagree",
+        &[
+            (lib, "package demo;\npublic class Lib {\n    public void put(Object o) {}\n    public void put(String s) {}\n}\n"),
+            (caller, "package demo;\nclass Caller {\n    void m(Lib lib) {\n        lib.put(\"x\");\n    }\n}\n"),
+        ],
+    );
+    let out = Command::new(javac).arg("--release").arg("17").arg("-d").arg(dir.join("target/classes")).arg(dir.join(lib)).arg(dir.join(caller)).env_remove("JAVA_TOOL_OPTIONS").output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    // (the enum case label grounds resolves to the field in scope: see
-    // an_enum_case_label_resolved_to_a_field_in_scope_is_reported)
+    let (code, out) = selfcheck(&dir, &["--format", "json"]);
+    assert_eq!(code, 0, "{out}");
+    // renamed after the build: grounds resolves the unedited call to
+    // put(Object), the class file names put(String)
+    std::fs::write(dir.join(lib), "package demo;\npublic class Lib {\n    public void put(Object o) {}\n    public void putText(String s) {}\n}\n").unwrap();
     let (code, out) = selfcheck(&dir, &["--format", "json"]);
     assert_eq!(code, 2, "{out}");
     let v: serde_json::Value = serde_json::from_str(&out).unwrap();
-    assert_eq!(v["disagreements"][0]["path"], "src/main/java/demo/Signal.java");
-    assert_eq!(v["disagreements"][0]["line"], 7);
-    assert_eq!(v["categories"]["fields"]["disagree"], 1);
+    assert_eq!(v["disagreements"][0]["path"], caller);
+    assert_eq!(v["disagreements"][0]["line"], 4);
+    assert_eq!(v["categories"]["calls"]["disagree"], 1);
     assert_eq!(v["modules"][0]["source_sets"][0]["classes"], "target/classes");
     let _ = std::fs::remove_dir_all(&dir);
 }

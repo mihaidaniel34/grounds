@@ -243,15 +243,14 @@ fn maven_and_gradle_layouts_are_both_found() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// A grounds error selfcheck must report: a case label of an enum switch
-/// names the enum's constant (JLS 14.11.1), whatever field of that name is
-/// in scope; grounds resolves it to the field. Reduced from the gate's
-/// baseline entry `io.projectreactor:reactor-core:3.6.1 fields other owner
-/// reactor/core/publisher/ImmutableSignal.java:142 ON_COMPLETE`
-/// (scripts/bytecode_oracle.baseline.json). When that is fixed, this test
-/// fails: invert it (no disagreement), as the baseline entry goes.
+/// A case label of an enum switch names the enum's constant (JLS 14.11.1),
+/// whatever field of that name is in scope, and grounds resolves it so: the
+/// class file agrees. Reduced from reactor-core's
+/// reactor/core/publisher/ImmutableSignal.java:142 `ON_COMPLETE`, which
+/// grounds resolved to the field, and the gate's baseline listed, until
+/// that was fixed.
 #[test]
-fn an_enum_case_label_resolved_to_a_field_in_scope_is_reported() {
+fn an_enum_case_label_agrees_with_the_class_file() {
     let javac = javac_or_skip!();
     let dir = project(
         "enum-case",
@@ -282,10 +281,7 @@ fn an_enum_case_label_resolved_to_a_field_in_scope_is_reported() {
     compile(&javac, &dir, "src/main/java", "target/classes", None);
     let r = check(&dir);
     let text = r.text();
-    let lines: Vec<String> = r.found.iter().map(|f| f.line()).collect();
-    assert_eq!(lines, ["src/main/java/demo/Signal.java:9: ON_COMPLETE: grounds static demo.Signal.ON_COMPLETE:Ldemo/Signal;, the class file GetStatic demo.SignalType.ON_COMPLETE:Ldemo/SignalType; (other owner)"], "{text}");
-    assert!(!r.found[0].possibly_stale);
-    assert_eq!(r.outcome(), grounds_engine::daemon::Outcome::Problems);
-    assert!(text.contains("\ndisagreements\nfields (1)\n  src/main/java/demo/Signal.java:9: ON_COMPLETE"), "{text}");
+    assert!(r.found.is_empty(), "{text}");
+    assert_eq!(r.outcome(), grounds_engine::daemon::Outcome::Clean);
     let _ = std::fs::remove_dir_all(&dir);
 }

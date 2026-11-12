@@ -1530,3 +1530,84 @@ fn asking_the_type_of_a_declarations_name_leaves_the_locals_type_alone() {
         assert_eq!(fm.type_of(used), Ty::int(), "{name} where it is used");
     }
 }
+
+/// What the name after each `/*F*/` marker refers to: `Owner.field` for a
+/// field, `local` for a local, `none` when it does not resolve.
+fn names_of(src: &str) -> Vec<String> {
+    let pf = ParsedFile::parse(src);
+    let mut idx = Index::new(jdk());
+    idx.set_file(Arc::from("T.java"), Arc::new(extract(&pf)));
+    let fm = FileModel::new(&pf, &idx, Arc::from("T.java"));
+    src.match_indices("/*F*/")
+        .map(|(i, m)| {
+            let rest = &src[i + m.len()..];
+            let at = i + m.len() + rest.len() - rest.trim_start().len();
+            // the largest name starting there (`Kind.ON`, not `Kind`)
+            let n = pf
+                .root()
+                .descendants()
+                .filter(|n| n.start_byte() == at && matches!(n.kind(), "identifier" | "field_access" | "scoped_identifier"))
+                .max_by_key(|n| n.end_byte())
+                .expect("name after marker");
+            match fm.symbol(n) {
+                Some(Symbol::Field(f)) => format!("{}.{}", simple_name_of(&f.owner), f.field.name),
+                Some(Symbol::Local(..)) => "local".to_string(),
+                Some(Symbol::Type(t)) => format!("type {t}"),
+                Some(Symbol::Package(p)) => format!("package {p}"),
+                None => "none".to_string(),
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn a_case_label_of_an_enum_switch_names_the_enums_constant() {
+    // a field, a static import and a local of the label's name are in scope:
+    // on an enum selector the label is the enum's constant all the same
+    let src = "import static java.util.concurrent.TimeUnit.SECONDS;
+         enum Signal { ON_COMPLETE, ON_NEXT, SECONDS }
+         enum Kind { ON_NEXT, OFF }
+         class T {
+           static final Object ON_COMPLETE = null; static final int ON_NEXT = 1; static final int TWO = 2;
+           int m(Signal s, Kind k, int i, java.util.concurrent.TimeUnit u, Missing x) {
+             final int OFF = 3;
+             switch (s) { case /*F*/ ON_COMPLETE: break; case /*F*/ ON_NEXT, /*F*/ SECONDS: break; default: }
+             switch (s) {
+               case /*F*/ ON_NEXT -> { switch (k) { case /*F*/ ON_NEXT -> {} case /*F*/ OFF -> {} } }
+               default -> {}
+             }
+             int r = switch (k) { case /*F*/ OFF -> 1; case /*F*/ ON_NEXT -> 2; };
+             switch (i) { case /*F*/ ON_NEXT: case /*F*/ TWO: case /*F*/ OFF: break; }
+             switch (u) { case /*F*/ SECONDS: break; default: }
+             switch (x) { case /*F*/ ON_NEXT: break; }
+             switch (missing()) { case /*F*/ ON_COMPLETE: break; }
+             Object o = s;
+             switch (o) { case /*F*/ Kind.OFF -> {} case /*F*/ Signal.ON_NEXT -> {} default -> {} }
+             return r + /*F*/ ON_NEXT;
+           } }";
+    assert_eq!(
+        names_of(src),
+        vec![
+            "Signal.ON_COMPLETE",
+            "Signal.ON_NEXT",
+            "Signal.SECONDS",
+            "Signal.ON_NEXT",
+            "Kind.ON_NEXT",
+            "Kind.OFF",
+            "Kind.OFF",
+            "Kind.ON_NEXT",
+            // an int selector: ordinary constant expressions
+            "T.ON_NEXT",
+            "T.TWO",
+            "local",
+            "TimeUnit.SECONDS",
+            // selectors of unknown type: the label is unresolved, not a field in scope
+            "none",
+            "none",
+            // Java 21: qualified enum constants, on a selector of another type
+            "Kind.OFF",
+            "Signal.ON_NEXT",
+            "T.ON_NEXT",
+        ]
+    );
+}
