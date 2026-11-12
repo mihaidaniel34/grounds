@@ -264,6 +264,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "grounds-classfile",
  "grounds-di",
  "grounds-engine",
  "grounds-index",
