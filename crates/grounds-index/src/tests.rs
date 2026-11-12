@@ -259,6 +259,25 @@ fn without_a_jdk_no_hierarchy_is_complete() {
 }
 
 #[test]
+fn a_hierarchy_with_members_lombok_adds_unmodelled_is_not_complete() {
+    let idx = index_of(&[(
+        "p/D.java",
+        "package p; import lombok.experimental.Delegate; import lombok.Data; import java.util.List;
+         class Delegating { @Delegate List<String> items; class Inner { } static class Nested { class Deeper { } } }
+         class Sub extends Delegating { }
+         interface Port { }
+         class Outside implements Port { Delegating d; }
+         @Data class Known { int a; class Inner { } }",
+    )]);
+    for n in ["p.Delegating", "p.Sub", "p.Delegating$Inner", "p.Delegating$Nested", "p.Delegating$Nested$Deeper"] {
+        assert!(!idx.hierarchy_complete(n), "{n} complete");
+    }
+    for n in ["p.Port", "p.Outside", "p.Known", "p.Known$Inner"] {
+        assert!(idx.hierarchy_complete(n), "{n} not complete");
+    }
+}
+
+#[test]
 fn release_newer_than_the_jdk_leaves_jdk_subclasses_incomplete() {
     let Some(home) = grounds_classfile::find_java_home() else { return };
     let Some(installed) = grounds_classfile::jdk_feature_release(&home) else { return };

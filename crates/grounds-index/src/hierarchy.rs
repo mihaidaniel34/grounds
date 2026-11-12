@@ -660,7 +660,26 @@ pub trait ClassLookup {
         found
     }
 
-    /// Whether the full supertype closure of `name` is known. Every type has
+    /// Whether the model may lack members of class `name`: an annotation
+    /// processor adds members to it that the Lombok model does not reproduce
+    /// (`Flags::MEMBERS_UNKNOWN`: `@Delegate`, `@Accessors`...), or to a
+    /// class enclosing it. An enclosing class counts because Lombok reads
+    /// `@Accessors` from the enclosing classes too, which renames the
+    /// accessors it generates in the nested class.
+    fn members_unknown(&self, name: &str) -> bool {
+        let mut k = self.class(name);
+        while let Some(c) = k {
+            if c.flags.has(Flags::MEMBERS_UNKNOWN) {
+                return true;
+            }
+            k = c.outer.as_ref().and_then(|o| self.class(o));
+        }
+        false
+    }
+
+    /// Whether every member of `name` and of its supertypes is known: the
+    /// full supertype closure is, and no class in it has members the model
+    /// does not know (see `members_unknown`). Every type has
     /// java.lang.Object above it (interfaces too: they have its methods),
     /// so without a JDK nothing is complete. A JDK class newer than the one
     /// loaded (the project's release is newer than the JDK) may have members
@@ -685,6 +704,9 @@ pub trait ClassLookup {
                 return false;
             }
             let Some(c) = self.class(&n) else { return false };
+            if self.members_unknown(&n) {
+                return false;
+            }
             for t in c.superclass.iter().chain(c.interfaces.iter()) {
                 match t.class_name() {
                     Some(sn) => q.push_back(Arc::from(sn)),

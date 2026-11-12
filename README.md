@@ -78,8 +78,9 @@ leaves tests for the end of the task.
   change names or signatures (fluent/chained accessors, prefixes, copyable
   annotations, `getter.noIsPrefix`, `builder.className`, `log.fieldName`,
   `fieldNameConstants.*`). A class that carries any other Lombok annotation
-  (`@Delegate`, `@Accessors`, ...), or extends or is nested in one, is open
-  to the compile-break rules: they say nothing about its members. So is a
+  (`@Delegate`, `@Accessors`, ...), or extends or is nested in one, is open:
+  its hierarchy does not count as complete, so the compile-break rules, and
+  every other claim that needs all of its members, say nothing. So is a
   class using a modelled annotation in a way the model does not cover
   (`@Getter(lazy = true)`, `@Singular` on Guava collections, a
   `lombok.config` key such as `singular.useGuava`). The modelled

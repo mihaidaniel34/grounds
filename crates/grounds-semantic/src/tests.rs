@@ -1118,6 +1118,25 @@ fn unknown_arguments_may_be_raw() {
 }
 
 #[test]
+fn a_static_import_may_be_hidden_by_members_lombok_adds_unmodelled() {
+    // @Delegate adds Checks' requireNonNull to T, hiding Objects.requireNonNull
+    // in T and in classes nested in it (JLS 15.12.1)
+    let src = "import static java.util.Objects.requireNonNull; import lombok.experimental.Delegate;
+         interface Checks { Object requireNonNull(Object o); }
+         class T { @Delegate Checks checks; void m(Object o) { requireNonNull(o); } class In { void n(Object o) { requireNonNull(o); } } }
+         class Plain { void m(Object o) { requireNonNull(o); } }";
+    let pf = ParsedFile::parse(src);
+    let mut idx = Index::new(jdk());
+    idx.set_file(Arc::from("T.java"), Arc::new(extract(&pf)));
+    let fm = FileModel::new(&pf, &idx, Arc::from("T.java"));
+    let calls: Vec<_> = pf.root().descendants().filter(|n| n.kind() == "method_invocation").collect();
+    assert_eq!(calls.len(), 3);
+    assert!(fm.import_may_be_shadowed(calls[0]));
+    assert!(fm.import_may_be_shadowed(calls[1]));
+    assert!(!fm.import_may_be_shadowed(calls[2]));
+}
+
+#[test]
 fn a_records_equals_hash_code_and_to_string_are_its_own() {
     // JLS 8.10.3: the record class declares them, implicitly unless written
     let c = calls_of(

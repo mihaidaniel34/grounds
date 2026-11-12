@@ -400,9 +400,11 @@ impl<'t> FileModel<'t> {
         while let Some(c) = cur {
             let Some(cn) = self.class_name_of_decl(c) else { return true };
             if !self.hierarchy_complete(cn) {
-                // only the implicit `Object` is missing: it declares few names
+                // only the implicit `Object` is missing: it declares few names.
+                // Members Lombok adds that the model does not reproduce (to
+                // this class or one enclosing it) may be any name.
                 let explicit = c.field("superclass").is_some() || c.field("interfaces").is_some() || c.kind() != "class_declaration";
-                if explicit || OBJECT_METHODS.contains(&name) {
+                if explicit || OBJECT_METHODS.contains(&name) || self.members_unknown(cn) {
                     return true;
                 }
             }

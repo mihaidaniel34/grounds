@@ -33,6 +33,8 @@ fn closed_class<'t>(cx: &Ctx<'_, 't>, name: &str) -> Option<std::sync::Arc<Class
         return None;
     }
     let c = cx.fm.class(name)?;
+    // (a complete hierarchy also has no class to which Lombok adds members
+    // the model does not reproduce, nor one nested in such a class)
     if !c.is_source() || !cx.fm.hierarchy_complete(name) {
         return None;
     }
@@ -61,17 +63,6 @@ fn closed_class<'t>(cx: &Ctx<'_, 't>, name: &str) -> Option<std::sync::Arc<Class
         }
         if file.is_some_and(|f| cx.fm.index.file(&f).is_some_and(|s| s.has_syntax_errors)) {
             return None;
-        }
-        // Lombok adds members the model does not reproduce to this class or
-        // one enclosing it (`@Delegate`, `@Accessors`, a lombok.config key it
-        // does not know...): what looks missing may exist. The annotations
-        // that are modelled fully are listed in lombok::IMPLEMENTED.
-        let mut k = cx.fm.class(n);
-        while let Some(kc) = k {
-            if kc.flags.has(Flags::MEMBERS_UNKNOWN) {
-                return None;
-            }
-            k = kc.outer.as_ref().and_then(|o| cx.fm.class(o));
         }
     }
     // library supertypes are read from guessed jar versions (the newest in the
