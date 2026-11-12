@@ -364,40 +364,33 @@ impl Session {
             })
             .collect();
         let mut s = Session { project, all_rules, edit_rules, resolution_rules, options, stamps, walked, config, config_unread, lombok_met: FxHashMap::default(), warned: false, full_walks: 0 };
-        s.meet_lombok(Some(lombok_before));
+        let found = s.project.lombok.found().to_vec();
+        s.meet_lombok(&found, Some(lombok_before));
         s
     }
 
-    /// Every `lombok.config` path in the directories the walk holds, stamped
-    /// (`lombok_met`). A stat of a name per directory, at a load and after a
-    /// walk of the whole workspace.
-    ///
-    /// Only where the discovery could decide about the config: one whose
-    /// directory cannot be listed (`would_find` is `None`) is not met, and
-    /// a rescan, which lists such a directory again at every sync, meets it
-    /// once it can be. And one the load did not read whose time is recent
-    /// as of the start of the load (it may have become readable, or been
-    /// written, while the load ran), and not the same as before the load
-    /// (`before`: stamps taken then, at a reload; `None` when no load was
-    /// made, after a walk of the workspace), is met with a stamp of
-    /// nothing, so that the next sync takes it as changed and loads again,
-    /// as for other configuration files (`config_unread`).
-    fn meet_lombok(&mut self, before: Option<&FxHashMap<PathBuf, crate::project::LombokStamp>>) {
-        let root = self.project.workspace.root.clone();
+    /// The `lombok.config` paths a discovery's walk listed (`found`: one
+    /// walk, the discovery's own, so its ignore rules and the directories it
+    /// cannot list are its own), stamped (`lombok_met`). One in a directory
+    /// the walk could not list is not met: a rescan, which lists such a
+    /// directory again at every sync, meets it once it can. One the load did
+    /// not read whose time is recent as of the start of the load (it may
+    /// have become readable, or been written, while the load ran), and not
+    /// the same as before the load (`before`: stamps taken then, at a
+    /// reload; `None` when no load was made, after a walk of the workspace),
+    /// is met with a stamp of nothing, so that the next sync takes it as
+    /// changed and loads again, as for other configuration files
+    /// (`config_unread`).
+    fn meet_lombok(&mut self, found: &[PathBuf], before: Option<&FxHashMap<PathBuf, crate::project::LombokStamp>>) {
         let read: FxHashSet<PathBuf> = self.project.lombok.files().collect();
         let began = self.project.load_began;
-        self.lombok_met = self
-            .walked
-            .dirs
-            .keys()
-            .filter(|d| crate::project::LombokConfigs::reads_dir(&root, d))
-            .map(|d| d.join("lombok.config"))
-            .filter(|p| std::fs::symlink_metadata(p).is_ok() && crate::project::LombokConfigs::would_find(&root, p).is_some())
+        self.lombok_met = found
+            .iter()
             .map(|p| {
-                let stamp = crate::project::lombok_stamp(&p);
+                let stamp = crate::project::lombok_stamp(p);
                 let times = [stamp.0, stamp.1].into_iter().flatten().flat_map(|(m, c, _, _)| [m, c]);
-                let in_doubt = before.is_some_and(|b| b.get(&p) != Some(&stamp)) && !read.contains(&p) && times.into_iter().any(|t| crate::project::recent(t, began));
-                (p, if in_doubt { (None, None) } else { stamp })
+                let in_doubt = before.is_some_and(|b| b.get(p) != Some(&stamp)) && !read.contains(p) && times.into_iter().any(|t| crate::project::recent(t, began));
+                (p.clone(), if in_doubt { (None, None) } else { stamp })
             })
             .collect();
     }
@@ -665,13 +658,14 @@ impl Session {
             }
             // (an ignore file decides which `lombok.config` files a load reads, too)
             let configs = |l: &crate::project::LombokConfigs| l.files().collect::<FxHashSet<PathBuf>>();
-            if configs(&crate::project::LombokConfigs::discover(&root)) != configs(&self.project.lombok) {
+            let discovered = crate::project::LombokConfigs::discover(&root);
+            if configs(&discovered) != configs(&self.project.lombok) {
                 crate::trace::log(|| "sync: reload, a load reads other lombok.config files".into());
                 return (Vec::new(), FxHashSet::default(), true);
             }
             // (the directories walked now: the configs met in them)
             let met = std::mem::take(&mut self.lombok_met);
-            self.meet_lombok(None);
+            self.meet_lombok(discovered.found(), None);
             for (p, old) in met {
                 // a stamp from before the walk, kept to compare with at the next sync
                 if let Some(stamp) = self.lombok_met.get_mut(&p) {

@@ -2504,3 +2504,42 @@ fn a_lombok_config_under_an_ignored_directory_does_not_reload() {
     assert!(form(&s).contains("getValue"), "a fresh discovery does not read it: {}", form(&s));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn an_ignore_line_the_walker_cannot_parse_does_not_hide_a_new_lombok_config() {
+    // Review round 4 (K1): `{unclosed` in the root .gitignore makes the
+    // ignore walker yield an error entry, which was taken for a directory
+    // that cannot be listed: the new config was never met, nor applied.
+    let dir = nested_lombok_project("lombokbadignore");
+    write(&dir, "src/main/java/demo/Root.java", "package demo;\npublic class Root {}\n");
+    write(&dir, ".gitignore", "*.log\n{unclosed\n");
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "odd ignore line"]);
+    set_tree_mtime(&dir, ".", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
+    let mut s = Session::open(&dir).unwrap();
+    holds_as_fresh(&mut s, &dir, "the load");
+    holds_as_fresh(&mut s, &dir, "a second sync");
+    write(&dir, "nested/lombok.config", "lombok.accessors.fluent = true\n");
+    holds_as_fresh(&mut s, &dir, "a lombok.config appeared");
+    assert!(!form(&s).contains("getValue"), "fluent accessors: {}", form(&s));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn many_lombok_configs_in_sibling_directories_load_in_one_walk() {
+    // Review round 4 (K2): each config's eligibility was decided by its own
+    // walks of every ancestor, which lists all the siblings: 2000 configs
+    // under one directory took 8.4 s at every load and full walk (134 ms
+    // before). They are met from the discovery's own walk now.
+    let dir = nested_lombok_project("lombokmany");
+    for i in 0..1500 {
+        write(&dir, &format!("mods/m{i:04}/sub/lombok.config"), "lombok.accessors.chain = true\n");
+    }
+    set_tree_mtime(&dir, ".", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
+    let t = std::time::Instant::now();
+    let mut s = Session::open(&dir).unwrap();
+    s.sync(&[]);
+    let took = t.elapsed();
+    assert!(took < std::time::Duration::from_secs(3), "a load and a sync with 1500 configs took {took:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

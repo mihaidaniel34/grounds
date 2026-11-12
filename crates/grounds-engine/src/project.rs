@@ -138,6 +138,9 @@ fn spring_registrations(ws: &Workspace) -> (Vec<String>, Vec<String>) {
 #[derive(Debug, Default, Clone)]
 pub struct LombokConfigs {
     dirs: Vec<(PathBuf, Vec<(String, String, String)>)>,
+    /// Every `lombok.config` entry the walk listed, read or not (no
+    /// permission, a symlink whose target cannot be reached).
+    found: Vec<PathBuf>,
 }
 
 /// What a session watches of a `lombok.config` path it came across, read or
@@ -155,6 +158,11 @@ impl LombokConfigs {
     /// The `lombok.config` files found and read.
     pub fn files(&self) -> impl Iterator<Item = PathBuf> + '_ {
         self.dirs.iter().map(|(d, _)| d.join("lombok.config"))
+    }
+
+    /// Every `lombok.config` the walk listed, read or not.
+    pub fn found(&self) -> &[PathBuf] {
+        &self.found
     }
 
     /// Whether a `lombok.config` in directory `dir` (under `root`) is one
@@ -182,12 +190,12 @@ impl LombokConfigs {
         if !Self::reads_dir(root, dir) {
             return Some(false);
         }
+        // (not known only when the directory cannot be read: other errors
+        // of the walk, an ignore line it cannot parse, are skipped as the
+        // discovery skips them)
         let listed = |parent: &Path, child: &Path| -> Option<bool> {
-            let mut found = false;
-            for e in ignore::WalkBuilder::new(parent).hidden(false).max_depth(Some(1)).build() {
-                found |= e.ok()?.path() == child;
-            }
-            Some(found)
+            std::fs::read_dir(parent).ok()?;
+            Some(ignore::WalkBuilder::new(parent).hidden(false).max_depth(Some(1)).build().flatten().any(|e| e.path() == child))
         };
         for a in cfg.ancestors().skip(1).take_while(|a| *a != root && a.starts_with(root)) {
             if !listed(a.parent()?, a)? {
@@ -202,13 +210,14 @@ impl LombokConfigs {
     }
 
     pub fn discover(root: &Path) -> LombokConfigs {
-        let mut dirs = Vec::new();
+        let (mut dirs, mut found) = (Vec::new(), Vec::new());
         let walker = ignore::WalkBuilder::new(root)
             .hidden(false)
             .filter_entry(|e| e.depth() == 0 || !(e.file_type().is_some_and(|t| t.is_dir()) && e.file_name().to_str().is_none_or(Self::skipped)))
             .build();
         for e in walker.flatten() {
             if e.file_name() == "lombok.config" {
+                found.push(e.path().to_path_buf());
                 if let (Some(dir), Ok(text)) = (e.path().parent(), crate::fsutil::read_text(e.path())) {
                     let mut entries = Vec::new();
                     for line in text.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
@@ -226,7 +235,7 @@ impl LombokConfigs {
                 }
             }
         }
-        LombokConfigs { dirs }
+        LombokConfigs { dirs, found }
     }
 
     /// Settings for a source file: configs from the outermost directory to
