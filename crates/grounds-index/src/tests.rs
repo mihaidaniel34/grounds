@@ -116,6 +116,32 @@ fn lombok_equals_hash_code_and_can_equal_as_lombok_generates_them() {
 }
 
 #[test]
+fn a_lazy_getter_field_is_an_atomic_reference() {
+    // Lombok rewrites `@Getter(lazy = true) private final T x = init;` into
+    // `private final AtomicReference<Object> x` and a getter returning T
+    let idx = index_of(&[(
+        "L.java",
+        "package q; import lombok.Getter; import java.nio.file.Path;
+         class L {
+           @Getter(lazy = true) private final Path path = Path.of(\"/\");
+           @Getter(lazy = true) private static final L INSTANCE = new L();
+           @Getter(lazy = true) private final String name = \"n\";
+           @Getter private final String plain = \"p\";
+         }",
+    )]);
+    let l = idx.class("q.L").unwrap();
+    for (f, getter, ty) in [("path", "getPath", "java.nio.file.Path"), ("INSTANCE", "getINSTANCE", "q.L"), ("name", "getName", "java.lang.String")] {
+        let field = l.field(f).unwrap();
+        assert_eq!(field.ty.to_string(), "java.util.concurrent.atomic.AtomicReference<java.lang.Object>", "{f}");
+        assert_eq!(field.constant, None, "{f}");
+        assert_eq!(l.methods_named(getter).next().unwrap_or_else(|| panic!("{getter}")).ret.to_string(), ty);
+    }
+    assert!(l.field("INSTANCE").unwrap().flags.is_static());
+    assert_eq!(l.field("plain").unwrap().ty.to_string(), "java.lang.String");
+    assert!(l.field("plain").unwrap().constant.is_some());
+}
+
+#[test]
 fn enums_records_interfaces() {
     let idx = index_of(&[(
         "E.java",

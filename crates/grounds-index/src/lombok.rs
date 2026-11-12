@@ -571,6 +571,18 @@ fn apply_one(c: &mut RawClass, imported: bool, imports: &[Import], cfg: &LombokC
         }
     }
 
+    // @Getter(lazy = true): Lombok moves the initializer into the getter and
+    // turns the field into `private final AtomicReference<Object>` (static
+    // if it was), whatever its declared type, so code reading the field
+    // directly reads the AtomicReference. The getter above keeps the declared
+    // type. The class stays open (see `unmodelled_use`).
+    for f in c.fields.iter_mut().filter(|f| f.annotations.iter().any(|a| is_lombok(a, "Getter", imported) && a.bool_arg("lazy") == Some(true))) {
+        let pkg = ["java", "util", "concurrent", "atomic"].map(|s| (Arc::from(s), Vec::new()));
+        f.ty = TypeSyntax::Named(pkg.into_iter().chain([(Arc::from("AtomicReference"), vec![TypeSyntax::qualified("java.lang.Object")])]).collect());
+        f.constant = None;
+        f.init = None;
+    }
+
     if (data || value || has("ToString").is_some())
         && !has_method(c, "toString", 0) {
             c.methods.push(gen_method("toString", Flags::PUBLIC, vec![], TypeSyntax::qualified("java.lang.String"), range));
