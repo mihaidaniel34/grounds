@@ -37,6 +37,23 @@ pub fn read_bytes(path: impl AsRef<Path>) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// Write `bytes` to `path` whole: into a temporary file beside it, named for
+/// this process and this write, then renamed over it. A reader, or a crash,
+/// sees the old content or the new and never a part of either; two writers
+/// at once (the daemon and an in-process fallback saving the stub cache)
+/// each rename a file of their own, and the last rename wins.
+pub fn write_replacing(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    static WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let n = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = path.with_file_name(format!(".{name}.{}.{n}.tmp", std::process::id()));
+    let written = std::fs::write(&tmp, bytes).and_then(|_| std::fs::rename(&tmp, path));
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written
+}
+
 #[cfg(test)]
 mod tests {
     use super::{read_bytes, read_text};

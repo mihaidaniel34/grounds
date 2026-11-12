@@ -130,7 +130,8 @@ impl Baseline {
         if let Some(d) = p.parent() {
             std::fs::create_dir_all(d)?;
         }
-        std::fs::write(p, serde_json::to_string_pretty(self)?)?;
+        // (whole or not at all: a crash leaves the old baseline)
+        crate::fsutil::write_replacing(&p, serde_json::to_string_pretty(self)?.as_bytes())?;
         Ok(())
     }
 }
@@ -1639,6 +1640,26 @@ mod tests {
         assert_eq!(gap("ambiguous-bean", "beans of type `a.Api` match `x` into `a.X`: 'a' a.A, 'b' a.B"), gap("ambiguous-bean", "beans of type `a.Api` match `y` into `a.Y`: 'a' a.A, 'b' a.B"));
         assert_ne!(gap("ambiguous-bean", "beans of type `a.Api` match `x` into `a.X`: 'a' a.A, 'b' a.B"), gap("ambiguous-bean", "beans of type `a.Api` match `x` into `a.X`: 'a' a.A, 'b' b.B"));
         assert_eq!(gap_key(&finding("unresolved-method", "`Lib` has no method `gap`", Some("`a.Lib` has no method `gap`"))), None);
+    }
+
+    /// A baseline is saved whole, then put in place of the old one by a
+    /// rename: the old file is never written over, so a crash in the middle
+    /// leaves it as it was (here, a hard link to it keeps what it held).
+    #[test]
+    fn a_baseline_is_replaced_not_written_over() {
+        let root = std::env::temp_dir().join(format!("grounds-baseline-save-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        Baseline { fingerprints: vec!["old".into()] }.save(&root).unwrap();
+        let before = std::fs::read_to_string(Baseline::path(&root)).unwrap();
+        let kept = root.join("kept.json");
+        std::fs::hard_link(Baseline::path(&root), &kept).unwrap();
+        Baseline { fingerprints: vec!["new".into(), "newer".into()] }.save(&root).unwrap();
+        assert_eq!(std::fs::read_to_string(&kept).unwrap(), before, "the old file as it was");
+        assert_eq!(Baseline::load(&root).fingerprints, ["new", "newer"]);
+        let names: Vec<_> = std::fs::read_dir(root.join(".grounds")).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(names, ["baseline.json"], "no temporary file left");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A panic while the project is in its base state (the daemon catches it
