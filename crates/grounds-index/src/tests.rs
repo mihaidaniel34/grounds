@@ -645,6 +645,37 @@ fn lombok_required_fields_follow_its_non_null_annotations() {
 }
 
 #[test]
+fn whether_an_interface_is_functional_is_unknown_when_a_supertype_is() {
+    let idx = index_of(&[(
+        "p/F.java",
+        "package p;
+         interface F { void f(); }
+         interface Two { void a(); void b(); }
+         interface Sub extends F { default void g() {} }
+         interface OnlyInherited extends q.Gone {}
+         interface OneMore extends q.Gone { void run(); }
+         class C implements F { public void f() {} }",
+    )]);
+    let what = |n: &str| match idx.functional_method(&Ty::class(n)) {
+        Functional::Method(m) => format!("method {}", m.method.name),
+        Functional::Not => "not".to_string(),
+        Functional::Unknown => "unknown".to_string(),
+    };
+    assert_eq!(what("p.F"), "method f");
+    assert_eq!(what("p.Sub"), "method f");
+    assert_eq!(what("p.Two"), "not");
+    assert_eq!(what("p.C"), "not");
+    // the unresolved supertype may declare abstract methods, or none
+    assert_eq!(what("p.OnlyInherited"), "unknown");
+    assert_eq!(what("p.OneMore"), "unknown");
+    assert_eq!(what("p.Missing"), "unknown");
+    assert!(matches!(idx.functional_method(&Ty::Unknown), Functional::Unknown));
+    // abstract methods of different names are two whatever their parameter types
+    assert!(matches!(idx.functional_method(&Ty::class_with("java.util.Collection", vec![Ty::Unknown])), Functional::Not));
+    assert!(matches!(idx.functional_method(&Ty::int()), Functional::Not));
+}
+
+#[test]
 fn members_and_supertypes_of_a_raw_type_are_erased() {
     let idx = index_of(&[(
         "p/A.java",

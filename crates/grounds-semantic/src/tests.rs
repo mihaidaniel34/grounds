@@ -1597,6 +1597,30 @@ fn members_of_a_raw_type_have_their_erased_types() {
     assert_eq!(calls, vec!["Object.toString()", "Box.<init>(java.lang.String)", "Box.<init>(?unknown)?"]);
 }
 
+#[test]
+fn an_overload_whose_parameter_may_be_functional_is_not_dropped() {
+    // `Cb` extends an interface that does not resolve: whether a lambda
+    // converts to it is unknown, so `run(Cb)` may be the one javac picks
+    let calls = calls_of(
+        "interface Cb extends Gone {}
+         interface Two { void a(); void b(); }
+         class T {
+           static int run(Runnable r) { return 0; }
+           static String run(Cb c) { return \"\"; }
+           static int go(Runnable r) { return 0; }
+           static String go(Two t) { return \"\"; }
+           void m() { /*C*/ run(() -> {}); /*C*/ run(this::m); /*C*/ go(() -> {}); }
+         }",
+    );
+    assert_eq!(calls, vec!["T.run(java.lang.Runnable)?", "T.run(java.lang.Runnable)?", "T.go(java.lang.Runnable)"]);
+    // nor is a lambda's parameter typed by it
+    let t = types_of(
+        "interface Cb extends Gone { void call(String s); }
+         class T { void m() { Cb c = s -> { Object o = /*T*/ s; }; } }",
+    );
+    assert_eq!(t, vec!["?unknown"]);
+}
+
 /// What the name after each `/*F*/` marker refers to: `Owner.field` for a
 /// field, `local` for a local, `none` when it does not resolve.
 fn names_of(src: &str) -> Vec<String> {

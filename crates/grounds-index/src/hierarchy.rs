@@ -808,26 +808,68 @@ pub trait ClassLookup {
         self.methods_named(&ty, method).iter().any(|m| m.method.params.len() == arity && &*m.owner != "java.lang.Object" && !m.method.flags.is_abstract())
     }
 
-    /// Single abstract method of a functional interface, substituted.
-    fn functional_method(&self, ty: &Ty) -> Option<MethodRef> {
-        let n = ty.class_name()?;
-        let c = self.class(n)?;
-        if !c.is_interface() {
-            return None;
+    /// Whether `ty` is a functional interface (JLS 9.8), with its single
+    /// abstract method substituted. An interface whose supertypes are not
+    /// all known may have another abstract method, or fewer: unknown. A
+    /// type variable or wildcard stands here for a type the model has not
+    /// inferred: unknown too.
+    fn functional_method(&self, ty: &Ty) -> Functional {
+        let n = match ty {
+            Ty::Class { name, .. } => name,
+            Ty::Unknown | Ty::NoType | Ty::TypeVar(_) | Ty::Wildcard(_) => return Functional::Unknown,
+            _ => return Functional::Not,
+        };
+        // a gap the answer rests on makes it unknown: handled here, not noted
+        let (answer, d) = doubt::observe(|| {
+            let Some(c) = self.class(n) else { return Functional::Unknown };
+            if !c.is_interface() {
+                return Functional::Not;
+            }
+            // whether it is one does not depend on its type arguments: decided
+            // on the generic declaration, where an unknown argument cannot hide
+            // that one method overrides another (`Set<?>.add` and
+            // `Collection<?>.add`), and the method then taken from `ty`
+            let ((declared, substituted), gaps) = doubt::observe(|| (self.all_methods(&c.this_type()), self.all_methods(ty)));
+            if gaps.contains(Doubt::IncompleteHierarchy) || gaps.contains(Doubt::MissingClass) || gaps.contains(Doubt::UnknownType) {
+                return Functional::Unknown;
+            }
+            doubt::replay(gaps);
+            let abstract_of = |ms: Vec<MethodRef>| -> Vec<MethodRef> {
+                ms.into_iter()
+                    .filter(|m| m.method.flags.is_abstract() && !m.method.flags.is_static())
+                    // methods of Object don't count
+                    .filter(|m| !matches!((&*m.method.name, m.method.params.len()), ("equals", 1) | ("hashCode", 0) | ("toString", 0)))
+                    .collect()
+            };
+            let declared = abstract_of(declared);
+            // two of the same name and arity may be one, overridden, where a
+            // declared parameter type is unknown and `all_methods` could not tell
+            let maybe_one = |a: &MethodRef, b: &MethodRef| a.method.name == b.method.name && a.method.params.len() == b.method.params.len() && a.method.params.iter().chain(&b.method.params).any(|p| p.ty.has_unknown());
+            let undecided = declared.iter().enumerate().any(|(i, a)| declared[i + 1..].iter().any(|b| maybe_one(a, b)));
+            match declared.as_slice() {
+                [one] => abstract_of(substituted)
+                    .into_iter()
+                    .find(|m| m.owner == one.owner && m.method.name == one.method.name && m.method.params.len() == one.method.params.len())
+                    .map_or(Functional::Unknown, Functional::Method),
+                _ if undecided => Functional::Unknown,
+                _ => Functional::Not,
+            }
+        });
+        if !matches!(answer, Functional::Unknown) {
+            doubt::replay(d);
         }
-        let mut abstract_methods: Vec<MethodRef> = self
-            .all_methods(ty)
-            .into_iter()
-            .filter(|m| m.method.flags.is_abstract() && !m.method.flags.is_static())
-            .filter(|m| {
-                // methods of Object don't count
-                !matches!((&*m.method.name, m.method.params.len()), ("equals", 1) | ("hashCode", 0) | ("toString", 0))
-            })
-            .collect();
-        if abstract_methods.len() == 1 {
-            abstract_methods.pop()
-        } else {
-            None
-        }
+        answer
     }
+}
+
+/// Whether a type is a functional interface: `ClassLookup::functional_method`.
+#[derive(Clone, Debug)]
+pub enum Functional {
+    /// It is one: its single abstract method, substituted.
+    Method(MethodRef),
+    /// It certainly is not one: not an interface, or an interface whose
+    /// supertypes are all known that has not exactly one abstract method.
+    Not,
+    /// The type, its class or one of its supertypes is not known.
+    Unknown,
 }

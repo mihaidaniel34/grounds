@@ -373,12 +373,23 @@ impl<'t> FileModel<'t> {
             _ => params.kids().iter().position(|k| *k == name_node || k.field("name") == Some(name_node)).unwrap_or(0),
         };
         let target = self.expected_type(lambda);
+        // a target that is not (known to be) functional gives no type
         match self.functional_method(&target) {
-            Some(m) => match m.method.params.get(idx) {
+            Functional::Method(m) => match m.method.params.get(idx) {
                 Some(p) if !p.ty.mentions_type_var() => p.ty.upper_bound(),
                 _ => Ty::Unknown,
             },
-            None => Ty::Unknown,
+            Functional::Not | Functional::Unknown => Ty::Unknown,
+        }
+    }
+
+    /// The result type of the function type of `target`; Unknown where it
+    /// is not (known to be) a functional interface, or mentions a type
+    /// variable.
+    fn functional_result(&self, target: &Ty) -> Ty {
+        match self.functional_method(target) {
+            Functional::Method(m) if !m.method.ret.mentions_type_var() => m.method.ret,
+            _ => Ty::Unknown,
         }
     }
 
@@ -765,7 +776,7 @@ impl<'t> FileModel<'t> {
             "return_statement" => self.return_type_at(p),
             "lambda_expression" if p.field("body") == Some(child) => {
                 let target = self.expected_type(p);
-                self.functional_method(&target).map(|m| m.method.ret).filter(|t| !t.mentions_type_var()).unwrap_or(Ty::Unknown)
+                self.functional_result(&target)
             }
             "argument_list" => {
                 let Some(call) = self.parent_of(p) else { return Ty::Unknown };
@@ -807,7 +818,7 @@ impl<'t> FileModel<'t> {
         match self.enclosing_callable(at) {
             Some(c) if c.kind() == "lambda_expression" => {
                 let target = self.expected_type(c);
-                self.functional_method(&target).map(|m| m.method.ret).filter(|t| !t.mentions_type_var()).unwrap_or(Ty::Unknown)
+                self.functional_result(&target)
             }
             Some(m) if m.kind() == "method_declaration" => {
                 let mut t = m.field("type").map(|t| self.resolve_type_node(t)).unwrap_or(Ty::Unknown);

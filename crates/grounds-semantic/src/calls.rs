@@ -578,7 +578,7 @@ impl<'t> FileModel<'t> {
                 }
                 match param.class_name().and_then(|c| self.class(c)) {
                     Some(c) if c.is_interface() => match self.functional_method(param) {
-                        Some(m) if m.method.params.len() == *n => {
+                        Functional::Method(m) if m.method.params.len() == *n => {
                             let void = matches!(m.method.ret, Ty::Void);
                             if (void && !compat.void_ok) || (!void && !compat.value_ok) {
                                 Fit::No
@@ -607,8 +607,11 @@ impl<'t> FileModel<'t> {
                                 }
                             }
                         }
-                        Some(_) => Fit::No,
-                        None => Fit::No,
+                        Functional::Method(_) | Functional::Not => Fit::No,
+                        // an interface whose abstract methods are not all known
+                        // may take it: dropping the overload would leave the
+                        // others looking certain
+                        Functional::Unknown => Fit::Maybe,
                     },
                     // a lambda never converts to a class type, Object included
                     Some(_) => Fit::No,
@@ -617,13 +620,10 @@ impl<'t> FileModel<'t> {
             }
             ArgShape::MethodRef if matches!(param, Ty::Array(_) | Ty::Prim(_)) => Fit::No,
             ArgShape::MethodRef => match param.class_name().and_then(|c| self.class(c)) {
-                Some(c) if c.is_interface() => {
-                    if self.functional_method(param).is_some() {
-                        Fit::Maybe
-                    } else {
-                        Fit::No
-                    }
-                }
+                Some(c) if c.is_interface() => match self.functional_method(param) {
+                    Functional::Method(_) | Functional::Unknown => Fit::Maybe,
+                    Functional::Not => Fit::No,
+                },
                 Some(_) => Fit::No,
                 None => Fit::Maybe,
             },
@@ -864,7 +864,8 @@ impl<'t> FileModel<'t> {
                                     && !inf.poisoned.contains(v)
                                     && m.type_params.iter().find(|tp| tp.name == *v).is_some_and(|tp| tp.bounds.iter().all(|b| b.is_class("java.lang.Object")))
                             };
-                            sam.is_some_and(|sam| match (&sam.method.ret, body) {
+                            // a function type that is not known proves nothing
+                            matches!(&sam, Functional::Method(sam) if match (&sam.method.ret, body) {
                                 (Ty::Void, _) => true,
                                 (Ty::TypeVar(v), Some(_)) => free(v),
                                 (r, Some(bt)) => !r.mentions_type_var() && self.body_fits(bt, r) == Conv::Yes,
@@ -2111,7 +2112,25 @@ impl<'t> FileModel<'t> {
                     }
                     let Some(pt0) = param_type_for_arg(&rc.method, i, args.len()) else { continue };
                     let pt = apply_subst(&pt0, &bindings);
-                    let Some(sam) = self.functional_method(&pt) else { continue };
+                    // a function type that is not known may bind any variable its
+                    // parameter mentions, through its inputs or its body
+                    let poison = |poisoned: &mut Vec<Name>, bindings: &mut Vec<(Name, Ty)>| {
+                        for v in tvars.iter().filter(|v| mentions(&pt0, v)) {
+                            if !poisoned.contains(v) {
+                                poisoned.push(v.clone());
+                                bindings.retain(|(k, _)| k != v);
+                            }
+                        }
+                    };
+                    let sam = match self.functional_method(&pt) {
+                        Functional::Method(m) => m,
+                        Functional::Unknown => {
+                            poison(&mut poisoned, &mut bindings);
+                            continue;
+                        }
+                        // no lambda converts to it: code that does not compile
+                        Functional::Not => continue,
+                    };
                     // its parameter types are its inputs: javac resolves their
                     // variables before the body, from the target or else from
                     // the bounds (`pick(x -> 1)` for `Function<? super T, ? extends T>`
@@ -2145,7 +2164,14 @@ impl<'t> FileModel<'t> {
                         }
                     }
                     // the result as declared, before what is bound so far
-                    let Some(sam0) = self.functional_method(&pt0) else { continue };
+                    let sam0 = match self.functional_method(&pt0) {
+                        Functional::Method(m) => m,
+                        Functional::Unknown => {
+                            poison(&mut poisoned, &mut bindings);
+                            continue;
+                        }
+                        Functional::Not => continue,
+                    };
                     if !sam0.method.ret.mentions_type_var() {
                         continue;
                     }

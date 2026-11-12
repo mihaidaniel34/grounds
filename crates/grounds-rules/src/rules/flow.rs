@@ -709,7 +709,8 @@ impl Rule for InfiniteRecursion {
                 return false;
             }
             // a lambda where our parameter is not functional targets another
-            // overload, possibly one we cannot see (inherited from a library)
+            // overload, possibly one we cannot see (inherited from a library);
+            // so may one where that is not known: no self call is claimed
             let args = cx.fm.args_of(e);
             let lambda_misfit = args.iter().enumerate().any(|(i, a)| {
                 let varargs_elem = (m.flags.has(Flags::VARARGS) && i + 1 >= m.params.len()).then(|| m.params.last().and_then(|p| if let Ty::Array(e) = &p.ty { Some((**e).clone()) } else { None }));
@@ -717,7 +718,7 @@ impl Rule for InfiniteRecursion {
                     Some(elem) => elem,
                     None => m.params.get(i).map(|p| p.ty.clone()),
                 };
-                matches!(a.unparen().kind(), "lambda_expression" | "method_reference") && pty.is_none_or(|t| cx.fm.functional_method(&t).is_none())
+                matches!(a.unparen().kind(), "lambda_expression" | "method_reference") && pty.is_none_or(|t| !matches!(cx.fm.functional_method(&t), Functional::Method(_)))
             });
             if lambda_misfit {
                 return false;
