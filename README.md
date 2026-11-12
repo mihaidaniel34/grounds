@@ -219,6 +219,44 @@ on-disk cache.
   references, records, enums, overrides) check that no "won't compile" rule
   reports anything on a file javac accepts. Every night all three also run
   on new seeds (the date), so the gate is not tuned to fixed cases.
+- **Comparison with javac's class files:** 30 published libraries
+  ([corpus/oracle.tsv](corpus/oracle.tsv)) are fetched as their sources and
+  the class files compiled from them. Wherever grounds is certain of what a
+  call, constructor call, field access or method reference resolves to, and
+  of which members a class declares, javac's record in the class file must
+  say the same (`scripts/bytecode_oracle.py`). Of 230,851 calls, 34,369
+  constructor calls, 170,070 field accesses, 2,259 method references and
+  151,950 declared members compared, one disagrees (javac numbers an
+  anonymous class otherwise; it is the only entry of the baseline). A
+  workflow runs it on every pull request and fails on a disagreement the
+  baseline does not list. `grounds selfcheck` makes the same comparison on
+  your own project's build output.
+- **Hiding information:** every fixture is analyzed again with the JDK
+  hidden, with the library stubs hidden, with one package and with one file
+  of them hidden. A finding that appears only then rests on something being
+  invisible, and fails the test (`crates/grounds-rules/tests/ablation.rs`).
+- **Doubt:** each query of the semantic layer that turns something unknown
+  into a definite-looking answer (a `false`, a `None`, an empty list) notes
+  it, caches replay the notes, and each finding carries what was noted
+  while it was derived (`GROUNDS_DOUBT=show`). A stable or compile-break
+  rule reports no finding with a note; any other rule reports one only for
+  the kinds of unknown it declares it tolerates, each with its reason.
+- **Claims that something is not there:** "no such method", "nothing
+  overridden", "not implemented" are only true when every place the thing
+  could be declared has been seen. One module (`closed.rs` in
+  grounds-semantic) decides that, names 22 reasons why it could not, and is
+  the only code that can construct the value a compile-break rule must hand
+  over to report. Its test enumerates 12,777 small class hierarchies with
+  parts hidden and checks that no claim is made that the full hierarchy
+  refutes.
+- **Findings judged by javac:** the compile-break findings on eight projects
+  of the smoke corpus were given to javac one by one, with the sources as
+  the only input
+  (`crates/grounds-cli/examples/javac_judge.rs`). Of 1,499, javac confirmed
+  1,201 and refuted 48; the rest it could not judge without the projects'
+  jars. 38 of the refuted were in old snapshots of a project's own sources
+  kept as test data, which no build compiles; this is what
+  [the build picture](#the-build-picture) is for.
 - **CI mode under scripted edits:** on every corpus project, commits that
   cannot break anything (a new method, a line shift, a new class) must get
   no report from `grounds changed --base`, and renamed public methods with
