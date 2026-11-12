@@ -265,6 +265,10 @@ declare_rule!(ArrayToStringOrHashCode {
     severity: Warning,
     maturity: Preview,
     tier: Edit,
+    tolerates: [
+        MissingClass: "StringBuilder's superclass `AbstractStringBuilder` is package-private, which the JDK model hides: every call on a StringBuilder or StringBuffer looks up an incomplete hierarchy",
+        IncompleteHierarchy: "StringBuilder's superclass `AbstractStringBuilder` is package-private, which the JDK model hides: every call on a StringBuilder or StringBuffer looks up an incomplete hierarchy",
+    ],
     sources: ["sonar:S2116", "spotbugs:DMI_INVOKING_TOSTRING_ON_ARRAY", "spotbugs:DMI_INVOKING_HASHCODE_ON_ARRAY", "errorprone:ArrayToString", "errorprone:ArrayHashCode"],
     kinds: ["method_invocation", "binary_expression"],
     description: "Arrays inherit `toString()` and `hashCode()` from Object: you get `[I@1b6d3586` and an identity hash instead of the contents. Use `Arrays.toString()` / `Arrays.hashCode()`.",
@@ -315,10 +319,9 @@ impl Rule for ArrayToStringOrHashCode {
                     return;
                 }
                 let Some(c) = cx.fm.select_method(n) else { return };
-                let owner_ok = cx.fm.is_subclass(&c.owner, "java.io.PrintStream").is_yes()
-                    || cx.fm.is_subclass(&c.owner, "java.io.PrintWriter").is_yes()
-                    || cx.fm.is_subclass(&c.owner, "java.lang.AbstractStringBuilder").is_yes()
-                    || matches!(&*c.owner, "java.lang.StringBuilder" | "java.lang.StringBuffer");
+                // one of the three is enough: an unknown answer for another does not matter
+                let printer = ["java.io.PrintStream", "java.io.PrintWriter", "java.lang.AbstractStringBuilder"].iter().fold(Tri::No, |acc, sup| acc.or(cx.fm.is_subclass(&c.owner, sup)));
+                let owner_ok = printer.is_yes() || matches!(&*c.owner, "java.lang.StringBuilder" | "java.lang.StringBuffer");
                 if owner_ok && c.method.params[0].ty.is_class("java.lang.Object") {
                     cx.report(args[0], "Array printed via `Object.toString()`; use `Arrays.toString()`");
                 }

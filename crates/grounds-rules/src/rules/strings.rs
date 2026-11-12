@@ -582,6 +582,9 @@ declare_rule!(LogFormatMismatch {
     severity: Warning,
     maturity: Preview,
     tier: Edit,
+    tolerates: [
+        UnknownType: "a logger of unknown type (no SLF4J or Log4j jar) is recognised by its name and level method, and the format by its `{}` placeholders",
+    ],
     sources: ["sonar:S2275", "sonar:S3457", "pmd:InvalidLogMessageFormat", "errorprone:Slf4jFormatShouldBeConst"],
     kinds: ["method_invocation"],
     description: "SLF4J/Log4j2 messages with more `{}` than arguments print literal `{}`; extra arguments are silently dropped (except a trailing exception, which is logged with its stack trace).",

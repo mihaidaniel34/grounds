@@ -12,6 +12,15 @@ use rustc_hash::FxHashSet;
 pub static PROFILE: std::sync::LazyLock<parking_lot::Mutex<rustc_hash::FxHashMap<&'static str, std::time::Duration>>> =
     std::sync::LazyLock::new(Default::default);
 
+/// `GROUNDS_DOUBT=show`, read once: every finding with doubt is reported,
+/// its message ending in `{doubt: Kind,..}`, or `{withheld; doubt: Kind,..}`
+/// when its rule does not tolerate them all and it would not be reported.
+/// A kind observed only inside a remembered computation is `deep:Kind`.
+fn doubt_shown() -> bool {
+    static S: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var("GROUNDS_DOUBT").is_ok_and(|v| v == "show"));
+    *S
+}
+
 fn profiling() -> bool {
     static P: std::sync::LazyLock<bool> = std::sync::LazyLock::new(|| std::env::var("GROUNDS_PROFILE").is_ok());
     *P
@@ -156,6 +165,19 @@ impl RuleSet {
                 d.doubt = doubt::Doubts::NONE;
             }
             seen.insert(key)
+        });
+        // unknown means silent: a finding that rests on a collapsed unknown
+        // its rule does not declare it tolerates is withheld (with
+        // GROUNDS_DOUBT=show, kept and marked, for inspection)
+        let stance: rustc_hash::FxHashMap<&str, &RuleMeta> = self.rules.iter().map(|r| (r.meta().id, r.meta())).collect();
+        let show = doubt_shown();
+        out.retain_mut(|d| {
+            let reported = stance.get(d.rule).is_none_or(|m| m.tolerates_all(d.doubt));
+            if show && !d.doubt.is_empty() {
+                let mark = if reported { "doubt" } else { "withheld; doubt" };
+                d.message = format!("{} {{{mark}: {}}}", d.message, d.doubt);
+            }
+            reported || show
         });
         out.sort_by_key(|d| (d.range.start, d.rule));
         if fm.root().has_error() {

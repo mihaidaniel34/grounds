@@ -4,6 +4,7 @@
 
 use grounds_syntax::NodeExt;
 use crate::model::{FileModel, ResolvedCall};
+use grounds_index::doubt::{self, Doubt};
 use grounds_index::*;
 use grounds_syntax::Node;
 
@@ -119,26 +120,38 @@ impl<'t> FileModel<'t> {
                 _ => return false,
             }
         }
-        match self.select_method(call) {
+        // the selection runs in a scope of its own: the uncertainty inside it
+        // counts where it makes the answer `false`, not where the checks below
+        // settle it
+        let (selected, d) = doubt::observe(|| self.select_method(call));
+        match selected {
             // found through a static import that an unresolved supertype's
             // method of the same name may hide: not known to be this method
             Some(_) if self.import_may_be_shadowed(call) => {
-                grounds_index::doubt::note(grounds_index::doubt::Doubt::UnresolvedCall);
+                doubt::replay(d);
+                doubt::note(Doubt::UnresolvedCall);
                 false
             }
             // a guessed overload may be another class's method altogether
             // (`wait(future)` declared by a superclass next to `Object.wait(long)`)
-            // unless every overload it may be is the same class's and matches
+            // unless every overload it may be is the same class's and matches:
+            // then which one it is does not matter, and nothing is in doubt
             Some(c) if c.ambiguous => {
-                if call.kind() != "method_invocation" {
-                    return false;
+                let fits = self.possible_callees(call);
+                let all = !fits.is_empty() && fits.iter().all(|x| x.owner == c.owner) && fits.into_iter().all(|x| m.matches_resolved(self, &ResolvedCall { owner: x.owner, method: x.method, ..(*c).clone() }));
+                if !all {
+                    doubt::replay(d);
                 }
-                let n = self.args_of(call).len();
-                let fits: Vec<_> = self.candidates(call).0.into_iter().filter(|x| x.method.accepts_arity(n)).collect();
-                !fits.is_empty() && fits.iter().all(|x| x.owner == c.owner) && fits.into_iter().all(|x| m.matches_resolved(self, &ResolvedCall { owner: x.owner, method: x.method, ..(*c).clone() }))
+                all
             }
-            Some(c) => m.matches_resolved(self, &c),
-            None => false,
+            Some(c) => {
+                doubt::replay(d);
+                m.matches_resolved(self, &c)
+            }
+            None => {
+                doubt::replay(d);
+                false
+            }
         }
     }
 

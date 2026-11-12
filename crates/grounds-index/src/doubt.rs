@@ -28,6 +28,32 @@
 //! What is observed inside such a computation is recorded as *deep*;
 //! everything else (the query a rule asked, its direct answer) as *surface*.
 //!
+//! A rule's stance (`RuleMeta::tolerates` in grounds-rules) decides what is
+//! reported: a strict rule, the default, reports only grounded findings; a
+//! rule may declare kinds of doubt it reports in spite of, each with its
+//! reason, and those declarations are the whole list of rules that report
+//! without full grounds.
+//!
+//! # Assumptions about what cannot be seen
+//!
+//! A few unknowns are not noted because the engine assumes something about
+//! them, written down here.
+//!
+//! - **An unseen supertype declares no variable that obscures a visible type
+//!   or package.** A simple name used as a qualifier (`Objects` in
+//!   `Objects.requireNonNull(x)`, `org` in `org.junit.Assert`) is, by JLS
+//!   6.4.2, a variable before it is a type, and a type before it is a
+//!   package. When the name resolves to a visible type or package and no
+//!   visible variable (local, field of an enclosing class or its visible
+//!   supertypes, static import) has it, an unresolved supertype of an
+//!   enclosing class could still declare a field of that name and obscure
+//!   it. Java's naming conventions (fields start lower case and are not named
+//!   like packages; types start upper case) make that negligible, and not
+//!   assuming it would put every qualified call in a class with an
+//!   unresolved supertype in doubt. Only that case is assumed: a method or
+//!   field of the name that an unseen supertype may declare beside a static
+//!   import (the shadowing of JLS 15.12.1) stays in doubt.
+//!
 //! Computations made once for every file and thread do not reach any visit:
 //! declaration lowering in the index runs [`quiet`], and the DI model that
 //! the wiring rules read is built before any rule runs. Those rules are
@@ -240,6 +266,14 @@ pub fn compute<R>(f: impl FnOnce() -> R) -> (R, Doubts) {
 /// something is complete).
 pub fn quiet<R>(f: impl FnOnce() -> R) -> R {
     run(f, false, false).0
+}
+
+/// Run `f` and return what it observed without passing it to the enclosing
+/// scope: the caller decides from `f`'s answer whether it [`replay`]s it
+/// (a query that hands an unresolved case back as a value notes nothing for
+/// it, and replays what it observed otherwise).
+pub fn observe<R>(f: impl FnOnce() -> R) -> (R, Doubts) {
+    run(f, false, false)
 }
 
 #[cfg(test)]

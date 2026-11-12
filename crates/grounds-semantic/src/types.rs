@@ -3,7 +3,7 @@
 
 use crate::binder::LocalKind;
 use crate::memo::Query;
-use crate::model::{FileModel, Symbol};
+use crate::model::{FileModel, Lookup, Named, Symbol};
 use grounds_index::doubt::{self, Doubt};
 use grounds_index::stubs::{fold_binary, fold_unary, literal_constant};
 use grounds_index::*;
@@ -476,47 +476,26 @@ impl<'t> FileModel<'t> {
                     }
                 }
                 let name = n.text(self.src);
-                // fields of enclosing classes; a superclass's private field is
-                // not inherited (and hides the ones above it), so the name
-                // belongs to an outer class if one has it
-                let mut cur = self.enclosing_class_node(n);
-                let mut not_inherited = None;
-                while let Some(c) = cur {
-                    if let Some(cn) = self.class_names.get(&c.id()) {
-                        if let Some(ci) = self.class(cn) {
-                            if let Some(f) = self.field(&ci.this_type(), name) {
-                                if f.field.flags.is_private() && f.owner != *cn {
-                                    not_inherited.get_or_insert(f);
-                                } else {
-                                    return Some(Symbol::Field(f));
-                                }
-                            }
-                        }
-                    }
-                    cur = self.enclosing_class_node(c);
-                }
-                if let Some(f) = not_inherited {
-                    return Some(Symbol::Field(f));
-                }
-                // static imports
-                for imp in self.stub.imports.iter().filter(|i| i.is_static) {
-                    if imp.on_demand || imp.is_named(name) {
-                        let cls = if imp.on_demand { imp.path.to_string() } else { imp.path.rsplit_once('.').map(|x| x.0.to_string()).unwrap_or_default() };
-                        if let Some(b) = self.index.binary_name_for_dotted(&cls) {
-                            if let Some(f) = self.field(&Ty::class(&b), name) {
-                                return Some(Symbol::Field(f));
-                            }
-                        }
-                    }
+                let (field, d) = doubt::observe(|| self.field_named(n, name));
+                if field.is_some() {
+                    doubt::replay(d);
+                    return field;
                 }
                 let scope = self.scope_at(n);
-                if let Some(t) = self.index.resolve_simple_type(name, &scope) {
-                    return Some(Symbol::Type(t));
+                let named = if let Some(t) = self.index.resolve_simple_type(name, &scope) {
+                    Some(Symbol::Type(t))
+                } else if self.index.package_exists(name) {
+                    Some(Symbol::Package(name.to_string()))
+                } else {
+                    None
+                };
+                // a qualifier that names a visible type or package, and no visible
+                // variable: an unseen supertype is not supposed to declare a
+                // variable that obscures it (an assumption, see `grounds_index::doubt`)
+                if !(named.is_some() && self.is_qualifier(n)) {
+                    doubt::replay(d);
                 }
-                if self.index.package_exists(name) {
-                    return Some(Symbol::Package(name.to_string()));
-                }
-                None
+                named
             }
             "field_access" | "scoped_identifier" | "scoped_type_identifier" => {
                 let (obj, field) = if n.kind() == "field_access" {
@@ -568,6 +547,55 @@ impl<'t> FileModel<'t> {
         }
     }
 
+    /// The field a simple name `name` at `n` denotes: of an enclosing class
+    /// (declared or inherited), else statically imported.
+    fn field_named(&self, n: Node<'t>, name: &str) -> Option<Symbol<'t>> {
+        // fields of enclosing classes; a superclass's private field is
+        // not inherited (and hides the ones above it), so the name
+        // belongs to an outer class if one has it
+        let mut cur = self.enclosing_class_node(n);
+        let mut not_inherited = None;
+        while let Some(c) = cur {
+            if let Some(cn) = self.class_names.get(&c.id()) {
+                if let Some(ci) = self.class(cn) {
+                    if let Some(f) = self.field(&ci.this_type(), name) {
+                        if f.field.flags.is_private() && f.owner != *cn {
+                            not_inherited.get_or_insert(f);
+                        } else {
+                            return Some(Symbol::Field(f));
+                        }
+                    }
+                }
+            }
+            cur = self.enclosing_class_node(c);
+        }
+        if let Some(f) = not_inherited {
+            return Some(Symbol::Field(f));
+        }
+        // static imports
+        for imp in self.stub.imports.iter().filter(|i| i.is_static) {
+            if imp.on_demand || imp.is_named(name) {
+                let cls = if imp.on_demand { imp.path.to_string() } else { imp.path.rsplit_once('.').map(|x| x.0.to_string()).unwrap_or_default() };
+                if let Some(b) = self.index.binary_name_for_dotted(&cls) {
+                    if let Some(f) = self.field(&Ty::class(&b), name) {
+                        return Some(Symbol::Field(f));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Is `n` the qualifier of a member access (`Objects` in
+    /// `Objects.requireNonNull(x)`, `org` in `org.junit.Assert`)?
+    fn is_qualifier(&self, n: Node<'t>) -> bool {
+        self.parent_of(n).is_some_and(|p| match p.kind() {
+            "method_invocation" | "field_access" => p.field("object") == Some(n),
+            "scoped_identifier" | "scoped_type_identifier" => p.field("scope").or_else(|| p.kids().first().copied()) == Some(n),
+            _ => false,
+        })
+    }
+
     fn local_member_type(&self, owner: &str, simple: &str) -> Option<Name> {
         let n = format!("{owner}${simple}");
         self.class(&n).map(|c| c.name.clone())
@@ -583,6 +611,75 @@ impl<'t> FileModel<'t> {
         match self.symbol(n) {
             Some(Symbol::Field(f)) => Some(f),
             _ => None,
+        }
+    }
+
+    /// The field an identifier or field access refers to, or that it refers
+    /// to no visible field. An unresolved name is not evidence that the field
+    /// does not exist: only a closed class (one whose whole hierarchy is
+    /// visible) proves absence, and a caller claiming absence must prove it
+    /// that way. Notes nothing for the unresolved case; what it observed while
+    /// finding a field (or another symbol) counts as usual.
+    pub fn field_lookup(&self, n: Node<'t>) -> Lookup<FieldRef> {
+        let (s, d) = doubt::observe(|| self.symbol(n));
+        match s {
+            Some(Symbol::Field(f)) => {
+                doubt::replay(d);
+                Lookup::Found(f)
+            }
+            Some(_) => {
+                doubt::replay(d);
+                Lookup::Unresolved
+            }
+            None => Lookup::Unresolved,
+        }
+    }
+
+    /// The class of a binary name, or that no visible class has it. A class
+    /// that is not found is not evidence that it does not exist: only a
+    /// closed class proves absence (of a member type, a member), and a caller
+    /// claiming absence must prove it that way. Notes nothing for the
+    /// unresolved case.
+    pub fn class_lookup(&self, name: &str) -> Lookup<Arc<ClassInfo>> {
+        let (c, d) = doubt::observe(|| self.class(name));
+        match c {
+            Some(c) => {
+                doubt::replay(d);
+                Lookup::Found(c)
+            }
+            None => Lookup::Unresolved,
+        }
+    }
+
+    /// The type a call's qualifier names (`Assert` in `Assert.assertEquals(..)`):
+    /// resolved, or, when no visible class has the name, the class the code
+    /// names by a single-type import (`import org.junit.Assert`) or writes
+    /// qualified (`org.junit.Assert`). None when the qualifier is not a type
+    /// name the code writes. An unresolved class named by a known library's
+    /// qualified name is taken to be that library's class: the caller decides
+    /// what to judge by it, and nothing is noted for the unresolved case.
+    pub fn qualifier_type(&self, o: Node<'t>) -> Option<Named> {
+        let (s, d) = doubt::observe(|| self.symbol(o));
+        if s.is_some() {
+            doubt::replay(d);
+        }
+        match s {
+            Some(Symbol::Type(t)) => Some(Named::Resolved(t)),
+            Some(_) => None,
+            None => {
+                let text = self.text(o);
+                let named = if o.kind() == "identifier" {
+                    self.stub.imports.iter().find(|i| !i.is_static && !i.on_demand && i.is_named(text)).map(|i| Name::from(&*i.path))
+                } else if o.kind() == "field_access" && text.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '_') && text.starts_with(|c: char| c.is_lowercase()) {
+                    Some(Name::from(text))
+                } else {
+                    None
+                };
+                if named.is_none() {
+                    doubt::replay(d);
+                }
+                named.map(Named::Unresolved)
+            }
         }
     }
 

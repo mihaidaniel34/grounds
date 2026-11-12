@@ -21,6 +21,35 @@ pub enum Symbol<'t> {
     Package(String),
 }
 
+/// What a lookup found, or that it found nothing visible. The unresolved
+/// case is an answer the caller handles in its own code, not a collapse of
+/// an unknown: the lookup notes nothing for it (see `grounds_index::doubt`).
+#[derive(Clone, Debug)]
+pub enum Lookup<T> {
+    Found(T),
+    Unresolved,
+}
+
+impl<T> Lookup<T> {
+    pub fn found(self) -> Option<T> {
+        match self {
+            Lookup::Found(t) => Some(t),
+            Lookup::Unresolved => None,
+        }
+    }
+    pub fn is_found(&self) -> bool {
+        matches!(self, Lookup::Found(_))
+    }
+}
+
+/// A type the code names: resolved, or by the binary name the code writes
+/// for it when it is not visible.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Named {
+    Resolved(Name),
+    Unresolved(Name),
+}
+
 #[derive(Clone, Debug)]
 pub struct ResolvedCall {
     pub owner: Name,

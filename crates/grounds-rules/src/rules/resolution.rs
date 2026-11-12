@@ -7,7 +7,7 @@
 use crate::framework::*;
 use crate::{declare_rule, rule_meta};
 use grounds_index::*;
-use grounds_semantic::Symbol;
+use grounds_semantic::{Lookup, Symbol};
 use grounds_syntax::{Node, NodeExt};
 
 pub fn rules() -> Vec<Box<dyn Rule>> {
@@ -340,17 +340,20 @@ impl Rule for UnresolvedStaticImport {
             return;
         }
         let member = segs[segs.len() - 1];
-        // `a.b.Outer.Inner`: which segments are the package
+        // `a.b.Outer.Inner`: which segments are the package (a split that
+        // names no visible class is not one, and no claim rests on it)
         let owner = (1..segs.len() - 1).rev().find_map(|k| {
             let name = format!("{}.{}", segs[..k].join("."), segs[k..segs.len() - 1].join("$"));
-            cx.fm.class(&name).map(|_| name)
+            cx.fm.class_lookup(&name).is_found().then_some(name)
         });
         let Some(owner) = owner else { return };
         let Some(cls) = closed_class(cx, &owner) else { return };
         let mut types: Vec<String> = vec![cls.name.to_string()];
         types.extend(cx.fm.all_supertypes(&cls.this_type()).iter().filter_map(|t| t.class_name().map(str::to_string)));
+        // the class is closed: what it and its supertypes do not declare does
+        // not exist, and that absence is the claim
         let exists = types.iter().any(|t| {
-            cx.fm.class(t).is_some_and(|c| c.field(member).is_some() || c.methods_named(member).next().is_some()) || cx.fm.class(&format!("{t}${member}")).is_some()
+            cx.fm.class(t).is_some_and(|c| c.field(member).is_some() || c.methods_named(member).next().is_some()) || cx.fm.class_lookup(&format!("{t}${member}")).is_found()
         });
         if !exists {
             let target = path.field("name").unwrap_or(path);
@@ -668,13 +671,15 @@ impl Rule for UnresolvedField {
             return;
         }
         let fname = f.text(cx.src);
-        if cx.fm.field_ref(n).is_some() {
+        // a field that does not resolve is the subject of the claim, which
+        // only `closed_class` below proves
+        if let Lookup::Found(_) = cx.fm.field_lookup(n) {
             return;
         }
         let cls = match cx.fm.symbol(o) {
             Some(Symbol::Type(t)) => {
                 // could be a nested type reference
-                if cx.fm.index.member_type(&t, fname).is_some() || cx.fm.class(&format!("{t}${fname}")).is_some() {
+                if cx.fm.index.member_type(&t, fname).is_some() || cx.fm.class_lookup(&format!("{t}${fname}")).is_found() {
                     return;
                 }
                 closed_class(cx, &t)

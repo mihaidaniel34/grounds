@@ -617,7 +617,8 @@ fn lifecycle_methods<'t>(cx: &Ctx<'_, 't>, decl: Node<'t>, cls: &str) -> Vec<Nod
             };
             anns.iter().any(|a| matches!(*a, "PostConstruct" | "PreDestroy" | "Autowired" | "Inject" | "Value" | "Resource"))
                 || matches!(name, "afterPropertiesSet" | "destroy" | "afterSingletonsInstantiated" | "setApplicationContext" | "setBeanFactory" | "setEnvironment" | "setServletContext")
-                || contract.is_some_and(|c| !cx.fm.is_subclass(cls, c).is_no())
+                // (also when it is unknown whether the class implements it)
+                || contract.is_some_and(|c| cx.fm.is_subclass(cls, c) != Tri::No)
                 || startup_listener
         })
         .collect();

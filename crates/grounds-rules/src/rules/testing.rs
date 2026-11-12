@@ -4,7 +4,8 @@ use crate::framework::*;
 use crate::util::*;
 use crate::{declare_rule, rule_meta};
 use grounds_index::*;
-use grounds_semantic::Symbol;
+use grounds_index::doubt;
+use grounds_semantic::{Lookup, Named};
 use grounds_syntax::{Node, NodeExt};
 
 pub fn rules() -> Vec<Box<dyn Rule>> {
@@ -76,37 +77,56 @@ fn assertion_classes<'t>(cx: &Ctx<'_, 't>, call: Node<'t>) -> Vec<Name> {
     // imports (JLS 15.12.1): they count only when that is not settled
     let unsettled = !owners.is_empty();
     let mut member = false;
+    // The selection runs in a scope of its own. What is uncertain in it (an
+    // argument of unknown type) counts unless every overload the call may be
+    // is the same class's: then the class is known whichever overload it is.
+    let (selected, uncertain) = doubt::observe(|| cx.fm.select_method(call));
+    let one_class = |owner: &Name| {
+        let callees = cx.fm.possible_callees(call);
+        !callees.is_empty() && callees.iter().all(|m| m.owner == *owner)
+    };
     // (a guessed overload may be another class's: every candidate counts)
-    if let Some(c) = cx.fm.select_method(call).filter(|c| !c.ambiguous) {
+    if let Some(c) = selected.as_ref().filter(|c| !c.ambiguous) {
+        if !one_class(&c.owner) {
+            doubt::replay(uncertain);
+        }
         member = call.field("object").is_none() && !c.via_type;
         owners.push(c.owner.clone());
     } else if let Some(o) = call.field("object") {
-        match cx.fm.symbol(o) {
-            Some(Symbol::Type(t)) => owners.push(t),
+        match cx.fm.qualifier_type(o) {
+            Some(Named::Resolved(t)) => {
+                if !one_class(&t) {
+                    doubt::replay(uncertain);
+                }
+                owners.push(t)
+            }
             // a class that is not on the classpath: named by its import
             // (`Assertions.assertEquals` with `import org.junit.jupiter.api.Assertions`)
-            // or written qualified (`org.junit.Assert.assertEquals`)
-            None => {
-                let text = cx.text(o);
-                if o.kind() == "identifier" {
-                    if let Some(i) = cx.fm.stub.imports.iter().find(|i| !i.is_static && !i.on_demand && i.is_named(text)) {
-                        owners.push(Name::from(&*i.path));
-                    }
-                } else if o.kind() == "field_access" && text.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '_') && text.starts_with(|c: char| c.is_lowercase()) {
-                    owners.push(Name::from(text));
-                }
-            }
-            _ => {}
+            // or written qualified (`org.junit.Assert.assertEquals`); the call is
+            // judged by the class the code names, so that it does not resolve
+            // is no doubt about the claim
+            Some(Named::Unresolved(t)) => owners.push(t),
+            None => doubt::replay(uncertain),
         }
     } else {
+        // every method of the name the enclosing classes declare or inherit,
+        // and below every static import that may provide it: the call is one
+        // of these, whichever the selection picked. What the classes' unseen
+        // supertypes may declare is covered by their written names above;
+        // when there are none, it is in doubt.
         let classes = std::iter::successors(cx.fm.enclosing_class_node(call), |c| cx.fm.enclosing_class_node(*c)).filter_map(|d| cx.fm.class_name_of_decl(d).and_then(|n| cx.fm.class(n)));
-        for cls in classes {
-            let found: Vec<Name> = cx.fm.methods_named(&cls.this_type(), name).into_iter().map(|m| m.owner).collect();
-            if !found.is_empty() {
-                owners.extend(found);
-                member = true;
-                break;
+        let ((), unseen) = doubt::observe(|| {
+            for cls in classes {
+                let found: Vec<Name> = cx.fm.methods_named(&cls.this_type(), name).into_iter().map(|m| m.owner).collect();
+                if !found.is_empty() {
+                    owners.extend(found);
+                    member = true;
+                    break;
+                }
             }
+        });
+        if !unsettled {
+            doubt::replay(unseen);
         }
     }
     // an unqualified call: every static import that may provide the name,
@@ -220,8 +240,11 @@ impl Rule for TestWithoutAssertion {
         // `async.complete()`, `testContext.verify(..)`)
         let async_context = n.field("parameters").is_some_and(|ps| {
             ps.kids().iter().any(|p| {
+                // by its type, or, when the type is unknown (no vert.x jar),
+                // by the name the code writes
                 let vertx = p.field("type").is_some_and(|t| {
-                    matches!(cx.fm.resolve_type_node(t).class_name(), Some("io.vertx.ext.unit.TestContext" | "io.vertx.junit5.VertxTestContext"))
+                    let ty = cx.fm.resolve_type_node(t);
+                    ty.is_known() && matches!(ty.class_name(), Some("io.vertx.ext.unit.TestContext" | "io.vertx.junit5.VertxTestContext"))
                         || matches!(cx.text(t).rsplit('.').next(), Some("TestContext" | "VertxTestContext")) && cx.src.contains("io.vertx.")
                 });
                 // and the body uses it (`ctx.async()`, `ctx.asyncAssertSuccess()`)
@@ -686,7 +709,13 @@ impl Rule for IncompleteAssertJ {
         // MatcherAssert.assertThat(reason, actual, matcher) is complete
         let single_arg = cx.fm.args_of(entry).len() == 1;
         let other_owner = cx.fm.select_method(entry).is_some_and(|c| !(c.owner.contains("assertj") || c.owner.contains("Truth")));
-        if incomplete && single_arg && !other_owner && (cx.fm.select_method(e).is_some_and(|c| c.owner.contains("assertj") || c.owner.contains("Truth")) || cx.fm.stub.imports.iter().any(|i| i.path.contains("assertj"))) {
+        // the chain may not resolve (a description method the jar at hand
+        // lacks): then the file's AssertJ import says whose it is
+        let assertj = match cx.fm.call_lookup(e) {
+            Lookup::Found(c) => c.owner.contains("assertj") || c.owner.contains("Truth"),
+            Lookup::Unresolved => false,
+        };
+        if incomplete && single_arg && !other_owner && (assertj || cx.fm.stub.imports.iter().any(|i| i.path.contains("assertj"))) {
             let boolean = cx.fm.call_name(entry) == Some("assertThat") && cx.fm.args_of(entry).first().is_some_and(|a| matches!(cx.type_of(*a).prim(), Some(Prim::Boolean)) || cx.type_of(*a).is_class("java.lang.Boolean"));
             if boolean {
                 cx.report(e, "`assertThat(condition)` has no check; it verifies nothing (add `.isTrue()`)");

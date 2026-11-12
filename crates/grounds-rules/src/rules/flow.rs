@@ -33,6 +33,11 @@ declare_rule!(NullDereference {
     tier: Edit,
     // a null dereference in a test just fails that test
     scope: Main,
+    tolerates: [
+        UnresolvedCall: "the nullness analysis carries the doubt of its whole callable, not of each variable: a call it cannot see on a path that is not the null one marks every finding there; the rule itself checks the calls that matter (one the variable is handed to, one ending the null branch)",
+        UnresolvedName: "the same, for a name in the callable that does not resolve",
+        UnknownType: "the same, for an expression of unknown type elsewhere in the callable",
+    ],
     sources: ["sonar:S2259", "spotbugs:NP_ALWAYS_NULL", "spotbugs:NP_NULL_ON_SOME_PATH", "spotbugs:NP_GUARANTEED_DEREF", "errorprone:NullAway", "intellij:DataFlowIssue"],
     kinds: ["<file>"],
     description: "A local variable that is null on some path is dereferenced (method call, field access, array access, unboxing). Typical causes: a null check that guards the wrong branch, a variable initialized to null and assigned only conditionally, or a @Nullable value used unchecked.",
@@ -560,6 +565,13 @@ declare_rule!(OptionalGetWithoutCheck {
     maturity: Preview,
     // in a test, an empty Optional just fails the test
     scope: Main,
+    tolerates: [
+        UnresolvedCall: "an assertion of presence by a library that is not visible (Hamcrest `assertThat(o.isPresent(), is(..))`, AssertJ soft assertions) is judged by its name",
+        UnresolvedName: "the qualified names of such an assertion (`org.hamcrest.Matchers`) do not resolve either",
+        UnknownType: "nor do the types of its arguments",
+        MissingClass: "StringBuilder's superclass `AbstractStringBuilder` is package-private, which the JDK model hides: every call on a StringBuilder or StringBuffer looks up an incomplete hierarchy",
+        IncompleteHierarchy: "StringBuilder's superclass `AbstractStringBuilder` is package-private, which the JDK model hides: every call on a StringBuilder or StringBuffer looks up an incomplete hierarchy",
+    ],
     sources: ["sonar:S3655", "intellij:OptionalGetWithoutIsPresent", "errorprone:OptionalNotPresent"],
     kinds: ["<file>"],
     description: "`get()` throws NoSuchElementException on an empty Optional. Check `isPresent()` first, or better use `orElse`, `orElseThrow` with a meaningful exception, `map` or `ifPresent`.",
@@ -711,8 +723,23 @@ impl Rule for InfiniteRecursion {
                 return false;
             }
             // with an argument of unknown type the call may target another overload
-            args.iter().all(|a| cx.type_of(*a).is_known())
-                && cx.fm.select_method(e).is_some_and(|c| c.method.range == range && !c.ambiguous && c.method.params.len() == m.params.len())
+            let arg_types: Vec<Ty> = args.iter().map(|a| cx.type_of(*a)).collect();
+            if !arg_types.iter().all(|t| t.is_known()) {
+                return false;
+            }
+            // What the selection cannot see (overloads an unresolved supertype
+            // may declare) cannot change a pick whose parameters are exactly the
+            // arguments' types: in code that compiles no other overload is more
+            // specific (JLS 15.12.2.5; one as specific would make the call
+            // ambiguous), and one with the same signature is overridden by this
+            // one. Any other pick stays in doubt.
+            let (selected, unseen) = grounds_index::doubt::observe(|| cx.fm.select_method(e));
+            let own = selected.is_some_and(|c| c.method.range == range && !c.ambiguous && c.method.params.len() == m.params.len());
+            let exact = !m.flags.has(Flags::VARARGS) && m.type_params.is_empty() && arg_types.len() == m.params.len() && arg_types.iter().zip(&m.params).all(|(a, p)| *a == p.ty && !a.has_unknown() && !a.mentions_type_var());
+            if !(own && exact) {
+                grounds_index::doubt::replay(unseen);
+            }
+            own
         };
         let mut blocked = vec![false; cfg.blocks.len()];
         let mut any = false;

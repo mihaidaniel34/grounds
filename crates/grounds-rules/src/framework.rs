@@ -6,7 +6,7 @@
 use grounds_di::DiModel;
 use grounds_flow::analyses::{Liveness, NullnessAnalysis, OptionalPresence, ResourceAnalysis};
 use grounds_flow::{Cfg, Results};
-use grounds_index::doubt::{self, Doubts};
+use grounds_index::doubt::{self, Doubt, Doubts};
 use grounds_index::*;
 use grounds_semantic::FileModel;
 use grounds_syntax::{Node, NodeExt, TextRange};
@@ -129,6 +129,23 @@ pub struct RuleMeta {
     /// Why it matters and how to fix it.
     pub description: &'static str,
     pub default_enabled: bool,
+    /// The rule's stance on doubt (see `grounds_index::doubt`): the kinds of
+    /// collapsed unknown it reports in spite of, each with the reason. Empty,
+    /// the default: strict, a finding with any doubt is withheld. The
+    /// declarations are the whole list of rules that report without full
+    /// grounds; every other rule only loses findings when information is
+    /// hidden.
+    #[serde(serialize_with = "serialize_tolerates")]
+    pub tolerates: &'static [(Doubt, &'static str)],
+}
+
+fn serialize_tolerates<S: serde::Serializer>(t: &&'static [(Doubt, &'static str)], s: S) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeSeq;
+    let mut seq = s.serialize_seq(Some(t.len()))?;
+    for (kind, reason) in t.iter() {
+        seq.serialize_element(&(kind.name(), reason))?;
+    }
+    seq.end()
 }
 
 /// The rules that say code would not compile, whose findings `grounds
@@ -154,6 +171,17 @@ pub const STABLE_IN_CHANGED: &[&str] = &[
 ];
 
 impl RuleMeta {
+    /// Whether the rule reports only grounded findings.
+    pub fn is_strict(&self) -> bool {
+        self.tolerates.is_empty()
+    }
+
+    /// Whether a finding of this rule with these doubts is reported: every
+    /// kind of them is one the rule declares it tolerates.
+    pub fn tolerates_all(&self, d: Doubts) -> bool {
+        d.kinds().all(|k| self.tolerates.iter().any(|(t, _)| *t == k))
+    }
+
     /// Whether `grounds changed` holds this rule's findings to the stable
     /// promise (see [`STABLE_IN_CHANGED`]).
     pub fn stable_in_changed(&self) -> bool {
@@ -451,6 +479,7 @@ macro_rules! declare_rule {
             $(tier: $tier:ident,)?
             $(scope: $scope:ident,)?
             $(enabled: $enabled:literal,)?
+            $(tolerates: [$($tk:ident: $tr:literal),* $(,)?],)?
             sources: [$($src:literal),* $(,)?],
             kinds: [$($kind:literal),* $(,)?],
             description: $desc:literal $(,)?
@@ -471,6 +500,7 @@ macro_rules! declare_rule {
                 kinds: &[$($kind),*],
                 description: $desc,
                 default_enabled: $crate::declare_rule!(@enabled $($enabled)?),
+                tolerates: &[$($((grounds_index::doubt::Doubt::$tk, $tr)),*)?],
             };
         }
     };

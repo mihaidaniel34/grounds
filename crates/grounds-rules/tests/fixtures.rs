@@ -191,6 +191,18 @@ const STABLE_IN_CHANGED: &[&str] = &[
     "unresolved-method",
 ];
 
+/// The promise of a stable rule includes that it reports only grounded
+/// findings: no stable rule (in `grounds check` or in `grounds changed`)
+/// declares a doubt it tolerates. A rule that needs one to keep its fixtures
+/// is not stable.
+#[test]
+fn stable_rules_are_strict() {
+    for id in STABLE.iter().chain(STABLE_IN_CHANGED) {
+        let m = grounds_rules::meta_of(id).unwrap_or_else(|| panic!("no rule {id}"));
+        assert!(m.is_strict(), "{id} is stable and tolerates {:?}", m.tolerates.iter().map(|t| t.0.name()).collect::<Vec<_>>());
+    }
+}
+
 #[test]
 fn stable_rules_are_exactly_the_intended_set() {
     use grounds_rules::Maturity;

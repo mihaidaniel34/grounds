@@ -390,6 +390,32 @@ impl<'t> FileModel<'t> {
     /// resolved and may declare a method of the name, which javac would bind
     /// instead (JLS 15.12.1). Without the JDK only `Object`'s methods can come
     /// from the implicit supertype.
+    /// Every method a method invocation may call, as far as the visible
+    /// hierarchy shows: the candidates of its name that take its number of
+    /// arguments. What the search could not see is noted by the search.
+    pub fn possible_callees(&self, call: Node<'t>) -> Vec<MethodRef> {
+        if call.kind() != "method_invocation" {
+            return Vec::new();
+        }
+        let n = self.args_of(call).len();
+        self.candidates(call).0.into_iter().filter(|x| x.method.accepts_arity(n)).collect()
+    }
+
+    /// `select_method`, with a call that does not resolve as a value: a call
+    /// that does not resolve is no evidence of what it is, and a caller that
+    /// judges it by what the code writes (a name, an import) handles that
+    /// itself. Notes nothing for the unresolved case.
+    pub fn call_lookup(&self, call: Node<'t>) -> crate::model::Lookup<Rc<ResolvedCall>> {
+        let (c, d) = doubt::observe(|| self.select_method(call));
+        match c {
+            Some(c) => {
+                doubt::replay(d);
+                crate::model::Lookup::Found(c)
+            }
+            None => crate::model::Lookup::Unresolved,
+        }
+    }
+
     pub fn import_may_be_shadowed(&self, call: Node<'t>) -> bool {
         if call.kind() != "method_invocation" || call.field("object").is_some() {
             return false;

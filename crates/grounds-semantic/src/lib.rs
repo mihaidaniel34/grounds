@@ -11,7 +11,7 @@ pub mod types;
 
 pub use binder::{LocalDecl, LocalKind};
 pub use matchers::{MethodMatcher, OwnerMatch};
-pub use model::{FileModel, ResolvedCall, Symbol};
+pub use model::{FileModel, Lookup, Named, ResolvedCall, Symbol};
 
 #[cfg(test)]
 mod tests;

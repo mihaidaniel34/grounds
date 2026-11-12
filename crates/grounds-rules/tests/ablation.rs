@@ -235,6 +235,11 @@ fn hiding_information_adds_no_finding() {
     }
 
     let baseline: BTreeSet<Entry> = BASELINE.iter().map(|(a, r, f, l)| (a.to_string(), r.to_string(), f.to_string(), *l)).collect();
+    // a strict rule withholds every finding that rests on a collapsed unknown:
+    // one it makes only with less information is a definite answer the
+    // semantic layer gave from less, never something to list
+    let strict: BTreeSet<&str> = BASELINE.iter().map(|e| e.1).filter(|r| grounds_rules::meta_of(r).is_none_or(|m| m.is_strict())).collect();
+    assert!(strict.is_empty(), "tests/ablation_baseline.rs lists findings of rules that tolerate no doubt: {strict:?}. Find the collapse that is not noted (or the definite answer given from less information) instead.");
     let mut report = String::new();
     let new: Vec<&Entry> = observed.difference(&baseline).collect();
     if !new.is_empty() {
