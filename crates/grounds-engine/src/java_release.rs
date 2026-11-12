@@ -937,22 +937,6 @@ impl PomCache {
         }
         None
     }
-
-    #[cfg(test)]
-    fn release(&mut self, path: &Path) -> Option<u32> {
-        // the plugin's configuration wins over the property it defaults to
-        for (param, prop) in [("release", "maven.compiler.release"), ("target", "maven.compiler.target"), ("source", "maven.compiler.source")] {
-            let raw = self.compiler(path, param, 0).or_else(|| self.property(path, prop, 0));
-            if let Some(v) = raw.and_then(|r| self.resolve(path, &r)).and_then(|r| parse_version(&r)) {
-                return Some(v);
-            }
-        }
-        // Spring Boot's parent compiles for `java.version`
-        if self.spring_boot_parent(path).is_some() {
-            return self.property(path, "java.version", 0).and_then(|r| self.resolve(path, &r)).and_then(|r| parse_version(&r));
-        }
-        None
-    }
 }
 
 fn parse_pom(text: &str, path: &Path) -> Pom {
