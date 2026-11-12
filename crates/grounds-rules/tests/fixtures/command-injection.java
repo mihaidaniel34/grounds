@@ -74,6 +74,8 @@ class Argv {
         new ProcessBuilder("zsh", "-b", "-c", "echo " + x);
         new ProcessBuilder("zsh", "-eb", "-c", "echo " + x);
         new ProcessBuilder("zsh", "-bc", "echo " + x); // expect
+        new ProcessBuilder("zsh", "+b", "-c", "echo " + x);
+        new ProcessBuilder("zsh", "+eb", "-c", "echo " + x);
         // bash's -O names (and zsh's letter -O) are not read
         new ProcessBuilder("bash", "-O", "nosuch", "-c", "echo " + x);
         new ProcessBuilder("bash", "+O", "nosuch", "-c", "echo " + x);
@@ -85,6 +87,10 @@ class Argv {
         new ProcessBuilder("sh", "-o", "interactive-comments", "-c", "echo " + x);
         new ProcessBuilder("sh", "-e", "-o", "nounset", "-c", "echo " + x); // expect
         new ProcessBuilder("dash", "-x", "-c", "echo " + x); // expect
+        // not every dash takes privileged
+        new ProcessBuilder("dash", "-o", "privileged", "-c", "echo " + x);
+        new ProcessBuilder("dash", "+o", "privileged", "-c", "echo " + x);
+        new ProcessBuilder("dash", "-c", "-o", "privileged", "echo " + x);
         // ksh's options are not checked
         new ProcessBuilder("ksh", "-c", "echo " + x);
     }

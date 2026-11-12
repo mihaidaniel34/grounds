@@ -982,7 +982,7 @@ fn shell_command_in<'a, 't>(argv: &'a [Node<'t>], lit: &dyn Fn(&Node<'t>) -> Opt
                 _ => Opt::Unknown,
             }
         } else if sh {
-            const SH: &[&str] = &["allexport", "errexit", "ignoreeof", "monitor", "noclobber", "noglob", "nolog", "notify", "nounset", "verbose", "vi", "emacs", "xtrace", "privileged"];
+            const SH: &[&str] = &["allexport", "errexit", "ignoreeof", "monitor", "noclobber", "noglob", "nolog", "notify", "nounset", "verbose", "vi", "emacs", "xtrace"];
             match name {
                 "noexec" if set => Opt::NoExec,
                 "noexec" => Opt::Plain,
@@ -1021,9 +1021,9 @@ fn shell_command_in<'a, 't>(argv: &'a [Node<'t>], lit: &dyn Fn(&Node<'t>) -> Opt
             Some((r, minus)) if !r.is_empty() && r.chars().all(|c| if sh { SHORT_SH.contains(c) } else { SHORT.contains(c) }) => {
                 if minus && r.contains('n') {
                     Opt::NoExec
-                // zsh: `-b` ends the options; what follows is a script, a
-                // `-c` in the same cluster still counts (`-bc`)
-                } else if zsh && minus && r.contains('b') && !r.contains('c') {
+                // zsh: `-b` (and `+b`) ends the options; what follows is a
+                // script, a `-c` in the same cluster still counts (`-bc`)
+                } else if zsh && r.contains('b') && !r.contains('c') {
                     Opt::Unknown
                 } else if minus && r.contains('c') {
                     Opt::Command
