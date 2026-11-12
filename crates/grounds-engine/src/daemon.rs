@@ -161,17 +161,76 @@ fn execute_with(session: &mut Session, req: &Request, warnings: &[String]) -> Re
     }
 }
 
+/// An advisory lock on the file beside a socket path (`<socket>.lock`), for
+/// as long as it is held. A server holds it while it looks at the path,
+/// removes a stale socket and binds its own, and while it removes its own:
+/// two servers starting on one stale socket otherwise both found it stale,
+/// and the second removed the socket the first had just bound, leaving the
+/// first serving no one until its idle exit.
+fn lock(sock: &Path) -> std::io::Result<std::fs::File> {
+    let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(sock.with_extension("lock"))?;
+    file.lock()?;
+    Ok(file)
+}
+
+/// The socket a server bound, owned by it: dropped, on every way out of
+/// `serve` (an error after binding included), it removes the socket file,
+/// and only if the path still names the socket it bound (the same device
+/// and inode). A file put in its place, another server's socket among them,
+/// is left alone.
+pub struct Bound {
+    listener: UnixListener,
+    path: PathBuf,
+    /// The device and inode of the socket file bound.
+    id: (u64, u64),
+}
+
+impl Bound {
+    /// Bind `sock`, unless a server answers there (`for_root`: named in the
+    /// error); a socket nothing listens on is stale and goes first.
+    pub fn bind(sock: &Path, for_root: &Path) -> anyhow::Result<Bound> {
+        use std::os::unix::fs::MetadataExt;
+        let _lock = lock(sock)?;
+        if sock.exists() {
+            // another daemon alive?
+            if UnixStream::connect(sock).is_ok() {
+                anyhow::bail!("a daemon is already running for {}", for_root.display());
+            }
+            let _ = std::fs::remove_file(sock);
+        }
+        let listener = UnixListener::bind(sock)?;
+        match std::fs::symlink_metadata(sock) {
+            Ok(m) => Ok(Bound { listener, path: sock.to_path_buf(), id: (m.dev(), m.ino()) }),
+            Err(e) => {
+                // (bound under the lock just now: what is there is ours)
+                let _ = std::fs::remove_file(sock);
+                Err(e.into())
+            }
+        }
+    }
+
+    pub fn listener(&self) -> &UnixListener {
+        &self.listener
+    }
+}
+
+impl Drop for Bound {
+    fn drop(&mut self) {
+        use std::os::unix::fs::MetadataExt;
+        // (under the lock: no server removes or binds between the look and
+        // the removal; without it, the look still holds)
+        let _lock = lock(&self.path);
+        if std::fs::symlink_metadata(&self.path).is_ok_and(|m| (m.dev(), m.ino()) == self.id) {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
 /// Serve requests until idle for `idle` or asked to shut down.
 pub fn serve(root: &Path, idle: Duration) -> anyhow::Result<()> {
     let Some(sock) = socket_path(root) else { anyhow::bail!("no private directory for the daemon socket") };
-    if sock.exists() {
-        // another daemon alive?
-        if UnixStream::connect(&sock).is_ok() {
-            anyhow::bail!("a daemon is already running for {}", root.display());
-        }
-        let _ = std::fs::remove_file(&sock);
-    }
-    let listener = UnixListener::bind(&sock)?;
+    let bound = Bound::bind(&sock, root)?;
+    let listener = bound.listener();
     listener.set_nonblocking(true)?;
     crate::trace::log(|| format!("daemon {}: listening", root.display()));
     let mut session = Session::open(root)?;
@@ -196,7 +255,6 @@ pub fn serve(root: &Path, idle: Duration) -> anyhow::Result<()> {
             Err(_) => std::thread::sleep(Duration::from_millis(50)),
         }
     }
-    let _ = std::fs::remove_file(&sock);
     Ok(())
 }
 
@@ -309,10 +367,64 @@ pub fn run(root: &Path, req: &Request, start_daemon: bool) -> anyhow::Result<Res
 
 #[cfg(test)]
 mod tests {
-    use super::{read_request, MAX_REQUEST};
+    use super::{read_request, Bound, MAX_REQUEST};
     use std::io::Write;
-    use std::os::unix::net::UnixStream;
+    use std::os::unix::net::{UnixListener, UnixStream};
     use std::time::{Duration, Instant};
+
+    fn socket_in(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("grounds-bound-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("d.sock")
+    }
+
+    /// The socket a server bound goes when the server does, and only while
+    /// the path is still that socket.
+    #[test]
+    fn a_bound_socket_is_removed_when_dropped_and_only_if_it_is_still_the_one_bound() {
+        let sock = socket_in("own");
+        let root = sock.parent().unwrap();
+        drop(Bound::bind(&sock, root).unwrap());
+        assert!(!sock.exists(), "its own socket goes");
+        // a server answers there: no second one, and its socket stays
+        let first = Bound::bind(&sock, root).unwrap();
+        assert!(Bound::bind(&sock, root).is_err_and(|e| e.to_string().contains("already running")));
+        assert!(sock.exists());
+        // a file put in its place stays
+        std::fs::remove_file(&sock).unwrap();
+        std::fs::write(&sock, "another's").unwrap();
+        drop(first);
+        assert_eq!(std::fs::read_to_string(&sock).unwrap(), "another's");
+        std::fs::remove_file(&sock).unwrap();
+        // and so does another server's socket bound there since
+        let bound = Bound::bind(&sock, root).unwrap();
+        std::fs::remove_file(&sock).unwrap();
+        let other = UnixListener::bind(&sock).unwrap();
+        drop(bound);
+        assert!(sock.exists() && UnixStream::connect(&sock).is_ok(), "the other server's socket");
+        drop(other);
+        // a socket nothing listens on is stale: bound over
+        assert!(sock.exists());
+        drop(Bound::bind(&sock, root).unwrap());
+        assert!(!sock.exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A daemon whose project cannot be loaded fails after it bound its
+    /// socket: the socket goes with it, rather than staying for clients to
+    /// find nothing behind.
+    #[test]
+    fn a_daemon_that_cannot_load_its_project_leaves_no_socket() {
+        let root = std::env::temp_dir().join(format!("grounds-serve-fails-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("grounds.toml"), "this is = = not toml\n").unwrap();
+        let Some(sock) = super::socket_path(&root) else { return };
+        assert!(super::serve(&root, Duration::from_secs(60)).is_err());
+        assert!(!sock.exists(), "{}", sock.display());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn request_reading_is_bounded() {
