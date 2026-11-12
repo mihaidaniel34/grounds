@@ -1182,6 +1182,71 @@ fn a_guess_among_overloads_alike_in_result_keeps_the_result() {
 }
 
 #[test]
+fn a_type_variable_argument_fits_only_what_its_bounds_do() {
+    // JLS 4.10.2: a caller's `K` is a subtype of itself and of its bounds'
+    // supertypes only, and unboxes only where a bound is a box type
+    let c = calls_of(
+        "package p; import java.util.*;
+         class R<K> {
+           K get(int i) { return null; }
+           void remove(int index) { /*C*/ remove(get(index)); }
+           void remove(Object key) { }
+           static String describe(Class<?> c) { return null; }
+           static String describe(Object o) { return null; }
+           <T> void both(T t) { /*C*/ describe(t); /*C*/ describe(String.class); }
+           static void f(Number n) { } static void f(Object o) { } static void f(int i) { }
+           <N extends Number> void bounded(N n) { /*C*/ f(n); }
+           static void g(int x) { } static void g(String s) { }
+           <I extends Integer> void boxed(I i) { /*C*/ g(i); }
+           static void check(boolean b, String m, char c) { } static void check(boolean b, String m, Object o) { }
+           static void check(boolean b, String m, Object... rest) { }
+           void checked(K key) { /*C*/ check(true, \"%s\", key); }
+           static void d(String... s) { } static void d(Object... o) { }
+           static void e(String[] s) { } static void e(Object[] o) { }
+           void arrays(K key, K[] keys) { /*C*/ d(key); /*C*/ d(keys); /*C*/ e(keys); }
+         }",
+    );
+    assert_eq!(
+        c,
+        vec![
+            "R.remove(java.lang.Object)",
+            "R.describe(java.lang.Object)",
+            "R.describe(java.lang.Class)",
+            "R.f(java.lang.Number)",
+            "R.g(int)",
+            "R.check(boolean,java.lang.String,java.lang.Object)",
+            "R.d(java.lang.Object[])",
+            "R.d(java.lang.Object[])",
+            "R.e(java.lang.Object[])",
+        ]
+    );
+    // the called method's own `T` is an inference variable, the caller's `T`
+    // of the same name a type: `<T extends Number> h(T)` takes no Object
+    let t = types_of(
+        "class H {
+           static <T extends Number> String h(T t) { return null; } static Integer h(Object o) { return null; }
+           <T> void clash(T t) { Object a = /*T*/ h(t); }
+           <T extends Integer> void within(T t) { Object a = /*T*/ h(t); }
+         }",
+    );
+    assert_eq!(t, vec!["java.lang.Integer", "java.lang.String"]);
+}
+
+#[test]
+fn an_overload_that_only_possibly_applies_is_no_sure_pick() {
+    // `J`'s superclass is missing: it may be a CharSequence, so javac (with
+    // the jar) may call either append; both return StringBuilder
+    let src = "package p; import missing.Base;
+         class J extends Base { }
+         class H {
+           static void put(CharSequence s) { } static void put(Object o) { }
+           void go(StringBuilder sb, J j) { Object o = /*T*/ sb.append(j); /*C*/ sb.append(j); /*C*/ put(j); /*C*/ put(\"x\"); }
+         }";
+    assert_eq!(types_of(src), vec!["java.lang.StringBuilder"]);
+    assert_eq!(calls_of(src), vec!["StringBuilder.append(java.lang.CharSequence)?", "H.put(java.lang.CharSequence)?", "H.put(java.lang.CharSequence)"]);
+}
+
+#[test]
 fn a_chain_of_final_locals_is_evaluated_once_per_local() {
     // found by scripts/fuzz_robust.py: `final int v1 = v0 + v0; ...` was
     // evaluated 2^n times (500 locals never finished). The CLI runs analysis

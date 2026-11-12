@@ -701,10 +701,78 @@ impl<'t> FileModel<'t> {
         self.fit(param, arg)
     }
 
+    /// The type variables of the calling context that argument types are
+    /// (or are arrays of), with their declared bounds; a bound that is such
+    /// a variable itself stands for its own bounds. An argument's type is
+    /// written in the caller's scope, so a variable it names is the caller's,
+    /// never one of the called method's inference variables; one not
+    /// declared in scope at `call` is left out.
+    fn caller_vars(&self, call: Node<'t>, args: &[Option<Ty>]) -> CallerVars {
+        let mut out: CallerVars = Vec::new();
+        for a in args.iter().flatten() {
+            let Some(v) = top_var(a) else { continue };
+            if out.iter().any(|(k, _)| k == v) {
+                continue;
+            }
+            if let Some(bounds) = self.caller_var_bounds(v, call, 0) {
+                out.push((v.clone(), bounds));
+            }
+        }
+        out
+    }
+
+    fn caller_var_bounds(&self, v: &str, call: Node<'t>, depth: usize) -> Option<Vec<Ty>> {
+        let bounds = self.declared_type_var_bounds(v, call)?;
+        Some(
+            bounds
+                .into_iter()
+                .flat_map(|b| match b {
+                    Ty::TypeVar(w) if depth < 8 => self.caller_var_bounds(&w, call, depth + 1).unwrap_or_else(|| vec![Ty::Unknown]),
+                    Ty::TypeVar(_) => vec![Ty::Unknown],
+                    b => vec![b],
+                })
+                .collect(),
+        )
+    }
+
+    /// `fit_in` for an argument whose type is a caller's type variable `T`
+    /// or an array of one. `T` is a subtype only of itself and of the
+    /// supertypes of its bounds, and unboxes only where a bound is a box
+    /// type (JLS 4.10.2, 5.1.8): it fits a parameter that is not `T` as
+    /// well as its best bound does. A parameter that is one of `m`'s own
+    /// variables is an inference variable even where the caller's has the
+    /// same name: `fit_in` checks the bound against its bounds.
+    fn fit_caller_var(&self, m: &MethodInfo, param: &Ty, a: &Ty, bounds: &[Ty]) -> Fit {
+        let own = m.type_params.iter().any(|tp| mentions(param, &tp.name));
+        if param == a && !own {
+            return Fit::Strict;
+        }
+        let Some(v) = top_var(a) else { return self.fit_in(m, param, &ArgShape::Ty(a.clone())) };
+        bounds.iter().map(|b| self.fit_in(m, param, &ArgShape::Ty(a.subst(&|x| (x == &**v).then(|| b.clone()))))).min().unwrap_or(Fit::Maybe)
+    }
+
+    /// `conv` of an argument to an instantiated parameter `q`, where the
+    /// argument's type is a caller's type variable (or an array of one):
+    /// what `conv` leaves undecided, its bounds decide (see `fit_caller_var`).
+    fn conv_arg(&self, a: &Ty, q: &Ty, vars: &CallerVars) -> Conv {
+        let c = self.conv(a, q);
+        let Some((v, bounds)) = (c == Conv::Unknown).then(|| caller_var(a, vars)).flatten() else { return c };
+        let cs: Vec<Conv> = bounds.iter().map(|b| self.conv(&a.subst(&|x| (x == &**v).then(|| b.clone())), q)).collect();
+        if cs.contains(&Conv::Yes) {
+            Conv::Yes
+        } else if cs.contains(&Conv::Unchecked) && cs.iter().all(|c| matches!(c, Conv::Unchecked | Conv::No)) {
+            Conv::Unchecked
+        } else if !cs.is_empty() && cs.iter().all(|c| *c == Conv::No) {
+            Conv::No
+        } else {
+            Conv::Unknown
+        }
+    }
+
     /// Phase in which `m` fits the args (1 strict, 2 loose, 3 varargs),
     /// with the inference over the arguments' full types. `None` when `m`
     /// surely does not fit; the inference says whether it surely does.
-    fn candidate_fit(&self, m: &MethodInfo, args: &[ArgShape], poly: &[Poly], floors: &[Vec<Ty>]) -> Option<(u8, Inference)> {
+    fn candidate_fit(&self, m: &MethodInfo, args: &[ArgShape], poly: &[Poly], floors: &[Vec<Ty>], vars: &CallerVars) -> Option<(u8, Inference)> {
         let n = args.len();
         let np = m.params.len();
         let own = |t: &Ty| m.type_params.iter().any(|tp| mentions(t, &tp.name));
@@ -716,7 +784,13 @@ impl<'t> FileModel<'t> {
                 if !p.is_prim() && !own(p) && floor.iter().any(|f| self.conv(f, &p.erasure()) == Conv::No) {
                     return None;
                 }
-                let mut f = self.fit_in(m, p, a);
+                let mut f = match a {
+                    ArgShape::Ty(t) => match caller_var(t, vars) {
+                        Some((_, bounds)) => self.fit_caller_var(m, p, t, bounds),
+                        None => self.fit_in(m, p, a),
+                    },
+                    _ => self.fit_in(m, p, a),
+                };
                 // a poly argument's type arguments follow the parameter in javac
                 let mut elem = p;
                 while let Ty::Array(e) = elem {
@@ -742,7 +816,7 @@ impl<'t> FileModel<'t> {
                 fits.push(f);
             }
             let tys: Vec<Option<Ty>> = args.iter().map(|a| if let ArgShape::Ty(t) = a { Some(t.clone()) } else { None }).collect();
-            let mut inf = self.infer_args(m, &params, &tys, poly);
+            let mut inf = self.infer_args(m, &params, &tys, poly, vars);
             if inf.no {
                 return None;
             }
@@ -998,8 +1072,8 @@ impl<'t> FileModel<'t> {
     /// of the lower bounds, else the glb of the upper ones, here only when
     /// one of them is that), and check the arguments against the parameters
     /// so instantiated.
-    fn infer_args(&self, m: &MethodInfo, params: &[Ty], args: &[Option<Ty>], poly: &[Poly]) -> Inference {
-        let mut inf = self.infer_args_exact(m, params, args, poly);
+    fn infer_args(&self, m: &MethodInfo, params: &[Ty], args: &[Option<Ty>], poly: &[Poly], vars: &CallerVars) -> Inference {
+        let mut inf = self.infer_args_exact(m, params, args, poly, vars);
         // a poly argument (`List.of(x)`, `new ArrayList<>()`) takes its type
         // arguments from the parameter in javac: what it says about the
         // variables, or its own mismatch, proves nothing
@@ -1020,7 +1094,7 @@ impl<'t> FileModel<'t> {
         inf
     }
 
-    fn infer_args_exact(&self, m: &MethodInfo, params: &[Ty], args: &[Option<Ty>], poly: &[Poly]) -> Inference {
+    fn infer_args_exact(&self, m: &MethodInfo, params: &[Ty], args: &[Option<Ty>], poly: &[Poly], caller: &CallerVars) -> Inference {
         let vars: Vec<Name> = m.type_params.iter().map(|t| t.name.clone()).collect();
         let mut inf = Inference::default();
         let mut cs: Vec<(Name, Rel, Ty)> = Vec::new();
@@ -1299,7 +1373,8 @@ impl<'t> FileModel<'t> {
                     }
                 }
                 let unrelated = || matches!((b.erasure().class_name(), bound.erasure().class_name()), (Some(x), Some(y)) if self.is_subclass(x, y).is_no());
-                match self.conv(&b, &bb) {
+                // `b` comes from the arguments: a variable in it is the caller's
+                match self.conv_arg(&b, &bb, caller) {
                     Conv::Yes => {}
                     // the other variables bound exactly: a plain check
                     Conv::No if !own(bound) || unrelated() || vars.iter().filter(|v| **v != tp.name && mentions(bound, v)).all(|v| exact.contains(v)) && !mentions(bound, &tp.name) => {
@@ -1369,7 +1444,11 @@ impl<'t> FileModel<'t> {
                 }
                 continue;
             }
-            match self.conv(a, &q) {
+            // a caller's variable bounds nothing of a parameter built from
+            // `m`'s own variables (`Iterable<? extends T>`), which `q` then
+            // shows only roughly: its bounds decide a plain parameter alone
+            let conv = if own(p) { self.conv(a, &q) } else { self.conv_arg(a, &q, caller) };
+            match conv {
                 Conv::Yes => {}
                 Conv::Unchecked => inf.unchecked = true,
                 // javac may or may not infer it to fit: no proof either way
@@ -1718,7 +1797,8 @@ impl<'t> FileModel<'t> {
     }
 
     /// The applicable method for `call` among `cands`, how far its result is
-    /// a guess, and whether the method itself is one for want of a type.
+    /// a guess, and whether the method itself is a guess even where its
+    /// result is not.
     fn select_among(&self, cands: Vec<MethodRef>, call: Node<'t>) -> Option<(MethodRef, Choice, bool)> {
         let arg_nodes = self.args_of(call);
         let n = arg_nodes.len();
@@ -1745,7 +1825,9 @@ impl<'t> FileModel<'t> {
         let args: Vec<ArgShape> = arg_nodes.iter().map(|a| self.arg_shape(*a)).collect();
         let args = &args[..];
         let floors: Vec<Vec<Ty>> = arg_nodes.iter().map(|a| self.poly_floor(*a)).collect();
-        let fits: Vec<(MethodRef, (u8, Inference))> = cands.into_iter().filter_map(|m| self.candidate_fit(&m.method, args, &poly, &floors).map(|f| (m, f))).collect();
+        let tys: Vec<Option<Ty>> = args.iter().map(|a| if let ArgShape::Ty(t) = a { Some(t.clone()) } else { None }).collect();
+        let vars = self.caller_vars(call, &tys);
+        let fits: Vec<(MethodRef, (u8, Inference))> = cands.into_iter().filter_map(|m| self.candidate_fit(&m.method, args, &poly, &floors, &vars).map(|f| (m, f))).collect();
         if fits.is_empty() {
             return None;
         }
@@ -1797,9 +1879,10 @@ impl<'t> FileModel<'t> {
         // only where a type is unknown: javac's pick in code that compiles.
         // A rival in a later phase wins where the unproven fit fails.
         let only = rivals == 0 && !explicit && pool[w].1.only_blind();
+        let proven = single || sure || only;
         // overloads alike in erasure but not in type arguments (`List<String>`,
         // `List<Integer>`) need the proof as well, or keep the erasure only
-        let choice = if single || sure || only {
+        let choice = if proven {
             Choice::Sure
         } else if rets_differ {
             Choice::Guess
@@ -1808,10 +1891,16 @@ impl<'t> FileModel<'t> {
         } else {
             Choice::ErasureOnly
         };
+        // overloads alike in what they return, short of proof: the result's
+        // type is known, but not which method is called. The winner may not
+        // apply (`append(x)` with `x` of a class whose supertypes are missing
+        // fits `append(CharSequence)` only possibly, `append(Object)`
+        // surely), or not beat a rival that does.
+        let alike = choice == Choice::Sure;
         // overloads of different classes alike in what they return: the
         // result's type is known, but not whose method is called
-        let owners_differ = !(single || sure || only) && pool.iter().any(|(m, _)| m.owner != pool[0].0.owner);
-        Some((pool.swap_remove(w).0, choice, (blind || owners_differ) && !(single || sure || only)))
+        let owners_differ = pool.iter().any(|(m, _)| m.owner != pool[0].0.owner);
+        Some((pool.swap_remove(w).0, choice, !proven && (alike || blind || owners_differ)))
     }
 
     /// Overload selection only (no lambda-body inference). Receiver type
@@ -2387,7 +2476,8 @@ impl<'t> FileModel<'t> {
                 params.push(pt);
                 tys.push((!lambda).then_some(at));
             }
-            self.infer_args(m, &params, &tys, &poly)
+            let vars = self.caller_vars(call, &tys);
+            self.infer_args(m, &params, &tys, &poly, &vars)
         })
     }
 
@@ -2871,6 +2961,25 @@ pub fn unify(lk: &dyn ClassLookup, param: &Ty, arg: &Ty, tvars: &[Name], out: &m
         }
         _ => {}
     }
+}
+
+/// The caller's type variables argument types name, with their bounds (see
+/// `FileModel::caller_vars`).
+type CallerVars = Vec<(Name, Vec<Ty>)>;
+
+/// The type variable `t` is, or is an array of.
+fn top_var(t: &Ty) -> Option<&Name> {
+    match t {
+        Ty::TypeVar(v) => Some(v),
+        Ty::Array(e) => top_var(e),
+        _ => None,
+    }
+}
+
+/// The caller's type variable `t` is (or is an array of), with its bounds.
+fn caller_var<'v>(t: &Ty, vars: &'v CallerVars) -> Option<(&'v Name, &'v [Ty])> {
+    let v = top_var(t)?;
+    vars.iter().find(|(k, _)| k == v).map(|(k, b)| (k, &b[..]))
 }
 
 #[allow(dead_code)]

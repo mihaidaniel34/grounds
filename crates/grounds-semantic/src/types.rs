@@ -367,19 +367,25 @@ impl<'t> FileModel<'t> {
 
     /// All bounds of a type variable visible at `at` (`T extends A & B`).
     pub fn type_var_bounds(&self, name: &str, at: Node<'t>) -> Vec<Ty> {
+        self.declared_type_var_bounds(name, at).unwrap_or_else(|| vec![Ty::object()])
+    }
+
+    /// The bounds of the type variable `name` declared in scope at `at`
+    /// (Object when it has none); `None` when no declaration there names it.
+    pub fn declared_type_var_bounds(&self, name: &str, at: Node<'t>) -> Option<Vec<Ty>> {
         for a in std::iter::once(at).chain(self.ancestors_of(at)) {
             if let Some(tp) = a.field("type_parameters") {
                 for p in tp.kids_of_kind("type_parameter") {
                     if p.kid_of_kind("type_identifier").map(|i| i.text(self.src)) == Some(name) {
-                        return match p.kid_of_kind("type_bound") {
+                        return Some(match p.kid_of_kind("type_bound") {
                             Some(b) => b.kids().into_iter().map(|t| self.resolve_type_node(t)).collect(),
                             None => vec![Ty::object()],
-                        };
+                        });
                     }
                 }
             }
         }
-        vec![Ty::object()]
+        None
     }
 
     /// Bound of a type variable visible at `at`.
