@@ -207,27 +207,37 @@ pub fn hunks_since(root: &Path, files: &[PathBuf], rev: &str) -> Result<BTreeMap
             }
             Err(e) => return Err(e),
         };
-        // `-a,b` / `+c,d`; a missing count means 1
-        let spec = |s: &str| -> (u32, u32) {
-            match s.split_once(',') {
-                Some((a, b)) => (a.parse().unwrap_or(0), b.parse().unwrap_or(0)),
-                None => (s.parse().unwrap_or(0), 1),
-            }
-        };
-        let mut hunks = Vec::new();
-        for line in diff.lines() {
-            // @@ -a,b +c,d @@
-            if let Some(rest) = line.strip_prefix("@@ ") {
-                let mut parts = rest.split_whitespace();
-                if let (Some(minus), Some(plus)) = (parts.next().and_then(|p| p.strip_prefix('-')), parts.next().and_then(|p| p.strip_prefix('+'))) {
-                    let ((old_start, old_count), (new_start, new_count)) = (spec(minus), spec(plus));
-                    hunks.push(Hunk { old_start, old_count, new_start, new_count });
-                }
-            }
-        }
+        let hunks = parse_hunks(&diff).map_err(|why| GitError { args: format!("diff -U0 --no-color --no-ext-diff --no-relative {rev} -- {}", f.display()), why })?;
         out.insert(f.clone(), Diff::Hunks(hunks));
     }
     Ok(out)
+}
+
+/// The hunks of a diff, from their headers (`@@ -a,b +c,d @@`). A header
+/// that does not read so is an error, saying which: read as 0, it said that
+/// line 0 changed, and the lines the hunk did change were taken for old.
+fn parse_hunks(diff: &str) -> Result<Vec<Hunk>, String> {
+    // `a,b` / `c,d`; a missing count means 1
+    let spec = |s: &str| -> Option<(u32, u32)> {
+        match s.split_once(',') {
+            Some((a, b)) => Some((a.parse().ok()?, b.parse().ok()?)),
+            None => Some((s.parse().ok()?, 1)),
+        }
+    };
+    let mut hunks = Vec::new();
+    // (every line of a hunk's body starts with ` `, `-`, `+` or `\`: a line
+    // that starts with `@@ ` is a header)
+    for line in diff.lines() {
+        let Some(rest) = line.strip_prefix("@@ ") else { continue };
+        let mut parts = rest.split_whitespace();
+        let minus = parts.next().and_then(|p| p.strip_prefix('-')).and_then(spec);
+        let plus = parts.next().and_then(|p| p.strip_prefix('+')).and_then(spec);
+        let (Some((old_start, old_count)), Some((new_start, new_count))) = (minus, plus) else {
+            return Err(format!("a hunk header that does not parse: `{line}`"));
+        };
+        hunks.push(Hunk { old_start, old_count, new_start, new_count });
+    }
+    Ok(hunks)
 }
 
 /// Contents of the file at HEAD; `Ok(None)` if it is not there.
@@ -316,5 +326,17 @@ mod tests {
             assert_eq!(is_repo(&outside), Ok(false));
         }
         let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    /// A hunk header is read as git writes it, a missing count being 1; one
+    /// that does not read so is an error, not a hunk at line 0.
+    #[test]
+    fn a_hunk_header_that_does_not_parse_is_an_error() {
+        let diff = "diff --git a/A.java b/A.java\n--- a/A.java\n+++ b/A.java\n@@ -3,2 +3 @@ class A {\n-    int a;\n-    int b;\n+    int c;\n@@ -9,0 +9,2 @@\n+x\n+y\n";
+        assert_eq!(parse_hunks(diff), Ok(vec![Hunk { old_start: 3, old_count: 2, new_start: 3, new_count: 1 }, Hunk { old_start: 9, old_count: 0, new_start: 9, new_count: 2 }]));
+        for header in ["@@ -3,x +3 @@", "@@ -3 +y,2 @@", "@@ -3,2 @@", "@@ 3,2 +3,1 @@"] {
+            let r = parse_hunks(&format!("--- a/A.java\n+++ b/A.java\n{header}\n+x\n"));
+            assert_eq!(r, Err(format!("a hunk header that does not parse: `{header}`")), "{header}");
+        }
     }
 }
