@@ -78,6 +78,7 @@ fn rule_fixtures() {
     let ids: BTreeSet<&str> = rules.iter().map(|r| r.meta().id).collect();
     let mut failures = Vec::new();
     let mut checked = 0;
+    let mut claimed = 0;
     for fx in &fixtures {
         let stem = fx.file_stem().unwrap().to_string_lossy().to_string();
         let rule_id = stem.split("__").next().unwrap().to_string();
@@ -116,6 +117,15 @@ fn rule_fixtures() {
         let actual: BTreeSet<usize> = diags.iter().map(|d| pf.lines.line_of(d.range.start) + 1).collect();
         let expected = expected_lines(&text, &rule_id);
         checked += 1;
+        // a compile-break finding is a claim of absence: it carries the
+        // claim the kernel made from its proof that the world is closed
+        let absence = grounds_rules::meta_of(&rule_id).is_some_and(|m| m.absence);
+        if absence || STABLE_IN_CHANGED.contains(&rule_id.as_str()) {
+            for d in diags.iter().filter(|d| d.claim.is_none()) {
+                failures.push(format!("{stem}: line {}: a finding of {rule_id} without the kernel's claim: {}", pf.lines.line_of(d.range.start) + 1, d.message));
+            }
+            claimed += diags.len();
+        }
         if expected.is_empty() && !first.contains("grounds: no-findings") {
             failures.push(format!("{stem}: fixture has no `// expect` markers (or `// grounds: no-findings`)"));
         }
@@ -132,7 +142,7 @@ fn rule_fixtures() {
             failures.push(msg);
         }
     }
-    eprintln!("checked {checked} fixtures");
+    eprintln!("checked {checked} fixtures, {claimed} findings of absence rules, each with its claim");
     if !failures.is_empty() {
         panic!("{} fixture failures:\n  {}", failures.len(), failures.join("\n  "));
     }
@@ -201,6 +211,53 @@ fn stable_rules_are_strict() {
         let m = grounds_rules::meta_of(id).unwrap_or_else(|| panic!("no rule {id}"));
         assert!(m.is_strict(), "{id} is stable and tolerates {:?}", m.tolerates.iter().map(|t| t.0.name()).collect::<Vec<_>>());
     }
+}
+
+/// The compile-break rules of `grounds changed` are absence rules: a finding
+/// of theirs without the kernel's claim is not reported (`Ctx::report_claim`
+/// takes a `grounds_semantic::Claim`, which only the kernel makes). So are
+/// the other compile-break rules of resolution.rs.
+#[test]
+fn compile_break_rules_report_only_claims_of_the_kernel() {
+    for id in STABLE_IN_CHANGED.iter().chain(&["unresolved-static-import", "incompatible-assignment"]) {
+        let m = grounds_rules::meta_of(id).unwrap_or_else(|| panic!("no rule {id}"));
+        assert!(m.absence, "{id} claims absence and is not an absence rule");
+    }
+}
+
+grounds_rules::declare_rule!(ClaimsWithoutProof {
+    id: "claims-without-proof",
+    name: "A rule that reports absence without the kernel",
+    category: Bug,
+    severity: Error,
+    maturity: Preview,
+    absence: true,
+    sources: ["test"],
+    kinds: ["method_invocation"],
+    description: "Reports every call as missing, through `Ctx::report`.",
+});
+
+impl grounds_rules::Rule for ClaimsWithoutProof {
+    grounds_rules::rule_meta!();
+    fn check_node<'t>(&self, n: grounds_syntax::Node<'t>, cx: &mut grounds_rules::framework::Ctx<'_, 't>) {
+        cx.report(n, "`C` has no method `m`");
+    }
+}
+
+/// `Ctx::report` and the other reports without a claim are no way around
+/// the kernel for an absence rule: the finding is not reported (and a debug
+/// build stops at it, which the runner catches as a panicking rule).
+#[test]
+fn an_absence_rule_reports_nothing_without_a_claim() {
+    let text = "class C { void f() { m(); } }";
+    let mut idx = base_index();
+    let key: Arc<str> = Arc::from("fixtures/C.java");
+    let pf = ParsedFile::parse(text);
+    idx.set_file(key.clone(), Arc::new(extract(&pf)));
+    let fm = FileModel::new(&pf, &idx, key.clone());
+    let set = RuleSet::new(vec![Box::new(ClaimsWithoutProof)]);
+    let info = FileInfo { path: key.to_string(), is_test: false, is_generated: false };
+    assert!(set.check(&fm, &info, None, &Default::default()).is_empty());
 }
 
 #[test]

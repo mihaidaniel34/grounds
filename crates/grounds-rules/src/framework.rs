@@ -8,7 +8,7 @@ use grounds_flow::analyses::{Liveness, NullnessAnalysis, OptionalPresence, Resou
 use grounds_flow::{Cfg, Results};
 use grounds_index::doubt::{self, Doubt, Doubts};
 use grounds_index::*;
-use grounds_semantic::FileModel;
+use grounds_semantic::{Claim, FileModel, Jars};
 use grounds_syntax::{Node, NodeExt, TextRange};
 use rustc_hash::FxHashMap;
 use serde::Serialize;
@@ -137,6 +137,14 @@ pub struct RuleMeta {
     /// hidden.
     #[serde(serialize_with = "serialize_tolerates")]
     pub tolerates: &'static [(Doubt, &'static str)],
+    /// The rule's findings say that code does not compile because something
+    /// is not there (`absence: true` in `declare_rule!`). Such a claim is
+    /// only true in a closed world, which only the kernel proves
+    /// (`grounds_semantic::closed`): each finding must carry the kernel's
+    /// [`Claim`] ([`Ctx::report_claim`]), and one without it is not
+    /// reported. Every rule of [`STABLE_IN_CHANGED`] is one.
+    #[serde(skip)]
+    pub absence: bool,
 }
 
 fn serialize_tolerates<S: serde::Serializer>(t: &&'static [(Doubt, &'static str)], s: S) -> Result<S::Ok, S::Error> {
@@ -239,12 +247,18 @@ pub struct Diagnostic {
     pub range: TextRange,
     pub message: String,
     pub fix: Option<Fix>,
-    /// What the finding asserts, when the message shows only part of it (a
-    /// list cut to a few entries) or in an order that is not part of the
-    /// claim. `grounds changed` compares claims to tell a finding that is new
-    /// with a change from one that was there before; without this the message,
-    /// less its hint and candidate list, is the claim.
-    pub claim: Option<String>,
+    /// What a compile-break finding asserts, made by the kernel from its
+    /// proof that the world is closed (`grounds_semantic::closed`), with
+    /// qualified names and whole sets where the message shows simple names
+    /// or a few entries. `grounds changed` compares claims to tell a finding
+    /// that is new with a change from one that was there before; without a
+    /// claim (here or in `wiring_claim`) the message, less its hint and
+    /// candidate list, is the claim.
+    pub claim: Option<Claim>,
+    /// What a wiring finding asserts, for the same comparison: the wiring
+    /// model makes it, not the kernel. No absence rule
+    /// ([`RuleMeta::absence`]) reports one.
+    pub wiring_claim: Option<String>,
     /// What was collapsed from unknown into a definite answer while the rule
     /// derived this finding (see `grounds_index::doubt`): noted in the
     /// [`Ctx::grounded`] part that reported it, else in the whole visit.
@@ -299,32 +313,55 @@ impl<'a, 't> Ctx<'a, 't> {
         r
     }
 
+    /// Every report goes through here. A finding of an absence rule
+    /// ([`RuleMeta::absence`]) without the kernel's claim rests on no proof
+    /// that what it says is missing is missing: it is a bug in the rule, an
+    /// assertion in a debug build, and not reported in any build.
+    fn push(&mut self, severity: Severity, range: TextRange, message: String, fix: Option<Fix>, claim: Option<Claim>, wiring_claim: Option<String>) {
+        if self.rule.absence && claim.is_none() {
+            debug_assert!(false, "{} reported a claim of absence without the kernel's proof: {message}", self.rule.id);
+            return;
+        }
+        self.out.push(Diagnostic { rule: self.rule.id, severity, range, message, fix, claim, wiring_claim, doubt: Doubts::NONE, attributed: false });
+    }
+
     pub fn report(&mut self, node: Node<'t>, message: impl Into<String>) {
         self.report_range(TextRange::of(node), message);
     }
 
     pub fn report_range(&mut self, range: TextRange, message: impl Into<String>) {
-        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range, message: message.into(), fix: None, claim: None, doubt: Doubts::NONE, attributed: false });
+        self.push(self.rule.severity, range, message.into(), None, None, None);
     }
 
     pub fn report_fix(&mut self, node: Node<'t>, message: impl Into<String>, fix: Fix) {
-        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range: TextRange::of(node), message: message.into(), fix: Some(fix), claim: None, doubt: Doubts::NONE, attributed: false });
+        self.push(self.rule.severity, TextRange::of(node), message.into(), Some(fix), None, None);
     }
 
     pub fn report_with_severity(&mut self, node: Node<'t>, severity: Severity, message: impl Into<String>) {
-        self.out.push(Diagnostic { rule: self.rule.id, severity, range: TextRange::of(node), message: message.into(), fix: None, claim: None, doubt: Doubts::NONE, attributed: false });
+        self.push(severity, TextRange::of(node), message.into(), None, None, None);
     }
 
-    /// A method's identity for a claim: qualified owner and erased,
-    /// qualified parameter types (the message shows simple names).
-    pub fn method_id(owner: &str, m: &grounds_index::MethodInfo) -> String {
-        format!("{owner}.{}({})", m.name, m.params.iter().map(|p| p.ty.erasure().to_string()).collect::<Vec<_>>().join(","))
+    /// Report a claim of absence the kernel made (see [`Diagnostic::claim`]),
+    /// behind a message that may show only part of it, or name types by
+    /// their simple names.
+    pub fn report_claim(&mut self, node: Node<'t>, message: impl Into<String>, claim: Claim) {
+        self.push(self.rule.severity, TextRange::of(node), message.into(), None, Some(claim), None);
     }
 
-    /// Report with the full claim behind a message that shows only part of
-    /// it, or names types by their simple names (see [`Diagnostic::claim`]).
-    pub fn report_claim(&mut self, node: Node<'t>, message: impl Into<String>, claim: String) {
-        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range: TextRange::of(node), message: message.into(), fix: None, claim: Some(claim), doubt: Doubts::NONE, attributed: false });
+    /// Report a wiring finding with the full claim behind its message (see
+    /// [`Diagnostic::wiring_claim`]).
+    pub fn report_wiring_claim(&mut self, node: Node<'t>, message: impl Into<String>, claim: String) {
+        self.push(self.rule.severity, TextRange::of(node), message.into(), None, None, Some(claim));
+    }
+
+    /// Where the versions of the jars come from: exact with a classpath the
+    /// build dumped (the project-wide `classpath.exact`), else guessed.
+    pub fn jars(&self) -> Jars {
+        if self.global_option("classpath.exact") == Some("true") {
+            Jars::Exact
+        } else {
+            Jars::Guessed
+        }
     }
 
     pub fn text(&self, n: Node<'t>) -> &'t str {
@@ -480,6 +517,7 @@ macro_rules! declare_rule {
             $(scope: $scope:ident,)?
             $(enabled: $enabled:literal,)?
             $(tolerates: [$($tk:ident: $tr:literal),* $(,)?],)?
+            $(absence: $absence:literal,)?
             sources: [$($src:literal),* $(,)?],
             kinds: [$($kind:literal),* $(,)?],
             description: $desc:literal $(,)?
@@ -501,6 +539,7 @@ macro_rules! declare_rule {
                 description: $desc,
                 default_enabled: $crate::declare_rule!(@enabled $($enabled)?),
                 tolerates: &[$($((grounds_index::doubt::Doubt::$tk, $tr)),*)?],
+                absence: $crate::declare_rule!(@absence $($absence)?),
             };
         }
     };
@@ -508,6 +547,8 @@ macro_rules! declare_rule {
     (@tier $t:ident) => { $crate::framework::Tier::$t };
     (@scope) => { $crate::framework::Scope::All };
     (@scope $s:ident) => { $crate::framework::Scope::$s };
+    (@absence) => { false };
+    (@absence $a:literal) => { $a };
     (@enabled) => { true };
     (@enabled $e:literal) => { $e };
 }

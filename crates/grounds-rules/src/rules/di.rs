@@ -129,7 +129,7 @@ impl Rule for BeanNotFound {
     fn check_file<'t>(&self, cx: &mut Ctx<'_, 't>) {
         for_each_point(cx, |cx, node, p, res, _| {
             if res == Resolution::NotFound {
-                cx.report_claim(node, format!("No bean of type `{}` is defined; injection of `{}` fails at startup", p.ty.display_simple(), p.name), format!("No bean of type `{}`; injection of `{}` into `{}`", p.ty, p.name, p.owner));
+                cx.report_wiring_claim(node, format!("No bean of type `{}` is defined; injection of `{}` fails at startup", p.ty.display_simple(), p.name), format!("No bean of type `{}`; injection of `{}` into `{}`", p.ty, p.name, p.owner));
             }
         });
     }
@@ -156,7 +156,7 @@ impl Rule for AmbiguousBean {
                 let mut all: Vec<String> = c.iter().map(|&i| bean_id(&di.beans[i])).collect();
                 all.sort();
                 let claim = format!("beans of type `{}` match `{}` into `{}`: {}", p.ty, p.name, p.owner, all.join(", "));
-                cx.report_claim(node, format!("{} beans of type `{}` match `{}`: {}; add a @Qualifier or @Primary", c.len(), p.ty.display_simple(), p.name, bean_list(di, &c)), claim);
+                cx.report_wiring_claim(node, format!("{} beans of type `{}` match `{}`: {}; add a @Qualifier or @Primary", c.len(), p.ty.display_simple(), p.name, bean_list(di, &c)), claim);
             }
         });
     }
@@ -179,7 +179,7 @@ impl Rule for QualifierNotFound {
     fn check_file<'t>(&self, cx: &mut Ctx<'_, 't>) {
         for_each_point(cx, |cx, node, p, res, di| {
             if let Resolution::QualifierNotFound { qualifier, candidates } = res {
-                cx.report_claim(node, format!("No `{}` bean is qualified `{}`; available: {}", p.ty.display_simple(), qualifier.trim_start_matches('@'), bean_list(di, &candidates)), format!("No `{}` bean is qualified `{}`", p.ty, qualifier.trim_start_matches('@')));
+                cx.report_wiring_claim(node, format!("No `{}` bean is qualified `{}`; available: {}", p.ty.display_simple(), qualifier.trim_start_matches('@'), bean_list(di, &candidates)), format!("No `{}` bean is qualified `{}`", p.ty, qualifier.trim_start_matches('@')));
             }
         });
     }
@@ -967,7 +967,7 @@ impl Rule for BeanNameConflict {
                             } else {
                                 "Spring Boot fails at startup (BeanDefinitionOverrideException) unless bean overriding is enabled"
                             };
-                            cx.report_claim(nd, format!("Bean name '{}' is also used by {by}; {fails}. Give one an explicit name", this.name), format!("Bean name '{}' of {} is also used by {by}; {fails}", this.name, bean_id(this)));
+                            cx.report_wiring_claim(nd, format!("Bean name '{}' is also used by {by}; {fails}. Give one an explicit name", this.name), format!("Bean name '{}' of {} is also used by {by}; {fails}", this.name, bean_id(this)));
                         }
                     }
                 }

@@ -201,7 +201,8 @@ pub fn compared_in_changed(rule: &str) -> bool {
 /// What a compile-break or wiring finding claims, independent of where it
 /// is: the rule and the assertion. The fingerprint is no use here: it hashes
 /// the text of the line, which an edit to that line changes. The rules hand
-/// the assertion over on the diagnostic (`Diagnostic::claim`), with
+/// the assertion over on the diagnostic (`Diagnostic::claim`, made by the
+/// kernel of grounds-semantic for a compile-break rule; `wiring_claim`), with
 /// qualified names where the message shows simple ones (`a.Api` and `b.Api`
 /// are different claims) and whole sets where the message cuts them. Per rule,
 /// what is asserted (kept, sets sorted) and what is presentation (left out):
@@ -223,9 +224,9 @@ pub fn compared_in_changed(rule: &str) -> bool {
 /// The last five (wiring) rows are compared too, but those rules are not
 /// stable: which pair, qualifier or cycle they report depends on the order of
 /// maps and annotations in the wiring model, so their findings stay preview.
-/// Without a claim on the diagnostic (`missing-jdk-import`, whose message is
-/// already qualified, and the cycle rule), the message less its recognised
-/// presentation suffixes is the claim.
+/// The claim of `missing-jdk-import` is its message, already qualified.
+/// Without a claim on the diagnostic (the cycle rule), the message less its
+/// recognised presentation suffixes is the claim.
 fn claim_key(f: &Finding) -> (&'static str, String) {
     if let Some(c) = &f.claim {
         return (f.rule, c.clone());

@@ -3,7 +3,7 @@
 
 use crate::binder::LocalKind;
 use crate::memo::Query;
-use crate::model::{FileModel, Lookup, Named, Symbol};
+use crate::model::{FileModel, Named, Symbol};
 use grounds_index::doubt::{self, Doubt};
 use grounds_index::stubs::{fold_binary, fold_unary, literal_constant};
 use grounds_index::*;
@@ -611,43 +611,6 @@ impl<'t> FileModel<'t> {
         match self.symbol(n) {
             Some(Symbol::Field(f)) => Some(f),
             _ => None,
-        }
-    }
-
-    /// The field an identifier or field access refers to, or that it refers
-    /// to no visible field. An unresolved name is not evidence that the field
-    /// does not exist: only a closed class (one whose whole hierarchy is
-    /// visible) proves absence, and a caller claiming absence must prove it
-    /// that way. Notes nothing for the unresolved case; what it observed while
-    /// finding a field (or another symbol) counts as usual.
-    pub fn field_lookup(&self, n: Node<'t>) -> Lookup<FieldRef> {
-        let (s, d) = doubt::observe(|| self.symbol(n));
-        match s {
-            Some(Symbol::Field(f)) => {
-                doubt::replay(d);
-                Lookup::Found(f)
-            }
-            Some(_) => {
-                doubt::replay(d);
-                Lookup::Unresolved
-            }
-            None => Lookup::Unresolved,
-        }
-    }
-
-    /// The class of a binary name, or that no visible class has it. A class
-    /// that is not found is not evidence that it does not exist: only a
-    /// closed class proves absence (of a member type, a member), and a caller
-    /// claiming absence must prove it that way. Notes nothing for the
-    /// unresolved case.
-    pub fn class_lookup(&self, name: &str) -> Lookup<Arc<ClassInfo>> {
-        let (c, d) = doubt::observe(|| self.class(name));
-        match c {
-            Some(c) => {
-                doubt::replay(d);
-                Lookup::Found(c)
-            }
-            None => Lookup::Unresolved,
         }
     }
 

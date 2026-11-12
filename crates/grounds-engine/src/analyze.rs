@@ -259,7 +259,7 @@ fn to_finding<'t>(project: &Project, pf: &'t ParsedFile, fm: &FileModel, rel: &s
         fingerprint: fp,
         legacy_fingerprint,
         fix: d.fix,
-        claim: d.claim,
+        claim: d.claim.map(|c| c.into_string()).or(d.wiring_claim),
         start: d.range.start,
         end: d.range.end,
     }

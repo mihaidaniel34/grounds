@@ -4,12 +4,14 @@
 
 pub mod binder;
 pub mod calls;
+pub mod closed;
 pub mod matchers;
 mod memo;
 pub mod model;
 pub mod types;
 
 pub use binder::{LocalDecl, LocalKind};
+pub use closed::{Claim, Closed, Jars, Open};
 pub use matchers::{MethodMatcher, OwnerMatch};
 pub use model::{FileModel, Lookup, Named, ResolvedCall, Symbol};
 
