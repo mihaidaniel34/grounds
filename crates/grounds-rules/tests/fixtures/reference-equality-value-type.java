@@ -56,11 +56,47 @@ class Rewriter {
         for (int i = 0; i < 3; i++) m = visit(m, ctx);
         return m != original;
     }
-    // a library value: an equal result is a new object
+    // a library value too: true exactly when round() gave back v itself
     java.math.BigDecimal round(java.math.BigDecimal v) { return v; }
     boolean library(java.math.BigDecimal v) {
         java.math.BigDecimal r = round(v);
-        return r == v; // expect
+        return r == v;
+    }
+    // a local that switches between two objects: which one it holds
+    boolean active(java.util.ArrayList<String> first, java.util.ArrayList<String> rest, boolean more) {
+        var elements = first;
+        if (more) elements = rest;
+        return elements == first;
+    }
+    boolean transformed(java.math.BigDecimal v) {
+        java.math.BigDecimal r = round(v);
+        r = r.stripTrailingZeros();
+        return r == v;
+    }
+    // two locals of one name in separate blocks: each is its own
+    boolean scoped(java.math.BigDecimal v, boolean c) {
+        if (c) {
+            java.math.BigDecimal r = new java.math.BigDecimal("1");
+            if (r.signum() > 0) return false;
+        }
+        java.math.BigDecimal r = round(v);
+        return r == v;
+    }
+    // missed, by design (follow-ups in #100): a helper that always makes a
+    // new object, and a local replaced by a new object, are not followed
+    static java.math.BigDecimal copy(java.math.BigDecimal v) { return new java.math.BigDecimal(v.toString()); }
+    boolean sameValue(java.math.BigDecimal v) {
+        return copy(v) == v;
+    }
+    boolean reassigned(java.math.BigDecimal v) {
+        java.math.BigDecimal r = v;
+        r = new java.math.BigDecimal(v.toString());
+        return r == v;
+    }
+    // but not against another value
+    boolean libraryUnrelated(java.math.BigDecimal v, java.math.BigDecimal w) {
+        java.math.BigDecimal r = round(v);
+        return r == w; // expect
     }
     // unrelated values: identity is not a change check
     boolean unrelated(Money a, Money b, Object ctx) {

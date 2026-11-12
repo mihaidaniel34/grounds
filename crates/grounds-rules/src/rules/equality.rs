@@ -1102,9 +1102,10 @@ impl Rule for ReferenceEqualityOnValueType {
                 return;
             }
         }
-        // the change check is an idiom of a project's own immutable trees; for
-        // a library value (`BigDecimal r = round(v); r == v`) identity is a bug
-        if identity_fast_path(n, l, r, cx.src) || c.is_source() && change_check(n, l, r, cx) {
+        // a change check asks whether a computation handed back the object
+        // it was given, whatever the type: `BigDecimal r = round(v); r == v`
+        // is true exactly when `round` returned `v` itself
+        if identity_fast_path(n, l, r, cx.src) || change_check(n, l, r, cx) {
             return;
         }
         cx.report(n, format!("`{}` overrides `equals()`; `{}` compares identity", simple_name_of(ln), op(n)));
@@ -1164,7 +1165,7 @@ fn identity_fast_path(n: Node<'_>, l: Node<'_>, r: Node<'_>, src: &str) -> bool 
 /// was computed from the other, so the identity test asks whether the
 /// computation handed back the object it was given. `equals()` would answer
 /// a different question (and walk both values to do it).
-fn change_check<'t>(n: Node<'t>, l: Node<'t>, r: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+fn change_check<'t>(_n: Node<'t>, l: Node<'t>, r: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
     let src = cx.src;
     let strip = |e: Node<'t>| {
         let mut e = e.unparen();
@@ -1187,16 +1188,18 @@ fn change_check<'t>(n: Node<'t>, l: Node<'t>, r: Node<'t>, cx: &Ctx<'_, 't>) -> 
             return true;
         }
         // a local that started out as the other operand or as such a call
+        // (its own declaration, as the binder finds it: not another local of
+        // the same name in another block). What is assigned to it later is
+        // not followed: the identity question stays one of which object it
+        // holds (`m = visit(m, ctx)`, `elements = body`), and a local that
+        // can only hold a new object by then is a missed finding (#100).
         let a = strip(a);
         if a.kind() != "identifier" || cx.fm.field_ref(a).is_some() {
             continue;
         }
-        let Some(m) = enclosing_method_decl(n).or_else(|| cx.owning_callable(n)) else { continue };
-        let mut named = m.descendants().filter(|d| d.kind() == "variable_declarator" && d.start_byte() < n.start_byte() && d.field("name").is_some_and(|x| cx.text(x) == cx.text(a)));
-        if let (Some(d), None) = (named.next(), named.next()) {
-            if d.field("value").is_some_and(|v| normalized(strip(v), src) == of || received(v, &of)) {
-                return true;
-            }
+        let Some(i) = cx.fm.local_ref(a) else { continue };
+        if cx.fm.binder.decls[i].decl_node.field("value").is_some_and(|v| normalized(strip(v), src) == of || received(v, &of)) {
+            return true;
         }
     }
     false

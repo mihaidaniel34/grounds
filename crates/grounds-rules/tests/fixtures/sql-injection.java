@@ -125,6 +125,32 @@ class IdentifiersFromFields {
         ps.setString(1, pref);
         c.prepareStatement("UPDATE " + table + " SET seen = ? WHERE id = ?");
     }
+    // an apostrophe in a comment opens no literal
+    void commented(java.sql.Connection c, String column, String name) throws java.sql.SQLException {
+        if (!java.util.Set.of("id", "name").contains(column)) throw new IllegalArgumentException();
+        c.prepareStatement("SELECT /* don't expose details */ t." + column + " FROM t WHERE id = ?");
+        c.prepareStatement("SELECT -- don't expose details\n t." + column + " FROM t WHERE id = ?");
+        c.prepareStatement("SELECT 'it''s', t." + column + " FROM t WHERE id = ?");
+        c.prepareStatement("SELECT * FROM t /* it's */ WHERE id = ? AND name = '" + name + "'"); // expect
+        c.prepareStatement("SELECT * FROM t WHERE id = ? /* " + name + " */"); // expect
+    }
+    // literals and comments the dialects read differently: not known
+    void dialects(java.sql.Connection c, String column) throws java.sql.SQLException {
+        if (!java.util.Set.of("id", "name").contains(column)) throw new IllegalArgumentException();
+        c.prepareStatement("SELECT $$it's$$ AS note, t." + column + " FROM t WHERE id = ?");
+        c.prepareStatement("SELECT $q$it's$q$ AS note, t." + column + " FROM t WHERE id = ?");
+        c.prepareStatement("SELECT $é$it's$é$ AS note, t." + column + " FROM t WHERE id = ?");
+        c.prepareStatement("SELECT E'it\\'s' AS note, t." + column + " FROM t WHERE id = ?");
+        c.prepareStatement("SELECT 'it\\'s' AS note, t." + column + " FROM t WHERE id = ?");
+        c.prepareStatement("SELECT /* outer /* inner */ don't */ t." + column + " FROM t WHERE id = ?");
+        // MySQL reads 1--2 as a subtraction, and `a/*b` as a quoted name
+        c.prepareStatement("SELECT 1--2, t." + column + " FROM t WHERE id = ?");
+        c.prepareStatement("SELECT t.`a/*b`, t." + column + " FROM t WHERE id = ?");
+        // a $ within a name opens no dollar quote
+        c.prepareStatement("SELECT foo$tag$ FROM t WHERE id = ? AND name = '" + column + "'"); // expect
+        // a parameter `$1` is no dollar quote
+        c.prepareStatement("SELECT t.a FROM t WHERE id = ? AND n = $1 AND name = '" + column + "'"); // expect
+    }
     // a value spliced in beside the placeholders
     void mixed(java.sql.Connection c, String table, String name) throws java.sql.SQLException {
         c.prepareStatement("SELECT * FROM " + table + " WHERE id = ? AND name = '" + name + "'"); // expect

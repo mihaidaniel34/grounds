@@ -137,7 +137,7 @@ fn git_common_dir(d: &Path) -> Option<PathBuf> {
     Some(if common.starts_with('.') { gitdir.join(common) } else { PathBuf::from(common) })
 }
 
-const SKIP_DIRS: &[&str] = &["node_modules", ".git", ".gradle", ".idea", "out", ".grounds", "bin"];
+pub(crate) const SKIP_DIRS: &[&str] = &["node_modules", ".git", ".gradle", ".idea", "out", ".grounds", "bin"];
 
 pub use grounds_index::sources::{in_test_module, is_test_path, is_test_set, register_project_root, set_extra_test_sets, source_set_of};
 

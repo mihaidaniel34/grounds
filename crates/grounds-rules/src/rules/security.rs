@@ -653,10 +653,16 @@ fn format_parts<'t>(fmt: &str, args: &[Node<'t>], out: &mut Vec<SqlPart<'t>>) ->
 /// Does the SQL so far end where a table or column name goes: after `from`,
 /// `into`, `update`, `join`, `table`, or after a qualifier (`t.`)?
 fn identifier_position(before: &str) -> bool {
-    // inside a quoted literal (`host = 'www.` + host): a value
-    if before.matches('\'').count() % 2 == 1 {
-        return false;
-    }
+    // inside a quoted literal (`host = 'www.` + host): a value; inside a
+    // comment (`-- ` + note, `/* ` + note): not a name either. Where the
+    // dialects disagree about the text before, where it ends is not known,
+    // and the text is taken for a name, which keeps the rule silent.
+    let before = match sql_code(before) {
+        SqlLexed::Code(code) => code,
+        SqlLexed::Inside => return false,
+        SqlLexed::Unknown => return true,
+    };
+    let before = before.as_str();
     if before.ends_with('.') {
         return true;
     }
@@ -666,6 +672,98 @@ fn identifier_position(before: &str) -> bool {
     }
     let lower = trimmed.to_ascii_lowercase();
     ["from", "into", "update", "join", "table"].iter().any(|k| lower.strip_suffix(k).is_some_and(|rest| !rest.ends_with(|c: char| c.is_alphanumeric() || c == '_')))
+}
+
+/// SQL text as a lexer reads it.
+enum SqlLexed {
+    /// Outside literals and comments: the text, comments made blanks, so
+    /// that an apostrophe in a comment (`/* don't .. */`) opens no literal.
+    Code(String),
+    /// Inside a quoted literal or identifier, or a comment.
+    Inside,
+    /// Where the dialects read it differently: a backslash in a literal
+    /// (an escape in MySQL and in PostgreSQL's `E'..'`, a character in
+    /// standard SQL), a `$` not followed by a digit outside a name
+    /// (PostgreSQL's dollar quote `$tag$` may open there), `--` not followed
+    /// by a blank (a comment, or MySQL's minus minus), a backtick (MySQL's
+    /// quoted identifier), a `/*` inside
+    /// a block comment (nested in PostgreSQL, not elsewhere).
+    Unknown,
+}
+
+/// A quote in a literal is doubled (`'it''s'`), which every dialect reads alike.
+fn sql_code(text: &str) -> SqlLexed {
+    #[derive(PartialEq)]
+    enum At {
+        Code,
+        Quoted(char),
+        Line,
+        Block,
+    }
+    let mut at = At::Code;
+    let mut out = String::with_capacity(text.len());
+    let mut cs = text.chars().peekable();
+    while let Some(c) = cs.next() {
+        match at {
+            At::Code => match c {
+                '\'' | '"' => {
+                    at = At::Quoted(c);
+                    out.push(c);
+                }
+                // `-- ` starts a comment everywhere; `--` before anything
+                // but a blank does in standard SQL, not in MySQL (`1--2`)
+                '-' if cs.peek() == Some(&'-') => {
+                    cs.next();
+                    if !cs.peek().is_some_and(|k| k.is_whitespace() || k.is_control()) {
+                        return SqlLexed::Unknown;
+                    }
+                    at = At::Line;
+                    out.push(' ');
+                }
+                // MySQL's quoted identifier, a character elsewhere
+                '`' => return SqlLexed::Unknown,
+                '/' if cs.peek() == Some(&'*') => {
+                    cs.next();
+                    at = At::Block;
+                    out.push(' ');
+                }
+                // a possible dollar quote (`$$`, `$tag$`, a tag in any
+                // letters PostgreSQL takes: `$é$`); a parameter (`$1`) is not
+                // (not within a name: `foo$tag$` is one identifier)
+                '$' if !cs.peek().is_some_and(|k| k.is_ascii_digit()) && !out.ends_with(|k: char| k.is_alphanumeric() || k == '_' || k == '$') => return SqlLexed::Unknown,
+                _ => out.push(c),
+            },
+            At::Quoted(q) => {
+                if c == '\\' {
+                    return SqlLexed::Unknown;
+                }
+                out.push(c);
+                if c == q {
+                    at = At::Code;
+                }
+            }
+            At::Line => {
+                if c == '\n' {
+                    at = At::Code;
+                    out.push(c);
+                }
+            }
+            At::Block => {
+                if c == '/' && cs.peek() == Some(&'*') {
+                    return SqlLexed::Unknown;
+                }
+                if c == '*' && cs.peek() == Some(&'/') {
+                    cs.next();
+                    at = At::Code;
+                }
+            }
+        }
+    }
+    if at == At::Code {
+        SqlLexed::Code(out)
+    } else {
+        SqlLexed::Inside
+    }
 }
 
 declare_rule!(SqlInjection {
@@ -767,25 +865,17 @@ impl Rule for CommandInjection {
         if let Some(argv) = argv {
             // each element reaches the program as one argument, whatever it
             // contains (`"--target=" + dir`); only a shell parses it again
-            // (`"sh", "-c", "cat " + file`)
+            // (`"sh", "-c", "cat " + file`), and only the shell's command
+            // operand: the program is `argv[0]` (`"/bin/echo", "sh", "-c",
+            // ...` runs echo), and the elements after the command string are
+            // the script's own arguments (`"sh", "-c", "cat \"$1\"", "sh", file`)
             // (through a local: `String shell = "/bin/sh";`)
             let lit = |a: &Node<'t>| match cx.fm.constant_value(sole_value(a.unparen(), cx).unwrap_or(*a)) {
-                Some(Constant::Str(s)) => Some(s.to_ascii_lowercase()),
+                Some(Constant::Str(s)) => Some(s.to_string()),
                 _ => None,
             };
-            let shell = argv.iter().filter_map(lit).any(|c| {
-                let c = c.rsplit(['/', '\\']).next().unwrap_or("");
-                matches!(c.trim_end_matches(".exe"), "sh" | "bash" | "zsh" | "ksh" | "dash" | "cmd" | "powershell" | "pwsh")
-            }) && argv.iter().filter_map(lit).any(|f| {
-                // `-c`, or combined short options with c: `bash -lc`, `sh -ec`
-                let short = f.strip_prefix('-').filter(|o| !o.is_empty() && o.chars().all(|c| c.is_ascii_alphabetic()) && o.len() <= 4);
-                matches!(f.as_str(), "/c" | "/k" | "-command") || short.is_some_and(|o| o.contains('c'))
-            });
-            if !shell {
-                return;
-            }
-            if let Some(a) = argv.iter().find(|a| dynamically_built(**a, cx)) {
-                cx.report(*a, "Shell command built by string concatenation; pass arguments separately, without a shell");
+            if let Some(command) = shell_command(&argv, &lit).into_iter().find(|a| dynamically_built(**a, cx)) {
+                cx.report(*command, "Shell command built by string concatenation; pass arguments separately, without a shell");
             }
             return;
         }
@@ -794,6 +884,196 @@ impl Rule for CommandInjection {
                 cx.report(a, "Command built by string concatenation; pass arguments separately");
                 return;
             }
+        }
+    }
+}
+
+/// The element of an argument vector that a shell runs as its command
+/// string, when that is known: the program at `argv[0]` (or after a plain
+/// `env [-i] [-u NAME] [NAME=value].. [--]`) is a shell, the options before
+/// the command option are ones the shell is known to take, and the command
+/// is the first operand after it for a POSIX shell (`$1`.. follow), or all
+/// that follows it for cmd and PowerShell, which join it into one command. Options are read as
+/// the shell reads them: `-C` is not `-c`, `--` ends the options, `-o`,
+/// `--rcfile` take the next element. Anything else leaves the command not
+/// known: `None`.
+fn shell_command<'a, 't>(argv: &'a [Node<'t>], lit: &dyn Fn(&Node<'t>) -> Option<String>) -> Vec<&'a Node<'t>> {
+    shell_command_in(argv, lit).unwrap_or_default()
+}
+
+fn shell_command_in<'a, 't>(argv: &'a [Node<'t>], lit: &dyn Fn(&Node<'t>) -> Option<String>) -> Option<Vec<&'a Node<'t>>> {
+    let base = |c: &str| c.rsplit(['/', '\\']).next().unwrap_or("").to_string();
+    let mut rest = argv.iter();
+    let mut program = rest.next().and_then(lit)?;
+    if base(&program) == "env" {
+        let mut assigned = false;
+        loop {
+            let f = rest.next().and_then(lit)?;
+            let assignment = f.split_once('=').is_some_and(|(n, _)| !n.is_empty() && !n.starts_with(|c: char| c.is_ascii_digit()) && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_'));
+            // options end at `--` or at the first assignment; assignments
+            // go on to the program (`env -i -- LANG=C sh`; in
+            // `env LANG=C -- sh` the program is `--`)
+            match f.as_str() {
+                "-i" | "--ignore-environment" if !assigned => {}
+                "-u" if !assigned => {
+                    rest.next().and_then(lit)?;
+                }
+                "--" if !assigned => assigned = true,
+                _ if f.starts_with('-') && !assigned => return None,
+                _ if assignment => assigned = true,
+                _ => {
+                    program = f;
+                    break;
+                }
+            }
+        }
+    }
+    let name = base(&program).to_ascii_lowercase();
+    match name.trim_end_matches(".exe") {
+        // (not ksh: which of its options let a command run is not checked)
+        "sh" | "bash" | "zsh" | "dash" => {}
+        "cmd" | "powershell" | "pwsh" => {
+            // options are case-insensitive here; the command follows /c, /k or -Command
+            for a in rest.by_ref() {
+                let f = lit(a)?.to_ascii_lowercase();
+                if matches!(f.as_str(), "/c" | "/k" | "-command" | "-c") {
+                    return Some(rest.collect());
+                }
+                if !(f.starts_with('/') || f.starts_with('-')) {
+                    return None;
+                }
+            }
+            return None;
+        }
+        _ => return None,
+    }
+    let zsh = name.trim_end_matches(".exe") == "zsh";
+    // `sh` may be dash or bash (or another): only what both take is known
+    let sh = matches!(name.trim_end_matches(".exe"), "sh" | "dash");
+    enum Opt {
+        Command,
+        Value,
+        Plain,
+        End,
+        Unknown,
+        /// `-n`, `-o noexec`: the shell reads the commands without running them
+        NoExec,
+    }
+    // An option set by name (`-o name` sets it, `+o name` unsets it; zsh
+    // also takes the name attached, `-oname`): known to leave the command
+    // run, to stop it from running (`noexec`), or not known, which zsh and
+    // bash refuse before running anything, as they do a name they lack.
+    // zsh ignores case and underscores and reads a leading `no` as the
+    // inverse (`NO_EXEC`, `+oexec`); bash takes its names as they are.
+    let named = |set: bool, name: &str| -> Opt {
+        if zsh {
+            const ZSH: &[&str] = &[
+                "exec", "errexit", "errreturn", "unset", "pipefail", "xtrace", "verbose", "glob", "nullglob", "extendedglob", "shwordsplit", "ksharrays",
+                "posixbuiltins", "clobber", "rcs", "globalrcs", "login", "privileged", "notify", "monitor", "hashcmds", "warncreateglobal", "localoptions",
+            ];
+            let n = name.replace('_', "").to_ascii_lowercase();
+            let (n, set) = match n.strip_prefix("no") {
+                Some(rest) if !ZSH.contains(&n.as_str()) => (rest.to_string(), !set),
+                _ => (n, set),
+            };
+            match n.as_str() {
+                "exec" if !set => Opt::NoExec,
+                k if ZSH.contains(&k) => Opt::Plain,
+                _ => Opt::Unknown,
+            }
+        } else if sh {
+            const SH: &[&str] = &["allexport", "errexit", "ignoreeof", "monitor", "noclobber", "noglob", "nolog", "notify", "nounset", "verbose", "vi", "emacs", "xtrace"];
+            match name {
+                "noexec" if set => Opt::NoExec,
+                "noexec" => Opt::Plain,
+                k if SH.contains(&k) => Opt::Plain,
+                _ => Opt::Unknown,
+            }
+        } else {
+            const BASH: &[&str] = &[
+                "allexport", "braceexpand", "emacs", "errexit", "errtrace", "functrace", "hashall", "histexpand", "history", "ignoreeof", "interactive-comments",
+                "keyword", "monitor", "noclobber", "noglob", "nolog", "notify", "nounset", "onecmd", "physical", "pipefail", "posix", "privileged", "verbose", "vi", "xtrace",
+            ];
+            match name {
+                "noexec" if set => Opt::NoExec,
+                "noexec" => Opt::Plain,
+                k if BASH.contains(&k) => Opt::Plain,
+                _ => Opt::Unknown,
+            }
+        }
+    };
+    // the one-letter options of `set` and of the invocation; `o`/`O` take a
+    // value and come alone
+    const SHORT: &str = "abefhkmnptuvxBCEHPTilrsc";
+    // dash and bash both take these letters (`-n` reads without running)
+    const SHORT_SH: &str = "abefmnuvxCEilsc";
+    let opt = |f: &str| match f {
+        "--" => Opt::End,
+        "-o" | "+o" => Opt::Value,
+        // bash's shopt names (`-O extglob`), and its long options with a
+        // value: refused by a shell that lacks them, a name bash lacks is
+        // refused too; not read (zsh's `-O` is a letter option)
+        "-O" | "+O" | "--rcfile" | "--init-file" => Opt::Unknown,
+        "--login" | "--noprofile" | "--norc" | "--posix" | "--restricted" | "--verbose" | "--noediting" if !sh => Opt::Plain,
+        // zsh takes an option's name attached: `-oerrexit`, `+onounset`
+        _ if zsh && f.len() > 2 && (f.starts_with("-o") || f.starts_with("+o")) => named(f.starts_with('-'), &f[2..]),
+        _ => match f.strip_prefix('-').map(|r| (r, true)).or_else(|| f.strip_prefix('+').map(|r| (r, false))) {
+            Some((r, minus)) if !r.is_empty() && r.chars().all(|c| if sh { SHORT_SH.contains(c) } else { SHORT.contains(c) }) => {
+                if minus && r.contains('n') {
+                    Opt::NoExec
+                // zsh: `-b` (and `+b`) ends the options; what follows is a
+                // script, a `-c` in the same cluster still counts (`-bc`)
+                } else if zsh && r.contains('b') && !r.contains('c') {
+                    Opt::Unknown
+                } else if minus && r.contains('c') {
+                    Opt::Command
+                } else {
+                    Opt::Plain
+                }
+            }
+            _ => Opt::Unknown,
+        },
+    };
+    // an option's value: for `-o`/`+o` a name as above; `-o noexec` runs
+    // nothing, a name not known is refused (`Some(())`: no command runs, or
+    // which one is not known)
+    let value = |f: &str, v: &str| match f {
+        "-o" | "+o" => matches!(named(f == "-o", v), Opt::NoExec | Opt::Unknown).then_some(()),
+        _ => None,
+    };
+    let operand = |f: &str| !f.starts_with('-') && !f.starts_with('+');
+    // up to the command option
+    loop {
+        let f = rest.next().and_then(lit)?;
+        match opt(&f) {
+            Opt::Command => break,
+            Opt::Value => {
+                let v = rest.next().and_then(lit)?;
+                if value(&f, &v).is_some() {
+                    return None;
+                }
+            }
+            Opt::Plain => {}
+            // a script file, `--`, an option not known, nothing run
+            Opt::End | Opt::Unknown | Opt::NoExec => return None,
+        }
+    }
+    // then the first operand
+    loop {
+        let a = rest.next()?;
+        let Some(f) = lit(a) else { return Some(vec![a]) };
+        match opt(&f) {
+            Opt::Value => {
+                let v = rest.next().and_then(lit)?;
+                if value(&f, &v).is_some() {
+                    return None;
+                }
+            }
+            Opt::Plain | Opt::Command => {}
+            Opt::NoExec => return None,
+            Opt::End => return rest.next().map(|a| vec![a]),
+            Opt::Unknown if operand(&f) => return Some(vec![a]),
+            Opt::Unknown => return None,
         }
     }
 }

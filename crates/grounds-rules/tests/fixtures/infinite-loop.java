@@ -52,6 +52,9 @@ class StuckCondition {
         boolean again = false;
         do { total++; } while (again);
         do { total++; } while (again == true);
+        // however many locals the value passes through
+        boolean a = false, b = a, c = b, d = c, e = d, f = e, g = f, h = g;
+        do { total++; } while (h);
         // other threads and calls can change what these read
         while (!q.isEmpty()) { total++; }
         while (total < n) { work(); }

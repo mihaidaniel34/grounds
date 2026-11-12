@@ -5,6 +5,7 @@ use crate::util::*;
 use crate::{declare_rule, rule_meta};
 use grounds_index::*;
 use grounds_syntax::{Node, NodeExt};
+use grounds_semantic::MethodMatcher;
 
 pub fn rules() -> Vec<Box<dyn Rule>> {
     vec![
@@ -747,31 +748,40 @@ impl InfiniteLoop {
                     })
             })
         });
-        // `boolean again = false; do { .. } while (again);` runs once
-        if written || known_bool(cond, cx, 0) == Some(false) {
+        // `boolean again = false; do { .. } while (again);` runs once; a
+        // condition too long a chain to follow is not known to hold either
+        let mut budget = KNOWN_BOOL_BUDGET;
+        if written || known_bool(cond, cx, &mut budget) == Some(false) || budget == 0 {
             return;
         }
         cx.report(n.child(0).unwrap_or(n), "Nothing in this loop changes its condition or leaves it; once entered it never terminates");
     }
 }
 
+/// How many expressions `known_bool` looks at before it gives up.
+const KNOWN_BOOL_BUDGET: u32 = 256;
+
 /// The value of a condition made of constants and locals that keep their
-/// initial value: `done`, `!done` after `boolean done = false;`.
-fn known_bool<'t>(e: Node<'t>, cx: &Ctx<'_, 't>, depth: u8) -> Option<bool> {
+/// initial value: `done`, `!done` after `boolean done = false;`. `budget`
+/// counts the expressions looked at; at 0 the value is not known, and the
+/// caller can tell that from a value that is not a constant (`budget == 0`).
+fn known_bool<'t>(e: Node<'t>, cx: &Ctx<'_, 't>, budget: &mut u32) -> Option<bool> {
     // a chain of locals defined by one another is not worth following far
-    if depth > 6 {
+    // (and in code that does not compile, `boolean a = !a;` has no end)
+    if *budget == 0 {
         return None;
     }
+    *budget -= 1;
     let e = e.unparen();
     if let Some(Constant::Bool(b)) = cx.fm.constant_value(e) {
         return Some(b);
     }
     match e.kind() {
-        "unary_expression" if op(e) == "!" => e.field("operand").and_then(|o| known_bool(o, cx, depth + 1)).map(|b| !b),
+        "unary_expression" if op(e) == "!" => e.field("operand").and_then(|o| known_bool(o, cx, budget)).map(|b| !b),
         // `again == true`
         "binary_expression" if matches!(op(e), "==" | "!=") => {
             let (l, r) = lr(e)?;
-            Some((known_bool(l, cx, depth + 1)? == known_bool(r, cx, depth + 1)?) == (op(e) == "=="))
+            Some((known_bool(l, cx, budget)? == known_bool(r, cx, budget)?) == (op(e) == "=="))
         }
         "identifier" => {
             let i = cx.fm.local_ref(e)?;
@@ -786,7 +796,7 @@ fn known_bool<'t>(e: Node<'t>, cx: &Ctx<'_, 't>, depth: u8) -> Option<bool> {
             if written || !matches!(d.kind, grounds_semantic::LocalKind::Local) {
                 return None;
             }
-            known_bool(d.decl_node.field("value")?, cx, depth + 1)
+            known_bool(d.decl_node.field("value")?, cx, budget)
         }
         _ => None,
     }
@@ -1446,9 +1456,67 @@ impl Rule for LoopBoundOffByOne {
     }
 }
 
-/// Calls that answer the same twice when nothing in between writes.
+/// Calls that answer the same each time on the same receiver: the length of
+/// a `String` and the ordinal of an enum constant, which never change, and
+/// the size of a local that holds an unmodifiable JDK collection
+/// (`var xs = List.of(..)`, never assigned again). Not any `size()` or
+/// `length()` by its name: a collection or a `StringBuilder` may change
+/// between two calls (another thread, a concurrent collection), and a
+/// project's own `size()` may answer differently each time. The receiver
+/// must stay the same object too (`stable_receiver`).
 fn is_stable_call<'t>(d: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
-    matches!(cx.fm.call_name(d), Some("size" | "length" | "ordinal")) && cx.fm.args_of(d).is_empty()
+    const STABLE: [MethodMatcher; 2] = [MethodMatcher::exact("java.lang.String").named(&["length"]).arity(0), MethodMatcher::exact("java.lang.Enum").named(&["ordinal"]).arity(0)];
+    if d.kind() != "method_invocation" {
+        return false;
+    }
+    let receiver = d.field("object");
+    if cx.fm.call_matches_any(d, &STABLE) {
+        return receiver.is_none_or(|o| stable_receiver(o, cx));
+    }
+    cx.fm.call_name(d) == Some("size") && cx.fm.args_of(d).is_empty() && receiver.is_some_and(|o| unmodifiable_local(o, cx))
+}
+
+/// A local never assigned after its initializer, which is an unmodifiable
+/// collection of the JDK: `List.of(..)`, `Set.copyOf(..)`, `Map.ofEntries(..)`.
+fn unmodifiable_local<'t>(e: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+    const FACTORIES: [MethodMatcher; 3] = [
+        MethodMatcher::statics("java.util.List").named(&["of", "copyOf"]),
+        MethodMatcher::statics("java.util.Set").named(&["of", "copyOf"]),
+        MethodMatcher::statics("java.util.Map").named(&["of", "copyOf", "ofEntries"]),
+    ];
+    let e = e.unparen();
+    let Some(i) = (e.kind() == "identifier").then(|| cx.fm.local_ref(e)).flatten() else { return false };
+    let assigned = cx.fm.binder.uses[i].iter().any(|u| {
+        u.parent_unparen().is_some_and(|p| match p.kind() {
+            "assignment_expression" => p.field("left").map(|l| l.unparen()) == Some(*u),
+            "update_expression" => true,
+            _ => false,
+        })
+    });
+    let init = cx.fm.binder.decls[i].decl_node.field("value").map(|v| v.unparen());
+    !assigned && init.is_some_and(|v| v.kind() == "method_invocation" && cx.fm.call_matches_any(v, &FACTORIES))
+}
+
+/// A receiver that is the same object at each of two reads: a local or a
+/// parameter (nothing in the chain assigns, see `ContradictoryRange`),
+/// `this`, a literal, or a final field of such. Not a field that another
+/// thread may replace between the reads (`text.length()`, `array.length`
+/// of a non-final field).
+fn stable_receiver<'t>(e: Node<'t>, cx: &Ctx<'_, 't>) -> bool {
+    let e = e.unparen();
+    match e.kind() {
+        "this" | "string_literal" => true,
+        "identifier" => match cx.fm.field_ref(e) {
+            Some(f) => f.field.flags.is_final(),
+            None => cx.fm.local_ref(e).is_some(),
+        },
+        "field_access" => {
+            let Some(f) = cx.fm.field_ref(e) else { return false };
+            // (a static field named through its class: `Holder.NAME`)
+            f.field.flags.is_final() && (f.field.flags.is_static() || e.field("object").is_some_and(|o| stable_receiver(o, cx)))
+        }
+        _ => false,
+    }
 }
 
 /// `x < 3` or `3 > x` as (x, "<", 3): a side-effect-free operand compared
@@ -1484,6 +1552,11 @@ fn const_comparison<'t>(e: Node<'t>, cx: &Ctx<'_, 't>) -> Option<(Node<'t>, &'st
     let x = x.unparen();
     let unstable = std::iter::once(x).chain(x.descendants()).any(|d| match d.kind() {
         "method_invocation" => !is_stable_call(d, cx),
+        // the length of an array that another thread may replace
+        "field_access" if d.field("field").is_some_and(|f| f.text(cx.src) == "length") && cx.type_of(d.field("object").unwrap_or(d)).is_array() => !d.field("object").is_some_and(|o| stable_receiver(o, cx)),
+        // a field another thread may write between the two reads (a final
+        // one, or a constant, keeps its value)
+        "identifier" | "field_access" => cx.fm.field_ref(d).is_some_and(|f| !f.field.flags.is_final()),
         "object_creation_expression" | "assignment_expression" | "update_expression" | "array_creation_expression" | "lambda_expression" => true,
         _ => false,
     });

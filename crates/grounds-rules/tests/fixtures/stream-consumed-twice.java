@@ -82,6 +82,12 @@ class A {
         return n;
     }
 
+    // methods of Object leave the stream as it was
+    long described(Stream<String> s) {
+        System.out.println(s.toString() + s.hashCode() + s.getClass());
+        return s.count();
+    }
+
     long perIteration(List<List<String>> ls) {
         long n = 0;
         for (List<String> l : ls) {

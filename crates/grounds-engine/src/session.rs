@@ -38,6 +38,12 @@ pub struct Session {
     /// time is that of a write during the load, or of one just before it,
     /// with no stamp from before the load to compare): load again.
     config_unread: bool,
+    /// Every `lombok.config` path met in a directory the walk holds, whether
+    /// the load read it, an ignore file leaves it out or it cannot be read
+    /// (no permission, a symlink whose target cannot be reached), with its
+    /// stamp: one whose stamp changes loads the project again, one that
+    /// stays as it was never does.
+    lombok_met: FxHashMap<PathBuf, crate::project::LombokStamp>,
     /// Classpath warnings already shown in this session.
     warned: bool,
     /// Full walks of the workspace by `rescan`.
@@ -55,10 +61,11 @@ pub struct Session {
 ///   added or removed.
 ///
 /// Listed whether they exist or not, so that one appearing counts as a
-/// change. Not followed: class directories on the classpath (a build writes
-/// into them without touching the directory itself, and the project's own
-/// classes are read from source anyway), and a `lombok.config` created later
-/// in a package directory that had none.
+/// change. A `lombok.config` that appears in another directory is noticed
+/// by `Session::rescan`, by the time of the directory. Not followed: class
+/// directories on the classpath (a build writes into them without touching
+/// the directory itself, and the project's own classes are read from source
+/// anyway).
 fn config_files(project: &Project) -> Vec<PathBuf> {
     let ws = &project.workspace;
     let cfg = &project.config;
@@ -300,12 +307,12 @@ impl Session {
     }
 
     pub fn from_project(project: Project) -> Session {
-        Self::from_load(project, None)
+        Self::from_load(project, None, &FxHashMap::default())
     }
 
     /// A session of a project just loaded; `before`: stamps of the
     /// configuration files taken before the load began, if it was a reload.
-    fn from_load(mut project: Project, before: Option<&FxHashMap<PathBuf, Option<FileStamp>>>) -> Session {
+    fn from_load(mut project: Project, before: Option<&FxHashMap<PathBuf, Option<FileStamp>>>, lombok_before: &FxHashMap<PathBuf, crate::project::LombokStamp>) -> Session {
         // the rules `grounds changed` runs: there the compile-break
         // rules are stable, so `preview = false` keeps them
         let (all_rules, options) = build_ruleset_for(&project, true);
@@ -356,7 +363,36 @@ impl Session {
                 (p, now)
             })
             .collect();
-        Session { project, all_rules, edit_rules, resolution_rules, options, stamps, walked, config, config_unread, warned: false, full_walks: 0 }
+        let mut s = Session { project, all_rules, edit_rules, resolution_rules, options, stamps, walked, config, config_unread, lombok_met: FxHashMap::default(), warned: false, full_walks: 0 };
+        let found = s.project.lombok.found().to_vec();
+        s.meet_lombok(&found, Some(lombok_before));
+        s
+    }
+
+    /// The `lombok.config` paths a discovery's walk listed (`found`: one
+    /// walk, the discovery's own, so its ignore rules and the directories it
+    /// cannot list are its own), stamped (`lombok_met`). One in a directory
+    /// the walk could not list is not met: a rescan, which lists such a
+    /// directory again at every sync, meets it once it can. One the load did
+    /// not read whose time is recent as of the start of the load (it may
+    /// have become readable, or been written, while the load ran), and not
+    /// the same as before the load (`before`: stamps taken then, at a
+    /// reload; `None` when no load was made, after a walk of the workspace),
+    /// is met with a stamp of nothing, so that the next sync takes it as
+    /// changed and loads again, as for other configuration files
+    /// (`config_unread`).
+    fn meet_lombok(&mut self, found: &[PathBuf], before: Option<&FxHashMap<PathBuf, crate::project::LombokStamp>>) {
+        let read: FxHashSet<PathBuf> = self.project.lombok.files().collect();
+        let began = self.project.load_began;
+        self.lombok_met = found
+            .iter()
+            .map(|p| {
+                let stamp = crate::project::lombok_stamp(p);
+                let times = [stamp.0, stamp.1].into_iter().flatten().flat_map(|(m, c, _, _)| [m, c]);
+                let in_doubt = before.is_some_and(|b| b.get(p) != Some(&stamp)) && !read.contains(p) && times.into_iter().any(|t| crate::project::recent(t, began));
+                (p.clone(), if in_doubt { (None, None) } else { stamp })
+            })
+            .collect();
     }
 
     /// Classpath warnings, the first time they are asked for: agents and
@@ -478,6 +514,28 @@ impl Session {
             s.walked.gits.retain(|p, _| !p.starts_with(d));
             gone.extend(s.stamps.keys().filter(|p| p.starts_with(d)).cloned());
         };
+        // A `lombok.config` the load did not read, in a directory whose
+        // listing is read again here, changes the stubs of every source file
+        // below it: the project is loaded again, as a new session would load
+        // it. (One the load read is a configuration file, its change seen by
+        // its own stamp.)
+        // A `lombok.config` not met before, in a directory whose listing is
+        // read again here: met from now on (`lombok_met`); one a load reads
+        // changes the stubs of every source file below it, and the project
+        // is loaded again, as a new session would load it. One whose
+        // directory cannot be listed is not known yet, and not met: it is
+        // looked at again once the directory can be listed.
+        let new_lombok = |s: &mut Session, d: &Path| -> bool {
+            let cfg = d.join("lombok.config");
+            if !crate::project::LombokConfigs::reads_dir(&root, d) || s.lombok_met.contains_key(&cfg) || std::fs::symlink_metadata(&cfg).is_err() {
+                return false;
+            }
+            let Some(read) = crate::project::LombokConfigs::would_find(&root, &cfg) else { return false };
+            crate::trace::log(|| format!("sync: {} appeared{}", cfg.display(), if read { ", reload" } else { ", which a load does not read" }));
+            let stamp = crate::project::lombok_stamp(&cfg);
+            s.lombok_met.insert(cfg, stamp);
+            read
+        };
         // directories forgotten: a module in one (gone, now a symlink, which
         // the discovery does not follow, though its build file may still be
         // found through it) is no module for a fresh load
@@ -511,6 +569,9 @@ impl Session {
                 if boundary(&d) != self.walked.gits.get(&d).copied() {
                     full = true;
                     break;
+                }
+                if new_lombok(self, &d) {
+                    return (Vec::new(), FxHashSet::default(), true);
                 }
                 crate::trace::log(|| format!("sync: directory changed {}", d.display()));
                 // one that cannot be listed or entered (no permission) is
@@ -546,6 +607,13 @@ impl Session {
                 let new_dirs: Vec<&PathBuf> = listed.dirs.iter().filter(|s| **s != d && !self.walked.dirs.contains_key(*s)).collect();
                 for sub in new_dirs {
                     let w = walk(sub, None);
+                    let mut read = false;
+                    for d in &w.dirs {
+                        read |= new_lombok(self, d);
+                    }
+                    if read {
+                        return (Vec::new(), FxHashSet::default(), true);
+                    }
                     let new = Walk::stamp(&w.dirs, None, began, &FxHashMap::default(), &FxHashMap::default());
                     self.walked.dirs.extend(new.dirs);
                     self.walked.ignores.extend(new.ignores);
@@ -588,6 +656,22 @@ impl Session {
                 crate::trace::log(|| "sync: reload, the walk finds other modules".into());
                 return (Vec::new(), FxHashSet::default(), true);
             }
+            // (an ignore file decides which `lombok.config` files a load reads, too)
+            let configs = |l: &crate::project::LombokConfigs| l.files().collect::<FxHashSet<PathBuf>>();
+            let discovered = crate::project::LombokConfigs::discover(&root);
+            if configs(&discovered) != configs(&self.project.lombok) {
+                crate::trace::log(|| "sync: reload, a load reads other lombok.config files".into());
+                return (Vec::new(), FxHashSet::default(), true);
+            }
+            // (the directories walked now: the configs met in them)
+            let met = std::mem::take(&mut self.lombok_met);
+            self.meet_lombok(discovered.found(), None);
+            for (p, old) in met {
+                // a stamp from before the walk, kept to compare with at the next sync
+                if let Some(stamp) = self.lombok_met.get_mut(&p) {
+                    *stamp = old;
+                }
+            }
             found = files(w).collect();
             let all: FxHashSet<&PathBuf> = found.iter().collect();
             gone = self.stamps.keys().filter(|p| !all.contains(p)).cloned().collect();
@@ -624,7 +708,14 @@ impl Session {
         let sig = |s: &Session, f: &Path| s.project.index.file(&path_key(f)).map(|s| format!("{:016x}", s.signature_hash)).unwrap_or_else(|| "-".into());
         let sigs: Vec<String> = if trace { extra.iter().map(|e| sig(self, e)).collect() } else { Vec::new() };
         let clock = SystemTime::now();
-        let mut reload = self.config_unread || self.config.iter_mut().any(|(p, stamp)| {
+        // a `lombok.config` met before whose stamp changed: written, gone,
+        // its permission or its symlink's target changed (which its
+        // directory does not show)
+        let met = self.lombok_met.iter().find(|(p, stamp)| crate::project::lombok_stamp(p) != **stamp).map(|(p, _)| p.clone());
+        if let Some(p) = &met {
+            crate::trace::log(|| format!("sync: reload, {} changed", p.display()));
+        }
+        let mut reload = met.is_some() || self.config_unread || self.config.iter_mut().any(|(p, stamp)| {
             let changed = match stamp {
                 Some(stamp) => stamp.changed(p, clock),
                 None => FileStamp::of(p, false).is_some(),
@@ -771,10 +862,11 @@ impl Session {
         // stamped before the load begins, to tell afterwards whether the
         // load read them as they are then
         let before: FxHashMap<PathBuf, Option<FileStamp>> = self.config.iter().map(|(p, _)| (p.clone(), FileStamp::of(p, true))).collect();
+        let lombok_before: FxHashMap<PathBuf, crate::project::LombokStamp> = self.lombok_met.keys().map(|p| (p.clone(), crate::project::lombok_stamp(p))).collect();
         if let Ok(project) = Project::load(&root) {
             // warnings already shown are not shown again for the same state
             let shown = self.warned.then(|| self.project.classpath_warnings.clone());
-            *self = Session::from_load(project, Some(&before));
+            *self = Session::from_load(project, Some(&before), &lombok_before);
             self.warned = shown.is_some_and(|w| w == self.project.classpath_warnings);
         }
     }
