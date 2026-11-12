@@ -775,6 +775,11 @@ impl Index {
         self.built.retain(|_, s| *s != InBuild::Unknown);
     }
 
+    /// The files declaring `name`, when it is declared in more than one.
+    pub fn copies_of(&self, name: &str) -> &[Arc<str>] {
+        self.copies.get(name).map_or(&[], |v| v.as_slice())
+    }
+
     /// Whether `file` belongs to the module at `dir` itself, not to a module
     /// nested below it (module directories come from `set_exact_releases`).
     pub fn in_module(&self, file: &str, dir: &str) -> bool {

@@ -304,3 +304,46 @@ fn a_session_follows_a_build_that_runs_while_it_is_open() {
     assert_eq!(fresh(&dir), cleaned);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// javaparser's shape: the symbol solver keeps an old snapshot of the core
+/// module's sources as test data, so `Node` is declared twice. The snapshot's
+/// own code is never compiled and gets no claim (it would be read against
+/// today's `Node`); real code of another module that calls the real `Node`
+/// wrongly is still judged, the snapshot's copy notwithstanding.
+#[test]
+fn a_snapshot_of_the_sources_is_no_rival_of_the_class_the_build_compiles() {
+    let javac = javac_or_skip!();
+    let node = "package p;\npublic class Node { public void visit(int i) {} }\n";
+    let old_node = "package p;\npublic class Node { public void visit(String s) {} }\n";
+    let call = |pkg: &str, arg: &str| format!("package {pkg};\nimport p.Node;\nclass Use {{ void f(Node n) {{ n.visit({arg}); }} }}\n");
+    let dir = project(
+        "snapshot",
+        &[
+            ("pom.xml", POM),
+            ("core/pom.xml", POM),
+            ("core/src/main/java/p/Node.java", node),
+            ("solver/pom.xml", POM),
+            ("solver/src/main/java/s/Use.java", &call("s", "1")),
+            ("solver/src/test/test_sourcecode/core/p/Node.java", old_node),
+            // compiles against the snapshot's `Node`, not today's
+            ("solver/src/test/test_sourcecode/solver/s/Use.java", &call("s", "\"x\"")),
+        ],
+    );
+    compile(&javac, &dir, &["core/src/main/java/p/Node.java"], "core/target/classes", None);
+    compile(&javac, &dir, &["solver/src/main/java/s/Use.java"], "solver/target/classes", Some("core/target/classes"));
+    // the real code broken since the build
+    write_at(&dir, "solver/src/main/java/s/Use.java", &call("s", "\"x\""), SystemTime::now());
+    let p = Project::load(&dir).unwrap();
+    assert_eq!(state(&p, "solver/src/test/test_sourcecode/core/p/Node.java"), InBuild::No);
+    assert_eq!(state(&p, "solver/src/test/test_sourcecode/solver/s/Use.java"), InBuild::No);
+    assert_eq!(state(&p, "solver/src/main/java/s/Use.java"), InBuild::Yes);
+    let got: Vec<(String, String, Option<InBuild>)> = findings(&p).into_iter().map(|f| (f.path, f.message, f.build)).collect();
+    assert_eq!(got, [("solver/src/main/java/s/Use.java".to_string(), "No `visit` in `Node` accepts (String); available: visit(int)".to_string(), Some(InBuild::Yes))]);
+    // never built: two copies of `Node` and no way to tell which is compiled,
+    // so no claim either way, as before
+    std::fs::remove_dir_all(dir.join("core/target")).unwrap();
+    std::fs::remove_dir_all(dir.join("solver/target")).unwrap();
+    let p = Project::load(&dir).unwrap();
+    assert!(findings(&p).is_empty(), "{:?}", findings(&p));
+    let _ = std::fs::remove_dir_all(&dir);
+}

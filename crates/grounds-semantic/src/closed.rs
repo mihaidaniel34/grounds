@@ -176,9 +176,10 @@ impl<'t> FileModel<'t> {
     /// unmodelled, no JDK class newer than the one loaded) is not enough:
     /// every project class of it must be read from a file that parses, from
     /// the copy this file compiles against when its name is declared more
-    /// than once (the build's module dependencies are not known), and library
-    /// classes from the jar versions the project builds against. Nothing is
-    /// claimed in a file the build does not compile.
+    /// than once (the build's module dependencies are not known; or the one
+    /// copy the build compiles, see `one_built_copy`), and library classes
+    /// from the jar versions the project builds against. Nothing is claimed
+    /// in a file the build does not compile.
     pub fn closed(&self, name: &str, jars: Jars) -> Result<Closed<'_, 't>, Open> {
         self.file_closed()?;
         let c = self.class(name).ok_or_else(|| Open::NotFound(Name::from(name)))?;
@@ -196,7 +197,7 @@ impl<'t> FileModel<'t> {
         let release_module = self.index.built_against_release(&self.path);
         for t in &supertypes {
             let Some(n) = t.class_name() else { return Err(Open::UnresolvedSupertype(c.name.clone())) };
-            if !self.copy_is_certain(n) {
+            if !self.copy_is_certain(n) && !one_built_copy(self, n) {
                 return Err(Open::CopyUncertain(Name::from(n)));
             }
             if self.index.in_jdk_package(n) {
@@ -282,7 +283,7 @@ impl<'t> FileModel<'t> {
         if let Some(gap) = doubt::quiet(|| self.hierarchy_gap(name, false)) {
             return Err(gap.into());
         }
-        if self.index.is_duplicated(name) {
+        if self.index.is_duplicated(name) && !one_built_copy(self, name) {
             return Err(Open::DeclaredMoreThanOnce(Name::from(name)));
         }
         if !parses(self, name) {
@@ -320,7 +321,8 @@ impl<'t> FileModel<'t> {
         }
         // a class defined in several modules: the index holds one of them
         let receiver_class = c.receiver.as_ref().and_then(|r| r.class_name().map(str::to_string));
-        if self.index.is_duplicated(&c.owner) || receiver_class.as_deref().is_some_and(|r| self.index.is_duplicated(r)) {
+        let duplicated = |n: &str| self.index.is_duplicated(n) && !one_built_copy(self, n);
+        if duplicated(&c.owner) || receiver_class.as_deref().is_some_and(duplicated) {
             return None;
         }
         // a private method is never inherited, nestmates or not: found through
@@ -371,6 +373,39 @@ fn class_found(fm: &FileModel<'_>, name: &str) -> bool {
         doubt::replay(d);
     }
     c.is_some()
+}
+
+/// Whether class `name`, declared in several files, has one copy the build
+/// compiles, and this file, which the build compiles too, reads that one:
+/// every other copy is in a file the build does not compile (test data
+/// holding an old snapshot of the sources, as javaparser's symbol solver
+/// tests do), so compiled code sees that copy and no other. With any copy
+/// of unknown state, or the copy read being another (the index holds the
+/// copy whose path sorts first, and this file's lookup reads it), the copy
+/// stays uncertain: reading the built one there would take a change to how
+/// names resolve, outside this module.
+fn one_built_copy(fm: &FileModel<'_>, name: &str) -> bool {
+    let index = fm.index;
+    if index.in_build(&fm.path) != InBuild::Yes {
+        return false;
+    }
+    let copies = index.copies_of(name);
+    let mut built = copies.iter().filter(|f| index.in_build(f) == InBuild::Yes);
+    let (Some(built), None) = (built.next(), built.next()) else { return false };
+    if copies.iter().any(|f| f != built && index.in_build(f) != InBuild::No) {
+        return false;
+    }
+    // the copy the model reads (`FileModel::lookup_class`): this file's own,
+    // the one of its module and source set, else the index's
+    let read = if fm.stub.classes.iter().any(|c| &*c.name == name) {
+        Some(&fm.path)
+    } else {
+        match index.certain_copy(name, &fm.path) {
+            Some((_, _, f)) => Some(f),
+            None => index.source_file_of(name),
+        }
+    };
+    read == Some(built)
 }
 
 /// The class `n`, if a project class, is read from a file that parses.
@@ -795,7 +830,8 @@ fn private_elsewhere<'t>(fm: &FileModel<'t>, site: Node<'t>, cls: &ClassInfo, na
         return None;
     }
     // a class defined in several modules: the index holds one of them
-    if fm.index.is_duplicated(&cls.name) || cands.iter().any(|m| fm.index.is_duplicated(&m.owner)) {
+    let duplicated = |n: &str| fm.index.is_duplicated(n) && !one_built_copy(fm, n);
+    if duplicated(&cls.name) || cands.iter().any(|m| duplicated(&m.owner)) {
         return None;
     }
     let visible_elsewhere = fm.all_supertypes(&cls.this_type()).iter().filter_map(|t| t.class_name().and_then(|n| fm.class(n))).any(|c| c.methods_named(name).any(|m| fits(m) && !m.flags.is_private()));
