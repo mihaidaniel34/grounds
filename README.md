@@ -467,16 +467,27 @@ When `java_release` is not set, grounds reads each module's build:
   under conditions or for different compile tasks, a Maven profile that sets
   the release): unknown.
 
+The tests (`src/test`) compile for their own release when the build gives
+them one: Maven's `testRelease`, `testSource`/`testTarget` (the plugin's
+configuration, its `default-testCompile` execution, or
+`maven.compiler.testRelease`/`testSource`/`testTarget`), Gradle's
+`compileTestJava { }` (`tasks.named('compileTestJava')`,
+`tasks.compileTestJava`). Settings for every compile (Gradle's `java { }`, a
+toolchain, `tasks.withType(JavaCompile)`) apply to them too, Gradle's
+`compileJava { }` does not; a test compile set under a condition grounds
+cannot evaluate (`if (name == 'compileTestJava')`) leaves the tests' release
+unknown, as does another Maven execution of `testCompile`.
+
 `${...}` is resolved through parent poms in the repository; Gradle modules
 inherit from the root's `subprojects`/`allprojects` and from convention
 plugins in `buildSrc`/`build-logic` (Groovy and Kotlin DSL). A record, a
 sealed class or a module import in a module said to compile for an older
 release means that is not what compiles it: its release is unknown. All
-modules share one JDK API: the exact release when every module states one,
-otherwise the installed JDK's (the newest at hand, so nothing the code may
-use is missing; 21 when no JDK is found), or a release newer than that when
-some module needs it.
-Imports of JDK classes a release lacks are reported only in modules whose
+modules share one JDK API: the exact release when every module states one
+for its code and its tests, otherwise the installed JDK's (the newest at
+hand, so nothing the code may use is missing; 21 when no JDK is found), or a
+release newer than that when some module needs it.
+Imports of JDK classes a release lacks are reported only in code whose
 release is exact. `grounds index` prints the release whose API is loaded.
 
 The JDK's API comes from its `lib/ct.sym` (the signatures of each release
