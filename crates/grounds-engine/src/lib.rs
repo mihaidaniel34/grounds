@@ -13,6 +13,7 @@ pub mod java_release;
 pub mod project;
 pub mod report;
 pub mod session;
+pub mod sources;
 pub mod trace;
 pub mod workspace;
 

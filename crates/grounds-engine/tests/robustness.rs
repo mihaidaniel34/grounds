@@ -233,18 +233,18 @@ fn a_source_file_replaced_by_a_pipe_is_refused_and_not_taken_as_read() {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut s = grounds_engine::session::Session::open(&d).unwrap();
-        assert!(s.project.index.class_exists("p.Pipe"));
+        assert!(s.project().index.class_exists("p.Pipe"));
         std::fs::remove_file(d.join("src/main/java/p/Pipe.java")).unwrap();
         assert!(std::process::Command::new("mkfifo").arg(d.join("src/main/java/p/Pipe.java")).status().unwrap().success());
         s.sync(&[]);
-        let first = (s.project.index.class_exists("p.Pipe"), s.unread_files());
+        let first = (s.project().index.class_exists("p.Pipe"), s.unread_files());
         s.sync(&[]);
         let second = s.unread_files();
         // a regular file again
         std::fs::remove_file(d.join("src/main/java/p/Pipe.java")).unwrap();
         std::fs::write(d.join("src/main/java/p/Pipe.java"), "package p;\nclass Pipe {}\n").unwrap();
         s.sync(&[]);
-        let _ = tx.send((first, second, s.project.index.class_exists("p.Pipe"), s.unread_files()));
+        let _ = tx.send((first, second, s.project().index.class_exists("p.Pipe"), s.unread_files()));
     });
     let got = rx.recv_timeout(Duration::from_secs(60));
     assert!(got.is_ok(), "a session blocked on a pipe");

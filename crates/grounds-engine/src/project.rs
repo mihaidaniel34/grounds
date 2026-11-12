@@ -686,8 +686,9 @@ impl Walk {
 /// What a load read, for the `Session` that keeps its project and tells
 /// later what changed: taken by value, once (`Session::from_project`).
 pub struct Loaded {
-    /// What each source file was when its stub was made.
-    stamps: rustc_hash::FxHashMap<PathBuf, FileStamp>,
+    /// Each source file listed, as it was read: with its stub, stamped as it
+    /// was when the stub was made, or unread.
+    entries: rustc_hash::FxHashMap<PathBuf, crate::sources::Entry>,
     /// The directories the discovery of source files went into, and the
     /// ignore files that decided what it skipped (`None`: not there), for
     /// telling later that a source file appeared.
@@ -700,10 +701,10 @@ pub struct Loaded {
 }
 
 impl Loaded {
-    /// The source stamps, the walk, when the load began, and the files
-    /// stamped before it.
-    pub(crate) fn into_parts(self) -> (rustc_hash::FxHashMap<PathBuf, FileStamp>, Walk, SystemTime, Option<Before>) {
-        (self.stamps, self.walked, self.began, self.before)
+    /// The source files' entries, the walk, when the load began, and the
+    /// files stamped before it.
+    pub(crate) fn into_parts(self) -> (rustc_hash::FxHashMap<PathBuf, crate::sources::Entry>, Walk, SystemTime, Option<Before>) {
+        (self.entries, self.walked, self.began, self.before)
     }
 }
 
@@ -785,12 +786,15 @@ impl Project {
                 (f.path.clone(), stamp, stub)
             })
             .collect();
-        let mut stamps = rustc_hash::FxHashMap::default();
+        let mut held = rustc_hash::FxHashMap::default();
         let mut results: Vec<(PathBuf, u64, Arc<FileStub>, bool)> = Vec::with_capacity(read.len());
         for (p, stamp, stub) in read {
             // (a file listed that cannot be looked at, its directory not to
             // be entered, or gone since: tried again at the next sync)
-            stamps.insert(p.clone(), stamp.unwrap_or(FileStamp::Recheck { meta: None, why: Why::Unreachable }));
+            let stamp = stamp.unwrap_or(FileStamp::Recheck { meta: None, why: Why::Unreachable });
+            // (no text, no stub: the stamp of such a read vouches for nothing)
+            let entry = if stub.is_some() { crate::sources::Entry::Indexed(stamp) } else { crate::sources::Entry::Unread(stamp.recheck(Why::ReadFailed)) };
+            held.insert(p.clone(), entry);
             if let Some((h, s, cached)) = stub {
                 results.push((p, h, s, cached));
             }
@@ -849,7 +853,7 @@ impl Project {
         stats.t_di = t.elapsed();
         let classpath_warnings = crate::classpath::warnings(&workspace, &config, &index);
         let project = Project { config, workspace, index, stats, di, di_settings, source_sets, lombok, registered, auto_registered, classpath_warnings, classpath_entries: entries, releases, release_inputs };
-        Ok((project, Loaded { stamps, walked, began: load_began, before: None }))
+        Ok((project, Loaded { entries: held, walked, began: load_began, before: None }))
     }
 
     /// Whether the release plan a load would make now, from the sources as

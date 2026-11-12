@@ -99,14 +99,14 @@ fn configuration_written_twice_at_the_same_time() -> Result<(), TooSlow> {
     let (now, began) = (std::time::SystemTime::now(), std::time::Instant::now());
     write_at(&dir, "grounds.toml", "exclude = [\"a/**\"]\n", now);
     s.sync(&[]);
-    assert_eq!(s.project.config.exclude, ["a/**"]);
+    assert_eq!(s.project().config.exclude, ["a/**"]);
     quick(began)?;
     // written again in the tick it was read in
     write_at(&dir, "grounds.toml", "exclude = [\"b/**\"]\n", now);
     std::thread::sleep(std::time::Duration::from_millis(2100));
     // the tick is over: one more load is right, whatever was written in it
     s.sync(&[]);
-    assert_eq!(s.project.config.exclude, ["b/**"]);
+    assert_eq!(s.project().config.exclude, ["b/**"]);
     // and that load is the last
     let loaded = s.load_began();
     s.sync(&[]);

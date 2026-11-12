@@ -6,6 +6,7 @@
 use crate::analyze::{analyze_text, build_ruleset_for, Finding};
 use crate::git;
 use crate::project::{path_key, recent, Before, FileStamp, Loaded, Project, Walk, Why};
+use crate::sources::{Admitted, Entry, Sources};
 use crate::workspace::{classify, SourceKind, Tracked};
 use grounds_index::{simple_name_of, ClassLookup, FileStub, Name};
 use grounds_rules::framework::RuleOptions;
@@ -19,13 +20,13 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 pub struct Session {
-    pub project: Project,
     pub all_rules: RuleSet,
     pub edit_rules: RuleSet,
     pub resolution_rules: RuleSet,
     pub options: RuleOptions,
-    /// The source files as their stubs in the index were made from.
-    stamps: FxHashMap<PathBuf, FileStamp>,
+    /// The project, and the source files as their stubs in the index were
+    /// made from: read through `project()`, changed only through `Sources`.
+    sources: Sources,
     /// The directories the source files were found in, and the ignore files
     /// that applied: a source file that appears is noticed by the time of
     /// its directory, whichever way it came (see `rescan`).
@@ -331,7 +332,7 @@ impl Session {
         let edit_rules = RuleSet::new(crate::analyze::selected_rules_for(&project, true).into_iter().filter(|r| r.meta().tier == Tier::Edit).collect());
         let resolution_rules = RuleSet::new(crate::analyze::selected_rules_for(&project, true).into_iter().filter(|r| r.meta().id.starts_with("unresolved-")).collect());
         // Source files: stamped as the load read them, each before its read.
-        let (stamps, walked, began, before) = loaded.into_parts();
+        let (entries, walked, began, before) = loaded.into_parts();
         // Configuration files are read all over the load and are only listed
         // after it, so they are stamped now. One the same now as before the
         // load (time, size and, for a recent time, content) is what the load
@@ -375,7 +376,12 @@ impl Session {
                 (p, conf)
             })
             .collect();
-        Session { project, all_rules, edit_rules, resolution_rules, options, stamps, walked, config, load_began: began, warned: false, full_walks: 0 }
+        Session { sources: Sources::new(project, entries), all_rules, edit_rules, resolution_rules, options, walked, config, load_began: began, warned: false, full_walks: 0 }
+    }
+
+    /// The project as this session holds it.
+    pub fn project(&self) -> &Project {
+        self.sources.project()
     }
 
     /// When the load of the project began: a sync that loads the project
@@ -396,17 +402,17 @@ impl Session {
         if std::mem::replace(&mut self.warned, true) {
             return Vec::new();
         }
-        self.project.classpath_warnings.iter().map(|w| w.to_string()).collect()
+        self.project().classpath_warnings.iter().map(|w| w.to_string()).collect()
     }
 
     pub fn root(&self) -> &Path {
-        &self.project.workspace.root
+        &self.project().workspace.root
     }
 
     /// Source files that could not be read and are tried again at every
     /// sync (see `FileStamp::Recheck`).
     pub fn unread_files(&self) -> Vec<PathBuf> {
-        let mut v: Vec<PathBuf> = self.stamps.iter().filter(|(_, s)| !s.vouches()).map(|(p, _)| p.clone()).collect();
+        let mut v: Vec<PathBuf> = self.sources.entries().filter(|(_, e)| matches!(e, Entry::Unread(_))).map(|(p, _)| p.clone()).collect();
         v.sort();
         v
     }
@@ -415,7 +421,7 @@ impl Session {
     /// recent to trust (see `FileStamp`), and whether the project is to be
     /// loaded again: what a sync costs beyond looking at times.
     pub fn in_doubt(&self) -> (usize, bool) {
-        let racy = self.stamps.values().chain(self.config.iter().filter_map(|(_, c)| c.stamp())).filter(|s| s.is_racy()).count();
+        let racy = self.sources.entries().map(|(_, e)| e.stamp()).chain(self.config.iter().filter_map(|(_, c)| c.stamp())).filter(|s| s.is_racy()).count();
         (racy, self.config_unread())
     }
 
@@ -447,14 +453,15 @@ impl Session {
     /// Not followed: git's global excludes file (`core.excludesFile`), and
     /// file systems that do not change a directory's time when an entry is
     /// added to it.
-    fn rescan(&mut self) -> (Vec<PathBuf>, FxHashSet<PathBuf>, bool) {
-        use crate::workspace::{boundary, listable, Workspace, IGNORE_FILES};
+    fn rescan(&mut self) -> (Vec<Admitted>, FxHashSet<PathBuf>, bool) {
+        use crate::sources::{discover, Found};
+        use crate::workspace::{boundary, listable, IGNORE_FILES};
         let clock = SystemTime::now();
-        let root = self.project.workspace.root.clone();
-        let exclude = self.project.config.exclude.clone();
-        let walk = |start: &Path, depth| Workspace::discover_in(&root, Some(start), depth, &exclude);
-        let files = |w: Workspace| w.files.into_iter().map(|f| f.path);
-        let modules = |w: &Workspace| w.modules.iter().map(|m| m.dir.clone()).collect::<Vec<_>>();
+        let root = self.root().to_path_buf();
+        let exclude = self.project().config.exclude.clone();
+        let walk = |start: &Path, depth| discover(&root, Some(start), depth, &exclude);
+        let files = |w: Found| w.into_files();
+        let modules = |w: &Found| w.ws.modules.iter().map(|m| m.dir.clone()).collect::<Vec<_>>();
         // (one that could not be read is read again, and walks only once it
         // can be or its stamp changes: see `FileStamp::read_otherwise`)
         let mut full = self.walked.ignores.iter_mut().any(|(p, stamp)| match stamp {
@@ -507,7 +514,7 @@ impl Session {
             s.walked.dirs.retain(|p, _| !p.starts_with(d));
             s.walked.ignores.retain(|(p, _)| !p.starts_with(d));
             s.walked.gits.retain(|p, _| !p.starts_with(d));
-            gone.extend(s.stamps.keys().filter(|p| p.starts_with(d)).cloned());
+            gone.extend(s.sources.paths().filter(|p| p.starts_with(d)).cloned());
         };
         // directories forgotten: a module in one (gone, now a symlink, which
         // the discovery does not follow, though its build file may still be
@@ -557,8 +564,8 @@ impl Session {
                 // which loads the project again if a fresh load lays the
                 // modules out otherwise (and only then: a listing of one
                 // directory is not the whole discovery)
-                let held = self.project.workspace.modules.iter().filter(|m| m.dir == d);
-                if held.into_iter().any(|h| !listed.modules.iter().any(|m| m.dir == h.dir && m.build_system == h.build_system)) {
+                let held = self.project().workspace.modules.iter().filter(|m| m.dir == d);
+                if held.into_iter().any(|h| !listed.ws.modules.iter().any(|m| m.dir == h.dir && m.build_system == h.build_system)) {
                     crate::trace::log(|| format!("sync: the module at {} is no longer listed as it was", d.display()));
                     full = true;
                     break;
@@ -566,18 +573,18 @@ impl Session {
                 // what was held below it by a name it no longer lists exactly
                 // (gone, now a symlink, renamed in case only on a file system
                 // that ignores case) is forgotten
-                let (dirs_now, files_now): (FxHashSet<&PathBuf>, FxHashSet<&PathBuf>) = (listed.dirs.iter().collect(), listed.files.iter().map(|f| &f.path).collect());
+                let (dirs_now, files_now): (FxHashSet<&PathBuf>, FxHashSet<&Path>) = (listed.ws.dirs.iter().collect(), listed.files().iter().map(Admitted::path).collect());
                 let lost_dirs: Vec<PathBuf> = self.walked.dirs.keys().filter(|p| p.parent() == Some(d.as_path()) && !dirs_now.contains(p)).cloned().collect();
-                gone.extend(self.stamps.keys().filter(|p| p.parent() == Some(d.as_path()) && !files_now.contains(p)).cloned());
+                gone.extend(self.sources.paths().filter(|p| p.parent() == Some(d.as_path()) && !files_now.contains(p.as_path())).cloned());
                 for l in lost_dirs {
                     crate::trace::log(|| format!("sync: directory no longer listed {}", l.display()));
                     forget(self, &mut gone, &l);
                     forgotten.push(l);
                 }
-                let new_dirs: Vec<&PathBuf> = listed.dirs.iter().filter(|s| **s != d && !self.walked.dirs.contains_key(*s)).collect();
+                let new_dirs: Vec<&PathBuf> = listed.ws.dirs.iter().filter(|s| **s != d && !self.walked.dirs.contains_key(*s)).collect();
                 for sub in new_dirs {
                     let w = walk(sub, None);
-                    let new = Walk::stamp(&w.dirs, None, began, &FxHashMap::default(), &FxHashMap::default());
+                    let new = Walk::stamp(&w.ws.dirs, None, began, &FxHashMap::default(), &FxHashMap::default());
                     self.walked.dirs.extend(new.dirs);
                     self.walked.ignores.extend(new.ignores);
                     self.walked.gits.extend(new.gits);
@@ -589,7 +596,7 @@ impl Session {
             }
         }
         // the same for a module in a directory forgotten (gone, now a symlink)
-        if !full && self.project.workspace.modules.iter().any(|m| forgotten.iter().any(|f| m.dir.starts_with(f))) {
+        if !full && self.project().workspace.modules.iter().any(|m| forgotten.iter().any(|f| m.dir.starts_with(f))) {
             crate::trace::log(|| "sync: a module's directory is no longer walked".into());
             full = true;
         }
@@ -607,7 +614,7 @@ impl Session {
             bounds.extend(root.ancestors().skip(1).map(|a| (a.to_path_buf(), boundary(a))));
             let began = SystemTime::now();
             let w = walk(&root, None);
-            self.walked = Walk::of_workspace(&w, began, &before, &bounds);
+            self.walked = Walk::of_workspace(&w.ws, began, &before, &bounds);
             // the modules as a fresh load finds them: one added, gone or of
             // another build system reloads the project
             let layout = |ms: &[crate::workspace::Module]| {
@@ -615,20 +622,20 @@ impl Session {
                 v.sort_by(|a, b| a.0.cmp(&b.0));
                 v
             };
-            if layout(&w.modules) != layout(&self.project.workspace.modules) {
+            if layout(&w.ws.modules) != layout(&self.project().workspace.modules) {
                 crate::trace::log(|| "sync: reload, the walk finds other modules".into());
                 return (Vec::new(), FxHashSet::default(), true);
             }
-            found = files(w).collect();
-            let all: FxHashSet<&PathBuf> = found.iter().collect();
-            gone = self.stamps.keys().filter(|p| !all.contains(p)).cloned().collect();
+            found = files(w);
+            let all: FxHashSet<&Path> = found.iter().map(Admitted::path).collect();
+            gone = self.sources.paths().filter(|p| !all.contains(p.as_path())).cloned().collect();
         }
-        let module = found_modules.iter().find(|d| !self.project.workspace.modules.iter().any(|m| m.dir == **d));
+        let module = found_modules.iter().find(|d| !self.project().workspace.modules.iter().any(|m| m.dir == **d));
         if let Some(d) = module {
             crate::trace::log(|| format!("sync: reload, a module appeared at {}", d.display()));
             return (Vec::new(), FxHashSet::default(), true);
         }
-        found.retain(|p| !self.stamps.contains_key(p));
+        found.retain(|p| self.sources.get(p.path()).is_none());
         found.sort();
         found.dedup();
         (found, gone, false)
@@ -652,7 +659,7 @@ impl Session {
         // this a daemon kept the layout it started with: after a module was
         // added or renamed its files counted as the root module's.)
         let trace = crate::trace::enabled();
-        let sig = |s: &Session, f: &Path| s.project.index.file(&path_key(f)).map(|s| format!("{:016x}", s.signature_hash)).unwrap_or_else(|| "-".into());
+        let sig = |s: &Session, f: &Path| s.project().index.file(&path_key(f)).map(|s| format!("{:016x}", s.signature_hash)).unwrap_or_else(|| "-".into());
         let sigs: Vec<String> = if trace { extra.iter().map(|e| sig(self, e)).collect() } else { Vec::new() };
         let clock = SystemTime::now();
         let unread = self.config_unread();
@@ -681,53 +688,36 @@ impl Session {
             }
             self.reload();
         }
-        // (on all cores: after a checkout of the whole tree every file is racy
-        // and its content is compared)
-        let clock = SystemTime::now();
-        let mut stale: Vec<PathBuf> = self
-            .stamps
-            .par_iter_mut()
-            .filter_map(|(p, stamp)| {
-                let was = *stamp;
-                if !stamp.changed(p, clock) {
-                    return None;
-                }
-                crate::trace::log(|| format!("sync: stale {} recorded {} size {}{} now {}", p.display(), crate::trace::time(was.meta().map(|m| m.mtime)), was.meta().map_or(0, |m| m.size), if was.is_racy() { " racy" } else if was.vouches() { "" } else { " unread" }, crate::trace::time(std::fs::metadata(p).and_then(|m| m.modified()).ok())));
-                Some(p.clone())
-            })
-            .collect();
-        // (appeared: not in `stamps`, so not in `stale` yet; gone: some may be)
-        let mut queued: FxHashSet<PathBuf> = appeared.iter().cloned().collect();
+        let mut stale: Vec<Admitted> = self.sources.stale(SystemTime::now());
+        // (appeared: not held, so not in `stale` yet; gone: some may be)
+        let mut queued: FxHashSet<PathBuf> = appeared.iter().map(|p| p.path().to_path_buf()).collect();
         for p in appeared {
-            crate::trace::log(|| format!("sync: appeared {}", p.display()));
-            stale.push(p.clone());
-            let module = self.project.workspace.module_of(&p).unwrap_or(0);
-            self.project.workspace.files.push(crate::workspace::SourceFile { kind: classify(&p), path: p, module });
+            crate::trace::log(|| format!("sync: appeared {}", p.path().display()));
+            stale.push(p);
         }
         if !gone.is_empty() {
-            queued.extend(stale.iter().cloned());
-            stale.extend(gone.iter().filter(|p| queued.insert((*p).clone())).cloned());
+            queued.extend(stale.iter().map(|p| p.path().to_path_buf()));
+            let held: Vec<Admitted> = gone.iter().filter(|p| queued.insert((*p).clone())).filter_map(|p| self.sources.held(p)).collect();
+            stale.extend(held);
         }
-        for e in extra {
-            let e = e.canonicalize().unwrap_or_else(|_| e.clone());
-            if e.extension().is_some_and(|x| x == "java") && !self.stamps.contains_key(&e) && !queued.contains(&e) {
-                stale.push(e.clone());
-                let module = self.project.workspace.module_of(&e).unwrap_or(0);
-                self.project.workspace.files.push(crate::workspace::SourceFile { path: e.clone(), module, kind: classify(&e) });
-            }
-        }
+        // named files not held yet, where a fresh load would list them
+        let named: Vec<PathBuf> = extra.iter().map(|e| e.canonicalize().unwrap_or_else(|_| e.clone())).filter(|e| e.extension().is_some_and(|x| x == "java") && self.sources.get(e).is_none() && !queued.contains(e)).collect();
+        let mut named = self.sources.admit(&named, &self.walked);
+        named.sort();
+        named.dedup();
+        stale.extend(named);
         let mut changed = Vec::new();
         let mut any_decl_change = false;
         let mut di_stale = false;
         let mut forgotten: FxHashSet<PathBuf> = FxHashSet::default();
-        let any_stale = !stale.is_empty();
-        for p in stale {
+        for file in stale {
+            let p = file.path().to_path_buf();
             // the stamp first, then the text it vouches for; a path that is
             // no longer a file (a directory now), or that the walk no longer
             // finds, is gone, as for a fresh load
             let meta = std::fs::symlink_metadata(&p);
-            let file = meta.as_ref().is_ok_and(|m| m.is_file());
-            let (stamp, text) = if file && !gone.contains(&p) { FileStamp::read(&p) } else { (None, None) };
+            let is_file = meta.as_ref().is_ok_and(|m| m.is_file());
+            let (stamp, text) = if is_file && !gone.contains(&p) { FileStamp::read(&p) } else { (None, None) };
             // one that cannot be looked at, its directory being readable but
             // not enterable, is still listed: a fresh load holds it, without
             // a stub, and so does the session, trying again at every sync
@@ -737,63 +727,64 @@ impl Session {
             let stamp = stamp.or_else(|| unreachable.then_some(FileStamp::Recheck { meta: None, why: Why::Unreachable }));
             // refresh_file rebuilds the DI model itself; batch it below instead
             let key = path_key(&p);
-            let old = self.project.index.file(&key).map(|s| s.signature_hash);
+            let old = self.project().index.file(&key).map(|s| s.signature_hash);
             // (the context starts a launcher makes are read with its stub)
-            let old_startups = self.project.index.file(&key).map(|s| s.startups.clone());
-            if let Some(stamp) = stamp {
-                // a time seen at an earlier look keeps the margin it began then
-                let stamp = stamp.after(self.stamps.get(&p));
-                if let Some(text) = text {
-                    let pf = ParsedFile::parse(text);
-                    let stub = Arc::new(self.project.extract(&p, &pf));
+            let old_startups = self.project().index.file(&key).map(|s| s.startups.clone());
+            let Some(stamp) = stamp else {
+                forgotten.insert(p.clone());
+                any_decl_change = true;
+                changed.push(p);
+                continue;
+            };
+            let stub = text.map(|text| {
+                let pf = ParsedFile::parse(text);
+                Arc::new(self.project().extract(&p, &pf))
+            });
+            match &stub {
+                Some(stub) => {
                     // install the new stub even when signatures are unchanged:
                     // referenced names (for broken callers) and declaration
                     // positions change with body-only edits
                     let decl_change = old != Some(stub.signature_hash);
                     // the DI model stores positions of beans and injection points
-                    di_stale |= decl_change || old_startups.as_ref() != Some(&stub.startups) || self.project.di.beans.iter().any(|b| b.file.as_deref() == Some(&*key)) || self.project.di.points.iter().any(|pt| pt.file.as_deref() == Some(&*key));
-                    self.project.index.set_file(key, stub);
+                    let project = self.project();
+                    di_stale |= decl_change || old_startups.as_ref() != Some(&stub.startups) || project.di.beans.iter().any(|b| b.file.as_deref() == Some(&*key)) || project.di.points.iter().any(|pt| pt.file.as_deref() == Some(&*key));
                     if decl_change {
                         any_decl_change = true;
                         changed.push(p.clone());
                     }
-                } else if old.is_some() {
-                    // could not be read: no stub, as a fresh load has none;
-                    // the stamp vouches for nothing, so the next sync tries again
-                    self.project.index.remove_file(&key);
+                }
+                // could not be read: no stub, as a fresh load has none; the
+                // stamp vouches for nothing, so the next sync tries again
+                None if old.is_some() => {
                     any_decl_change = true;
                     changed.push(p.clone());
                 }
-                self.stamps.insert(p.clone(), stamp);
-            } else {
-                self.project.index.remove_file(&key);
-                self.stamps.remove(&p);
-                forgotten.insert(p.clone());
-                any_decl_change = true;
-                changed.push(p.clone());
+                None => {}
             }
+            self.sources.install(file, stamp, stub);
         }
-        if !forgotten.is_empty() {
-            self.project.workspace.files.retain(|f| !forgotten.contains(&f.path));
-        }
+        self.sources.forget(&forgotten);
         // The JDK API, the modules' releases and all that is resolved against
         // them follow from the release plan, which also depends on the
         // sources (which modules hold code, what release the code needs): one
         // a fresh load would make differently now is made by loading again.
-        if any_stale && self.project.release_plan_changed() {
+        // (Compared whenever a file was installed or forgotten since the last
+        // comparison, also after a sync a panic cut short.)
+        if self.sources.release_plan_changed() {
             crate::trace::log(|| "sync: reload, the sources change the release plan".into());
             self.reload();
             return changed;
         }
         if any_decl_change || di_stale {
-            self.project.rebuild_di();
+            self.sources.rebuild_di();
         }
-        self.project.index.ensure_resolved();
+        self.project().index.ensure_resolved();
         if trace {
             for (e, b) in extra.iter().zip(&sigs) {
                 let now = std::fs::metadata(e).and_then(|m| m.modified()).ok();
                 let text = crate::fsutil::read_text(e).ok().map(|t| format!("{:016x}", crate::cache::content_hash(&t))).unwrap_or_else(|| "-".into());
-                crate::trace::log(|| format!("sync: checked {} stub {} -> {} recorded {} now {} content {}", e.display(), b, sig(self, e), crate::trace::time(self.stamps.get(e).and_then(|s| s.meta()).map(|m| m.mtime)), crate::trace::time(now), text));
+                crate::trace::log(|| format!("sync: checked {} stub {} -> {} recorded {} now {} content {}", e.display(), b, sig(self, e), crate::trace::time(self.sources.get(e).and_then(|s| s.stamp().meta()).map(|m| m.mtime)), crate::trace::time(now), text));
             }
         }
         changed
@@ -807,9 +798,9 @@ impl Session {
         let before = Before::take(self.config.iter().map(|(p, _)| p.as_path()));
         if let Ok((project, loaded)) = Project::reload(&root, before) {
             // warnings already shown are not shown again for the same state
-            let shown = self.warned.then(|| self.project.classpath_warnings.clone());
+            let shown = self.warned.then(|| self.project().classpath_warnings.clone());
             *self = Session::from_project(project, loaded);
-            self.warned = shown.is_some_and(|w| w == self.project.classpath_warnings);
+            self.warned = shown.is_some_and(|w| w == self.project().classpath_warnings);
         }
     }
 
@@ -831,11 +822,11 @@ impl Session {
     }
 
     fn analyze(&self, rules: &RuleSet, files: &[PathBuf]) -> Vec<Finding> {
-        self.project.index.ensure_resolved();
+        self.project().index.ensure_resolved();
         files
             .par_iter()
             .flat_map_iter(|p| match crate::fsutil::read_text(p) {
-                Ok(text) => analyze_text(&self.project, rules, &self.options, p, &text),
+                Ok(text) => analyze_text(self.project(), rules, &self.options, p, &text),
                 Err(_) => Vec::new(),
             })
             .collect()
@@ -846,8 +837,8 @@ impl Session {
         let mut changed_files = Vec::new();
         let mut names: FxHashSet<Name> = FxHashSet::default();
         for f in files {
-            let Some(cur) = self.project.index.file(&path_key(f)).cloned() else { continue };
-            let head: Option<FileStub> = git::version_at(self.root(), rev, f).map(|t| self.project.extract(f, &ParsedFile::parse(t)));
+            let Some(cur) = self.project().index.file(&path_key(f)).cloned() else { continue };
+            let head: Option<FileStub> = git::version_at(self.root(), rev, f).map(|t| self.project().extract(f, &ParsedFile::parse(t)));
             let Some(head) = head else { continue }; // new file: nothing to break
             if head.signature_hash == cur.signature_hash {
                 continue;
@@ -891,7 +882,7 @@ impl Session {
             return Vec::new();
         }
         let mut out = Vec::new();
-        for (p, stub) in self.project.index.files() {
+        for (p, stub) in self.project().index.files() {
             let pb = PathBuf::from(&**p);
             if exclude.contains(&pb) || classify(&pb) == SourceKind::Generated {
                 continue;
@@ -1027,7 +1018,7 @@ impl Session {
     /// before the change (which compiled) is one it cannot back: the same
     /// gap, whether the line holding it was edited, moved or newly written.
     fn claims_before(&mut self, findings: &[Finding], claims: &[usize], files: &[PathBuf], touched: &[PathBuf], rev: &str) -> FxHashSet<(&'static str, String)> {
-        let rules = RuleSet::new(crate::analyze::selected_rules_for(&self.project, true).into_iter().filter(|r| compared_in_changed(r.meta().id)).collect());
+        let rules = RuleSet::new(crate::analyze::selected_rules_for(self.project(), true).into_iter().filter(|r| compared_in_changed(r.meta().id)).collect());
         // a finding's path is relative to the root, as `analyze_text` makes it
         let paths: FxHashSet<&str> = claims.iter().map(|&i| findings[i].path.as_str()).collect();
         let in_files: Vec<PathBuf> = files.iter().filter(|f| paths.contains(f.strip_prefix(self.root()).unwrap_or(f).to_string_lossy().as_ref())).cloned().collect();
@@ -1043,7 +1034,7 @@ impl Session {
             if names.is_empty() {
                 continue;
             }
-            for (p, stub) in self.project.index.files() {
+            for (p, stub) in self.project().index.files() {
                 let pb = PathBuf::from(&**p);
                 if !skip.contains(&pb) && classify(&pb) != SourceKind::Generated && names.iter().all(|n| stub.referenced_names.binary_search_by(|x| (**x).cmp(n.as_str())).is_ok()) {
                     elsewhere.insert(pb);
@@ -1055,8 +1046,8 @@ impl Session {
         let old: Vec<(PathBuf, String)> = in_files.iter().filter_map(|f| git::version_at(self.root(), rev, f).map(|t| (f.clone(), t))).collect();
         let base = self.at_base(touched, rev);
         let s: &Session = &base;
-        s.project.index.ensure_resolved();
-        let mut found: Vec<Finding> = old.par_iter().flat_map_iter(|(f, t)| analyze_text(&s.project, &rules, &s.options, f, t)).collect();
+        s.project().index.ensure_resolved();
+        let mut found: Vec<Finding> = old.par_iter().flat_map_iter(|(f, t)| analyze_text(s.project(), &rules, &s.options, f, t)).collect();
         found.extend(s.analyze(&rules, &elsewhere));
         drop(base);
         found.iter().flat_map(|f| std::iter::once(claim_key(f)).chain(gap_key(f))).collect()
@@ -1074,16 +1065,16 @@ impl Session {
     /// new. The unchanged files' text is the same both times, so fingerprints
     /// match exactly.
     fn cross_file_breaks(&mut self, changed: &[PathBuf], deleted: &[PathBuf], rev: &str) -> Vec<Finding> {
-        let rules = RuleSet::new(crate::analyze::selected_rules_for(&self.project, true).into_iter().filter(|r| CROSS_FILE_RULES.contains(&r.meta().id)).collect());
+        let rules = RuleSet::new(crate::analyze::selected_rules_for(self.project(), true).into_iter().filter(|r| CROSS_FILE_RULES.contains(&r.meta().id)).collect());
         let touched: Vec<PathBuf> = changed.iter().chain(deleted).cloned().collect();
         let skip: FxHashSet<&PathBuf> = touched.iter().collect();
-        let others: Vec<PathBuf> = crate::analyze::all_source_files(&self.project).into_iter().filter(|f| !skip.contains(f)).collect();
+        let others: Vec<PathBuf> = crate::analyze::all_source_files(self.project()).into_iter().filter(|f| !skip.contains(f)).collect();
         if touched.is_empty() || others.is_empty() {
             return Vec::new();
         }
         let now = self.analyze(&rules, &others);
         let base = self.at_base(&touched, rev);
-        let base_classes: Vec<Name> = touched.iter().filter_map(|f| base.project.index.file(&path_key(f))).flat_map(|stub| stub.classes.iter().map(|c| c.name.clone())).collect();
+        let base_classes: Vec<Name> = touched.iter().filter_map(|f| base.project().index.file(&path_key(f))).flat_map(|stub| stub.classes.iter().map(|c| c.name.clone())).collect();
         let before: FxHashSet<PlaceClaim> = base.analyze(&rules, &others).iter().map(place_claim).collect();
         drop(base);
         let mut found: Vec<Finding> = now.into_iter().filter(|f| !before.contains(&place_claim(f))).collect();
@@ -1098,14 +1089,14 @@ impl Session {
         let mut uncertain_packages: Vec<String> = Vec::new();
         let mut uncertain_all = false;
         for f in changed.iter().filter(|f| f.exists()) {
-            match self.project.index.file(&path_key(f)) {
+            match self.project().index.file(&path_key(f)) {
                 Some(s) if !s.has_syntax_errors => {}
                 Some(s) if !s.package.is_empty() => uncertain_packages.push(s.package.to_string()),
                 _ => uncertain_all = true,
             }
         }
         let in_uncertain = |c: &str| uncertain_all || uncertain_packages.iter().any(|p| c.rsplit_once('.').map_or("", |x| x.0) == p);
-        let removed: Vec<Name> = base_classes.into_iter().filter(|c| self.project.index.class(c).is_none() && !in_uncertain(c)).collect();
+        let removed: Vec<Name> = base_classes.into_iter().filter(|c| self.project().index.class(c).is_none() && !in_uncertain(c)).collect();
         if !removed.is_empty() {
             found.extend(others.par_iter().flat_map_iter(|f| self.removed_class_uses(f, &removed)).collect::<Vec<_>>());
         }
@@ -1115,7 +1106,7 @@ impl Session {
     /// Uses of `removed` classes in `file`: an import of one, or its simple
     /// name in the same package or under an on-demand import of its package.
     fn removed_class_uses(&self, file: &Path, removed: &[Name]) -> Vec<Finding> {
-        let Some(stub) = self.project.index.file(&path_key(file)) else { return Vec::new() };
+        let Some(stub) = self.project().index.file(&path_key(file)) else { return Vec::new() };
         // how the file names a removed class: its import, its simple name,
         // or its qualified name
         enum Use {
@@ -1127,7 +1118,7 @@ impl Session {
         // or an on-demand one (nested types under a static one) we cannot see
         // all of; only the JDK defines `java.*`, so those are complete once the
         // JDK's classes are loaded at all
-        let idx = &self.project.index;
+        let idx = &self.project().index;
         let jdk = idx.class_exists("java.lang.Object");
         let may_supply = |name: &str, pkg: &str| {
             stub.imports.iter().any(|i| {
@@ -1171,7 +1162,7 @@ impl Session {
         }
         let Ok(text) = crate::fsutil::read_text(file) else { return Vec::new() };
         let pf = ParsedFile::parse(text);
-        let fm = grounds_semantic::FileModel::new(&pf, &self.project.index, path_key(file));
+        let fm = grounds_semantic::FileModel::new(&pf, &self.project().index, path_key(file));
         let rel = file.strip_prefix(self.root()).unwrap_or(file).to_string_lossy().to_string();
         let mut out = Vec::new();
         // a variable named like the qualifier may come from a supertype we
@@ -1305,7 +1296,7 @@ impl Session {
             first.insert(f, start);
             if let Some(text) = git::version_at(self.root(), rev, f) {
                 let pf = ParsedFile::parse(text);
-                let stub = self.project.extract(f, &pf);
+                let stub = self.project().extract(f, &pf);
                 for (n, owner, l) in decls(&stub, &pf) {
                     if owner.is_none() {
                         classes.push((f, n.clone()));
@@ -1315,7 +1306,7 @@ impl Session {
                     }
                 }
             }
-            if let (Some(stub), Ok(text)) = (self.project.index.file(&path_key(f)), crate::fsutil::read_text(f)) {
+            if let (Some(stub), Ok(text)) = (self.project().index.file(&path_key(f)), crate::fsutil::read_text(f)) {
                 let pf = ParsedFile::parse(text);
                 for (n, owner, l) in decls(stub, &pf) {
                     if owner.is_none() {
@@ -1374,7 +1365,7 @@ impl Session {
     /// Record current findings of the given (or changed) files as accepted.
     pub fn write_baseline(&mut self, files: &[PathBuf], merge: bool) -> anyhow::Result<usize> {
         let opts = CheckOptions { mode: Mode::Checkpoint, files: files.to_vec(), all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None };
-        let targets = if files.is_empty() && !git::is_repo(self.root()) { crate::analyze::all_source_files(&self.project) } else { self.target_files(&opts) };
+        let targets = if files.is_empty() && !git::is_repo(self.root()) { crate::analyze::all_source_files(self.project()) } else { self.target_files(&opts) };
         self.sync(&targets);
         let findings = self.analyze(&self.all_rules, &targets);
         let mut b = if merge { Baseline::load(self.root()) } else { Baseline::default() };
@@ -1398,7 +1389,7 @@ impl Session {
         // reverse reference closure over simple class names
         let mut frontier: FxHashSet<Name> = FxHashSet::default();
         for f in &targets {
-            if let Some(stub) = self.project.index.file(&path_key(f)) {
+            if let Some(stub) = self.project().index.file(&path_key(f)) {
                 for c in &stub.classes {
                     frontier.insert(Arc::from(simple_name_of(&c.name)));
                 }
@@ -1408,7 +1399,7 @@ impl Session {
         let mut tests: Vec<ImpactedTest> = Vec::new();
         for _depth in 0..3 {
             let mut next: FxHashSet<Name> = FxHashSet::default();
-            for (p, stub) in self.project.index.files() {
+            for (p, stub) in self.project().index.files() {
                 let pb = PathBuf::from(&**p);
                 if seen_files.contains(&pb) {
                     continue;
@@ -1435,7 +1426,7 @@ impl Session {
         // tests among the changed files themselves
         for f in &targets {
             if crate::workspace::is_test_path(&f.to_string_lossy()) {
-                if let Some(stub) = self.project.index.file(&path_key(f)) {
+                if let Some(stub) = self.project().index.file(&path_key(f)) {
                     for c in stub.classes.iter().filter(|c| c.outer.is_none()) {
                         tests.push(self.impacted_test(f, c.name.to_string()));
                     }
@@ -1448,10 +1439,10 @@ impl Session {
     }
 
     fn impacted_test(&self, file: &Path, class: String) -> ImpactedTest {
-        let ws = &self.project.workspace;
+        let ws = &self.project().workspace;
         let module = ws.module_of(file).map(|m| ws.modules[m].name.clone()).unwrap_or_default();
         let set = crate::workspace::source_set_of(file).unwrap_or("test");
-        let task = self.project.source_sets.test_task(&module, set);
+        let task = self.project().source_sets.test_task(&module, set);
         ImpactedTest { module, task, class }
     }
 }
@@ -1469,33 +1460,24 @@ mod base {
     /// version.
     pub(super) struct AtBase<'s> {
         session: &'s mut Session,
-        /// The stub each file had (`None`: none) before the base was put in.
-        saved: Vec<(Arc<str>, Option<Arc<FileStub>>)>,
-        di: grounds_di::DiModel,
+        /// The stubs of the touched files and the bean model, set aside
+        /// while the base is in place (`None` once put back).
+        lent: Option<crate::sources::Lent>,
     }
 
     impl<'s> AtBase<'s> {
         pub(super) fn install(session: &'s mut Session, touched: &[PathBuf], rev: &str) -> AtBase<'s> {
-            let saved = touched.iter().map(|p| {
-                let key = path_key(p);
-                let stub = session.project.index.file(&key).cloned();
-                (key, stub)
-            }).collect();
-            let di = std::mem::take(&mut session.project.di);
+            let lent = session.sources.lend(touched);
             // (the guard first: a panic while the base is put in restores too)
-            let base = AtBase { session, saved, di };
-            let project = &mut base.session.project;
+            let base = AtBase { session, lent: Some(lent) };
             for p in touched {
-                let key = path_key(p);
-                match git::version_at(&project.workspace.root, rev, p) {
-                    Some(t) => {
-                        let stub = Arc::new(project.extract(p, &ParsedFile::parse(t)));
-                        project.index.set_file(key, stub);
-                    }
-                    None => project.index.remove_file(&key),
+                let project = base.session.project();
+                let stub = git::version_at(&project.workspace.root, rev, p).map(|t| Arc::new(project.extract(p, &ParsedFile::parse(t))));
+                if let Some(lent) = &base.lent {
+                    base.session.sources.hold_base(lent, path_key(p), stub);
                 }
             }
-            project.rebuild_di();
+            base.session.sources.rebuild_di();
             base
         }
     }
@@ -1510,14 +1492,9 @@ mod base {
 
     impl Drop for AtBase<'_> {
         fn drop(&mut self) {
-            let project = &mut self.session.project;
-            for (key, stub) in self.saved.drain(..) {
-                match stub {
-                    Some(stub) => project.index.set_file(key, stub),
-                    None => project.index.remove_file(&key),
-                }
+            if let Some(lent) = self.lent.take() {
+                self.session.sources.put_back(lent);
             }
-            project.di = std::mem::take(&mut self.di);
         }
     }
 }
@@ -1706,8 +1683,8 @@ mod tests {
         w("src/main/java/demo/Owner.java", "package demo;\npublic class Owner {}\n");
         let owner = dir.join("src/main/java/demo/Owner.java").canonicalize().unwrap();
         let s = &mut Session::open(&dir).unwrap();
-        assert!(s.project.di_settings.bean_overriding_allowed);
-        let held = |s: &Session| (format!("{:?}", s.project.index.file(&path_key(&owner))), s.project.di.beans.len(), s.project.di.settings);
+        assert!(s.project().di_settings.bean_overriding_allowed);
+        let held = |s: &Session| (format!("{:?}", s.project().index.file(&path_key(&owner))), s.project().di.beans.len(), s.project().di.settings);
         let now = held(s);
         let base = s.at_base(std::slice::from_ref(&owner), "HEAD");
         let (stub, beans, settings) = held(&base);

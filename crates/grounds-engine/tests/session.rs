@@ -400,7 +400,7 @@ fn a_body_only_edit_resolves_classes_as_a_fresh_load_does() {
         std::fs::File::options().write(true).open(dir.join(file)).unwrap().set_modified(later).unwrap();
         s.sync(&[]);
         let fresh = classes(&grounds_engine::Project::load(&dir).unwrap().index);
-        assert_eq!(classes(&s.project.index), fresh, "after a body-only edit of {file}, the classes must resolve as a fresh load resolves them");
+        assert_eq!(classes(&s.project().index), fresh, "after a body-only edit of {file}, the classes must resolve as a fresh load resolves them");
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -418,12 +418,12 @@ fn a_changed_build_file_reloads_the_project() {
     git(&dir, &["commit", "-qm", "init"]);
     let mut s = Session::open(&dir).unwrap();
     let modules = |s: &Session| {
-        let mut names: Vec<String> = s.project.workspace.modules.iter().map(|m| m.name.clone()).collect();
+        let mut names: Vec<String> = s.project().workspace.modules.iter().map(|m| m.name.clone()).collect();
         names.sort();
         names
     };
     let module_of = |s: &Session, rel: &str| {
-        let ws = &s.project.workspace;
+        let ws = &s.project().workspace;
         let file = ws.root.join(rel);
         ws.files.iter().find(|f| f.path == file).map(|f| ws.modules[f.module].name.clone())
     };
@@ -443,10 +443,10 @@ fn a_changed_build_file_reloads_the_project() {
     assert_eq!(module_of(&s, "lib/src/main/java/demo/Lib.java").as_deref(), Some("lib"), "the new file belongs to the new module");
 
     // a setting changed: grounds.toml did not exist when the session opened
-    assert!(s.project.config.exclude.is_empty());
+    assert!(s.project().config.exclude.is_empty());
     write(&dir, "grounds.toml", "exclude = [\"lib/**\"]\n");
     s.sync(&[]);
-    assert_eq!(s.project.config.exclude, ["lib/**"]);
+    assert_eq!(s.project().config.exclude, ["lib/**"]);
     // one reload settles it: the next request, moments later, loads nothing
     let loaded = s.load_began();
     s.sync(&[]);
@@ -454,21 +454,21 @@ fn a_changed_build_file_reloads_the_project() {
     assert_eq!(module_of(&s, "lib/src/main/java/demo/Lib.java"), None, "the excluded file is gone, as in a fresh load");
 
     // a registration file that did not exist: Spring's imports of the app module
-    assert!(s.project.registered.is_empty());
+    assert!(s.project().registered.is_empty());
     write(&dir, "app/src/main/resources/META-INF/spring/org.springframework.boot.autoconfigure.AutoConfiguration.imports", "demo.App\n");
     s.sync(&[]);
-    assert_eq!(s.project.registered, ["demo.App"]);
+    assert_eq!(s.project().registered, ["demo.App"]);
 
     // the classpath dump `grounds classpath` writes, created after the session opened
     // (a load warns that it is older than the build file above)
-    assert!(s.project.classpath_warnings.is_empty(), "{:?}", s.project.classpath_warnings);
+    assert!(s.project().classpath_warnings.is_empty(), "{:?}", s.project().classpath_warnings);
     write(&dir, ".grounds/classpath.txt", &format!("{}\n", dir.join("libs/some.jar").display()));
     s.sync(&[]);
-    let warnings: Vec<String> = s.project.classpath_warnings.iter().map(|w| w.to_string()).collect();
+    let warnings: Vec<String> = s.project().classpath_warnings.iter().map(|w| w.to_string()).collect();
     assert!(warnings.iter().any(|w| w.contains("classpath.txt")), "the dump is read once it exists: {warnings:?}");
 
     // the jar it lists appears (a dependency built later): a class from it is known
-    assert!(!s.project.index.class_exists("lib.Dep"));
+    assert!(!s.project().index.class_exists("lib.Dep"));
     write(&dir, "libs/src/lib/Dep.java", "package lib;\npublic class Dep {}\n");
     // (older javac does not create the output directory itself)
     std::fs::create_dir_all(dir.join("libs/classes")).unwrap();
@@ -476,7 +476,7 @@ fn a_changed_build_file_reloads_the_project() {
     let jar = Command::new("jar").arg("cf").arg(dir.join("libs/some.jar")).arg("-C").arg(dir.join("libs/classes")).arg("lib").status();
     if javac.is_ok_and(|s| s.success()) && jar.is_ok_and(|s| s.success()) {
         s.sync(&[]);
-        assert!(s.project.index.class_exists("lib.Dep"), "the jar is read once it is there");
+        assert!(s.project().index.class_exists("lib.Dep"), "the jar is read once it is there");
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -667,7 +667,7 @@ fn a_file_written_while_the_project_loads_is_read_again() {
     let mut s = Session::from_project(project, loaded);
     s.sync(&[]);
     let fresh = grounds_engine::Project::load(&dir).unwrap();
-    assert_eq!(classes(&s.project.index), classes(&fresh.index), "the edit made during the load must not be lost");
+    assert_eq!(classes(&s.project().index), classes(&fresh.index), "the edit made during the load must not be lost");
     // and what it broke is reported, as a run from scratch reports it
     let opts = CheckOptions { mode: Mode::Edit, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None };
     let r = s.check(&opts);
@@ -695,8 +695,8 @@ fn a_second_write_at_the_same_time_is_read() {
     // past the margin, the build file is not one the load may have raced)
     std::thread::sleep(std::time::Duration::from_millis(2100));
     let methods = |s: &Session| {
-        let api = s.project.index.source_class_names().find(|n| n.ends_with("Api")).cloned().unwrap();
-        format!("{:?}", s.project.index.class(&api))
+        let api = s.project().index.source_class_names().find(|n| n.ends_with("Api")).cloned().unwrap();
+        format!("{:?}", s.project().index.class(&api))
     };
     let mut s = Session::open(&dir).unwrap();
     let loaded = s.load_began();
@@ -743,7 +743,7 @@ fn a_body_only_edit_of_a_launcher_rebuilds_the_contexts() {
     let _ = std::fs::remove_dir_all(&dir);
     launcher_project(&dir, "Solo");
     let mut s = Session::open(&dir).unwrap();
-    assert!(s.project.di.name_conflicts().is_empty());
+    assert!(s.project().di.name_conflicts().is_empty());
     // a body-only edit: no declaration changes, no bean in the file
     write(&dir, "src/main/java/launch/Main.java", &launcher("Pair"));
     let later = std::time::SystemTime::now() + std::time::Duration::from_secs(5);
@@ -751,7 +751,7 @@ fn a_body_only_edit_of_a_launcher_rebuilds_the_contexts() {
     s.sync(&[]);
     let fresh = grounds_engine::Project::load(&dir).unwrap();
     assert_eq!(fresh.di.name_conflicts().len(), 1);
-    assert_eq!(s.project.di.name_conflicts().len(), 1, "the warm session must see the launcher's new start as a fresh load does");
+    assert_eq!(s.project().di.name_conflicts().len(), 1, "the warm session must see the launcher's new start as a fresh load does");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -846,9 +846,9 @@ fn a_build_file_written_while_the_project_loads_reloads_it() {
     let (project, loaded) = grounds_engine::Project::load_stamped(&dir).unwrap();
     write(&dir, "grounds.toml", "exclude = [\"src/main/java/gen/**\"]\n");
     let mut s = Session::from_project(project, loaded);
-    assert!(s.project.config.exclude.is_empty());
+    assert!(s.project().config.exclude.is_empty());
     s.sync(&[]);
-    assert_eq!(s.project.config.exclude, ["src/main/java/gen/**"], "the settings written during the load are read");
+    assert_eq!(s.project().config.exclude, ["src/main/java/gen/**"], "the settings written during the load are read");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -881,7 +881,7 @@ fn a_configuration_file_gone_after_the_look_before_a_load_loads_it_again() {
     let began = s.load_began();
     s.sync(&[]);
     assert_eq!(s.load_began(), began, "and not again");
-    assert!(s.project.config.exclude.is_empty());
+    assert!(s.project().config.exclude.is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -900,7 +900,7 @@ fn a_file_that_could_not_be_read_is_read_once_it_can_be() {
     // (an old build file: a reload would read everything again and hide what sync does)
     set_mtime(&dir, "build.gradle", t);
     let mut s = Session::open(&dir).unwrap();
-    let api = |s: &Session| s.project.index.source_class_names().find(|n| n.ends_with("Api")).map(|n| format!("{:?}", s.project.index.class(n)));
+    let api = |s: &Session| s.project().index.source_class_names().find(|n| n.ends_with("Api")).map(|n| format!("{:?}", s.project().index.class(n)));
     let fresh = |dir: &Path| { let s = Session::open(dir).unwrap(); api(&s) };
     // the edit lands, but cannot be read: without permission where that
     // stops us, else as bytes that are not UTF-8 (of the same size)
@@ -948,10 +948,10 @@ fn a_file_that_could_not_be_read_is_read_once_it_can_be() {
 /// files with their module and kind, the files in the index, and every class
 /// as it resolves.
 fn holdings(s: &Session) -> (Vec<String>, Vec<String>, Vec<String>) {
-    let ws = &s.project.workspace;
+    let ws = &s.project().workspace;
     let mut files: Vec<String> = ws.files.iter().map(|f| format!("{} {} {:?}", f.path.strip_prefix(&ws.root).unwrap_or(&f.path).display(), ws.modules[f.module].name, f.kind)).collect();
     files.sort();
-    let index = &s.project.index;
+    let index = &s.project().index;
     let mut indexed: Vec<String> = index.files().map(|(p, _)| p.to_string()).collect();
     indexed.sort();
     let mut names: Vec<_> = index.source_class_names().cloned().collect();
@@ -1057,7 +1057,7 @@ fn files_that_appear_in_no_list_of_changed_files_are_found() {
     let mut s = Session::open(&dir).unwrap();
     git(&dir, &["checkout", "-q", "other"]);
     holds_as_fresh(&mut s, &dir, "a checkout that adds files");
-    assert!(s.project.index.class_exists("demo.fresh.deep.New"));
+    assert!(s.project().index.class_exists("demo.fresh.deep.New"));
     git(&dir, &["checkout", "-q", "base"]);
     holds_as_fresh(&mut s, &dir, "a checkout that removes them");
     git(&dir, &["checkout", "-q", "other"]);
@@ -1072,8 +1072,52 @@ fn files_that_appear_in_no_list_of_changed_files_are_found() {
     set_tree_mtime(&dir, "build", std::time::SystemTime::now() - std::time::Duration::from_secs(600));
     holds_as_fresh(&mut s, &dir, "a generator wrote sources");
     listed_not_walked(&s);
-    assert!(s.project.index.class_exists("demo.gen.Gen"));
+    assert!(s.project().index.class_exists("demo.gen.Gen"));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn files_named_to_a_sync_are_held_only_where_a_fresh_load_finds_them() {
+    // A request names the files git lists as changed, or that the caller
+    // gives: a fixture under a resources directory, a file in a hidden
+    // directory or in build output, one the configuration excludes, one
+    // outside the project. A fresh load reads none of them; a session that
+    // took them in because they were named held their declarations for good,
+    // and answered for a class that a fresh run does not know.
+    let dir = restored_project("named");
+    write(&dir, "grounds.toml", "exclude = [\"src/main/java/demo/skip/**\"]\n");
+    set_mtime(&dir, "grounds.toml", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
+    git(&dir, &["add", "-A"]);
+    git(&dir, &["commit", "-qm", "settings"]);
+    let _ = std::fs::remove_file(dir.join(".git/info/exclude"));
+    let outside = dir.with_file_name(format!("{}-outside", dir.file_name().unwrap().to_string_lossy()));
+    let _ = std::fs::remove_dir_all(&outside);
+    write(&outside, "Out.java", "package demo;\npublic class Out {}\n");
+    let mut s = Session::open(&dir).unwrap();
+    for (rel, class) in [("src/test/resources/fixture/Res.java", "Res"), (".hidden/Hid.java", "Hid"), ("build/tmp/Built.java", "Built"), ("src/main/java/demo/skip/Skip.java", "Skip")] {
+        write(&dir, rel, &format!("package demo;\npublic class {class} {{}}\n"));
+    }
+    // (older than the margin when the directories are stamped, so that no
+    // later sync lists them again, which would drop a file held there by
+    // chance: the session must not take such a file in to begin with)
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    // (the untracked files git lists as changed)
+    let opts = CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None };
+    s.check(&opts);
+    holds_as_fresh(&mut s, &dir, "files git lists that a fresh load does not read");
+    let named = CheckOptions { files: vec![outside.join("Out.java"), dir.join("src/test/resources/fixture/Res.java")], ..opts };
+    s.check(&named);
+    holds_as_fresh(&mut s, &dir, "files named that a fresh load does not read");
+    for class in ["demo.Res", "demo.Hid", "demo.Built", "demo.Skip", "demo.Out"] {
+        assert!(!s.project().index.class_exists(class), "{class}");
+    }
+    // a file named in a directory the discovery goes into is still held
+    write(&dir, "src/main/java/demo/Named.java", "package demo;\npublic class Named {}\n");
+    s.sync(&[dir.join("src/main/java/demo/Named.java")]);
+    assert!(s.project().index.class_exists("demo.Named"));
+    holds_as_fresh(&mut s, &dir, "a source file named");
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&outside);
 }
 
 #[test]
@@ -1087,7 +1131,7 @@ fn a_directory_that_goes_and_comes_back_is_read_again() {
     set_tree_mtime(&dir, "src/main/java/demo", old);
     holds_as_fresh(&mut s, &dir, "it came back, with old times");
     listed_not_walked(&s);
-    assert!(s.project.index.class_exists("demo.sub.Sub"));
+    assert!(s.project().index.class_exists("demo.sub.Sub"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1106,7 +1150,7 @@ fn a_file_replaced_by_a_directory_and_back() {
     set_mtime(&dir, req, old);
     holds_as_fresh(&mut s, &dir, "the directory was replaced by the file");
     listed_not_walked(&s);
-    assert!(s.project.index.class_exists("demo.Req"));
+    assert!(s.project().index.class_exists("demo.Req"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1120,7 +1164,7 @@ fn a_module_directory_that_appears_is_a_module() {
     write(&dir, "lib/src/test/java/lib/LibTest.java", "package lib;\nclass LibTest {}\n");
     set_tree_mtime(&dir, "lib", std::time::SystemTime::now() - std::time::Duration::from_secs(600));
     holds_as_fresh(&mut s, &dir, "a module directory appeared");
-    assert!(s.project.workspace.modules.iter().any(|m| m.name == "lib"));
+    assert!(s.project().workspace.modules.iter().any(|m| m.name == "lib"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1132,12 +1176,12 @@ fn an_ignore_file_that_changes_changes_the_sources() {
     let mut s = Session::open(&dir).unwrap();
     write(&dir, ".gitignore", "src/main/java/demo/sub/\n");
     holds_as_fresh(&mut s, &dir, "a .gitignore appeared");
-    assert!(!s.project.index.class_exists("demo.sub.Sub"));
+    assert!(!s.project().index.class_exists("demo.sub.Sub"));
     // edited in place: the directory's time does not change
     write(&dir, ".gitignore", "*.log\n");
     set_mtime(&dir, ".gitignore", std::time::SystemTime::now() - std::time::Duration::from_secs(60));
     holds_as_fresh(&mut s, &dir, "the .gitignore no longer lists it");
-    assert!(s.project.index.class_exists("demo.sub.Sub"));
+    assert!(s.project().index.class_exists("demo.sub.Sub"));
     write(&dir, ".git/info/exclude", "Req.java\n");
     holds_as_fresh(&mut s, &dir, "git's exclude file lists a file");
     let _ = std::fs::remove_dir_all(&dir);
@@ -1194,7 +1238,7 @@ fn a_directory_that_cannot_be_listed_is_listed_once_it_can_be() {
     std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o755)).unwrap();
     holds_as_fresh(&mut s, &dir, "the directory could be listed again");
     holds_as_fresh(&mut s, &dir, "a second sync");
-    assert!(s.project.index.class_exists("demo.sub.B"));
+    assert!(s.project().index.class_exists("demo.sub.B"));
     listed_not_walked(&s);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1212,11 +1256,11 @@ fn the_exclude_file_of_a_linked_worktree_is_followed() {
     let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
     set_tree_mtime(&dir, ".", old);
     let mut s = Session::open(&dir).unwrap();
-    assert!(s.project.index.class_exists("demo.Req"));
+    assert!(s.project().index.class_exists("demo.Req"));
     write(&main, ".git/info/exclude", "Req.java\n");
     set_mtime(&main, ".git/info/exclude", old - std::time::Duration::from_secs(60));
     holds_as_fresh(&mut s, &dir, "the main repository's exclude file lists a file");
-    assert!(!s.project.index.class_exists("demo.Req"));
+    assert!(!s.project().index.class_exists("demo.Req"));
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&main);
 }
@@ -1228,10 +1272,10 @@ fn an_ignore_file_that_removes_a_module_reloads_the_project() {
     write(&dir, "lib/src/main/java/lib/L.java", "package lib;\npublic class L {}\n");
     set_tree_mtime(&dir, "lib", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
     let mut s = Session::open(&dir).unwrap();
-    assert!(s.project.workspace.modules.iter().any(|m| m.name == "lib"));
+    assert!(s.project().workspace.modules.iter().any(|m| m.name == "lib"));
     write(&dir, ".ignore", "lib/build.gradle\n");
     holds_as_fresh(&mut s, &dir, "an ignore file hides a module's build file");
-    assert!(!s.project.workspace.modules.iter().any(|m| m.name == "lib"));
+    assert!(!s.project().workspace.modules.iter().any(|m| m.name == "lib"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1272,7 +1316,7 @@ fn a_directory_that_can_be_read_but_not_entered_is_listed_once_it_can_be() {
     std::fs::set_permissions(&sub, std::fs::Permissions::from_mode(0o755)).unwrap();
     holds_as_fresh(&mut s, &dir, "the directory could be entered again");
     holds_as_fresh(&mut s, &dir, "a second sync");
-    assert!(s.project.index.class_exists("demo.sub.Sub") && s.project.index.class_exists("demo.sub.B"));
+    assert!(s.project().index.class_exists("demo.sub.Sub") && s.project().index.class_exists("demo.sub.B"));
     listed_not_walked(&s);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1293,7 +1337,7 @@ fn an_ignore_file_that_cannot_be_read_is_read_once_it_can_be() {
     holds_as_fresh(&mut s, &dir, "the ignore file could be read again");
     std::thread::sleep(std::time::Duration::from_millis(2100));
     holds_as_fresh(&mut s, &dir, "past the margin");
-    assert!(!s.project.index.class_exists("demo.Req"));
+    assert!(!s.project().index.class_exists("demo.Req"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1345,15 +1389,15 @@ fn a_directory_whose_permissions_change_is_held_as_a_fresh_load_holds_it() {
         let dir = restored_project(&format!("chmoddir{mode:o}{}", rel.len()));
         let mut s = settled(&dir);
         let began = s.load_began();
-        assert!(s.project.index.class_exists("demo.sub.Sub"));
+        assert!(s.project().index.class_exists("demo.sub.Sub"));
         chmod(&dir, rel, mode);
         holds_as_fresh(&mut s, &dir, &format!("{rel} set to mode {mode:o}"));
         holds_as_fresh(&mut s, &dir, &format!("a second sync with {rel} at mode {mode:o}"));
-        assert!(!s.project.index.class_exists("demo.sub.Sub"), "{rel} at {mode:o}");
+        assert!(!s.project().index.class_exists("demo.sub.Sub"), "{rel} at {mode:o}");
         chmod(&dir, rel, 0o755);
         holds_as_fresh(&mut s, &dir, &format!("{rel} back from mode {mode:o}"));
         holds_as_fresh(&mut s, &dir, "a second sync");
-        assert!(s.project.index.class_exists("demo.sub.Sub") && s.project.index.class_exists("demo.Req"), "{rel} back from {mode:o}");
+        assert!(s.project().index.class_exists("demo.sub.Sub") && s.project().index.class_exists("demo.Req"), "{rel} back from {mode:o}");
         listed_not_walked(&s);
         no_reload(&s, began, "the permission changes");
         let _ = std::fs::remove_dir_all(&dir);
@@ -1381,7 +1425,7 @@ fn an_ignore_file_whose_permissions_change_is_read_as_a_fresh_load_reads_it() {
             write(&dir, rel, text);
             set_tree_mtime(&dir, ".", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
             let s = settled(&dir);
-            assert!(!s.project.index.class_exists(class), "{rel}");
+            assert!(!s.project().index.class_exists(class), "{rel}");
             let began = s.load_began();
             (dir, s, began)
         })
@@ -1394,12 +1438,12 @@ fn an_ignore_file_whose_permissions_change_is_read_as_a_fresh_load_reads_it() {
         chmod(dir, rel, 0o000);
         holds_as_fresh(s, dir, &format!("{rel} could no longer be read"));
         holds_as_fresh(s, dir, &format!("a second sync, {rel} unreadable"));
-        assert!(s.project.index.class_exists(class), "{rel} unreadable");
+        assert!(s.project().index.class_exists(class), "{rel} unreadable");
         assert_eq!(s.full_walks(), walks + 1, "{rel}: one walk when it could no longer be read, and none after");
         chmod(dir, rel, 0o644);
         holds_as_fresh(s, dir, &format!("{rel} could be read again"));
         holds_as_fresh(s, dir, "a second sync");
-        assert!(!s.project.index.class_exists(class), "{rel} readable again");
+        assert!(!s.project().index.class_exists(class), "{rel} readable again");
         no_reload(s, *began, rel);
         let _ = std::fs::remove_dir_all(&*dir);
     }
@@ -1429,7 +1473,7 @@ fn an_ignore_file_that_stays_unreadable_is_read_again_but_not_walked_for() {
         holds_as_fresh(&mut s, &dir, &format!("sync {i} with an unreadable ignore file"));
     }
     assert_eq!(s.full_walks(), 0, "nothing changed: no walk of the workspace");
-    assert!(s.project.index.class_exists("demo.Req"));
+    assert!(s.project().index.class_exists("demo.Req"));
     // one that becomes unreadable after the load: one walk, then none
     chmod(&dir, "src/main/java/demo/sub/.gitignore", 0o000);
     for i in 0..3 {
@@ -1449,14 +1493,14 @@ fn an_ignore_file_that_stays_unreadable_is_read_again_but_not_walked_for() {
     chmod(&dir, ".ignore", 0o644);
     holds_as_fresh(&mut s, &dir, "the ignore file could be read again");
     assert_eq!(s.full_walks(), 3);
-    assert!(!s.project.index.class_exists("demo.Req"));
+    assert!(!s.project().index.class_exists("demo.Req"));
     no_reload(&s, began, "the permission changes");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// The modules a session lays out, with their build systems.
 fn modules_of(s: &Session) -> Vec<String> {
-    let mut v: Vec<String> = s.project.workspace.modules.iter().map(|m| format!("{} {:?}", m.name, m.build_system)).collect();
+    let mut v: Vec<String> = s.project().workspace.modules.iter().map(|m| format!("{} {:?}", m.name, m.build_system)).collect();
     v.sort();
     v
 }
@@ -1496,15 +1540,15 @@ fn a_symlinked_ignore_file_whose_target_comes_within_reach_is_read() {
     let walks = s.full_walks();
     s.sync(&[]);
     assert_eq!(s.full_walks(), walks, "nothing changed: no walk");
-    assert!(s.project.index.class_exists("demo.Req"));
+    assert!(s.project().index.class_exists("demo.Req"));
     chmod(&outside, "locked", 0o755);
     holds_as_fresh(&mut s, &dir, "the target of a symlinked ignore file came within reach");
     holds_as_fresh(&mut s, &dir, "a second sync");
-    assert!(!s.project.index.class_exists("demo.Req"));
+    assert!(!s.project().index.class_exists("demo.Req"));
     chmod(&outside, "locked", 0o000);
     holds_as_fresh(&mut s, &dir, "the target went out of reach again");
     holds_as_fresh(&mut s, &dir, "a second sync");
-    assert!(s.project.index.class_exists("demo.Req"));
+    assert!(s.project().index.class_exists("demo.Req"));
     no_reload(&s, began, "the target's permissions");
     chmod(&outside, "locked", 0o755);
     let _ = std::fs::remove_dir_all(&dir);
@@ -1531,7 +1575,7 @@ fn a_dangling_ignore_symlink_in_a_directory_that_cannot_be_listed_walks_nothing(
     assert_eq!(s.full_walks(), walks, "nothing changed: no walk of the workspace");
     chmod(&dir, "src/main/java/demo/sub", 0o755);
     holds_as_fresh(&mut s, &dir, "the directory could be listed again");
-    assert!(s.project.index.class_exists("demo.sub.Sub"));
+    assert!(s.project().index.class_exists("demo.sub.Sub"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1607,12 +1651,12 @@ fn a_tracked_ignored_source_replaced_by_a_symlink_is_gone_for_both() {
     set_tree_mtime(&dir, ".", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
     std::thread::sleep(std::time::Duration::from_millis(2100));
     let mut s = Session::open(&dir).unwrap();
-    assert!(s.project.index.class_exists("demo.Gen"));
+    assert!(s.project().index.class_exists("demo.Gen"));
     std::fs::remove_file(dir.join("gen/demo/Gen.java")).unwrap();
     std::os::unix::fs::symlink(away.join("Gen.java"), dir.join("gen/demo/Gen.java")).unwrap();
     holds_as_fresh(&mut s, &dir, "a tracked, ignored source replaced by a symlink");
     holds_as_fresh(&mut s, &dir, "a second sync");
-    assert!(!s.project.index.class_exists("demo.Gen"));
+    assert!(!s.project().index.class_exists("demo.Gen"));
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&away);
 }
@@ -1633,17 +1677,17 @@ fn a_tracked_ignored_source_under_a_symlinked_directory_is_gone_for_both() {
     git(&dir, &["commit", "-qm", "generated"]);
     set_tree_mtime(&dir, ".", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
     let mut s = settled(&dir);
-    assert!(s.project.index.class_exists("demo.Gen"));
+    assert!(s.project().index.class_exists("demo.Gen"));
     for link in ["gen/demo", "gen"] {
         std::fs::rename(dir.join(link), away.join("moved")).unwrap();
         std::os::unix::fs::symlink(away.join("moved"), dir.join(link)).unwrap();
         holds_as_fresh(&mut s, &dir, &format!("{link} replaced by a symlink to it"));
         holds_as_fresh(&mut s, &dir, "a second sync");
-        assert!(!s.project.index.class_exists("demo.Gen"), "through {link}");
+        assert!(!s.project().index.class_exists("demo.Gen"), "through {link}");
         std::fs::remove_file(dir.join(link)).unwrap();
         std::fs::rename(away.join("moved"), dir.join(link)).unwrap();
         holds_as_fresh(&mut s, &dir, &format!("{link} back as a directory"));
-        assert!(s.project.index.class_exists("demo.Gen"), "{link} back");
+        assert!(s.project().index.class_exists("demo.Gen"), "{link} back");
     }
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&away);
@@ -1710,10 +1754,10 @@ fn a_source_file_whose_permissions_change_is_held_as_a_fresh_load_holds_it() {
     let began = s.load_began();
     chmod(&dir, "src/main/java/demo/Req.java", 0o000);
     holds_as_fresh(&mut s, &dir, "a source file could no longer be read");
-    assert!(!s.project.index.class_exists("demo.Req"));
+    assert!(!s.project().index.class_exists("demo.Req"));
     chmod(&dir, "src/main/java/demo/Req.java", 0o644);
     holds_as_fresh(&mut s, &dir, "the source file could be read again");
-    assert!(s.project.index.class_exists("demo.Req"));
+    assert!(s.project().index.class_exists("demo.Req"));
     listed_not_walked(&s);
     no_reload(&s, began, "the permission changes");
     let _ = std::fs::remove_dir_all(&dir);
@@ -1745,13 +1789,13 @@ fn a_repository_that_starts_or_ends_around_the_workspace_changes_what_is_ignored
     write(&dir, "src/main/java/demo/Biz.java", "package demo;\npublic class Biz {}\n");
     set_tree_mtime(&dir, ".", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
     let mut s = Session::open(&dir).unwrap();
-    assert!(s.project.index.class_exists("demo.Req"));
+    assert!(s.project().index.class_exists("demo.Req"));
     git(&dir, &["init", "-q"]);
     holds_as_fresh(&mut s, &dir, "git init");
-    assert!(!s.project.index.class_exists("demo.Req"));
+    assert!(!s.project().index.class_exists("demo.Req"));
     std::fs::remove_dir_all(dir.join(".git")).unwrap();
     holds_as_fresh(&mut s, &dir, "the repository removed");
-    assert!(s.project.index.class_exists("demo.Req"));
+    assert!(s.project().index.class_exists("demo.Req"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1771,10 +1815,10 @@ fn a_jj_repository_counts_as_a_repository() {
     holds_as_fresh(&mut s, &dir, "a .jj directory made");
     std::thread::sleep(std::time::Duration::from_millis(2100));
     holds_as_fresh(&mut s, &dir, "past the margin");
-    assert!(!s.project.index.class_exists("demo.Req"));
+    assert!(!s.project().index.class_exists("demo.Req"));
     std::fs::remove_dir(dir.join(".jj")).unwrap();
     holds_as_fresh(&mut s, &dir, "the .jj directory removed");
-    assert!(s.project.index.class_exists("demo.Req"));
+    assert!(s.project().index.class_exists("demo.Req"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1794,7 +1838,7 @@ fn a_worktree_whose_git_file_is_rewritten_follows_the_new_exclude_file() {
     set_tree_mtime(&dir, ".", old);
     set_mtime(&main, ".git/info/exclude", old);
     let mut s = Session::open(&dir).unwrap();
-    assert!(!s.project.index.class_exists("demo.Req"));
+    assert!(!s.project().index.class_exists("demo.Req"));
     let moved = main.with_extension("moved");
     let _ = std::fs::remove_dir_all(&moved);
     std::fs::rename(&main, &moved).unwrap();
@@ -1803,7 +1847,7 @@ fn a_worktree_whose_git_file_is_rewritten_follows_the_new_exclude_file() {
     holds_as_fresh(&mut s, &dir, "the worktree repaired");
     std::thread::sleep(std::time::Duration::from_millis(2100));
     holds_as_fresh(&mut s, &dir, "past the margin");
-    assert!(!s.project.index.class_exists("demo.Req"));
+    assert!(!s.project().index.class_exists("demo.Req"));
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&moved);
 }
@@ -2111,7 +2155,7 @@ fn changed_as_fresh(s: &mut Session, dir: &Path, what: &str) -> String {
     let warm = json(&s.check(&opts()));
     let mut fresh = Session::open(dir).unwrap();
     assert_eq!(warm, json(&fresh.check(&opts())), "after {what}, the session must report what a fresh run reports");
-    assert_eq!(s.project.stats.java_release, fresh.project.stats.java_release, "after {what}, the session must check against the JDK API a fresh run loads");
+    assert_eq!(s.project().stats.java_release, fresh.project().stats.java_release, "after {what}, the session must check against the JDK API a fresh run loads");
     assert_eq!(holdings(s), holdings(&fresh), "after {what}");
     warm
 }
@@ -2135,18 +2179,18 @@ fn a_module_that_gains_its_first_sources_gets_the_jdk_api_a_fresh_load_picks() {
     git(&dir, &["commit", "-qm", "init"]);
     let mut s = Session::open(&dir).unwrap();
     changed_as_fresh(&mut s, &dir, "the load");
-    let java8 = s.project.stats.java_release;
+    let java8 = s.project().stats.java_release;
     write(&dir, "later/src/main/java/Later.java", "class Later extends java.util.ArrayList<String> { void test() { new Later().getFirst(); } }\n");
     let r = changed_as_fresh(&mut s, &dir, "a source was added to a module that had none");
     assert!(!r.contains("unresolved-method"), "{r}");
-    let java21 = s.project.stats.java_release;
+    let java21 = s.project().stats.java_release;
     // (where a JDK is installed that can tell the two apart)
     if java8 == 8 {
         assert_eq!(java21, 21, "the newly populated module counts");
     }
     std::fs::remove_file(dir.join("later/src/main/java/Later.java")).unwrap();
     changed_as_fresh(&mut s, &dir, "the module lost its only source");
-    assert_eq!(s.project.stats.java_release, java8);
+    assert_eq!(s.project().stats.java_release, java8);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -2255,7 +2299,7 @@ fn a_changed_file_whose_parse_is_abandoned_removes_no_class() {
     write(&repo, "src/main/java/p/A.java", &format!("package p; public class A {{ void padding() {{ {} }} }}\n", ";".repeat(2_500_000)));
     let mut s = Session::open(&repo).unwrap();
     // (the parse was abandoned: the stub is unreadable and declares nothing)
-    let stub = s.project.index.files().find(|(p, _)| p.ends_with("p/A.java")).map(|(_, st)| st.clone()).expect("A.java is indexed");
+    let stub = s.project().index.files().find(|(p, _)| p.ends_with("p/A.java")).map(|(_, st)| st.clone()).expect("A.java is indexed");
     assert!(stub.has_syntax_errors && stub.classes.is_empty());
     let r = s.check(&CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: Some("HEAD".into()) });
     assert!(r.pending.iter().all(|f| f.rule != "removed-class-still-used") && r.breaks.is_empty(), "{:?} {:?}", r.pending, r.breaks);

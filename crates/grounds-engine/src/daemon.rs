@@ -102,7 +102,7 @@ pub fn execute(session: &mut Session, req: &Request) -> Response {
         Request::Check { .. } | Request::Baseline { .. } => session.take_warnings(),
         Request::SessionStart => {
             session.take_warnings();
-            session.project.classpath_warnings.iter().map(|w| w.to_string()).collect()
+            session.project().classpath_warnings.iter().map(|w| w.to_string()).collect()
         }
         Request::Ping | Request::ImpactedTests { .. } | Request::Shutdown => Vec::new(),
     };
