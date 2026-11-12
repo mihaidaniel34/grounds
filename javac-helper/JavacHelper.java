@@ -50,6 +50,12 @@
  *                         erroneous expression),
  *               "hier" (a class whose members or subtyping decided the
  *                       answer has an erroneous supertype: missing),
+ *               "missing" (that supertype, when known),
+ *               "simp" (an unqualified name javac did not find that a static
+ *                       import javac could not resolve may name),
+ *               "srcs" (source files of the classes the member was looked
+ *                       up in: the receiver's class and its supertypes, or
+ *                       the enclosing classes' supertypes),
  *               "imp" (a type in the answer, the receiver or an argument
  *                      has the simple name of a single-type import javac
  *                      could not resolve, in this file or the declaring
@@ -58,7 +64,9 @@
  *                       JLS 13.1: the receiver's erased type, or the
  *                       enclosing class the method is a member of),
  *               "anon" (a constructor of an anonymous class)}],
- *    "classes": [{"name", "members": [{"name", "kind", "desc", "flags"}]}],
+ *    "classes": [{"name", "start", "line", "end_line", "missing" (the first
+ *                 missing supertype, "" when its hierarchy is complete),
+ *                 "members": [{"name", "kind", "desc", "flags"}]}],
  *    "crash": "..." (when javac threw)}
  *
  * Offsets are UTF-8 byte offsets into the file (javac's are UTF-16 indexes;
@@ -224,7 +232,7 @@ public final class JavacHelper {
         LineMap lines;
         CharSequence text;
         int[] byteAt; // UTF-16 index -> UTF-8 offset; null when the file is ASCII
-        final Map<TypeElement, Boolean> incomplete = new HashMap<>();
+        final Map<TypeElement, String> incomplete = new HashMap<>();
 
         final JavacTaskPool pool;
 
@@ -329,9 +337,8 @@ public final class JavacHelper {
                 m.put("start", off(d.getStartPosition()));
                 m.put("end", off(d.getEndPosition()));
                 m.put("line", d.getLineNumber());
-                String msg = d.getMessage(Locale.ROOT);
-                int nl = msg.indexOf('\n');
-                m.put("msg", nl < 0 ? msg : msg.substring(0, nl));
+                String msg = d.getMessage(Locale.ROOT).replace('\n', ' ').replaceAll(" +", " ");
+                m.put("msg", msg.length() > 400 ? msg.substring(0, 400) : msg);
                 Json.write(sb, m);
             }
             sb.append("],\"other_diags\":").append(other);
@@ -412,6 +419,24 @@ public final class JavacHelper {
 
         final Map<CompilationUnitTree, Set<String>> failedImports = new HashMap<>();
 
+        final Map<CompilationUnitTree, Set<String>> failedStatic = new HashMap<>();
+
+        /** The member names of a file's static imports whose class javac could not resolve ("*" for an on-demand one). */
+        Set<String> failedStaticImports(CompilationUnitTree u) {
+            Set<String> known = failedStatic.get(u);
+            if (known != null) return known;
+            Set<String> r = new HashSet<>();
+            for (ImportTree it : u.getImports()) {
+                if (!it.isStatic() || !(it.getQualifiedIdentifier() instanceof MemberSelectTree)) continue;
+                MemberSelectTree q = (MemberSelectTree) it.getQualifiedIdentifier();
+                TreePath qp = new TreePath(new TreePath(new TreePath(u), it), q);
+                Element owner = trees.getElement(new TreePath(qp, q.getExpression()));
+                if (owner == null || owner.asType() == null || owner.asType().getKind() == TypeKind.ERROR) r.add(q.getIdentifier().toString());
+            }
+            failedStatic.put(u, r);
+            return r;
+        }
+
         /** The simple names of the single-type imports of a file that javac could not resolve. */
         Set<String> failedImports(CompilationUnitTree u) {
             Set<String> known = failedImports.get(u);
@@ -430,21 +455,36 @@ public final class JavacHelper {
 
         /** Whether a class has an erroneous supertype, directly or further up. */
         boolean incompleteClass(TypeElement c, int depth) {
-            if (c == null || depth > 40) return false;
-            Boolean known = incomplete.get(c);
+            return !missingSuper(c, depth).isEmpty();
+        }
+
+        /** The first erroneous (missing) supertype of a class, directly or further up; "" when none. */
+        String missingSuper(TypeElement c, int depth) {
+            if (c == null || depth > 40) return "";
+            String known = incomplete.get(c);
             if (known != null) return known;
-            incomplete.put(c, false); // cycles
-            boolean r = false;
+            incomplete.put(c, ""); // cycles
+            String r = "";
             List<TypeMirror> sups = new ArrayList<>(c.getInterfaces());
             sups.add(c.getSuperclass());
             for (TypeMirror s : sups) {
-                if (s.getKind() == TypeKind.ERROR) r = true;
-                else if (s.getKind() == TypeKind.DECLARED && incompleteClass((TypeElement) ((DeclaredType) s).asElement(), depth + 1)) r = true;
-                if (r) break;
+                if (s.getKind() == TypeKind.ERROR) r = s.toString() + " (of " + c.getQualifiedName() + ")";
+                else if (s.getKind() == TypeKind.DECLARED) r = missingSuper((TypeElement) ((DeclaredType) s).asElement(), depth + 1);
+                if (!r.isEmpty()) break;
             }
-            // an enclosing class's hierarchy decides what an unqualified name means
             incomplete.put(c, r);
             return r;
+        }
+
+        /** The source files (not class files) of a class and its supertypes. */
+        void sourcesUp(TypeElement c, Set<String> out, int depth) {
+            if (c == null || depth > 8 || out.size() > 8) return;
+            TreePath p = trees.getPath(c);
+            if (p != null && p.getCompilationUnit() != cu) out.add(p.getCompilationUnit().getSourceFile().toUri().getPath());
+            TypeMirror sup = c.getSuperclass();
+            if (sup.getKind() == TypeKind.DECLARED) sourcesUp((TypeElement) ((DeclaredType) sup).asElement(), out, depth + 1);
+            for (TypeMirror i : c.getInterfaces())
+                if (i.getKind() == TypeKind.DECLARED) sourcesUp((TypeElement) ((DeclaredType) i).asElement(), out, depth + 1);
         }
 
         /** Whether the answer for this type may differ with its missing supertypes. */
@@ -601,6 +641,53 @@ public final class JavacHelper {
                             if (types.isSubtype(erasureOrSelf(c.asType()), owner)) break;
                         }
                     }
+                } else if (receiver == null) {
+                    // not found: every enclosing class was looked in
+                    for (TreePath p = at; p != null; p = p.getParentPath()) {
+                        if (p.getLeaf() instanceof ClassTree) {
+                            Element c = trees.getElement(p);
+                            if (c instanceof TypeElement && incompleteClass((TypeElement) c, 0)) {
+                                hier = true;
+                                m.put("missing", missingSuper((TypeElement) c, 0));
+                            }
+                        }
+                    }
+                }
+                // the source files of the classes the member was looked up in
+                // (the receiver's class and its supertypes, or the enclosing
+                // classes' supertypes): a copy of a class in test data or a
+                // fake is as good as the real one to javac on a sourcepath
+                Set<String> srcs = new LinkedHashSet<>();
+                if (receiver != null) {
+                    TypeMirror rt = erasureOrSelf(trees.getTypeMirror(new TreePath(at, receiver)));
+                    if (rt != null && rt.getKind() == TypeKind.DECLARED) sourcesUp((TypeElement) ((DeclaredType) rt).asElement(), srcs, 0);
+                } else {
+                    for (TreePath p = at; p != null; p = p.getParentPath()) {
+                        if (p.getLeaf() instanceof ClassTree) {
+                            Element c = trees.getElement(p);
+                            if (c instanceof TypeElement) {
+                                TypeMirror sup = ((TypeElement) c).getSuperclass();
+                                if (sup.getKind() == TypeKind.DECLARED) sourcesUp((TypeElement) ((DeclaredType) sup).asElement(), srcs, 0);
+                                for (TypeMirror i : ((TypeElement) c).getInterfaces())
+                                    if (i.getKind() == TypeKind.DECLARED) sourcesUp((TypeElement) ((DeclaredType) i).asElement(), srcs, 0);
+                            }
+                        }
+                    }
+                }
+                if (!srcs.isEmpty()) m.put("srcs", new ArrayList<>(srcs));
+                // an unqualified name javac did not find, which a static
+                // import javac could not resolve may have brought in
+                if (receiver == null && (sym == null || sym.asType() == null || sym.asType().getKind() == TypeKind.ERROR)) {
+                    Tree leaf = at.getLeaf();
+                    String name = leaf instanceof MethodInvocationTree && ((MethodInvocationTree) leaf).getMethodSelect() instanceof IdentifierTree
+                            ? ((IdentifierTree) ((MethodInvocationTree) leaf).getMethodSelect()).getName().toString()
+                            : leaf instanceof IdentifierTree ? ((IdentifierTree) leaf).getName().toString() : null;
+                    Set<String> failed = failedStaticImports(cu);
+                    if (name != null && (failed.contains(name) || failed.contains("*"))) m.put("simp", true);
+                }
+                if (receiver != null && hier && !m.containsKey("missing")) {
+                    TypeMirror rt = erasureOrSelf(trees.getTypeMirror(new TreePath(at, receiver)));
+                    if (rt != null && rt.getKind() == TypeKind.DECLARED) m.put("missing", missingSuper((TypeElement) ((DeclaredType) rt).asElement(), 0));
                 }
                 m.put("argerr", argerr);
                 m.put("hier", hier);
@@ -778,7 +865,7 @@ public final class JavacHelper {
                     TypeMirror tt = trees.getTypeMirror(getCurrentPath());
                     if (tt != null && tt.getKind() == TypeKind.ERROR && !(getCurrentPath().getParentPath().getLeaf() instanceof ImportTree)) {
                         long ne = end(t);
-                        site("unres", t, ne - t.getIdentifier().length(), ne, null);
+                        argumentChecks(site("unres", t, ne - t.getIdentifier().length(), ne, null), getCurrentPath(), t.getExpression(), List.of(), null);
                     }
                 }
                 return super.visitMemberSelect(t, v);
@@ -793,7 +880,7 @@ public final class JavacHelper {
                     argumentChecks(m, getCurrentPath(), null, List.of(), sym);
                 } else if (sym == null || sym.asType() == null || sym.asType().getKind() == TypeKind.ERROR) {
                     TypeMirror tt = trees.getTypeMirror(getCurrentPath());
-                    if (tt != null && tt.getKind() == TypeKind.ERROR) site("unres", t, start(t), end(t), null);
+                    if (tt != null && tt.getKind() == TypeKind.ERROR) argumentChecks(site("unres", t, start(t), end(t), null), getCurrentPath(), null, List.of(), null);
                 }
                 return null;
             }
@@ -814,6 +901,9 @@ public final class JavacHelper {
                     Map<String, Object> c = new LinkedHashMap<>();
                     c.put("name", binaryName(e));
                     c.put("start", off(start(t)));
+                    c.put("line", line(start(t)));
+                    c.put("end_line", line(end(t)));
+                    c.put("missing", missingSuper((TypeElement) e, 0));
                     List<Map<String, Object>> ms = new ArrayList<>();
                     for (Element m : e.getEnclosedElements()) {
                         if (m instanceof TypeElement) continue;
