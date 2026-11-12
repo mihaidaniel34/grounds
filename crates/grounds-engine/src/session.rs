@@ -740,7 +740,6 @@ impl Session {
             // every sync too, and says when it goes)
             let unreachable = !gone.contains(&p) && meta.as_ref().is_err_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied);
             let stamp = stamp.or_else(|| unreachable.then_some(FileStamp::Recheck { meta: None, why: Why::Unreachable }));
-            // refresh_file rebuilds the DI model itself; batch it below instead
             let key = path_key(&p);
             let old = self.project().index.file(&key).map(|s| s.signature_hash);
             // (the context starts a launcher makes are read with its stub)

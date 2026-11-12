@@ -875,33 +875,6 @@ impl Project {
         crate::workspace::classify(path)
     }
 
-    /// Re-read one file and update the index. Returns true if its
-    /// declaration signature changed.
-    pub fn refresh_file(&mut self, path: &Path) -> bool {
-        if crate::workspace::is_resource(path.strip_prefix(&self.workspace.root).unwrap_or(path)) {
-            return false;
-        }
-        let key = path_key(path);
-        let old = self.index.file(&key).map(|s| s.signature_hash);
-        match crate::fsutil::read_text(path) {
-            Ok(text) => {
-                let pf = ParsedFile::parse(text);
-                let stub = Arc::new(self.extract(path, &pf));
-                // always install: referenced names and positions change with
-                // body-only edits; the DI model stores positions too
-                let changed = old != Some(stub.signature_hash);
-                self.index.set_file(key, stub);
-                self.rebuild_di();
-                changed
-            }
-            Err(_) => {
-                self.index.remove_file(&key);
-                self.rebuild_di();
-                old.is_some()
-            }
-        }
-    }
-
     /// Declaration stub of a file, with the lombok.config settings for it.
     pub fn extract(&self, path: &Path, pf: &ParsedFile) -> FileStub {
         extract_with(pf, &self.lombok.for_file(path))
