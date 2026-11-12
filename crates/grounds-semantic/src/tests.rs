@@ -1118,6 +1118,41 @@ fn unknown_arguments_may_be_raw() {
 }
 
 #[test]
+fn a_records_equals_hash_code_and_to_string_are_its_own() {
+    // JLS 8.10.3: the record class declares them, implicitly unless written
+    let c = calls_of(
+        "package p;
+         record Point(int x, int y) {
+           void m(Point o) { /*C*/ equals(o); }
+         }
+         record Named(String name) {
+           public boolean equals(Named n) { return true; }
+           @Override public String toString() { return name; }
+         }
+         class T {
+           void m(Point a, Point b, Named n, Object o) {
+             /*C*/ a.equals(b); /*C*/ a.hashCode(); /*C*/ a.toString(); /*C*/ a.x();
+             /*C*/ n.equals(o); /*C*/ n.equals(n); /*C*/ n.toString(); /*C*/ n.getClass();
+           }
+         }",
+    );
+    assert_eq!(
+        c,
+        vec![
+            "Point.equals(java.lang.Object)",
+            "Point.equals(java.lang.Object)",
+            "Point.hashCode()",
+            "Point.toString()",
+            "Point.x()",
+            "Named.equals(java.lang.Object)",
+            "Named.equals(p.Named)",
+            "Named.toString()",
+            "Object.getClass()",
+        ]
+    );
+}
+
+#[test]
 fn overloads_alike_in_result_with_unknown_argument_types_stay_ambiguous() {
     // `RC`, `M` are not on the classpath: javac calls (Ctx, RC), (Ctx, byte)
     // and (Ctx, M), which the model cannot tell

@@ -142,6 +142,43 @@ fn a_lazy_getter_field_is_an_atomic_reference() {
 }
 
 #[test]
+fn a_record_declares_equals_hash_code_and_to_string() {
+    // JLS 8.10.3: implicit unless declared with the same signature
+    let idx = index_of(&[(
+        "R.java",
+        "package r;
+         record Plain(int x) { }
+         record Own(int x) {
+           public boolean equals(Own o) { return true; }
+           @Override public String toString() { return \"\"; }
+         }
+         record Full(int x) {
+           @Override public boolean equals(java.lang.Object o) { return true; }
+           @Override public int hashCode() { return 0; }
+           public int x() { return x; }
+         }",
+    )]);
+    let methods = |c: &str, m: &str| idx.class(c).unwrap().methods_named(m).cloned().collect::<Vec<_>>();
+    for m in ["equals", "hashCode", "toString", "x"] {
+        let ms = methods("r.Plain", m);
+        assert_eq!(ms.len(), 1, "{m}");
+        assert!(ms[0].flags.has(Flags::IMPLICIT) && ms[0].flags.is_public(), "{m}");
+    }
+    assert_eq!(methods("r.Plain", "equals")[0].params[0].ty.to_string(), "java.lang.Object");
+    // `equals(Own)` is an overload: `equals(Object)` stays implicit
+    let eq = methods("r.Own", "equals");
+    assert_eq!(eq.len(), 2);
+    assert!(eq.iter().any(|m| m.flags.has(Flags::IMPLICIT) && m.params[0].ty.to_string() == "java.lang.Object"));
+    assert!(methods("r.Own", "toString").iter().all(|m| !m.flags.has(Flags::IMPLICIT)));
+    assert_eq!(methods("r.Own", "hashCode").len(), 1);
+    for m in ["equals", "hashCode", "x"] {
+        let ms = methods("r.Full", m);
+        assert!(ms.len() == 1 && !ms[0].flags.has(Flags::IMPLICIT), "{m}");
+    }
+    assert!(methods("r.Full", "toString")[0].flags.has(Flags::IMPLICIT));
+}
+
+#[test]
 fn enums_records_interfaces() {
     let idx = index_of(&[(
         "E.java",

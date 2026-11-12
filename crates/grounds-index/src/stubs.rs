@@ -1278,6 +1278,23 @@ impl<'s> Extractor<'s> {
                         methods.push(implicit_method(&c.name, Flags(Flags::PUBLIC | Flags::IMPLICIT), vec![], c.ty.clone()));
                     }
                 }
+                // equals, hashCode and toString are members of the record
+                // class itself, not inherited from Object through Record
+                // (JLS 8.10.3; javac makes them public final), unless it
+                // declares them: equals by its signature, since an
+                // `equals(R)` is an overload next to the implicit one
+                let object = |t: &TypeSyntax| matches!(t, TypeSyntax::Named(segs) if segs.iter().map(|s| &*s.0).eq(["Object"]) || segs.iter().map(|s| &*s.0).eq(["java", "lang", "Object"]));
+                let object_methods = [
+                    ("equals", vec![RawParam { name: Arc::from("obj"), ty: TypeSyntax::qualified("java.lang.Object"), annotations: vec![], flags: Flags::default() }], TypeSyntax::Prim(Prim::Boolean)),
+                    ("hashCode", vec![], TypeSyntax::Prim(Prim::Int)),
+                    ("toString", vec![], TypeSyntax::qualified("java.lang.String")),
+                ];
+                for (name, params, ret) in object_methods {
+                    let declared = methods.iter().any(|m| &*m.name == name && m.params.len() == params.len() && m.params.iter().all(|p| object(&p.ty)));
+                    if !declared {
+                        methods.push(implicit_method(name, Flags(Flags::PUBLIC | Flags::FINAL | Flags::IMPLICIT), params, ret));
+                    }
+                }
                 let canonical_exists = methods.iter().any(|m| {
                     &*m.name == "<init>" && m.params.len() == comps.len() && m.params.iter().zip(&comps).all(|(p, c)| p.ty == c.ty)
                 });
