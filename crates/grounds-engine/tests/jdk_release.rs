@@ -41,7 +41,7 @@ fn release_newer_than_the_jdk_warns_once_and_stays_silent_on_jdk_subclasses() {
     assert!(s.take_warnings().is_empty());
 
     let opts = CheckOptions { mode: grounds_engine::session::Mode::Edit, files: Vec::new(), all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None };
-    let r = s.check(&CheckOptions { files: vec![dir.join("src/main/java/demo/Meter.java"), dir.join("src/main/java/demo/Plain.java")], ..opts });
+    let r = s.check(&CheckOptions { files: vec![dir.join("src/main/java/demo/Meter.java"), dir.join("src/main/java/demo/Plain.java")], ..opts }).unwrap();
     let breaks: Vec<&str> = r.findings.iter().filter(|f| f.rule == "unresolved-method").map(|f| f.path.as_str()).collect();
     assert_eq!(breaks.len(), 1, "{:?}", r.findings.iter().map(|f| (f.rule, &f.path)).collect::<Vec<_>>());
     assert!(breaks[0].ends_with("Plain.java"), "{breaks:?}");
@@ -83,7 +83,7 @@ fn imports_of_jdk_classes_the_release_lacks_are_reported() {
         git(&dir, &["commit", "-qm", "init"]);
         let mut s = Session::open(&dir).unwrap();
         let opts = CheckOptions { mode: grounds_engine::session::Mode::Edit, files: vec![dir.join("src/main/java/demo/Uses.java"), dir.join("src/main/java99/demo/Later.java")], all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None };
-        let r = s.check(&opts);
+        let r = s.check(&opts).unwrap();
         let _ = std::fs::remove_dir_all(&dir);
         r.findings.iter().filter(|f| f.rule == "missing-jdk-import").map(|f| (f.line, f.message.clone())).collect::<Vec<_>>()
     };

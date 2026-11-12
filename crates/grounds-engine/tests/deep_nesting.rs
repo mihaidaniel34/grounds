@@ -33,7 +33,7 @@ fn deeply_nested_files_are_skipped_and_the_rest_is_checked() {
 
     let mut s = Session::open(&dir).unwrap();
     let files = vec![dir.join("src/main/java/demo/Deep.java"), dir.join("src/main/java/demo/Plain.java")];
-    let r = s.check(&CheckOptions { mode: grounds_engine::session::Mode::Checkpoint, files, all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None });
+    let r = s.check(&CheckOptions { mode: grounds_engine::session::Mode::Checkpoint, files, all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None }).unwrap();
     let paths: Vec<&str> = r.findings.iter().filter(|f| f.rule == "string-reference-equality").map(|f| f.path.as_str()).collect();
     assert_eq!(paths.len(), 1, "{:?}", r.findings.iter().map(|f| (f.rule, &f.path)).collect::<Vec<_>>());
     assert!(paths[0].ends_with("Plain.java"), "{paths:?}");

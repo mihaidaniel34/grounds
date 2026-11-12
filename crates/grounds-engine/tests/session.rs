@@ -33,11 +33,11 @@ fn edit_checkpoint_baseline_and_pending_callers() {
     let mut s = Session::open(&dir).unwrap();
     // pre-existing problem on an unchanged line is not reported
     let opts = |mode| CheckOptions { mode, files: Vec::new(), all_lines: false, use_baseline: true, min_severity: Severity::Info, base: None };
-    assert!(s.check(&opts(Mode::Checkpoint)).findings.is_empty());
+    assert!(s.check(&opts(Mode::Checkpoint)).unwrap().findings.is_empty());
 
     // breaking edit: rename + new bug on a changed line
     write(&dir, "src/main/java/demo/Owner.java", "package demo;\npublic class Owner {\n    public void registerPet(String p) { String n = null; n.trim(); }\n    public boolean old(String s) { return s == \"x\"; }\n}\n");
-    let r = s.check(&opts(Mode::Edit));
+    let r = s.check(&opts(Mode::Edit)).unwrap();
     let rules: Vec<&str> = r.findings.iter().map(|f| f.rule).collect();
     assert!(rules.contains(&"null-dereference"), "{rules:?}");
     assert!(!rules.contains(&"string-reference-equality"), "unchanged line must not be reported: {rules:?}");
@@ -45,18 +45,18 @@ fn edit_checkpoint_baseline_and_pending_callers() {
     assert_eq!(r.changed_apis, vec!["src/main/java/demo/Owner.java".to_string()]);
 
     // impacted tests
-    let tests = s.impacted_tests(&[]);
+    let tests = s.impacted_tests(&[]).unwrap();
     assert!(tests.iter().any(|t| t.class == "demo.OwnerTest" && t.task == "test"), "{tests:?}");
 
     // baseline accepts the current state
     s.write_baseline(&[], false).unwrap();
-    let r = s.check(&opts(Mode::Checkpoint));
+    let r = s.check(&opts(Mode::Checkpoint)).unwrap();
     assert!(r.findings.is_empty(), "{:?}", r.findings);
 
     // fixing callers clears the pending list
     write(&dir, "src/main/java/demo/Clinic.java", "package demo;\npublic class Clinic {\n    void m(Owner o) { o.registerPet(\"rex\"); }\n}\n");
     write(&dir, "src/test/java/demo/OwnerTest.java", "package demo;\nclass OwnerTest { void t() { new Owner().registerPet(\"a\"); } }\n");
-    let r = s.check(&opts(Mode::Edit));
+    let r = s.check(&opts(Mode::Edit)).unwrap();
     assert!(r.pending.is_empty(), "{:?}", r.pending);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -79,10 +79,10 @@ fn body_only_edits_update_references() {
 
     // body-only edit: Caller starts using Api.old() (its signature is unchanged)
     write(&dir, "src/main/java/demo/Caller.java", "package demo;\npublic class Caller {\n    void test(Api a) { a.old(); }\n}\n");
-    s.check(&opts(vec![caller.clone()]));
+    s.check(&opts(vec![caller.clone()])).unwrap();
     // renaming Api.old() must list Caller as a broken caller
     write(&dir, "src/main/java/demo/Api.java", "package demo;\npublic class Api {\n    public void renamed() {}\n}\n");
-    let r = s.check(&opts(vec![api]));
+    let r = s.check(&opts(vec![api])).unwrap();
     assert_eq!(r.pending.len(), 1, "{:?}", r.pending);
     assert!(r.pending[0].path.ends_with("Caller.java"), "{:?}", r.pending);
     let _ = std::fs::remove_dir_all(&dir);
@@ -102,12 +102,12 @@ fn baseline_does_not_hide_the_same_bug_in_another_class() {
     let opts = CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: true, use_baseline: true, min_severity: Severity::Info, base: None };
     // A.f() has a bug; accept it into the baseline
     write(&dir, "src/main/java/demo/Pair.java", "package demo;\nclass Pair {\n    static class A {\n        void f() {\n            Object x = null;\n            x.toString();\n        }\n    }\n}\n");
-    assert!(s.check(&opts).findings.iter().any(|f| f.rule == "null-dereference"));
+    assert!(s.check(&opts).unwrap().findings.iter().any(|f| f.rule == "null-dereference"));
     s.write_baseline(&[], false).unwrap();
-    assert!(!s.check(&opts).findings.iter().any(|f| f.rule == "null-dereference"));
+    assert!(!s.check(&opts).unwrap().findings.iter().any(|f| f.rule == "null-dereference"));
     // fix A.f(), introduce the identical statement in B.f(): a new bug
     write(&dir, "src/main/java/demo/Pair.java", "package demo;\nclass Pair {\n    static class A {\n        void f() {\n        }\n    }\n    static class B {\n        void f() {\n            Object x = null;\n            x.toString();\n        }\n    }\n}\n");
-    let r = s.check(&opts);
+    let r = s.check(&opts).unwrap();
     assert!(r.findings.iter().any(|f| f.rule == "null-dereference"), "{:?}", r.findings);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -125,10 +125,10 @@ fn fingerprints_tell_array_overloads_apart() {
     let mut s = Session::open(&dir).unwrap();
     let opts = CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: true, use_baseline: true, min_severity: Severity::Info, base: None };
     write(&dir, "src/main/java/demo/Case.java", "package demo;\nclass Case {\n    void f(Object p) {\n        Object x = null;\n        x.toString();\n    }\n    void f(Object p[]) {\n    }\n}\n");
-    s.check(&opts);
+    s.check(&opts).unwrap();
     s.write_baseline(&[], false).unwrap();
     write(&dir, "src/main/java/demo/Case.java", "package demo;\nclass Case {\n    void f(Object p) {\n    }\n    void f(Object p[]) {\n        Object x = null;\n        x.toString();\n    }\n}\n");
-    let r = s.check(&opts);
+    let r = s.check(&opts).unwrap();
     assert!(r.findings.iter().any(|f| f.rule == "null-dereference"), "{:?}", r.findings);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -166,11 +166,11 @@ fn base_mode_finds_breaks_in_unchanged_files_and_writes_sarif() {
     let mut s = Session::open(&dir).unwrap();
     let opts = |base: Option<String>| CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base };
     // against HEAD the working tree is clean: nothing to report
-    let r = s.check(&opts(None));
+    let r = s.check(&opts(None)).unwrap();
     assert!(r.findings.is_empty() && r.pending.is_empty(), "{:?} {:?}", r.findings, r.pending);
 
     let mb = grounds_engine::git::merge_base(&dir, "main").expect("merge base");
-    let r = s.check(&opts(Some(mb)));
+    let r = s.check(&opts(Some(mb))).unwrap();
     let rules: Vec<&str> = r.findings.iter().map(|f| f.rule).collect();
     assert!(rules.contains(&"null-dereference"), "{rules:?}");
     assert!(!rules.contains(&"string-reference-equality"), "unchanged line must not be reported: {rules:?}");
@@ -185,9 +185,9 @@ fn base_mode_finds_breaks_in_unchanged_files_and_writes_sarif() {
     assert!(b.message.contains("Clinic.java:3"), "{}", b.message);
 
     // the index is back to the current version afterwards
-    let again = s.check(&opts(grounds_engine::git::merge_base(&dir, "main")));
+    let again = s.check(&opts(grounds_engine::git::merge_base(&dir, "main"))).unwrap();
     assert_eq!(again.pending.len(), 2);
-    assert!(s.check(&opts(None)).pending.is_empty());
+    assert!(s.check(&opts(None)).unwrap().pending.is_empty());
 
     // SARIF: paths from the repository root, the break with related locations
     let sarif: serde_json::Value = serde_json::from_str(&grounds_engine::report::sarif_report(&r, &dir, &[])).unwrap();
@@ -241,7 +241,7 @@ fn base_mode_edge_cases() {
     let mut s = Session::open(&dir).unwrap();
     let mb = grounds_engine::git::merge_base(&dir, "main").unwrap();
     let opts = CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: Some(mb) };
-    let r = s.check(&opts);
+    let r = s.check(&opts).unwrap();
     let mut pending: Vec<(&str, u32, &str)> = r.pending.iter().map(|f| (f.path.rsplit('/').next().unwrap(), f.line, f.rule)).collect();
     pending.sort();
     assert_eq!(pending, vec![("Impl.java", 2, "unimplemented-abstract-method"), ("UseB.java", 3, "unresolved-method"), ("UseTwo.java", 3, "unresolved-method")], "{:?}", r.pending);
@@ -251,7 +251,7 @@ fn base_mode_edge_cases() {
 
     // the swap left duplicate-class resolution as it was
     let c = CheckOptions { mode: Mode::Checkpoint, files: vec![dir.join(j("demo/C.java"))], all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None };
-    assert!(s.check(&c).findings.iter().all(|f| f.rule != "unimplemented-abstract-method"));
+    assert!(s.check(&c).unwrap().findings.iter().all(|f| f.rule != "unimplemented-abstract-method"));
 
     let sarif: serde_json::Value = serde_json::from_str(&grounds_engine::report::sarif_report(&r, &dir, &[])).unwrap();
     let uris: Vec<&str> = sarif["runs"][0]["results"].as_array().unwrap().iter().map(|x| x["locations"][0]["physicalLocation"]["artifactLocation"]["uri"].as_str().unwrap()).collect();
@@ -316,7 +316,7 @@ fn base_mode_removed_classes_and_new_beans() {
     let mut s = Session::open(&dir).unwrap();
     let mb = grounds_engine::git::merge_base(&dir, "main").unwrap();
     let opts = CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: Some(mb) };
-    let r = s.check(&opts);
+    let r = s.check(&opts).unwrap();
     let mut pending: Vec<(&str, u32, &str)> = r.pending.iter().map(|f| (f.path.as_str(), f.line, f.rule)).collect();
     pending.sort();
     assert_eq!(
@@ -519,43 +519,43 @@ fn a_pre_existing_break_claim_on_a_changed_line_is_not_reported() {
     let opts = |base: Option<String>| CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base };
     // a whole-project run reports the gap: that is what `check` is told
     let mut warm = Session::open(&dir).unwrap();
-    let all = warm.check(&CheckOptions { all_lines: true, files: vec![dir.join(use_java)], ..opts(None) });
+    let all = warm.check(&CheckOptions { all_lines: true, files: vec![dir.join(use_java)], ..opts(None) }).unwrap();
     assert_eq!(claims(&all).len(), 1, "{:?}", all.findings);
     assert_eq!(all.findings.iter().find(|f| f.rule == "unresolved-method").unwrap().maturity, grounds_rules::Maturity::Preview, "on an unchanged line it is not the promise");
 
     // 1. the change edits the very line of the gap, harmlessly: not reported
     write(&dir, use_java, "package demo;\nclass Use {\n    void a(Lib l) { l.gap(); /* touched */ }\n    void b(Lib l) { l.real(); }\n}\n");
-    let r = warm.check(&opts(None));
+    let r = warm.check(&opts(None)).unwrap();
     assert_eq!(claims(&r), vec![], "{:?}", r.findings);
     assert_eq!(r.outside_changed_lines, 0);
     // the post-edit hook, with the file named
-    let edit = warm.check(&CheckOptions { mode: Mode::Edit, files: vec![dir.join(use_java)], ..opts(None) });
+    let edit = warm.check(&CheckOptions { mode: Mode::Edit, files: vec![dir.join(use_java)], ..opts(None) }).unwrap();
     assert_eq!(claims(&edit), vec![]);
 
     // 2. a new break on a changed line next to it: reported, as stable
     write(&dir, use_java, "package demo;\nclass Use {\n    void a(Lib l) { l.gap(); /* touched */ }\n    void b(Lib l) { l.missing(); }\n}\n");
-    let r = warm.check(&opts(None));
+    let r = warm.check(&opts(None)).unwrap();
     assert_eq!(claims(&r), vec![("Use.java".to_string(), 4, "`Lib` has no method `missing`".to_string())], "{:?}", r.findings);
     let v: serde_json::Value = serde_json::from_str(&json(&r)).unwrap();
     let f = v["findings"].as_array().unwrap().iter().find(|f| f["rule"] == "unresolved-method").unwrap();
     assert_eq!(f["maturity"], "stable");
     assert_eq!(r.findings.iter().find(|f| f.rule == "unresolved-method").unwrap().maturity, grounds_rules::Maturity::Stable);
-    let fresh = Session::open(&dir).unwrap().check(&opts(None));
+    let fresh = Session::open(&dir).unwrap().check(&opts(None)).unwrap();
     assert_eq!(json(&fresh), json(&r), "a fresh session (no daemon) answers as the warm one");
 
     // 3. the gap's line moved to the end of the class and edited: not reported
     write(&dir, use_java, "package demo;\nclass Use {\n    void b(Lib l) { l.real(); }\n\n    void a(Lib l) {\n        l.gap();\n    }\n}\n");
-    let r = warm.check(&opts(None));
+    let r = warm.check(&opts(None)).unwrap();
     assert_eq!(claims(&r), vec![], "{:?}", r.findings);
-    assert_eq!(json(&Session::open(&dir).unwrap().check(&opts(None))), json(&r));
+    assert_eq!(json(&Session::open(&dir).unwrap().check(&opts(None)).unwrap()), json(&r));
 
     // 4. a new file: everything in it is new, except a claim the project
     // before the change already got (the same call in untouched code)
     write(&dir, use_java, "package demo;\nclass Use {\n    void a(Lib l) { l.gap(); }\n    void b(Lib l) { l.real(); }\n}\n");
     write(&dir, "src/main/java/demo/Fresh.java", "package demo;\nclass Fresh {\n    void e(Lib l) { l.nowhere(); }\n    void f(Lib l) { l.gap(); }\n}\n");
-    let r = warm.check(&opts(None));
+    let r = warm.check(&opts(None)).unwrap();
     assert_eq!(claims(&r), vec![("Fresh.java".to_string(), 3, "`Lib` has no method `nowhere`".to_string())], "{:?}", r.findings);
-    assert_eq!(json(&Session::open(&dir).unwrap().check(&opts(None))), json(&r));
+    assert_eq!(json(&Session::open(&dir).unwrap().check(&opts(None)).unwrap()), json(&r));
 
     // 5. the same in CI mode, against the merge base, once committed
     git(&repo, &["checkout", "-qb", "feature"]);
@@ -563,7 +563,7 @@ fn a_pre_existing_break_claim_on_a_changed_line_is_not_reported() {
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-qm", "feature"]);
     let mb = grounds_engine::git::merge_base(&dir, "main").unwrap();
-    let r = warm.check(&opts(Some(mb.clone())));
+    let r = warm.check(&opts(Some(mb.clone()))).unwrap();
     assert_eq!(
         claims(&r),
         vec![("Fresh.java".to_string(), 3, "`Lib` has no method `nowhere`".to_string()), ("Use.java".to_string(), 4, "`Lib` has no method `missing`".to_string())],
@@ -571,9 +571,9 @@ fn a_pre_existing_break_claim_on_a_changed_line_is_not_reported() {
         r.findings
     );
     assert!(r.pending.is_empty(), "{:?}", r.pending);
-    assert_eq!(json(&Session::open(&dir).unwrap().check(&opts(Some(mb)))), json(&r));
+    assert_eq!(json(&Session::open(&dir).unwrap().check(&opts(Some(mb))).unwrap()), json(&r));
     // against HEAD the branch is clean
-    assert!(warm.check(&opts(None)).findings.is_empty());
+    assert!(warm.check(&opts(None)).unwrap().findings.is_empty());
     let _ = std::fs::remove_dir_all(&repo);
 }
 
@@ -582,11 +582,11 @@ fn per_turn_breaks_in_other_files_are_only_those_the_change_made() {
     let (repo, dir) = gap_project("pending");
     let opts = CheckOptions { mode: Mode::Edit, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None };
     let mut warm = Session::open(&dir).unwrap();
-    assert!(warm.check(&opts).pending.is_empty());
+    assert!(warm.check(&opts).unwrap().pending.is_empty());
     // renaming `real` breaks its callers in Use and Other; their `l.gap()`
     // calls were already claimed broken before and are not the change's
     write(&dir, "src/main/java/demo/Lib.java", "package demo;\npublic class Lib {\n    public void real2() {}\n    public void other() {}\n}\n");
-    let r = warm.check(&opts);
+    let r = warm.check(&opts).unwrap();
     let mut pending: Vec<(&str, u32)> = r.pending.iter().map(|f| (f.path.rsplit('/').next().unwrap(), f.line)).collect();
     pending.sort();
     assert_eq!(pending, vec![("Other.java", 4), ("Use.java", 4)], "{:?}", r.pending);
@@ -602,7 +602,7 @@ fn per_turn_breaks_in_other_files_are_only_those_the_change_made() {
     for d in sarif["runs"][0]["tool"]["driver"]["rules"].as_array().unwrap() {
         assert_eq!(d["properties"]["maturity"], "stable", "{d}");
     }
-    assert_eq!(json(&Session::open(&dir).unwrap().check(&opts)), json(&r));
+    assert_eq!(json(&Session::open(&dir).unwrap().check(&opts).unwrap()), json(&r));
     let _ = std::fs::remove_dir_all(&repo);
 }
 
@@ -617,7 +617,7 @@ fn only_the_promised_rules_are_stable_in_pending_and_sarif_rules_take_the_weaker
     // a renamed statically imported member: `unresolved-static-import` is not
     // one of the promised rules, so it stays preview in `pending`
     write(&dir, "src/main/java/demo/Util.java", "package demo;\npublic class Util {\n    public static void helper2() {}\n}\n");
-    let r = s.check(&CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None });
+    let r = s.check(&CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None }).unwrap();
     assert!(r.pending.iter().any(|f| f.rule == "unresolved-static-import"), "{:?}", r.pending);
     for f in &r.pending {
         let want = if grounds_engine::session::stable_in_changed(f.rule) { grounds_rules::Maturity::Stable } else { grounds_rules::Maturity::Preview };
@@ -634,7 +634,7 @@ fn only_the_promised_rules_are_stable_in_pending_and_sarif_rules_take_the_weaker
     // new break on a changed line (stable) of the same rule
     write(&dir, "src/main/java/demo/Util.java", "package demo;\npublic class Util {\n    public static void helper() {}\n}\n");
     write(&dir, "src/main/java/demo/Use.java", "package demo;\nclass Use {\n    void a(Lib l) { l.gap(); }\n    void b(Lib l) { l.missing(); }\n}\n");
-    let r = s.check(&CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None });
+    let r = s.check(&CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None }).unwrap();
     let m: Vec<_> = r.findings.iter().filter(|f| f.rule == "unresolved-method").map(|f| (f.line, f.maturity)).collect();
     assert!(m.contains(&(3, grounds_rules::Maturity::Preview)) && m.contains(&(4, grounds_rules::Maturity::Stable)), "{m:?}");
     let sarif: serde_json::Value = serde_json::from_str(&grounds_engine::report::sarif_report(&r, &dir, &[])).unwrap();
@@ -670,7 +670,7 @@ fn a_file_written_while_the_project_loads_is_read_again() {
     assert_eq!(classes(&s.project().index), classes(&fresh.index), "the edit made during the load must not be lost");
     // and what it broke is reported, as a run from scratch reports it
     let opts = CheckOptions { mode: Mode::Edit, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None };
-    let r = s.check(&opts);
+    let r = s.check(&opts).unwrap();
     assert_eq!(r.pending.len(), 1, "the caller of the renamed method: {:?}", r.pending);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -781,7 +781,7 @@ fn one_class_project(name: &str, api: &str) -> std::path::PathBuf {
 fn changed_apis(s: &mut Session, dir: &Path) -> Vec<String> {
     let api = dir.join("src/main/java/demo/Api.java").canonicalize().unwrap();
     let opts = CheckOptions { mode: Mode::Checkpoint, files: vec![api], all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None };
-    s.check(&opts).changed_apis
+    s.check(&opts).unwrap().changed_apis
 }
 
 #[test]
@@ -820,7 +820,7 @@ fn a_comparison_with_a_base_sees_the_base_s_launcher() {
     let mut s = Session::open(&repo).unwrap();
     let mb = grounds_engine::git::merge_base(&repo, "main").unwrap();
     let opts = CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: Some(mb) };
-    let r = s.check(&opts);
+    let r = s.check(&opts).unwrap();
     let conflicts: Vec<&str> = r.pending.iter().chain(r.findings.iter()).filter(|f| f.rule == "bean-name-conflict").map(|f| f.path.as_str()).collect();
     assert!(!conflicts.is_empty(), "the clash the change introduces is new: {:?} / {:?}", r.pending, r.findings);
     drop(s);
@@ -1025,7 +1025,7 @@ fn a_deleted_file_that_comes_back_is_read_again() {
     let mut s = Session::open(&dir).unwrap();
     let opts = CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None };
     std::fs::remove_file(dir.join(req)).unwrap();
-    s.check(&opts);
+    s.check(&opts).unwrap();
     holds_as_fresh(&mut s, &dir, "a file was deleted");
     write(&dir, req, &text);
     set_mtime(&dir, req, old);
@@ -1035,8 +1035,8 @@ fn a_deleted_file_that_comes_back_is_read_again() {
     write(&dir, "src/main/java/demo/Biz.java", "package demo;\npublic interface Biz {\n    void handle(Req r);\n    void added();\n}\n");
     git(&dir, &["commit", "-qam", "added"]);
     let opts = CheckOptions { base: Some("HEAD~1".into()), ..opts };
-    let warm = s.check(&opts);
-    let fresh = Session::open(&dir).unwrap().check(&opts);
+    let warm = s.check(&opts).unwrap();
+    let fresh = Session::open(&dir).unwrap().check(&opts).unwrap();
     assert!(fresh.pending.iter().any(|f| f.rule == "unimplemented-abstract-method"), "{}", json(&fresh));
     assert_eq!(json(&warm), json(&fresh), "the daemon answers as a fresh run");
     let _ = std::fs::remove_dir_all(&dir);
@@ -1103,10 +1103,10 @@ fn files_named_to_a_sync_are_held_only_where_a_fresh_load_finds_them() {
     std::thread::sleep(std::time::Duration::from_secs(3));
     // (the untracked files git lists as changed)
     let opts = CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None };
-    s.check(&opts);
+    s.check(&opts).unwrap();
     holds_as_fresh(&mut s, &dir, "files git lists that a fresh load does not read");
     let named = CheckOptions { files: vec![outside.join("Out.java"), dir.join("src/test/resources/fixture/Res.java")], ..opts };
-    s.check(&named);
+    s.check(&named).unwrap();
     holds_as_fresh(&mut s, &dir, "files named that a fresh load does not read");
     for class in ["demo.Res", "demo.Hid", "demo.Built", "demo.Skip", "demo.Out"] {
         assert!(!s.project().index.class_exists(class), "{class}");
@@ -1890,12 +1890,12 @@ fn a_different_claim_at_the_same_place_is_a_new_break() {
     write(&dir, "src/main/java/demo/Lib.java", "package demo;\npublic class Lib {\n    public New api() { return null; }\n    public void helper(long a) {}\n}\n");
     let opts = |base: Option<String>| CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base };
     let msgs = |r: &grounds_engine::session::Report| r.pending.iter().map(|f| f.message.clone()).collect::<Vec<_>>();
-    let r = s.check(&opts(None));
+    let r = s.check(&opts(None)).unwrap();
     assert_eq!(msgs(&r), ["`New` has no method `missing`"], "per turn: {:?}", r.pending);
     git(&repo, &["checkout", "-qb", "feature"]);
     git(&repo, &["commit", "-qam", "api"]);
     let mb = grounds_engine::git::merge_base(&dir, "main").unwrap();
-    let r = s.check(&opts(Some(mb)));
+    let r = s.check(&opts(Some(mb))).unwrap();
     assert_eq!(msgs(&r), ["`New` has no method `missing`"], "--base: {:?}", r.pending);
     let _ = std::fs::remove_dir_all(&repo);
 }
@@ -1915,13 +1915,13 @@ fn reordered_declarations_do_not_make_an_old_claim_new() {
     git(&repo, &["add", "-A"]);
     git(&repo, &["commit", "-qm", "init"]);
     let mut s = Session::open(&dir).unwrap();
-    let before = s.check(&CheckOptions { mode: Mode::Checkpoint, files: vec![dir.join("src/main/java/demo/Caller.java")], all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None });
+    let before = s.check(&CheckOptions { mode: Mode::Checkpoint, files: vec![dir.join("src/main/java/demo/Caller.java")], all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None }).unwrap();
     assert!(before.findings.iter().any(|f| f.message.contains("available: f(int), f(int,int)")), "{:?}", before.findings);
     write(&dir, "src/main/java/demo/Lib.java", "package demo;\npublic class Lib {\n    public void f(int a, int b) {}\n    public void f(int a) {}\n}\n");
     let opts = |base: Option<String>| CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base };
-    let r = s.check(&opts(Some("HEAD".into())));
+    let r = s.check(&opts(Some("HEAD".into()))).unwrap();
     assert!(r.pending.is_empty() && r.breaks.is_empty(), "--base: {:?}", r.pending);
-    let r = s.check(&opts(None));
+    let r = s.check(&opts(None)).unwrap();
     assert!(r.pending.is_empty() && r.breaks.is_empty(), "per turn: {:?}", r.pending);
     let _ = std::fs::remove_dir_all(&repo);
 }
@@ -1949,7 +1949,7 @@ fn spring_project(name: &str, files: &[(&str, &str)]) -> (std::path::PathBuf, st
 
 fn base_check(dir: &std::path::Path) -> grounds_engine::session::Report {
     let mut s = Session::open(dir).unwrap();
-    s.check(&CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: Some("HEAD".into()) })
+    s.check(&CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: Some("HEAD".into()) }).unwrap()
 }
 
 fn rules_of(r: &grounds_engine::session::Report) -> Vec<(String, &'static str)> {
@@ -2049,7 +2049,7 @@ fn a_missing_bean_of_another_type_with_the_same_simple_name_is_reported() {
 fn reordered_private_overloads_are_the_old_claim() {
     let (repo, dir) = spring_project("private", &[("Lib.java", "package demo;\npublic class Lib {\n    private void f(int a) {}\n    private void f(long a) {}\n}\n"), ("Caller.java", "package demo;\nclass Caller {\n    void t(Lib x) { x.f(1); }\n}\n")]);
     let mut s = Session::open(&dir).unwrap();
-    let all = s.check(&CheckOptions { mode: Mode::Checkpoint, files: vec![dir.join("src/main/java/demo/Caller.java")], all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None });
+    let all = s.check(&CheckOptions { mode: Mode::Checkpoint, files: vec![dir.join("src/main/java/demo/Caller.java")], all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None }).unwrap();
     assert!(all.findings.iter().any(|f| f.rule == "unresolved-method" && f.message.contains("is private")), "{:?}", all.findings);
     write(&dir, "src/main/java/demo/Lib.java", "package demo;\npublic class Lib {\n    private void f(long a) {}\n    private void f(int a) {}\n}\n");
     assert_eq!(rules_of(&base_check(&dir)), vec![]);
@@ -2065,7 +2065,7 @@ fn a_requirement_from_reordered_interfaces_is_the_old_claim() {
         &[("I.java", "package demo;\npublic interface I {\n    void f();\n}\n"), ("J.java", "package demo;\npublic interface J {\n    void f();\n}\n"), ("C.java", "package demo;\npublic class C implements I, J {}\n")],
     );
     let mut s = Session::open(&dir).unwrap();
-    let all = s.check(&CheckOptions { mode: Mode::Checkpoint, files: vec![dir.join("src/main/java/demo/C.java")], all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None });
+    let all = s.check(&CheckOptions { mode: Mode::Checkpoint, files: vec![dir.join("src/main/java/demo/C.java")], all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None }).unwrap();
     assert!(all.findings.iter().any(|f| f.rule == "unimplemented-abstract-method"), "{:?}", all.findings);
     write(&dir, "src/main/java/demo/C.java", "package demo;\npublic class C implements J, I {}\n");
     assert_eq!(rules_of(&base_check(&dir)), vec![]);
@@ -2084,7 +2084,7 @@ fn a_short_cycle_beside_a_long_route_is_found() {
     let refs: Vec<(&str, &str)> = files.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
     let (repo, dir) = spring_project("longroute", &refs);
     let mut s = Session::open(&dir).unwrap();
-    let all = s.check(&CheckOptions { mode: Mode::Checkpoint, files: vec![dir.join("src/main/java/demo/S.java")], all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None });
+    let all = s.check(&CheckOptions { mode: Mode::Checkpoint, files: vec![dir.join("src/main/java/demo/S.java")], all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None }).unwrap();
     let cyc: Vec<&str> = all.findings.iter().filter(|f| f.rule == "circular-constructor-dependency").map(|f| f.message.as_str()).collect();
     assert_eq!(cyc, ["Circular constructor dependency: S -> A -> R -> S"], "{:?}", all.findings);
     let _ = std::fs::remove_dir_all(&repo);
@@ -2137,12 +2137,12 @@ fn a_stable_rule_is_stable_on_changed_lines_on_unchanged_lines_and_outside_git()
         v
     };
     // changed lines only: the new one, stable
-    assert_eq!(unused(&s.check(&opts(false))), [(4, Maturity::Stable)]);
+    assert_eq!(unused(&s.check(&opts(false)).unwrap()), [(4, Maturity::Stable)]);
     // `--all-lines`: the old one too, and it is stable as well
-    assert_eq!(unused(&s.check(&opts(true))), [(3, Maturity::Stable), (4, Maturity::Stable)]);
+    assert_eq!(unused(&s.check(&opts(true)).unwrap()), [(3, Maturity::Stable), (4, Maturity::Stable)]);
     // outside a git repository
     let _ = std::fs::remove_dir_all(repo.join(".git"));
-    let r = Session::open(&dir).unwrap().check(&CheckOptions { files: vec![dir.join("src/main/java/demo/Old.java")], ..opts(true) });
+    let r = Session::open(&dir).unwrap().check(&CheckOptions { files: vec![dir.join("src/main/java/demo/Old.java")], ..opts(true) }).unwrap();
     assert_eq!(unused(&r), [(3, Maturity::Stable), (4, Maturity::Stable)]);
     let _ = std::fs::remove_dir_all(&repo);
 }
@@ -2152,9 +2152,9 @@ fn a_stable_rule_is_stable_on_changed_lines_on_unchanged_lines_and_outside_git()
 /// API the two load.
 fn changed_as_fresh(s: &mut Session, dir: &Path, what: &str) -> String {
     let opts = || CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: Some("HEAD".into()) };
-    let warm = json(&s.check(&opts()));
+    let warm = json(&s.check(&opts()).unwrap());
     let mut fresh = Session::open(dir).unwrap();
-    assert_eq!(warm, json(&fresh.check(&opts())), "after {what}, the session must report what a fresh run reports");
+    assert_eq!(warm, json(&fresh.check(&opts()).unwrap()), "after {what}, the session must report what a fresh run reports");
     assert_eq!(s.project().stats.java_release, fresh.project().stats.java_release, "after {what}, the session must check against the JDK API a fresh run loads");
     assert_eq!(holdings(s), holdings(&fresh), "after {what}");
     warm
@@ -2268,9 +2268,11 @@ fn a_git_listing_that_fails_is_asked_again_once_git_answers() {
     std::fs::write(&index, &bad).unwrap();
     set_mtime(&dir, ".git/index", at);
     let opts = CheckOptions { mode: Mode::Checkpoint, files: vec![dir.join("src/main/java/Use.java")], all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None };
-    let r = json(&s.check(&opts));
-    // (git failed: the files found tracked before are still held)
-    assert!(r.contains("`Kept` has no method `gone`"), "{r}");
+    // (git failed: the files found tracked before are still held; a check,
+    // which needs git's diff, fails rather than report on all lines)
+    s.sync(&opts.files);
+    assert!(s.project().index.class_exists("Kept") && !s.project().index.class_exists("Hidden"));
+    assert!(s.check(&opts).is_err_and(|e| e.to_string().contains("index file corrupt")));
     // and while git keeps failing, it is asked again without a walk of the workspace
     let walks = s.full_walks();
     s.sync(&[]);
@@ -2278,8 +2280,8 @@ fn a_git_listing_that_fails_is_asked_again_once_git_answers() {
     assert_eq!(s.full_walks(), walks, "no walk of the workspace while git cannot list");
     std::fs::write(&index, &good).unwrap();
     set_mtime(&dir, ".git/index", at);
-    let r = json(&s.check(&opts));
-    assert_eq!(r, json(&Session::open(&dir).unwrap().check(&opts)), "once git answers again, the session must report what a fresh run reports");
+    let r = json(&s.check(&opts).unwrap());
+    assert_eq!(r, json(&Session::open(&dir).unwrap().check(&opts).unwrap()), "once git answers again, the session must report what a fresh run reports");
     assert!(r.contains("`Hidden` has no method `missing`"), "{r}");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -2301,7 +2303,7 @@ fn a_changed_file_whose_parse_is_abandoned_removes_no_class() {
     // (the parse was abandoned: the stub is unreadable and declares nothing)
     let stub = s.project().index.files().find(|(p, _)| p.ends_with("p/A.java")).map(|(_, st)| st.clone()).expect("A.java is indexed");
     assert!(stub.has_syntax_errors && stub.classes.is_empty());
-    let r = s.check(&CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: Some("HEAD".into()) });
+    let r = s.check(&CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: Some("HEAD".into()) }).unwrap();
     assert!(r.pending.iter().all(|f| f.rule != "removed-class-still-used") && r.breaks.is_empty(), "{:?} {:?}", r.pending, r.breaks);
     let _ = std::fs::remove_dir_all(&repo);
 }
@@ -2324,7 +2326,7 @@ fn an_unreadable_changed_file_hides_removals_of_its_own_package_only() {
     write(&repo, "src/main/java/q/Broken.java", "package q;\nclass Broken { void m( }\n");
     let opts = CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: Some("HEAD".into()) };
     let removed = |r: &grounds_engine::session::Report| r.pending.iter().filter(|f| f.rule == "removed-class-still-used").count();
-    let r = Session::open(&repo).unwrap().check(&opts);
+    let r = Session::open(&repo).unwrap().check(&opts).unwrap();
     assert_eq!(removed(&r), 1, "{:?}", r.pending);
     // a changed file that cannot be read: unknown, whatever its package
     #[cfg(unix)]
@@ -2334,10 +2336,30 @@ fn an_unreadable_changed_file_hides_removals_of_its_own_package_only() {
         write(&repo, "src/main/java/q/Broken.java", "package q;\nclass Broken { int x; }\n");
         std::fs::set_permissions(&broken, std::fs::Permissions::from_mode(0o000)).unwrap();
         if std::fs::read(&broken).is_err() {
-            let r = Session::open(&repo).unwrap().check(&opts);
+            let r = Session::open(&repo).unwrap().check(&opts).unwrap();
             assert_eq!(removed(&r), 0, "{:?}", r.pending);
         }
         std::fs::set_permissions(&broken, std::fs::Permissions::from_mode(0o644)).unwrap();
     }
     let _ = std::fs::remove_dir_all(&repo);
+}
+
+#[test]
+fn a_git_that_cannot_list_the_changes_fails_the_check() {
+    // git's index unreadable (a corrupt or half-written index): `git status`
+    // fails. The check took that for a tree with nothing changed and
+    // answered "no new problems" with the bug on a changed line unreported.
+    let dir = one_class_project("gitfails", "package demo;\npublic class Api {\n    void m() {}\n}\n");
+    write(&dir, "src/main/java/demo/Api.java", "package demo;\npublic class Api {\n    void m() { String s = null; s.trim(); }\n}\n");
+    let mut s = Session::open(&dir).unwrap();
+    let opts = CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None };
+    assert!(s.check(&opts).unwrap().findings.iter().any(|f| f.rule == "null-dereference"));
+    std::fs::write(dir.join(".git/index"), b"not an index").unwrap();
+    let e = s.check(&opts).unwrap_err();
+    assert!(e.to_string().contains("git status"), "{e}");
+    let req = grounds_engine::daemon::Request::Check { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, baseline: false, max: 10, min_severity: "info".into(), json: false, color: false, base: None, sarif: false };
+    let resp = grounds_engine::daemon::execute(&mut s, &req);
+    assert_eq!(resp.code, 1, "a failure, not a clean answer: {resp:?}");
+    assert!(resp.stdout.is_empty() && resp.stderr.starts_with("grounds: `git status"), "{resp:?}");
+    let _ = std::fs::remove_dir_all(&dir);
 }

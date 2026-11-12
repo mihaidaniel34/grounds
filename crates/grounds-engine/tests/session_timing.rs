@@ -49,7 +49,7 @@ fn one_class_project(name: &str, api: &str) -> std::path::PathBuf {
 fn changed_apis(s: &mut Session, dir: &Path) -> Vec<String> {
     let api = dir.join("src/main/java/demo/Api.java").canonicalize().unwrap();
     let opts = CheckOptions { mode: Mode::Checkpoint, files: vec![api], all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None };
-    s.check(&opts).changed_apis
+    s.check(&opts).unwrap().changed_apis
 }
 
 /// A run of a test that was too slow to model what it models.

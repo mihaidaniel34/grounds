@@ -151,7 +151,7 @@ fn preview_false_keeps_the_breaks_in_changed_only() {
         std::fs::write(dir.join("src/main/java/app/A.java"), "package app;\nclass A {\n    boolean m(String s) { return s == \"y\"; }\n    void n(A a) { a.nothing(); }\n}\n").unwrap();
 
         let mut s = Session::open(&dir).unwrap();
-        let r = s.check(&CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: grounds_rules::Severity::Info, base: None });
+        let r = s.check(&CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: grounds_rules::Severity::Info, base: None }).unwrap();
         let got: Vec<(&str, Maturity)> = r.findings.iter().map(|f| (f.rule, f.maturity)).collect();
         if preview {
             assert_eq!(got, [("unresolved-method", Maturity::Stable), ("string-reference-equality", Maturity::Preview)]);

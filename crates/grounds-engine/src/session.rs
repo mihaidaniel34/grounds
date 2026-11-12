@@ -4,7 +4,7 @@
 //! `Session` warm and runs them per request.
 
 use crate::analyze::{analyze_text, build_ruleset_for, Finding};
-use crate::git;
+use crate::git::{self, GitError};
 use crate::project::{path_key, recent, Before, FileStamp, Loaded, Project, Walk, Why};
 use crate::sources::{Admitted, Entry, Sources};
 use crate::workspace::{classify, SourceKind, Tracked};
@@ -804,21 +804,24 @@ impl Session {
         }
     }
 
-    fn target_files(&self, opts: &CheckOptions) -> Vec<PathBuf> {
-        self.targets(opts).0
+    fn target_files(&self, opts: &CheckOptions) -> Result<Vec<PathBuf>, GitError> {
+        Ok(self.targets(opts)?.0)
     }
 
-    /// Java files to check, and Java files deleted since `opts.base`.
-    fn targets(&self, opts: &CheckOptions) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    /// Java files to check, and Java files deleted since `opts.base`. With
+    /// no files named, those git lists as changed: outside a repository
+    /// none, and when git cannot list them an error, not a clean tree.
+    fn targets(&self, opts: &CheckOptions) -> Result<(Vec<PathBuf>, Vec<PathBuf>), GitError> {
         let (files, deleted) = match (&opts.base, opts.files.is_empty()) {
-            (Some(rev), true) => git::changed_files_since(self.root(), rev),
-            (None, true) => (git::changed_files(self.root()), Vec::new()),
+            (_, true) if !git::is_repo(self.root())? => (Vec::new(), Vec::new()),
+            (Some(rev), true) => git::changed_files_since(self.root(), rev)?,
+            (None, true) => (git::changed_files(self.root())?, Vec::new()),
             (_, false) => (opts.files.iter().map(|f| f.canonicalize().unwrap_or_else(|_| f.clone())).collect(), Vec::new()),
         };
         // git lists the whole repository; the project may be a subdirectory
         let root = self.root().canonicalize().unwrap_or_else(|_| self.root().to_path_buf());
         let java = |f: &PathBuf| f.extension().is_some_and(|x| x == "java") && classify(f) != SourceKind::Generated && (!opts.files.is_empty() || f.starts_with(&root) || f.starts_with(self.root()));
-        (files.into_iter().filter(|f| java(f) && f.exists()).collect(), deleted.into_iter().filter(|f| java(f)).collect())
+        Ok((files.into_iter().filter(|f| java(f) && f.exists()).collect(), deleted.into_iter().filter(|f| java(f)).collect()))
     }
 
     fn analyze(&self, rules: &RuleSet, files: &[PathBuf]) -> Vec<Finding> {
@@ -838,7 +841,9 @@ impl Session {
         let mut names: FxHashSet<Name> = FxHashSet::default();
         for f in files {
             let Some(cur) = self.project().index.file(&path_key(f)).cloned() else { continue };
-            let head: Option<FileStub> = git::version_at(self.root(), rev, f).map(|t| self.project().extract(f, &ParsedFile::parse(t)));
+            // (a version git cannot give is not compared: the names it would
+            // have lost are not looked for, and nothing is said of them)
+            let head: Option<FileStub> = git::version_at(self.root(), rev, f).ok().flatten().map(|t| self.project().extract(f, &ParsedFile::parse(t)));
             let Some(head) = head else { continue }; // new file: nothing to break
             if head.signature_hash == cur.signature_hash {
                 continue;
@@ -895,9 +900,12 @@ impl Session {
         out
     }
 
-    pub fn check(&mut self, opts: &CheckOptions) -> Report {
+    /// The report of a check, or the git command that failed: without its
+    /// answer the check cannot tell what changed, and a report would read as
+    /// a clean one, or as old problems made new.
+    pub fn check(&mut self, opts: &CheckOptions) -> Result<Report, GitError> {
         let rev = opts.base.as_deref().unwrap_or("HEAD");
-        let (files, deleted) = self.targets(opts);
+        let (files, deleted) = self.targets(opts)?;
         self.sync(&files);
         let rules = match opts.mode {
             Mode::Edit => &self.edit_rules,
@@ -905,11 +913,14 @@ impl Session {
         };
         let mut findings = self.analyze(rules, &files);
         let mut report = Report { files_checked: files.len(), ..Default::default() };
-        let repo = git::is_repo(self.root());
+        let repo = git::is_repo(self.root())?;
         // keyed by resolved path: git reports `/private/var/..` for a root
         // reached through the `/var` symlink
         let canon = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
-        let ranges = repo.then(|| git::changed_lines_since(self.root(), &files, rev).into_iter().map(|(p, r)| (canon(&p), r)).collect::<FxHashMap<_, _>>());
+        let ranges = match repo {
+            true => Some(git::changed_lines_since(self.root(), &files, rev)?.into_iter().map(|(p, r)| (canon(&p), r)).collect::<FxHashMap<_, _>>()),
+            false => None,
+        };
         let root = self.root().to_path_buf();
         let on_changed_line = |f: &Finding| match ranges.as_ref().and_then(|r| r.get(&canon(&root.join(&f.path)))) {
             Some(r) => git::in_ranges(f.line, r),
@@ -926,8 +937,8 @@ impl Session {
             let claims: Vec<usize> = (0..findings.len()).filter(|&i| compared_in_changed(findings[i].rule) && on_changed_line(&findings[i])).collect();
             let mut drop: FxHashSet<usize> = FxHashSet::default();
             if !claims.is_empty() {
-                let touched = self.touched(opts, &files, &deleted, rev);
-                let before = self.claims_before(&findings, &claims, &files, &touched, rev);
+                let touched = self.touched(opts, &files, &deleted, rev)?;
+                let before = self.claims_before(&findings, &claims, &files, &touched, rev)?;
                 drop = claims.iter().copied().filter(|&i| before.contains(&claim_key(&findings[i])) || gap_key(&findings[i]).is_some_and(|g| before.contains(&g))).collect();
             }
             for &i in &claims {
@@ -963,7 +974,7 @@ impl Session {
             report.changed_apis = changed_apis;
             let mut pending = if opts.base.is_some() {
                 // CI: every unchanged file, against both versions of the changed ones
-                self.cross_file_breaks(&files, &deleted, rev)
+                self.cross_file_breaks(&files, &deleted, rev)?
             } else {
                 // per turn: quick, only unresolved references to changed names,
                 // and of those only the ones the change introduced
@@ -975,8 +986,8 @@ impl Session {
                 } else {
                     // (files deleted since HEAD are no longer in the index, so
                     // no dependent is analyzed against a stub of another version)
-                    let touched = self.touched(opts, &files, &deleted, rev);
-                    let base = self.at_base(&touched, rev);
+                    let touched = self.touched(opts, &files, &deleted, rev)?;
+                    let base = self.at_base(&touched, rev)?;
                     let before: FxHashSet<PlaceClaim> = base.analyze(&base.resolution_rules, &deps).iter().map(place_claim).collect();
                     drop(base);
                     now.into_iter().filter(|f| !before.contains(&place_claim(f))).collect()
@@ -993,22 +1004,22 @@ impl Session {
             report.pending = pending;
             report.breaks = self.attribute_breaks(&report.pending, &files, rev);
         }
-        report
+        Ok(report)
     }
 
     /// The files whose version at `rev` makes up the project before the
     /// change: the changed and deleted files, and per turn (no explicit
     /// files) also the files deleted since HEAD. With explicit files (the
     /// post-edit hook) only those: the change judged is the edit to them.
-    fn touched(&self, opts: &CheckOptions, files: &[PathBuf], deleted: &[PathBuf], rev: &str) -> Vec<PathBuf> {
+    fn touched(&self, opts: &CheckOptions, files: &[PathBuf], deleted: &[PathBuf], rev: &str) -> Result<Vec<PathBuf>, GitError> {
         let mut out: Vec<PathBuf> = files.iter().chain(deleted).cloned().collect();
         if opts.base.is_none() && opts.files.is_empty() {
             let root = self.root().canonicalize().unwrap_or_else(|_| self.root().to_path_buf());
-            out.extend(git::changed_files_since(self.root(), rev).1.into_iter().filter(|f| f.extension().is_some_and(|x| x == "java") && (f.starts_with(&root) || f.starts_with(self.root()))));
+            out.extend(git::changed_files_since(self.root(), rev)?.1.into_iter().filter(|f| f.extension().is_some_and(|x| x == "java") && (f.starts_with(&root) || f.starts_with(self.root()))));
         }
         out.sort();
         out.dedup();
-        out
+        Ok(out)
     }
 
     /// The compile-break and wiring claims the project made before the
@@ -1017,7 +1028,7 @@ impl Session {
     /// every name the claim quotes. A claim the model already made about code
     /// before the change (which compiled) is one it cannot back: the same
     /// gap, whether the line holding it was edited, moved or newly written.
-    fn claims_before(&mut self, findings: &[Finding], claims: &[usize], files: &[PathBuf], touched: &[PathBuf], rev: &str) -> FxHashSet<(&'static str, String)> {
+    fn claims_before(&mut self, findings: &[Finding], claims: &[usize], files: &[PathBuf], touched: &[PathBuf], rev: &str) -> Result<FxHashSet<(&'static str, String)>, GitError> {
         let rules = RuleSet::new(crate::analyze::selected_rules_for(self.project(), true).into_iter().filter(|r| compared_in_changed(r.meta().id)).collect());
         // a finding's path is relative to the root, as `analyze_text` makes it
         let paths: FxHashSet<&str> = claims.iter().map(|&i| findings[i].path.as_str()).collect();
@@ -1043,19 +1054,24 @@ impl Session {
         }
         let mut elsewhere: Vec<PathBuf> = elsewhere.into_iter().collect();
         elsewhere.sort();
-        let old: Vec<(PathBuf, String)> = in_files.iter().filter_map(|f| git::version_at(self.root(), rev, f).map(|t| (f.clone(), t))).collect();
-        let base = self.at_base(touched, rev);
+        let mut old: Vec<(PathBuf, String)> = Vec::new();
+        for f in &in_files {
+            old.extend(git::version_at(self.root(), rev, f)?.map(|t| (f.clone(), t)));
+        }
+        let base = self.at_base(touched, rev)?;
         let s: &Session = &base;
         s.project().index.ensure_resolved();
         let mut found: Vec<Finding> = old.par_iter().flat_map_iter(|(f, t)| analyze_text(s.project(), &rules, &s.options, f, t)).collect();
         found.extend(s.analyze(&rules, &elsewhere));
         drop(base);
-        found.iter().flat_map(|f| std::iter::once(claim_key(f)).chain(gap_key(f))).collect()
+        Ok(found.iter().flat_map(|f| std::iter::once(claim_key(f)).chain(gap_key(f))).collect())
     }
 
     /// The project as it was at `rev` for the `touched` files (their version
     /// there, or none), until the guard returned is dropped (see `AtBase`).
-    fn at_base(&mut self, touched: &[PathBuf], rev: &str) -> base::AtBase<'_> {
+    /// An error, and the session as it was, when git cannot give a version:
+    /// taken for a file absent at `rev`, it made the claims about it look new.
+    fn at_base(&mut self, touched: &[PathBuf], rev: &str) -> Result<base::AtBase<'_>, GitError> {
         base::AtBase::install(self, touched, rev)
     }
 
@@ -1064,16 +1080,16 @@ impl Session {
     /// changed files and again with their version at `rev`, keeping what is
     /// new. The unchanged files' text is the same both times, so fingerprints
     /// match exactly.
-    fn cross_file_breaks(&mut self, changed: &[PathBuf], deleted: &[PathBuf], rev: &str) -> Vec<Finding> {
+    fn cross_file_breaks(&mut self, changed: &[PathBuf], deleted: &[PathBuf], rev: &str) -> Result<Vec<Finding>, GitError> {
         let rules = RuleSet::new(crate::analyze::selected_rules_for(self.project(), true).into_iter().filter(|r| CROSS_FILE_RULES.contains(&r.meta().id)).collect());
         let touched: Vec<PathBuf> = changed.iter().chain(deleted).cloned().collect();
         let skip: FxHashSet<&PathBuf> = touched.iter().collect();
         let others: Vec<PathBuf> = crate::analyze::all_source_files(self.project()).into_iter().filter(|f| !skip.contains(f)).collect();
         if touched.is_empty() || others.is_empty() {
-            return Vec::new();
+            return Ok(Vec::new());
         }
         let now = self.analyze(&rules, &others);
-        let base = self.at_base(&touched, rev);
+        let base = self.at_base(&touched, rev)?;
         let base_classes: Vec<Name> = touched.iter().filter_map(|f| base.project().index.file(&path_key(f))).flat_map(|stub| stub.classes.iter().map(|c| c.name.clone())).collect();
         let before: FxHashSet<PlaceClaim> = base.analyze(&rules, &others).iter().map(place_claim).collect();
         drop(base);
@@ -1100,7 +1116,7 @@ impl Session {
         if !removed.is_empty() {
             found.extend(others.par_iter().flat_map_iter(|f| self.removed_class_uses(f, &removed)).collect::<Vec<_>>());
         }
-        found
+        Ok(found)
     }
 
     /// Uses of `removed` classes in `file`: an import of one, or its simple
@@ -1261,7 +1277,9 @@ impl Session {
         if pending.is_empty() || changed.is_empty() {
             return Vec::new();
         }
-        let hunks = git::hunks_since(self.root(), changed, rev);
+        // (what git cannot give leaves a break unattributed: it is still in
+        // `pending`, only not anchored on a changed line)
+        let Ok(hunks) = git::hunks_since(self.root(), changed, rev) else { return Vec::new() };
         // (file, simple name, declaring class for members, line in the current version)
         let mut removed: Vec<(&PathBuf, String, Option<String>, u32)> = Vec::new();
         let mut added: Vec<(&PathBuf, String, Option<String>, u32)> = Vec::new();
@@ -1291,10 +1309,10 @@ impl Session {
             out
         };
         for f in changed {
-            let Some(Some(h)) = hunks.get(f) else { continue };
+            let Some(git::Diff::Hunks(h)) = hunks.get(f) else { continue };
             let Some(start) = h.iter().map(|x| x.new_start.max(1)).min() else { continue };
             first.insert(f, start);
-            if let Some(text) = git::version_at(self.root(), rev, f) {
+            if let Ok(Some(text)) = git::version_at(self.root(), rev, f) {
                 let pf = ParsedFile::parse(text);
                 let stub = self.project().extract(f, &pf);
                 for (n, owner, l) in decls(&stub, &pf) {
@@ -1365,7 +1383,7 @@ impl Session {
     /// Record current findings of the given (or changed) files as accepted.
     pub fn write_baseline(&mut self, files: &[PathBuf], merge: bool) -> anyhow::Result<usize> {
         let opts = CheckOptions { mode: Mode::Checkpoint, files: files.to_vec(), all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None };
-        let targets = if files.is_empty() && !git::is_repo(self.root()) { crate::analyze::all_source_files(self.project()) } else { self.target_files(&opts) };
+        let targets = if files.is_empty() && !git::is_repo(self.root())? { crate::analyze::all_source_files(self.project()) } else { self.target_files(&opts)? };
         self.sync(&targets);
         let findings = self.analyze(&self.all_rules, &targets);
         let mut b = if merge { Baseline::load(self.root()) } else { Baseline::default() };
@@ -1382,9 +1400,11 @@ impl Session {
 
     /// Test classes that reference (transitively, through project classes)
     /// any class declared in the changed files.
-    pub fn impacted_tests(&mut self, files: &[PathBuf]) -> Vec<ImpactedTest> {
+    /// Test classes reaching the given files, or those git lists as changed;
+    /// the git command that failed, when it could not list them.
+    pub fn impacted_tests(&mut self, files: &[PathBuf]) -> Result<Vec<ImpactedTest>, GitError> {
         let opts = CheckOptions { mode: Mode::Checkpoint, files: files.to_vec(), all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None };
-        let targets = self.target_files(&opts);
+        let targets = self.target_files(&opts)?;
         self.sync(&targets);
         // reverse reference closure over simple class names
         let mut frontier: FxHashSet<Name> = FxHashSet::default();
@@ -1435,7 +1455,7 @@ impl Session {
         }
         tests.sort();
         tests.dedup();
-        tests
+        Ok(tests)
     }
 
     fn impacted_test(&self, file: &Path, class: String) -> ImpactedTest {
@@ -1466,19 +1486,21 @@ mod base {
     }
 
     impl<'s> AtBase<'s> {
-        pub(super) fn install(session: &'s mut Session, touched: &[PathBuf], rev: &str) -> AtBase<'s> {
+        pub(super) fn install(session: &'s mut Session, touched: &[PathBuf], rev: &str) -> Result<AtBase<'s>, GitError> {
+            // every version first: one git cannot give leaves the session as it is
+            let root = session.root().to_path_buf();
+            let versions = touched.iter().map(|p| git::version_at(&root, rev, p)).collect::<Result<Vec<_>, _>>()?;
             let lent = session.sources.lend(touched);
             // (the guard first: a panic while the base is put in restores too)
             let base = AtBase { session, lent: Some(lent) };
-            for p in touched {
-                let project = base.session.project();
-                let stub = git::version_at(&project.workspace.root, rev, p).map(|t| Arc::new(project.extract(p, &ParsedFile::parse(t))));
+            for (p, text) in touched.iter().zip(versions) {
+                let stub = text.map(|t| Arc::new(base.session.project().extract(p, &ParsedFile::parse(t))));
                 if let Some(lent) = &base.lent {
                     base.session.sources.hold_base(lent, path_key(p), stub);
                 }
             }
             base.session.sources.rebuild_di();
-            base
+            Ok(base)
         }
     }
 
@@ -1645,17 +1667,17 @@ mod tests {
         let owner = dir.join("src/main/java/demo/Owner.java").canonicalize().unwrap();
         let opts = CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None };
         let mut s = Session::open(&dir).unwrap();
-        let first = serde_json::to_string(&s.check(&opts)).unwrap();
+        let first = serde_json::to_string(&s.check(&opts).unwrap()).unwrap();
         let hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _base = s.at_base(&[owner.clone()], "HEAD");
+            let _base = s.at_base(&[owner.clone()], "HEAD").unwrap();
             panic!("in the base state")
         }));
         std::panic::set_hook(hook);
         assert!(r.is_err());
-        let after = serde_json::to_string(&s.check(&opts)).unwrap();
-        let fresh = serde_json::to_string(&Session::open(&dir).unwrap().check(&opts)).unwrap();
+        let after = serde_json::to_string(&s.check(&opts).unwrap()).unwrap();
+        let fresh = serde_json::to_string(&Session::open(&dir).unwrap().check(&opts).unwrap()).unwrap();
         assert_eq!(after, fresh);
         assert_eq!(after, first);
         assert!(after.contains("Clinic.java"), "{after}");
@@ -1686,11 +1708,39 @@ mod tests {
         assert!(s.project().di_settings.bean_overriding_allowed);
         let held = |s: &Session| (format!("{:?}", s.project().index.file(&path_key(&owner))), s.project().di.beans.len(), s.project().di.settings);
         let now = held(s);
-        let base = s.at_base(std::slice::from_ref(&owner), "HEAD");
+        let base = s.at_base(std::slice::from_ref(&owner), "HEAD").unwrap();
         let (stub, beans, settings) = held(&base);
         assert_ne!(stub, now.0, "the version at HEAD");
         assert_eq!((beans, settings), (now.1 + 1, now.2), "a model of the base, with the project's settings");
         drop(base);
+        assert_eq!(held(s), now);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A version git cannot give (its object unreadable) is not a file
+    /// absent at the revision: the base state is not built, and the session
+    /// keeps the stub it had. Taken for an absent file, it removed the stub,
+    /// and every claim the file's code made before looked new.
+    #[test]
+    fn a_base_version_git_cannot_give_builds_no_base_state() {
+        let dir = std::env::temp_dir().join(format!("grounds-atbase-gitfails-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src/main/java/demo")).unwrap();
+        std::fs::write(dir.join("build.gradle"), "plugins { id 'java' }\n").unwrap();
+        std::fs::write(dir.join("src/main/java/demo/Owner.java"), "package demo;\npublic class Owner {}\n").unwrap();
+        git(&dir, &["init", "-q"]);
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-qm", "init"]);
+        let owner = dir.join("src/main/java/demo/Owner.java").canonicalize().unwrap();
+        let s = &mut Session::open(&dir).unwrap();
+        let held = |s: &Session| format!("{:?}", s.project().index.file(&path_key(&owner)));
+        let now = held(s);
+        assert!(s.at_base(std::slice::from_ref(&owner), "HEAD").is_ok());
+        let out = std::process::Command::new("git").arg("-C").arg(&dir).args(["rev-parse", "HEAD:src/main/java/demo/Owner.java"]).output().unwrap();
+        let blob = String::from_utf8(out.stdout).unwrap();
+        let blob = blob.trim();
+        std::fs::remove_file(dir.join(".git/objects").join(&blob[..2]).join(&blob[2..])).unwrap();
+        assert!(s.at_base(std::slice::from_ref(&owner), "HEAD").is_err());
         assert_eq!(held(s), now);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1722,7 +1772,7 @@ mod tests {
         std::fs::write(tree.join("app/src/main/java/Hidden.java"), "class Hidden {}\n").unwrap();
         let dir = tree.join("app").canonicalize().unwrap();
         let opts = CheckOptions { mode: Mode::Checkpoint, files: vec![dir.join("src/main/java/Use.java")], all_lines: true, use_baseline: false, min_severity: Severity::Info, base: None };
-        let report = |s: &mut Session| serde_json::to_string(&s.check(&opts)).unwrap();
+        let report = |s: &mut Session| serde_json::to_string(&s.check(&opts).unwrap()).unwrap();
         let as_fresh = |s: &mut Session, what: &str| {
             let warm = report(s);
             assert_eq!(warm, report(&mut Session::open(&dir).unwrap()), "after {what}");

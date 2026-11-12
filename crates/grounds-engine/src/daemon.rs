@@ -127,7 +127,11 @@ fn execute_with(session: &mut Session, req: &Request, warnings: &[String]) -> Re
                 },
             };
             let opts = CheckOptions { mode: *mode, files: files.clone(), all_lines: *all_lines, use_baseline: *baseline, min_severity: min, base };
-            let report = session.check(&opts);
+            // (git failing: the check cannot tell what changed, and says so)
+            let report = match session.check(&opts) {
+                Ok(report) => report,
+                Err(e) => return Response { code: 1, stderr: format!("grounds: {e}\n"), ..Default::default() },
+            };
             let problems = !report.findings.is_empty() || !report.pending.is_empty();
             let text = if *sarif {
                 crate::report::sarif_report(&report, session.root(), warnings)
@@ -144,7 +148,10 @@ fn execute_with(session: &mut Session, req: &Request, warnings: &[String]) -> Re
         },
         Request::SessionStart => execute_with(session, &Request::Baseline { files: Vec::new(), merge: true }, warnings),
         Request::ImpactedTests { files } => {
-            let tests = session.impacted_tests(files);
+            let tests = match session.impacted_tests(files) {
+                Ok(tests) => tests,
+                Err(e) => return Response { code: 1, stderr: format!("grounds: {e}\n"), ..Default::default() },
+            };
             let mut out = String::new();
             for t in &tests {
                 out.push_str(&format!("{}\t{}\t{}\n", t.module, t.task, t.class));
