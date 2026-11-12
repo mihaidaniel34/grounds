@@ -742,7 +742,11 @@ A claim that code does not compile is only worth making where the build
 compiles it. Next to the code, projects keep test data, check samples and
 old snapshots of their sources in the conventional layout, and nothing
 builds them. So grounds reads, per module, the class files in its build
-output, and puts each source file in one of three states:
+output, and puts each source file in one of three states. For this, a
+directory holding `src/<set>/java` beside build output with class files is
+a module of its own, whatever its build file is called (Spring's projects
+name it after the module, `config/spring-security-config.gradle`); a file
+belongs to the nearest one enclosing it.
 
 - **in the build**: the output holds a class file of a top-level class
   declared in the file's source root (the file's directory less its

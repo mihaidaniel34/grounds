@@ -19,7 +19,7 @@ fn main() -> anyhow::Result<()> {
     for f in &p.workspace.files {
         let key = grounds_engine::project::path_key(&f.path);
         let stub = p.index.file(&key);
-        let r = p.picture.root_of(&p.workspace, f.module, &f.path, stub.map_or("", |s| &s.package));
+        let r = p.picture.root_of(&f.path, stub.map_or("", |s| &s.package));
         let state = format!("{:?}", p.index.in_build(&key));
         *by_root.entry((r.strip_prefix(&root).unwrap_or(&r).display().to_string(), state)).or_default() += 1;
     }

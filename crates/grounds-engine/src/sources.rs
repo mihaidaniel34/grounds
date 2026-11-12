@@ -225,7 +225,11 @@ impl Sources {
     pub fn follow_build(&mut self, clock: SystemTime, declarations: bool, installed: &[PathBuf]) {
         let Sources { project, entries, .. } = self;
         let mtime = |p: &Path| entries.get(p).and_then(|e| e.stamp().meta()).map(|m| m.mtime);
-        let moved = project.picture.refresh(&project.workspace, clock);
+        let mut moved = project.picture.refresh(clock);
+        // (a file added may be the first of a unit found by its source set)
+        if declarations {
+            moved |= project.picture.add_candidates(&project.workspace);
+        }
         if moved || declarations {
             let index = &project.index;
             let states = project.picture.place(&project.workspace, |p| index.file(&path_key(p)).cloned(), mtime);
@@ -234,8 +238,7 @@ impl Sources {
         }
         for p in installed {
             let key = path_key(p);
-            let module = project.workspace.module_of(p).unwrap_or(0);
-            let state = project.picture.place_file(&project.workspace, module, p, project.index.file(&key).map(|s| &**s), mtime(p));
+            let state = project.picture.place_file(p, project.index.file(&key).map(|s| &**s), mtime(p));
             project.index.set_in_build(key, state);
         }
     }

@@ -11,8 +11,15 @@
 //! `build/classes/<language>/<source set>`), read for the names of their
 //! class files and their times. Nothing is run. The rules:
 //!
-//! - A file belongs to its nearest enclosing module (the workspace's). Its
-//!   source root is its directory less the package's directories, when they
+//! - A file belongs to its nearest enclosing build unit: a module of the
+//!   workspace, or a directory that holds a source set's conventional
+//!   directory (`<dir>/src/<set>/java`, found from the source files' paths)
+//!   and an output directory with class files. The output itself shows
+//!   where a unit is, whether or not a build file grounds recognizes made it
+//!   a module: Spring's projects name each module's build file after the
+//!   module (`config/spring-security-config.gradle`). Only the picture goes
+//!   by units; everything else goes by the workspace's modules. (Below,
+//!   "module" is such a unit.) Its source root is its directory less the package's directories, when they
 //!   spell its package: such files establish the module's roots. A build
 //!   compiles directory trees, and a package other than the directories (or
 //!   the default package below a root) is legal Java, so a file whose
@@ -115,18 +122,36 @@ enum Root {
     Unknown,
 }
 
-/// The build picture of a workspace: each module's output, and what it shows
+/// A build unit: a directory whose build output is evidence for the source
+/// files below it that no nearer unit holds. Every module of the workspace
+/// is one; so is a directory holding a source set's conventional directory
+/// (`src/<set>/java`) whose output directory holds class files, a build
+/// file grounds does not recognize or not (`config/spring-security-config
+/// .gradle`): the output itself shows where a unit is. One without class
+/// files is followed for them, and holds no file until it has some.
+#[derive(Clone, Debug)]
+struct Unit {
+    dir: PathBuf,
+    /// A module of the workspace (else found by its source set's directory).
+    module: bool,
+    out: ModuleOutput,
+}
+
+/// The build picture of a workspace: each unit's output, and what it shows
 /// of each source root.
 #[derive(Clone, Debug, Default)]
 pub struct Picture {
-    /// Per module, in the workspace's order.
-    modules: Vec<ModuleOutput>,
-    /// Per (module, source root).
+    /// The workspace's modules, in its order, then the other units.
+    units: Vec<Unit>,
+    /// The units files belong to, by directory: the modules, and the other
+    /// units with class files.
+    active: FxHashMap<PathBuf, usize>,
+    /// Per (unit, source root).
     roots: FxHashMap<(usize, PathBuf), Root>,
-    /// Per module, the source roots files whose package spells their
+    /// Per unit, the source roots files whose package spells their
     /// directories establish (see `root_of`).
     established: FxHashMap<usize, FxHashSet<PathBuf>>,
-    /// The modules with a file newer than their newest class file in a root
+    /// The units with a file newer than their newest class file in a root
     /// without one: read again at every sync (see the module doc).
     pending: FxHashSet<usize>,
 }
@@ -138,50 +163,82 @@ const MAVEN_OUTPUTS: [(&str, &str); 2] = [("target/classes", "main"), ("target/t
 const GRADLE_OUTPUTS: &str = "build/classes";
 
 impl Picture {
-    /// Read the build output of every module of `ws`.
+    /// Read the build output of every module of `ws`, and of the other
+    /// directories holding a source set's directory (see `Unit`).
     pub fn read(ws: &Workspace) -> Picture {
         use rayon::prelude::*;
-        let modules = ws.modules.par_iter().map(|m| read_module(&m.dir)).collect();
-        Picture { modules, roots: FxHashMap::default(), established: FxHashMap::default(), pending: FxHashSet::default() }
+        let mut dirs: Vec<(PathBuf, bool)> = ws.modules.iter().map(|m| (m.dir.clone(), true)).collect();
+        dirs.extend(candidates(ws, &dirs.iter().map(|(d, _)| d.as_path()).collect()).into_iter().map(|d| (d, false)));
+        let units = dirs.into_par_iter().map(|(dir, module)| Unit { out: read_module(&dir), dir, module }).collect();
+        let mut picture = Picture { units, ..Picture::default() };
+        picture.activate();
+        picture
     }
 
-    /// Whether any module has build output to go by.
+    /// Follow the directories holding a source set's directory that `ws`
+    /// has now and had not (a source file added there): whether one of
+    /// them has class files, so that the states are to be placed again.
+    pub fn add_candidates(&mut self, ws: &Workspace) -> bool {
+        let known: FxHashSet<&Path> = self.units.iter().map(|u| u.dir.as_path()).collect();
+        let new: Vec<Unit> = candidates(ws, &known).into_iter().map(|dir| Unit { out: read_module(&dir), dir, module: false }).collect();
+        let evidence = new.iter().any(|u| u.out.output.evidence());
+        self.units.extend(new);
+        if evidence {
+            self.activate();
+        }
+        evidence
+    }
+
+    /// The units files belong to: the modules, and the others with class files.
+    fn activate(&mut self) {
+        self.active = self.units.iter().enumerate().filter(|(_, u)| u.module || u.out.output.evidence()).map(|(i, u)| (u.dir.clone(), i)).collect();
+    }
+
+    /// The unit the file at `path` belongs to: the nearest enclosing one
+    /// (the workspace's root module when no other encloses it).
+    pub fn unit_of(&self, path: &Path) -> usize {
+        path.ancestors().skip(1).find_map(|a| self.active.get(a).copied()).unwrap_or(0)
+    }
+
+    /// Whether any unit has build output to go by.
     pub fn any_evidence(&self) -> bool {
-        self.modules.iter().any(|m| m.output.evidence())
+        self.units.iter().any(|u| u.out.output.evidence())
     }
 
-    /// How many modules holding source files have no build output to go
-    /// by: their picture of the build is guessed.
+    /// How many units holding source files have no build output to go by:
+    /// their picture of the build is guessed.
     pub fn guessed_modules(&self, ws: &Workspace) -> usize {
-        let with_code: FxHashSet<usize> = ws.files.iter().filter(|f| f.kind != crate::workspace::SourceKind::Generated).map(|f| f.module).collect();
-        with_code.into_iter().filter(|m| !self.module_has_evidence(*m)).count()
+        let with_code: FxHashSet<usize> = ws.files.iter().filter(|f| f.kind != crate::workspace::SourceKind::Generated).map(|f| self.unit_of(&f.path)).collect();
+        with_code.into_iter().filter(|u| !self.unit_has_evidence(*u)).count()
     }
 
-    /// Whether module `m` has build output to go by.
-    pub fn module_has_evidence(&self, m: usize) -> bool {
-        self.modules.get(m).is_some_and(|m| m.output.evidence())
+    /// Whether unit `u` has build output to go by.
+    fn unit_has_evidence(&self, u: usize) -> bool {
+        self.units.get(u).is_some_and(|u| u.out.output.evidence())
     }
 
-    /// Read again the output of each module whose directories changed since
+    /// Read again the output of each unit whose directories changed since
     /// they were read (`clock`: the time before this look), or that has files
     /// newer than its newest class file in a root without one. Whether what
     /// any of them shows changed; the states are then to be placed again.
-    pub fn refresh(&mut self, ws: &Workspace, clock: SystemTime) -> bool {
+    pub fn refresh(&mut self, clock: SystemTime) -> bool {
         let mut changed = false;
-        for (i, m) in self.modules.iter_mut().enumerate() {
+        for (i, u) in self.units.iter_mut().enumerate() {
             let moved = self.pending.contains(&i)
-                || m.stamps.iter_mut().any(|(p, s)| match s {
+                || u.out.stamps.iter_mut().any(|(p, s)| match s {
                     Some(s) => s.changed(p, clock),
                     None => p.exists(),
                 });
             if !moved {
                 continue;
             }
-            let Some(dir) = ws.modules.get(i).map(|w| &w.dir) else { continue };
-            let again = read_module(dir);
-            crate::trace::log(|| format!("sync: build output of {} read again", dir.display()));
-            changed |= again.output != m.output;
-            *m = again;
+            let again = read_module(&u.dir);
+            crate::trace::log(|| format!("sync: build output of {} read again", u.dir.display()));
+            changed |= again.output != u.out.output;
+            u.out = again;
+        }
+        if changed {
+            self.activate();
         }
         changed
     }
@@ -195,7 +252,7 @@ impl Picture {
         if !self.any_evidence() {
             return FxHashMap::default();
         }
-        let files: Vec<(usize, &Path, Option<Arc<FileStub>>)> = ws.files.iter().filter(|f| self.module_has_evidence(f.module)).map(|f| (f.module, f.path.as_path(), stub(&f.path))).collect();
+        let files: Vec<(usize, &Path, Option<Arc<FileStub>>)> = ws.files.iter().map(|f| (self.unit_of(&f.path), f)).filter(|(u, _)| self.unit_has_evidence(*u)).map(|(u, f)| (u, f.path.as_path(), stub(&f.path))).collect();
         // the roots files whose package spells their directories establish
         for (m, path, stub) in &files {
             if let Some(root) = stub.as_deref().and_then(|s| package_root(path, &s.package)) {
@@ -206,7 +263,7 @@ impl Picture {
         let mut declares: FxHashMap<(usize, PathBuf), FxHashSet<String>> = FxHashMap::default();
         let mut file_root: Vec<(usize, &Path, PathBuf)> = Vec::new();
         for (m, path, stub) in files {
-            let root = self.root_of(ws, m, path, stub.as_deref().map_or("", |s| &s.package));
+            let root = self.root_of(path, stub.as_deref().map_or("", |s| &s.package));
             let classes = declares.entry((m, root.clone())).or_default();
             for c in stub.iter().flat_map(|s| s.classes.iter()).filter(|c| c.outer.is_none()) {
                 classes.insert(c.name.replace('.', "/"));
@@ -220,7 +277,7 @@ impl Picture {
                 *count.entry((*m, c.as_str())).or_default() += 1;
             }
         }
-        let output = |m: usize| &self.modules[m].output;
+        let output = |m: usize| &self.units[m].out.output;
         // a root is compiled when the output holds the class file of a class
         // only it declares, or, for a source set's conventional directory, of
         // a class it declares in that set's own output (a module's tests may
@@ -228,7 +285,7 @@ impl Picture {
         let compiled: FxHashSet<&(usize, PathBuf)> = declares
             .iter()
             .filter(|((m, root), classes)| {
-                let set = conventional_set(&ws.modules[*m].dir, root);
+                let set = conventional_set(&self.units[*m].dir, root);
                 classes.iter().any(|c| match output(*m).classes.get(c.as_str()) {
                     Some(sets) => count[&(*m, c.as_str())] == 1 || set.is_some_and(|set| sets.iter().any(|s| **s == *set)),
                     None => false,
@@ -249,7 +306,7 @@ impl Picture {
             // a class file of its classes that no root in the build explains,
             // or a source set whose own output holds no class file: unknown
             let unexplained = classes.iter().any(|c| output(m).classes.contains_key(c.as_str()) && !explained.contains(&(m, c.as_str())));
-            let set_not_compiled = conventional_set(&ws.modules[m].dir, &key.1).is_some_and(|set| !output(m).sets.contains(set));
+            let set_not_compiled = conventional_set(&self.units[m].dir, &key.1).is_some_and(|set| !output(m).sets.contains(set));
             let state = if compiled.contains(key) {
                 Root::Compiled
             } else if unexplained || set_not_compiled {
@@ -268,32 +325,34 @@ impl Picture {
         states
     }
 
-    /// The state of one source file of module `m`, after a change that left
-    /// its module's roots as they were (an edit that changed no declaration):
-    /// only its own time may differ.
-    pub fn place_file(&mut self, ws: &Workspace, m: usize, path: &Path, stub: Option<&FileStub>, mtime: Option<SystemTime>) -> InBuild {
-        if !self.module_has_evidence(m) {
+    /// The state of one source file, after a change that left its unit's
+    /// roots as they were (an edit that changed no declaration): only its
+    /// own time may differ.
+    pub fn place_file(&mut self, path: &Path, stub: Option<&FileStub>, mtime: Option<SystemTime>) -> InBuild {
+        let u = self.unit_of(path);
+        if !self.unit_has_evidence(u) {
             return InBuild::Unknown;
         }
-        let root = self.root_of(ws, m, path, stub.map_or("", |s| &s.package));
-        self.state(m, &root, mtime)
+        let root = self.root_of(path, stub.map_or("", |s| &s.package));
+        self.state(u, &root, mtime)
     }
 
-    /// The source root of the file at `path` of module `m`, in package
-    /// `package`, as the roots were last placed: its directory less the
+    /// The source root of the file at `path`, in package `package`, as the
+    /// roots were last placed: its directory less the
     /// package's directories when they spell the package. A build compiles
     /// directory trees, and a package other than the directories (or the
     /// default package below a root) is legal Java: such a file belongs to
     /// the nearest root enclosing it that is established otherwise, a source
-    /// set's conventional directory of its module (`src/<set>/java`) or a
+    /// set's conventional directory of its unit (`src/<set>/java`) or a
     /// root that a file whose package spells its directories establishes.
     /// Only when there is none is its directory its root.
-    pub fn root_of(&self, ws: &Workspace, m: usize, path: &Path, package: &str) -> PathBuf {
+    pub fn root_of(&self, path: &Path, package: &str) -> PathBuf {
         if let Some(root) = package_root(path, package) {
             return root;
         }
         let dir = path.parent().unwrap_or(Path::new(""));
-        let Some(module) = ws.modules.get(m).map(|w| w.dir.as_path()) else { return dir.to_path_buf() };
+        let m = self.unit_of(path);
+        let Some(module) = self.units.get(m).map(|u| u.dir.as_path()) else { return dir.to_path_buf() };
         let established = self.established.get(&m);
         dir.ancestors()
             .take_while(|a| a.starts_with(module))
@@ -305,7 +364,7 @@ impl Picture {
     fn state(&mut self, m: usize, root: &Path, mtime: Option<SystemTime>) -> InBuild {
         match self.roots.get(&(m, root.to_path_buf())) {
             Some(Root::Compiled) => InBuild::Yes,
-            Some(Root::NoClassFile) => match (mtime, self.modules[m].output.newest) {
+            Some(Root::NoClassFile) => match (mtime, self.units[m].out.output.newest) {
                 (Some(t), Some(newest)) if t < newest => InBuild::No,
                 _ => {
                     self.pending.insert(m);
@@ -330,9 +389,26 @@ pub fn guessed<'f>(project: &crate::Project, findings: impl IntoIterator<Item = 
     let mut count = 0;
     for f in findings.into_iter().filter(|f| f.build == Some(InBuild::Unknown)) {
         count += 1;
-        modules.insert(ws.module_of(&ws.root.join(&f.path)).unwrap_or(0));
+        modules.insert(project.picture.unit_of(&ws.root.join(&f.path)));
     }
     (count > 0).then_some(crate::classpath::Warning::GuessedBuild { modules: modules.len(), findings: count })
+}
+
+/// The directories other than `known` that hold a source set's
+/// conventional directory with a source file of `ws` in it
+/// (`<dir>/src/<set>/<java|kotlin|groovy|scala>/...`; the last such in a
+/// path): where a build unit may be (see `Unit`). From the files' paths, no
+/// walk of its own.
+fn candidates(ws: &Workspace, known: &FxHashSet<&Path>) -> Vec<PathBuf> {
+    let mut seen: FxHashSet<&str> = FxHashSet::default();
+    let mut out = Vec::new();
+    for f in &ws.files {
+        let Some((dir, _)) = f.path.to_str().and_then(grounds_index::index::source_root) else { continue };
+        if !dir.is_empty() && seen.insert(dir) && !known.contains(Path::new(dir)) {
+            out.push(PathBuf::from(dir));
+        }
+    }
+    out
 }
 
 /// The source root a file in package `package` establishes: its directory

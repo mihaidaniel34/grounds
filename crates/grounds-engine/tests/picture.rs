@@ -426,3 +426,42 @@ fn a_class_declared_only_in_test_data_is_not_what_the_build_compiles_against() {
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&jar);
 }
+
+/// Spring's layout: each subproject's build file is named after it
+/// (`config/spring-security-config.gradle`, set in settings.gradle), which
+/// the workspace does not take for a module. Its build output shows where
+/// the build unit is: its files are in the build, sample files beside them
+/// are not, and a build that appears while a session is open is noticed.
+#[test]
+fn build_output_beside_a_build_file_grounds_does_not_know_is_evidence() {
+    use grounds_engine::session::{CheckOptions, Mode, Session};
+    let javac = javac_or_skip!();
+    let dir = project(
+        "unit",
+        &[
+            ("build.gradle", GRADLE),
+            ("settings.gradle", "include 'sub'\nproject(':sub').buildFileName = 'sub.gradle'\n"),
+            ("sub/sub.gradle", GRADLE),
+            ("sub/src/main/java/app/Lib.java", LIB),
+            ("sub/src/main/java/app/Use.java", USE),
+            ("sub/src/test/samples/app/Broken.java", BROKEN),
+        ],
+    );
+    let p = Project::load(&dir).unwrap();
+    assert_eq!(p.workspace.modules.len(), 1, "the workspace sees the root module alone");
+    let files: Vec<PathBuf> = ["sub/src/main/java/app/Use.java", "sub/src/test/samples/app/Broken.java"].iter().map(|f| dir.join(f)).collect();
+    let opts = CheckOptions { mode: Mode::Checkpoint, files, all_lines: true, use_baseline: false, min_severity: grounds_rules::Severity::Info, base: None };
+    let got = |s: &mut Session| -> Vec<(String, Option<InBuild>)> { s.check(&opts).unwrap().findings.into_iter().filter(|f| f.rule == "unresolved-method").map(|f| (f.path, f.build)).collect() };
+    let mut s = Session::open(&dir).unwrap();
+    assert_eq!(got(&mut s), [("sub/src/test/samples/app/Broken.java".to_string(), Some(InBuild::Unknown))]);
+    // the build runs, then `Use` is broken
+    compile(&javac, &dir, &["sub/src/main/java/app/Lib.java", "sub/src/main/java/app/Use.java"], "sub/build/classes/java/main", None);
+    write_at(&dir, "sub/src/main/java/app/Use.java", USE_BROKEN, SystemTime::now());
+    let built = vec![("sub/src/main/java/app/Use.java".to_string(), Some(InBuild::Yes))];
+    assert_eq!(got(&mut s), built);
+    let p = Project::load(&dir).unwrap();
+    assert_eq!(state(&p, "sub/src/main/java/app/Lib.java"), InBuild::Yes);
+    assert_eq!(state(&p, "sub/src/test/samples/app/Broken.java"), InBuild::No);
+    assert_eq!(got(&mut Session::open(&dir).unwrap()), built);
+    let _ = std::fs::remove_dir_all(&dir);
+}
