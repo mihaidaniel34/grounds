@@ -41,6 +41,8 @@
 !/corpus/holdout.tsv
 # published libraries whose class files judge grounds (scripts/bytecode_oracle.py)
 !/corpus/oracle.tsv
+# javac as a judge of what grounds resolves (crates/grounds-cli/examples/javac_verify.rs)
+!/javac-helper/*.java
 !/docs/holdout/*
 !/docs/smoke/*
 !/corpus/planted/*.patch
