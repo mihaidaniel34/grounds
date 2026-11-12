@@ -429,7 +429,9 @@ impl Session {
     /// Source files that appeared since they were last looked for, and files
     /// that a walk would no longer find though they are there, and whether a
     /// module appeared (a build file in a directory that was no module), for
-    /// which the project is loaded again.
+    /// which the project is loaded again. With them, the stamps of what was
+    /// looked at as they are after this look (`None`: nothing changed), for
+    /// the sync to put in place once it holds what the look found.
     ///
     /// A file is created, removed or renamed in a directory by an entry of
     /// that directory, which changes the directory's time; so every directory
@@ -454,7 +456,7 @@ impl Session {
     /// Not followed: git's global excludes file (`core.excludesFile`), and
     /// file systems that do not change a directory's time when an entry is
     /// added to it.
-    fn rescan(&mut self) -> (Vec<Admitted>, FxHashSet<PathBuf>, bool) {
+    fn rescan(&mut self) -> (Option<Walk>, Vec<Admitted>, FxHashSet<PathBuf>, bool) {
         use crate::sources::{discover, Found};
         use crate::workspace::{boundary, listable, IGNORE_FILES};
         let clock = SystemTime::now();
@@ -506,40 +508,52 @@ impl Session {
                 }
             }
         }
+        // (a stamp found unchanged may settle in place, above and here: that
+        // says nothing about what is held)
+        let mut changed: Vec<PathBuf> = if full { Vec::new() } else { self.walked.dirs.par_iter_mut().filter_map(|(d, stamp)| stamp.changed(d, clock).then(|| d.clone())).collect() };
+        if !full && changed.is_empty() {
+            return (None, Vec::new(), FxHashSet::default(), false);
+        }
+        // What the look finds is held only once the sync has read the files
+        // that appeared and forgotten those that went; the stamps that say the
+        // directories were looked at are changed on a copy, which the sync
+        // puts in place after that. A sync cut short in between (a panic,
+        // which the daemon catches) leaves the stamps as they were, and the
+        // next sync looks again and finds the same.
+        let mut walked = self.walked.clone();
         let (mut found, mut found_modules) = (Vec::new(), Vec::new());
         let mut gone: FxHashSet<PathBuf> = FxHashSet::default();
         // a directory the discovery would not go into (any more): it and all
         // below it are forgotten, and the source files held there are gone
         // (their own stamps may not show it: a stamp follows a symlink)
-        let forget = |s: &mut Session, gone: &mut FxHashSet<PathBuf>, d: &Path| {
-            s.walked.dirs.retain(|p, _| !p.starts_with(d));
-            s.walked.ignores.retain(|(p, _)| !p.starts_with(d));
-            s.walked.gits.retain(|p, _| !p.starts_with(d));
-            gone.extend(s.sources.paths().filter(|p| p.starts_with(d)).cloned());
+        let forget = |walked: &mut Walk, sources: &crate::sources::Sources, gone: &mut FxHashSet<PathBuf>, d: &Path| {
+            walked.dirs.retain(|p, _| !p.starts_with(d));
+            walked.ignores.retain(|(p, _)| !p.starts_with(d));
+            walked.gits.retain(|p, _| !p.starts_with(d));
+            gone.extend(sources.paths().filter(|p| p.starts_with(d)).cloned());
         };
         // directories forgotten: a module in one (gone, now a symlink, which
         // the discovery does not follow, though its build file may still be
         // found through it) is no module for a fresh load
         let mut forgotten: Vec<PathBuf> = Vec::new();
         if !full {
-            let mut changed: Vec<PathBuf> = self.walked.dirs.par_iter_mut().filter_map(|(d, stamp)| stamp.changed(d, clock).then(|| d.clone())).collect();
             // (parents first: a directory that went takes those below it along)
             changed.sort();
             for d in changed {
-                let Some(old) = self.walked.dirs.get(&d).copied() else { continue };
+                let Some(old) = walked.dirs.get(&d).copied() else { continue };
                 // the stamp first, then the listing it vouches for; not
                 // through a symlink, which the discovery does not follow
                 let stamp = FileStamp::of(&d, true).filter(|_| std::fs::symlink_metadata(&d).is_ok_and(|m| m.is_dir()));
                 let Some(stamp) = stamp else {
                     crate::trace::log(|| format!("sync: directory gone {}", d.display()));
-                    forget(self, &mut gone, &d);
+                    forget(&mut walked, &self.sources, &mut gone, &d);
                     forgotten.push(d);
                     continue;
                 };
                 // an ignore file that appeared or went
                 // (an entry as the listing sees it, whether or not what it
                 // names can be read: one that cannot is kept without a stamp)
-                let known = |n: &&str| self.walked.ignores.iter().any(|(p, _)| *p == d.join(n));
+                let known = |n: &&str| walked.ignores.iter().any(|(p, _)| *p == d.join(n));
                 if IGNORE_FILES.iter().any(|n| known(n) != std::fs::symlink_metadata(d.join(n)).is_ok()) {
                     full = true;
                     break;
@@ -547,7 +561,7 @@ impl Session {
                 // a repository that starts or ends here, or a `.git` of
                 // another kind: which ignore files count, and which exclude
                 // file, is decided again
-                if boundary(&d) != self.walked.gits.get(&d).copied() {
+                if boundary(&d) != walked.gits.get(&d).copied() {
                     full = true;
                     break;
                 }
@@ -556,7 +570,7 @@ impl Session {
                 // listed again at every sync until it can, as an unreadable
                 // file is read
                 let stamp = if listable(&d) { stamp } else { stamp.recheck(Why::Unlistable) };
-                self.walked.dirs.insert(d.clone(), stamp.after(Some(&old)));
+                walked.dirs.insert(d.clone(), stamp.after(Some(&old)));
                 let began = SystemTime::now();
                 let listed = walk(&d, Some(1));
                 // a module here that the listing no longer finds (the
@@ -575,20 +589,20 @@ impl Session {
                 // (gone, now a symlink, renamed in case only on a file system
                 // that ignores case) is forgotten
                 let (dirs_now, files_now): (FxHashSet<&PathBuf>, FxHashSet<&Path>) = (listed.ws.dirs.iter().collect(), listed.files().iter().map(Admitted::path).collect());
-                let lost_dirs: Vec<PathBuf> = self.walked.dirs.keys().filter(|p| p.parent() == Some(d.as_path()) && !dirs_now.contains(p)).cloned().collect();
+                let lost_dirs: Vec<PathBuf> = walked.dirs.keys().filter(|p| p.parent() == Some(d.as_path()) && !dirs_now.contains(p)).cloned().collect();
                 gone.extend(self.sources.paths().filter(|p| p.parent() == Some(d.as_path()) && !files_now.contains(p.as_path())).cloned());
                 for l in lost_dirs {
                     crate::trace::log(|| format!("sync: directory no longer listed {}", l.display()));
-                    forget(self, &mut gone, &l);
+                    forget(&mut walked, &self.sources, &mut gone, &l);
                     forgotten.push(l);
                 }
-                let new_dirs: Vec<&PathBuf> = listed.ws.dirs.iter().filter(|s| **s != d && !self.walked.dirs.contains_key(*s)).collect();
+                let new_dirs: Vec<&PathBuf> = listed.ws.dirs.iter().filter(|s| **s != d && !walked.dirs.contains_key(*s)).collect();
                 for sub in new_dirs {
                     let w = walk(sub, None);
                     let new = Walk::stamp(&w.ws.dirs, None, began, &FxHashMap::default(), &FxHashMap::default());
-                    self.walked.dirs.extend(new.dirs);
-                    self.walked.ignores.extend(new.ignores);
-                    self.walked.gits.extend(new.gits);
+                    walked.dirs.extend(new.dirs);
+                    walked.ignores.extend(new.ignores);
+                    walked.gits.extend(new.gits);
                     found_modules.extend(modules(&w));
                     found.extend(files(w));
                 }
@@ -607,15 +621,15 @@ impl Session {
             // ignore files stamped before the walk: one unchanged by its end is
             // what it read, and keeps the time it was first seen
             // (and git's index and HEAD, which the list of tracked files was read with)
-            let before: FxHashMap<PathBuf, FileStamp> = self.walked.ignores.iter().chain(&self.walked.git).filter_map(|(p, old)| FileStamp::of(p, true).map(|s| (p.clone(), s.after(old.as_ref())))).collect();
+            let before: FxHashMap<PathBuf, FileStamp> = walked.ignores.iter().chain(&walked.git).filter_map(|(p, old)| FileStamp::of(p, true).map(|s| (p.clone(), s.after(old.as_ref())))).collect();
             // and where repositories start, in the directories known before
             // the walk and above the root: one that starts or ends while it
             // runs leaves another walk to do
-            let mut bounds: FxHashMap<PathBuf, Option<u8>> = self.walked.dirs.par_iter().map(|(d, _)| (d.clone(), boundary(d))).collect();
+            let mut bounds: FxHashMap<PathBuf, Option<u8>> = walked.dirs.par_iter().map(|(d, _)| (d.clone(), boundary(d))).collect();
             bounds.extend(root.ancestors().skip(1).map(|a| (a.to_path_buf(), boundary(a))));
             let began = SystemTime::now();
             let w = walk(&root, None);
-            self.walked = Walk::of_workspace(&w.ws, began, &before, &bounds);
+            walked = Walk::of_workspace(&w.ws, began, &before, &bounds);
             // the modules as a fresh load finds them: one added, gone or of
             // another build system reloads the project
             let layout = |ms: &[crate::workspace::Module]| {
@@ -625,7 +639,7 @@ impl Session {
             };
             if layout(&w.ws.modules) != layout(&self.project().workspace.modules) {
                 crate::trace::log(|| "sync: reload, the walk finds other modules".into());
-                return (Vec::new(), FxHashSet::default(), true);
+                return (None, Vec::new(), FxHashSet::default(), true);
             }
             found = files(w);
             let all: FxHashSet<&Path> = found.iter().map(Admitted::path).collect();
@@ -634,12 +648,12 @@ impl Session {
         let module = found_modules.iter().find(|d| !self.project().workspace.modules.iter().any(|m| m.dir == **d));
         if let Some(d) = module {
             crate::trace::log(|| format!("sync: reload, a module appeared at {}", d.display()));
-            return (Vec::new(), FxHashSet::default(), true);
+            return (None, Vec::new(), FxHashSet::default(), true);
         }
         found.retain(|p| self.sources.get(p.path()).is_none());
         found.sort();
         found.dedup();
-        (found, gone, false)
+        (Some(walked), found, gone, false)
     }
 
     /// How many times a sync walked the whole workspace (an ignore file
@@ -678,12 +692,12 @@ impl Session {
         });
         // source files that appeared or that the walk no longer finds, and
         // whether a module appeared
-        let (mut appeared, mut gone) = (Vec::new(), FxHashSet::default());
+        let (mut walked, mut appeared, mut gone) = (None, Vec::new(), FxHashSet::default());
         if !reload {
-            (appeared, gone, reload) = self.rescan();
+            (walked, appeared, gone, reload) = self.rescan();
         }
         if reload {
-            (appeared, gone) = (Vec::new(), FxHashSet::default());
+            (walked, appeared, gone) = (None, Vec::new(), FxHashSet::default());
             if unread {
                 crate::trace::log(|| "sync: reload, the version of a configuration file the load read is not known".into());
             }
@@ -703,7 +717,7 @@ impl Session {
         }
         // named files not held yet, where a fresh load would list them
         let named: Vec<PathBuf> = extra.iter().map(|e| e.canonicalize().unwrap_or_else(|_| e.clone())).filter(|e| e.extension().is_some_and(|x| x == "java") && self.sources.get(e).is_none() && !queued.contains(e)).collect();
-        let mut named = self.sources.admit(&named, &self.walked);
+        let mut named = self.sources.admit(&named, walked.as_ref().unwrap_or(&self.walked));
         named.sort();
         named.dedup();
         stale.extend(named);
@@ -766,6 +780,10 @@ impl Session {
             self.sources.install(file, stamp, stub);
         }
         self.sources.forget(&forgotten);
+        // what the look found is held: its stamps can say it was looked at
+        if let Some(walked) = walked {
+            self.walked = walked;
+        }
         // The JDK API, the modules' releases and all that is resolved against
         // them follow from the release plan, which also depends on the
         // sources (which modules hold code, what release the code needs): one
@@ -1703,6 +1721,50 @@ mod tests {
         assert_eq!(after, first);
         assert!(after.contains("Clinic.java"), "{after}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A sync cut short after its look at the directories (a panic, which
+    /// the daemon catches and goes on) leaves the directories' stamps as they
+    /// were, so the next sync finds again what that look found: a file that
+    /// went is forgotten (here its directory was replaced by a symlink to
+    /// it: the file's own stamp follows the link and does not change), and
+    /// one that appeared is held. With the stamps put in place by the look
+    /// itself, neither was, until the directory changed again.
+    #[cfg(unix)]
+    #[test]
+    fn a_sync_cut_short_after_its_look_leaves_the_directories_to_be_looked_at_again() {
+        let base = std::env::temp_dir().join(format!("grounds-cut-short-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("p");
+        let w = |rel: &str, t: &str| {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, t).unwrap();
+        };
+        w("build.gradle", "plugins { id 'java' }\n");
+        w("src/main/java/demo/A.java", "package demo;\nclass A {}\n");
+        w("src/main/java/demo/sub/Req.java", "package demo.sub;\nclass Req {}\n");
+        std::fs::create_dir_all(base.join("away")).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        // every time older than the margin within which a sync looks again
+        // at what it cannot trust (a recent file or directory, the
+        // configuration), which would find the files by chance
+        std::thread::sleep(crate::project::MARGIN + std::time::Duration::from_millis(500));
+        let (req, new) = (dir.join("src/main/java/demo/sub/Req.java"), dir.join("src/main/java/demo/New.java"));
+        let mut s = Session::open(&dir).unwrap();
+        assert!(s.sources.get(&req).is_some());
+        std::fs::rename(dir.join("src/main/java/demo/sub"), base.join("away/sub")).unwrap();
+        std::os::unix::fs::symlink(base.join("away/sub"), dir.join("src/main/java/demo/sub")).unwrap();
+        std::fs::write(&new, "package demo;\nclass New {}\n").unwrap();
+        // what a sync cut short right after the look leaves behind
+        let (_, appeared, gone, reload) = s.rescan();
+        assert_eq!((appeared.iter().map(|a| a.path()).collect::<Vec<_>>(), gone.iter().collect::<Vec<_>>(), reload), (vec![new.as_path()], vec![&req], false));
+        s.sync(&[]);
+        assert!(s.sources.get(&req).is_none(), "the file that went is still held");
+        assert!(s.sources.get(&new).is_some(), "the file that appeared is not held");
+        let fresh = Session::open(&dir).unwrap();
+        assert!(fresh.sources.get(&req).is_none() && fresh.sources.get(&new).is_some());
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     /// In the base state the project holds the base version of the touched
