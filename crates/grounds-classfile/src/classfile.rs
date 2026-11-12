@@ -1,6 +1,7 @@
 //! Class file parser. Reads declarations only: constant pool, members,
 //! signatures, annotations and a few other attributes. Method bodies (`Code`)
-//! are skipped entirely.
+//! are skipped entirely; `crate::references` reads them, for the tools that
+//! need what a body refers to.
 
 use anyhow::{bail, Result};
 
@@ -118,7 +119,7 @@ impl ClassFile {
 }
 
 #[derive(Clone, Debug)]
-enum Cp {
+pub(crate) enum Cp {
     Empty,
     Utf8(String),
     Int(i32),
@@ -127,16 +128,24 @@ enum Cp {
     Double(f64),
     Class(u16),
     String(u16),
+    /// Fieldref (9), Methodref (10), InterfaceMethodref (11): tag, class, name and type
+    Member(u8, u16, u16),
+    /// name, descriptor
+    NameAndType(u16, u16),
+    /// reference kind (1 getField .. 9 invokeInterface), reference
+    MethodHandle(u8, u16),
+    /// Dynamic (17), InvokeDynamic (18): tag, bootstrap method, name and type
+    Dynamic(u8, u16, u16),
     Other,
 }
 
-struct Reader<'a> {
-    b: &'a [u8],
-    p: usize,
+pub(crate) struct Reader<'a> {
+    pub(crate) b: &'a [u8],
+    pub(crate) p: usize,
 }
 
 impl<'a> Reader<'a> {
-    fn u8(&mut self) -> Result<u8> {
+    pub(crate) fn u8(&mut self) -> Result<u8> {
         if self.p >= self.b.len() {
             bail!("eof");
         }
@@ -144,7 +153,7 @@ impl<'a> Reader<'a> {
         self.p += 1;
         Ok(v)
     }
-    fn u16(&mut self) -> Result<u16> {
+    pub(crate) fn u16(&mut self) -> Result<u16> {
         if self.p + 2 > self.b.len() {
             bail!("eof");
         }
@@ -152,7 +161,7 @@ impl<'a> Reader<'a> {
         self.p += 2;
         Ok(v)
     }
-    fn u32(&mut self) -> Result<u32> {
+    pub(crate) fn u32(&mut self) -> Result<u32> {
         if self.p + 4 > self.b.len() {
             bail!("eof");
         }
@@ -160,7 +169,7 @@ impl<'a> Reader<'a> {
         self.p += 4;
         Ok(v)
     }
-    fn bytes(&mut self, n: usize) -> Result<&'a [u8]> {
+    pub(crate) fn bytes(&mut self, n: usize) -> Result<&'a [u8]> {
         if self.p + n > self.b.len() {
             bail!("eof");
         }
@@ -195,19 +204,28 @@ pub fn decode_modified_utf8(b: &[u8]) -> String {
     String::from_utf16_lossy(&units)
 }
 
-struct Parser<'a> {
-    r: Reader<'a>,
-    cp: Vec<Cp>,
+pub(crate) struct Parser<'a> {
+    pub(crate) r: Reader<'a>,
+    pub(crate) cp: Vec<Cp>,
+}
+
+/// The constant-pool index an attribute of exactly two bytes holds
+/// (`Signature`, `SourceFile`, `ConstantValue`).
+pub(crate) fn index_attribute(data: &[u8]) -> Result<u16> {
+    match data {
+        [a, b] => Ok(u16::from_be_bytes([*a, *b])),
+        _ => bail!("an index attribute of {} bytes", data.len()),
+    }
 }
 
 impl<'a> Parser<'a> {
-    fn utf8(&self, idx: u16) -> Result<String> {
+    pub(crate) fn utf8(&self, idx: u16) -> Result<String> {
         match self.cp.get(idx as usize) {
             Some(Cp::Utf8(s)) => Ok(s.clone()),
             _ => bail!("expected utf8 at {idx}"),
         }
     }
-    fn class_name(&self, idx: u16) -> Result<String> {
+    pub(crate) fn class_name(&self, idx: u16) -> Result<String> {
         match self.cp.get(idx as usize) {
             Some(Cp::Class(n)) => self.utf8(*n),
             _ => bail!("expected class at {idx}"),
@@ -225,7 +243,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_constant_pool(&mut self) -> Result<()> {
+    pub(crate) fn parse_constant_pool(&mut self) -> Result<()> {
         let count = self.r.u16()? as usize;
         self.cp = Vec::with_capacity(count);
         self.cp.push(Cp::Empty);
@@ -251,14 +269,10 @@ impl<'a> Parser<'a> {
                 }
                 7 => Cp::Class(self.r.u16()?),
                 8 => Cp::String(self.r.u16()?),
-                9 | 10 | 11 | 12 | 17 | 18 => {
-                    self.r.u32()?;
-                    Cp::Other
-                }
-                15 => {
-                    self.r.bytes(3)?;
-                    Cp::Other
-                }
+                9..=11 => Cp::Member(tag, self.r.u16()?, self.r.u16()?),
+                12 => Cp::NameAndType(self.r.u16()?, self.r.u16()?),
+                17 | 18 => Cp::Dynamic(tag, self.r.u16()?, self.r.u16()?),
+                15 => Cp::MethodHandle(self.r.u8()?, self.r.u16()?),
                 16 | 19 | 20 => {
                     self.r.u16()?;
                     Cp::Other
@@ -387,8 +401,8 @@ pub fn parse_class(bytes: &[u8]) -> Result<ClassFile> {
         let mut fi = FieldInfo { access, name, descriptor, ..Default::default() };
         p.attributes(|p, name, data| {
             match name {
-                "Signature" => fi.signature = Some(p.utf8(u16::from_be_bytes([data[0], data[1]]))?),
-                "ConstantValue" => fi.constant = p.const_value(u16::from_be_bytes([data[0], data[1]])),
+                "Signature" => fi.signature = Some(p.utf8(index_attribute(data)?)?),
+                "ConstantValue" => fi.constant = p.const_value(index_attribute(data)?),
                 "RuntimeVisibleAnnotations" => fi.annotations.extend(p.annotations(data, true)?),
                 "RuntimeInvisibleAnnotations" => fi.annotations.extend(p.annotations(data, false)?),
                 "Deprecated" => fi.deprecated = true,
@@ -409,7 +423,7 @@ pub fn parse_class(bytes: &[u8]) -> Result<ClassFile> {
         let mut mi = MethodInfo { access, name, descriptor, ..Default::default() };
         p.attributes(|p, name, data| {
             match name {
-                "Signature" => mi.signature = Some(p.utf8(u16::from_be_bytes([data[0], data[1]]))?),
+                "Signature" => mi.signature = Some(p.utf8(index_attribute(data)?)?),
                 "Exceptions" => {
                     let mut r = Reader { b: data, p: 0 };
                     let n = r.u16()?;
@@ -452,11 +466,11 @@ pub fn parse_class(bytes: &[u8]) -> Result<ClassFile> {
 
     p.attributes(|p, name, data| {
         match name {
-            "Signature" => cf.signature = Some(p.utf8(u16::from_be_bytes([data[0], data[1]]))?),
+            "Signature" => cf.signature = Some(p.utf8(index_attribute(data)?)?),
             "RuntimeVisibleAnnotations" => cf.annotations.extend(p.annotations(data, true)?),
             "RuntimeInvisibleAnnotations" => cf.annotations.extend(p.annotations(data, false)?),
             "Deprecated" => cf.deprecated = true,
-            "SourceFile" => cf.source_file = Some(p.utf8(u16::from_be_bytes([data[0], data[1]]))?),
+            "SourceFile" => cf.source_file = Some(p.utf8(index_attribute(data)?)?),
             "InnerClasses" => {
                 let mut r = Reader { b: data, p: 0 };
                 let n = r.u16()?;

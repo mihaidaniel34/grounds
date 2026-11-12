@@ -3,10 +3,12 @@
 
 pub mod classfile;
 pub mod jimage;
+pub mod references;
 pub mod signature;
 pub mod zip;
 
 pub use classfile::{parse_class, Annotation, ClassFile, ConstValue, ElementValue, FieldInfo, MethodInfo};
+pub use references::{parse_references, ClassReferences, MethodReferences, RefKind, Reference};
 
 use anyhow::Result;
 use std::path::{Path, PathBuf};
