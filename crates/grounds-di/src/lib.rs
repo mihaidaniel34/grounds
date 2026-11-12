@@ -2163,7 +2163,9 @@ impl DiModel {
                     providers.entry(Arc::from(n)).or_default().push(i);
                 }
             }
-            if !lk.hierarchy_complete(bn) {
+            // which types the bean provides is a question of its supertypes,
+            // whatever members Lombok adds to it
+            if !lk.supertypes_known(bn) {
                 incomplete.push(i);
             }
         }

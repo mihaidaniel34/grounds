@@ -1106,12 +1106,14 @@ impl Rule for NonSerializableField {
             return;
         }
         if !tc.flags.is_final() && !tc.is_record() && !tc.is_source() {
-            // library non-final classes: only trust a complete hierarchy
-            if !cx.fm.hierarchy_complete(tn) {
+            // library non-final classes: only trust known supertypes
+            if !cx.fm.supertypes_known(tn) {
                 return;
             }
         }
-        if cx.fm.is_subclass(tn, "java.io.Serializable").is_no() && cx.fm.hierarchy_complete(tn) {
+        // whether the type is Serializable is a question of its supertypes:
+        // members Lombok adds (`@Accessors`) do not make it one
+        if cx.fm.is_subclass(tn, "java.io.Serializable").is_no() && cx.fm.supertypes_known(tn) {
             for d in reported {
                 cx.report(d, format!("Field of non-serializable type `{}` in a Serializable class; make it transient", ty.display_simple()));
             }

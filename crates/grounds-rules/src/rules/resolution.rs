@@ -520,10 +520,11 @@ impl Rule for IncompatibleAssignment {
         if !gargs.is_empty() || got == want {
             return;
         }
-        // both hierarchies fully known: an unknown supertype could connect them
-        // ...and read from files that parse (a broken stub may miss a supertype or overload)
+        // both sets of supertypes known: an unknown supertype could connect
+        // them (members the model lacks could not), and read from files that
+        // parse (a broken stub may miss a supertype or overload)
         let parses = |n: &str| cx.fm.class(n).and_then(|k| k.source_file().map(|f| f.to_string())).is_none_or(|f| !cx.fm.index.file(&f).is_some_and(|s| s.has_syntax_errors));
-        let known = |n: &str| cx.fm.class(n).is_some() && cx.fm.hierarchy_complete(n) && !cx.fm.index.is_duplicated(n) && parses(n);
+        let known = |n: &str| cx.fm.class(n).is_some() && cx.fm.supertypes_known(n) && !cx.fm.index.is_duplicated(n) && parses(n);
         if !parses(&c.owner) {
             return;
         }

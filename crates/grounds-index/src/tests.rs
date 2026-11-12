@@ -254,8 +254,11 @@ fn without_a_jdk_no_hierarchy_is_complete() {
     bare.set_file(Arc::from("p/I.java"), Arc::new(extract(&pf)));
     assert!(!bare.hierarchy_complete("p.I"));
     assert!(!bare.hierarchy_complete("p.C"));
+    assert_eq!(bare.hierarchy_gap("p.C", false), Some(Gap::NoJdk));
+    assert!(!bare.supertypes_known("p.C"));
     let with_jdk = index_of(&[("p/I.java", src)]);
     assert!(with_jdk.hierarchy_complete("p.I"));
+    assert!(with_jdk.supertypes_known("p.C"));
 }
 
 #[test]
@@ -271,10 +274,22 @@ fn a_hierarchy_with_members_lombok_adds_unmodelled_is_not_complete() {
     )]);
     for n in ["p.Delegating", "p.Sub", "p.Delegating$Inner", "p.Delegating$Nested", "p.Delegating$Nested$Deeper"] {
         assert!(!idx.hierarchy_complete(n), "{n} complete");
+        // the members Lombok adds change no supertype
+        assert!(idx.supertypes_known(n), "{n} has a supertype not known");
     }
+    assert_eq!(idx.hierarchy_gap("p.Sub", true), Some(Gap::MembersUnknown(Arc::from("p.Delegating"))));
     for n in ["p.Port", "p.Outside", "p.Known", "p.Known$Inner"] {
         assert!(idx.hierarchy_complete(n), "{n} not complete");
     }
+}
+
+#[test]
+fn supertypes_are_known_only_when_every_one_resolves() {
+    let idx = index_of(&[("p/S.java", "package p; class Up extends lib.Gone { } class Down extends Up { } class Fine implements java.io.Serializable { }")]);
+    // a name that resolves to no class is no class type: Up names an unknown
+    assert_eq!(idx.hierarchy_gap("p.Down", false), Some(Gap::UnresolvedSupertype(Arc::from("p.Up"))));
+    assert!(!idx.supertypes_known("p.Down"));
+    assert!(idx.supertypes_known("p.Fine"));
 }
 
 #[test]
@@ -296,6 +311,8 @@ fn release_newer_than_the_jdk_leaves_jdk_subclasses_incomplete() {
     let newer = index(installed + 1);
     assert_eq!(newer.classpath.jdk, JdkApi::Newer { requested: installed + 1, installed });
     assert!(!newer.hierarchy_complete("p.Meter"));
+    // a newer JDK class may have supertypes this JDK does not give it
+    assert!(!newer.supertypes_known("p.Meter"));
     assert!(newer.hierarchy_complete("p.Plain"));
 }
 

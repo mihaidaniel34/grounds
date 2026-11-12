@@ -8,6 +8,23 @@ use rustc_hash::FxHashSet;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
+/// What keeps a class's hierarchy from being known (see
+/// [`ClassLookup::hierarchy_gap`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Gap {
+    /// No JDK is loaded: `java.lang.Object`, above every type, is not known.
+    NoJdk,
+    /// A JDK class of the hierarchy may be newer than the one loaded.
+    NewerJdk(Name),
+    /// A class of the hierarchy is not visible.
+    Missing(Name),
+    /// A supertype this class names does not resolve to a class.
+    UnresolvedSupertype(Name),
+    /// Lombok adds members the model does not reproduce to this class of
+    /// the hierarchy, or to a class enclosing it (see `members_unknown`).
+    MembersUnknown(Name),
+}
+
 /// Three-valued logic: analysis results must distinguish "no" from "don't know".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tri {
@@ -677,21 +694,32 @@ pub trait ClassLookup {
         false
     }
 
-    /// Whether every member of `name` and of its supertypes is known: the
-    /// full supertype closure is, and no class in it has members the model
-    /// does not know (see `members_unknown`). Every type has
-    /// java.lang.Object above it (interfaces too: they have its methods),
-    /// so without a JDK nothing is complete. A JDK class newer than the one
-    /// loaded (the project's release is newer than the JDK) may have members
-    /// we cannot see, so it is incomplete too.
+    /// Whether every member of `name` and of its supertypes is known: every
+    /// supertype is (see `supertypes_known`), and no class of the closure has
+    /// members the model does not know (see `members_unknown`).
     fn hierarchy_complete(&self, name: &str) -> bool {
         // asking whether it is complete is handling the unknown
-        doubt::quiet(|| self.hierarchy_complete_walk(name))
+        doubt::quiet(|| self.hierarchy_gap(name, true)).is_none()
     }
 
-    fn hierarchy_complete_walk(&self, name: &str) -> bool {
+    /// Whether every supertype of `name` is known, whatever members its
+    /// classes have that the model does not: enough for a question of
+    /// subtyping (is it `Serializable`, may a bean be injected as `T`), which
+    /// the members Lombok adds do not change. Every type has java.lang.Object
+    /// above it (interfaces too: they have its methods), so without a JDK
+    /// nothing is known. A JDK class newer than the one loaded (the project's
+    /// release is newer than the JDK) may have members and supertypes we
+    /// cannot see (`List` is a `SequencedCollection` from Java 21 on), so it
+    /// is not known either.
+    fn supertypes_known(&self, name: &str) -> bool {
+        doubt::quiet(|| self.hierarchy_gap(name, false)).is_none()
+    }
+
+    /// What keeps the hierarchy of `name` from being known: a supertype,
+    /// and with `members` also a member of a class in it. None: nothing.
+    fn hierarchy_gap(&self, name: &str, members: bool) -> Option<Gap> {
         if self.class("java.lang.Object").is_none() {
-            return false;
+            return Some(Gap::NoJdk);
         }
         let mut seen = FxHashSet::default();
         let mut q = VecDeque::new();
@@ -701,20 +729,20 @@ pub trait ClassLookup {
                 continue;
             }
             if &*n != "java.lang.Object" && self.may_lack_members(&n) {
-                return false;
+                return Some(Gap::NewerJdk(n));
             }
-            let Some(c) = self.class(&n) else { return false };
-            if self.members_unknown(&n) {
-                return false;
+            let Some(c) = self.class(&n) else { return Some(Gap::Missing(n)) };
+            if members && self.members_unknown(&n) {
+                return Some(Gap::MembersUnknown(n));
             }
             for t in c.superclass.iter().chain(c.interfaces.iter()) {
                 match t.class_name() {
                     Some(sn) => q.push_back(Arc::from(sn)),
-                    None => return false,
+                    None => return Some(Gap::UnresolvedSupertype(n)),
                 }
             }
         }
-        true
+        None
     }
 
     /// Does the class (or a superclass other than Object) declare `name(params)`?
