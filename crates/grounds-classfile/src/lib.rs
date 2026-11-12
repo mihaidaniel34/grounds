@@ -199,11 +199,12 @@ impl ClassContainer {
     pub fn read_class(&self, internal_name: &str) -> Option<ClassFile> {
         let mut class = parse_class(&self.read_class_bytes(internal_name)?).ok()?;
         if matches!(self, ClassContainer::JImage(_)) {
-            // ct.sym carries only public classes (a protected nested class is public in its class file)
-            // and only their public and protected members; the image has everything
-            if class.access & classfile::access::PUBLIC == 0 {
-                return None;
-            }
+            // ct.sym carries only the public and protected members of a class;
+            // the image has everything. A class that is not public is read too:
+            // it is a supertype of public ones (`AbstractStringBuilder` of
+            // `StringBuilder`), which ct.sym carries as well, and code outside
+            // the JDK cannot name it (the classpath does not let names resolve
+            // to it, see `Classpath::contains` in grounds-index)
             let api = |access: u16| access & (classfile::access::PUBLIC | classfile::access::PROTECTED) != 0;
             class.fields.retain(|f| api(f.access));
             class.methods.retain(|m| api(m.access));
@@ -374,8 +375,10 @@ mod tests {
         let ClassContainer::JImage(image) = &c else { unreachable!() };
         let packages: Vec<&str> = image.all_packages().collect();
         assert!(packages.contains(&"jdk/internal/misc") && packages.contains(&"com/sun/tools/javac/util") && packages.contains(&"java/lang"), "{}", packages.len());
-        // only public classes: ImmutableCollections is package-private; a protected nested class is public
-        assert!(c.read_class("java/util/ImmutableCollections").is_none());
+        // classes that are not public too, as they are: ImmutableCollections is
+        // package-private; a protected nested class is public in its class file
+        assert!(c.read_class("java/util/ImmutableCollections").is_some_and(|k| k.access & classfile::access::PUBLIC == 0));
+        assert!(c.read_class("java/lang/AbstractStringBuilder").is_some_and(|k| k.methods.iter().any(|m| m.name == "setLength")));
         assert!(c.read_class("java/awt/Container$AccessibleAWTContainer").is_some());
         assert!(c.class_names().len() > 1000);
     }

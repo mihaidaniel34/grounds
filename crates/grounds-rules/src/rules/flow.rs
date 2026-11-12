@@ -569,8 +569,6 @@ declare_rule!(OptionalGetWithoutCheck {
         UnresolvedCall: "an assertion of presence by a library that is not visible (Hamcrest `assertThat(o.isPresent(), is(..))`, AssertJ soft assertions) is judged by its name",
         UnresolvedName: "the qualified names of such an assertion (`org.hamcrest.Matchers`) do not resolve either",
         UnknownType: "nor do the types of its arguments",
-        MissingClass: "StringBuilder's superclass `AbstractStringBuilder` is package-private, which the JDK model hides: every call on a StringBuilder or StringBuffer looks up an incomplete hierarchy",
-        IncompleteHierarchy: "StringBuilder's superclass `AbstractStringBuilder` is package-private, which the JDK model hides: every call on a StringBuilder or StringBuffer looks up an incomplete hierarchy",
     ],
     sources: ["sonar:S3655", "intellij:OptionalGetWithoutIsPresent", "errorprone:OptionalNotPresent"],
     kinds: ["<file>"],

@@ -660,9 +660,11 @@ impl<'t> FileModel<'t> {
         })
     }
 
-    fn local_member_type(&self, owner: &str, simple: &str) -> Option<Name> {
+    pub(crate) fn local_member_type(&self, owner: &str, simple: &str) -> Option<Name> {
         let n = format!("{owner}${simple}");
-        self.class(&n).map(|c| c.name.clone())
+        // a JDK class that is not public is there for hierarchy walks, not
+        // for names (`Classpath::contains`)
+        self.class(&n).filter(|c| c.is_source() || self.index.class_exists(&c.name)).map(|c| c.name.clone())
     }
 
     /// True if the node denotes a type name rather than a value.

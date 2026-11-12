@@ -361,8 +361,9 @@ fn package_private_jdk_classes_are_not_visible() {
     let Some(home) = grounds_classfile::find_java_home() else { return };
     let Some(release) = grounds_classfile::jdk_feature_release(&home) else { return };
     let cp = Classpath::build(Some(&home), release, &[]);
+    // no name resolves to it, but hierarchy walks see it
     assert!(!cp.contains("java.util.ImmutableCollections"));
-    assert!(cp.class("java.util.ImmutableCollections").is_none());
+    assert!(cp.class("java.util.ImmutableCollections").is_some());
     assert!(cp.contains("java.util.List"));
     assert!(cp.class("java.util.List").is_some());
     assert!(cp.contains("java.awt.Container$AccessibleAWTContainer"));
@@ -520,6 +521,44 @@ fn an_on_demand_import_imports_only_accessible_classes() {
     assert_eq!(simple_in(&idx, "b.Viewer", "Node"), None);
     assert_eq!(simple_in(&idx, "b.Viewer", "Edge").as_deref(), Some("a.Edge"));
     assert_eq!(simple_in(&idx, "a.Same", "Other").as_deref(), Some("a.Other"));
+}
+
+#[test]
+fn a_package_private_jdk_supertype_is_walked_but_not_named() {
+    if grounds_classfile::find_java_home().is_none() {
+        return;
+    }
+    let idx = index_of(&[(
+        "p/A.java",
+        "package p; import java.lang.AbstractStringBuilder; import java.util.*;
+         class A { }",
+    )]);
+    // StringBuilder's superclass is package-private: its hierarchy is complete
+    // and lookups on it see the members it inherits, with nothing in doubt
+    assert!(idx.hierarchy_complete("java.lang.StringBuilder"));
+    assert!(idx.hierarchy_complete("java.lang.StringBuffer"));
+    assert!(idx.is_subclass("java.lang.StringBuilder", "java.lang.AbstractStringBuilder").is_yes());
+    let (owners, d) = crate::doubt::scope(|| idx.methods_named(&Ty::class("java.lang.StringBuilder"), "setLength").into_iter().map(|m| m.owner.to_string()).collect::<Vec<_>>());
+    assert_eq!(owners, vec!["java.lang.AbstractStringBuilder"]);
+    assert!(d.is_empty(), "{d}");
+    let ((), d) = crate::doubt::scope(|| {
+        idx.methods_named(&Ty::class("java.lang.StringBuilder"), "append");
+    });
+    assert!(d.is_empty(), "{d}");
+    // no name resolves to it: not the simple name java.lang brings in, nor a
+    // single-type import, nor the qualified name; nor to another class that
+    // is not public, by an on-demand import
+    assert_eq!(simple_in(&idx, "p.A", "AbstractStringBuilder"), None);
+    assert_eq!(idx.binary_name_for_dotted("java.lang.AbstractStringBuilder"), None);
+    assert_eq!(simple_in(&idx, "p.A", "ImmutableCollections"), None);
+    assert!(!idx.class_exists("java.lang.AbstractStringBuilder"));
+    // the API of an older release, read from ct.sym, carries it the same way
+    let cp17 = Classpath::build(grounds_classfile::find_java_home().as_deref(), 17, &[]);
+    if cp17.class("java.lang.StringBuilder").is_some() {
+        assert!(cp17.class("java.lang.AbstractStringBuilder").is_some());
+        assert!(!cp17.contains("java.lang.AbstractStringBuilder"));
+        assert!(cp17.contains("java.lang.StringBuilder"));
+    }
 }
 
 #[test]

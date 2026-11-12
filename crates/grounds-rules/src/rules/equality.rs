@@ -265,10 +265,6 @@ declare_rule!(ArrayToStringOrHashCode {
     severity: Warning,
     maturity: Preview,
     tier: Edit,
-    tolerates: [
-        MissingClass: "StringBuilder's superclass `AbstractStringBuilder` is package-private, which the JDK model hides: every call on a StringBuilder or StringBuffer looks up an incomplete hierarchy",
-        IncompleteHierarchy: "StringBuilder's superclass `AbstractStringBuilder` is package-private, which the JDK model hides: every call on a StringBuilder or StringBuffer looks up an incomplete hierarchy",
-    ],
     sources: ["sonar:S2116", "spotbugs:DMI_INVOKING_TOSTRING_ON_ARRAY", "spotbugs:DMI_INVOKING_HASHCODE_ON_ARRAY", "errorprone:ArrayToString", "errorprone:ArrayHashCode"],
     kinds: ["method_invocation", "binary_expression"],
     description: "Arrays inherit `toString()` and `hashCode()` from Object: you get `[I@1b6d3586` and an identity hash instead of the contents. Use `Arrays.toString()` / `Arrays.hashCode()`.",

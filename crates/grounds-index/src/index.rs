@@ -349,11 +349,16 @@ impl Classpath {
     pub fn containers(&self) -> &[ClassContainer] {
         &self.containers
     }
-    /// Whether a class exists. The JDK runtime image also holds package-private
-    /// classes, which `class` hides, so those are checked by parsing the class.
+    /// Whether a class exists that a name may resolve to. The JDK's runtime
+    /// image and ct.sym also hold classes that are not public, which code
+    /// outside the JDK cannot name: `class` has them, as the supertypes of
+    /// public ones (`AbstractStringBuilder` of `StringBuilder`) that
+    /// hierarchy walks and member lookup need, but they do not exist for
+    /// names. A nested class declared protected is public in its class file,
+    /// and accessible.
     pub fn contains(&self, name: &str) -> bool {
         match self.names.get(name) {
-            Some(&idx) if matches!(self.containers[idx as usize], ClassContainer::JImage(_)) => self.class(name).is_some(),
+            Some(&idx) if matches!(self.containers[idx as usize], ClassContainer::JImage(_) | ClassContainer::CtSym { .. }) => self.class(name).is_some_and(|c| c.flags.is_public() || c.flags.has(Flags::PROTECTED)),
             Some(_) => true,
             None => false,
         }

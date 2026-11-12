@@ -2781,7 +2781,7 @@ impl<'t> FileModel<'t> {
         };
         let Some(outer) = self.type_of(q).class_name().map(str::to_string) else { return Ty::Unknown };
         let simple = simple.text(self.src);
-        let Some(member) = self.index.member_type(&outer, simple).or_else(|| self.class(&format!("{outer}${simple}")).map(|c| c.name.clone())) else { return Ty::Unknown };
+        let Some(member) = self.index.member_type(&outer, simple).or_else(|| self.local_member_type(&outer, simple)) else { return Ty::Unknown };
         let args = args.map(|ta| ta.kids().into_iter().map(|a| self.resolve_type_node(a)).collect()).unwrap_or_default();
         Ty::Class { name: member, args }
     }

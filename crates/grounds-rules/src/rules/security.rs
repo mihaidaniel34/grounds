@@ -677,8 +677,6 @@ declare_rule!(SqlInjection {
     tolerates: [
         UnknownType: "a value of unknown type is taken to be able to carry SQL text; only a known number or boolean cannot",
         UnresolvedCall: "a request parameter read through a call that does not resolve (`req.getParameter` without the servlet jar) is judged by its name",
-        MissingClass: "StringBuilder's superclass `AbstractStringBuilder` is package-private, which the JDK model hides: every call on a StringBuilder or StringBuffer looks up an incomplete hierarchy",
-        IncompleteHierarchy: "StringBuilder's superclass `AbstractStringBuilder` is package-private, which the JDK model hides: every call on a StringBuilder or StringBuffer looks up an incomplete hierarchy",
     ],
     sources: ["sonar:S2077", "sonar:S3649", "spotbugs:SQL_NONCONSTANT_STRING_PASSED_TO_EXECUTE", "spotbugs:SQL_PREPARED_STATEMENT_GENERATED_FROM_NONCONSTANT_STRING", "spotbugs:SQL_INJECTION_JDBC"],
     kinds: ["method_invocation"],
