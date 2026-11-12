@@ -81,6 +81,41 @@ fn lombok_members() {
 }
 
 #[test]
+fn lombok_equals_hash_code_and_can_equal_as_lombok_generates_them() {
+    let idx = index_of(&[(
+        "E.java",
+        "package q; import lombok.*;
+         @Data class Open { int a; }
+         @Value class Closed { int a; }
+         @Value @NonFinal class Reopened { int a; }
+         @EqualsAndHashCode final class FinalPlain { int a; }
+         @EqualsAndHashCode final class FinalObject extends Object { int a; }
+         @Value @EqualsAndHashCode(callSuper = true) class FinalChild extends Open { int b; }
+         @Data class OwnBoth { int a; public boolean equals(Object o) { return false; } public int hashCode() { return 0; } }
+         @Data class OwnEquals { int a; public boolean equals(Object o) { return false; } }
+         @EqualsAndHashCode class OwnHash { int a; public int hashCode() { return 0; } }
+         @EqualsAndHashCode class OwnCanEqual { int a; boolean canEqual(Object o) { return true; } }",
+    )]);
+    let has = |c: &str, m: &str| idx.class(c).unwrap_or_else(|| panic!("{c}")).methods_named(m).next().is_some();
+    let generated = |c: &str, m: &str| idx.class(c).unwrap().methods_named(m).any(|x| x.flags.has(Flags::GENERATED));
+    for c in ["q.Open", "q.Reopened", "q.FinalChild"] {
+        assert!(generated(c, "equals") && generated(c, "hashCode") && generated(c, "canEqual"), "{c}");
+    }
+    // final and extending Object: no subclass, no canEqual
+    for c in ["q.Closed", "q.FinalPlain", "q.FinalObject"] {
+        assert!(generated(c, "equals") && generated(c, "hashCode"), "{c}");
+        assert!(!has(c, "canEqual"), "{c} has canEqual");
+    }
+    // equals or hashCode declared: Lombok generates none of the three
+    for c in ["q.OwnBoth", "q.OwnEquals", "q.OwnHash"] {
+        assert!(!generated(c, "equals") && !generated(c, "hashCode") && !has(c, "canEqual"), "{c}");
+    }
+    assert!(!has("q.OwnEquals", "hashCode") && !has("q.OwnHash", "equals"));
+    // a declared canEqual stops only canEqual
+    assert!(generated("q.OwnCanEqual", "equals") && generated("q.OwnCanEqual", "hashCode") && !generated("q.OwnCanEqual", "canEqual"));
+}
+
+#[test]
 fn enums_records_interfaces() {
     let idx = index_of(&[(
         "E.java",

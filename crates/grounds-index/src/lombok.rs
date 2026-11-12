@@ -575,14 +575,22 @@ fn apply_one(c: &mut RawClass, imported: bool, imports: &[Import], cfg: &LombokC
         && !has_method(c, "toString", 0) {
             c.methods.push(gen_method("toString", Flags::PUBLIC, vec![], TypeSyntax::qualified("java.lang.String"), range));
         }
-    if data || value || has("EqualsAndHashCode").is_some() {
-        if !has_method(c, "equals", 1) {
-            c.methods.push(gen_method("equals", Flags::PUBLIC, vec![param("o", TypeSyntax::qualified("java.lang.Object"))], TypeSyntax::Prim(Prim::Boolean), range));
-        }
-        if !has_method(c, "hashCode", 0) {
-            c.methods.push(gen_method("hashCode", Flags::PUBLIC, vec![], TypeSyntax::Prim(Prim::Int), range));
-        }
-        if !has_method(c, "canEqual", 1) {
+    // equals and hashCode come as a pair: a class that declares either one
+    // itself (by name and parameter count) gets neither, and no canEqual.
+    // canEqual is left out where no subclass could need it, in a final class
+    // that extends Object (no `extends` clause, or `extends Object`); a final
+    // class with a superclass gets it. A declared canEqual only stops
+    // canEqual. (Lombok's HandleEqualsAndHashCode; the class files of
+    // testcontainers and easyexcel show each case but the last: @Value
+    // classes without a superclass have equals and hashCode but no canEqual,
+    // a @Value class extending another class has all three, and a @Data or
+    // @EqualsAndHashCode class declaring equals and hashCode has only its
+    // own.)
+    if (data || value || has("EqualsAndHashCode").is_some()) && !has_method(c, "equals", 1) && !has_method(c, "hashCode", 0) {
+        c.methods.push(gen_method("equals", Flags::PUBLIC, vec![param("o", TypeSyntax::qualified("java.lang.Object"))], TypeSyntax::Prim(Prim::Boolean), range));
+        c.methods.push(gen_method("hashCode", Flags::PUBLIC, vec![], TypeSyntax::Prim(Prim::Int), range));
+        let extends_object = c.superclass.as_ref().is_none_or(|s| matches!(erased(s).0.as_deref(), Some("Object" | "java.lang.Object")));
+        if !(c.flags.is_final() && extends_object) && !has_method(c, "canEqual", 1) {
             c.methods.push(gen_method("canEqual", Flags::PROTECTED, vec![param("other", TypeSyntax::qualified("java.lang.Object"))], TypeSyntax::Prim(Prim::Boolean), range));
         }
     }
