@@ -75,6 +75,9 @@ pub struct FileModel<'t> {
     /// the queries in progress and their cut-offs, for every memo below
     pub(crate) guards: Guards,
     pub(crate) types: Memo<ByKey<usize, Ty>>,
+    /// local variable types by the node of the declared name (see `local_type`):
+    /// not in `types`, where that node has the type of no expression
+    pub(crate) locals: Memo<ByKey<usize, Ty>>,
     pub(crate) calls: Memo<ByKey<usize, Option<Rc<ResolvedCall>>>>,
     /// method invocation types without target typing (see `arg_type`)
     pub(crate) standalone: Memo<ByKey<(usize, crate::calls::Target), Ty>>,
@@ -122,6 +125,7 @@ impl<'t> FileModel<'t> {
             local_scopes: RefCell::new(FxHashMap::default()),
             guards: Guards::default(),
             types: Memo::default(),
+            locals: Memo::default(),
             calls: Memo::default(),
             standalone: Memo::default(),
             selected: Memo::default(),

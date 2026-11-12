@@ -299,7 +299,7 @@ impl<'t> FileModel<'t> {
     pub fn local_type(&self, idx: usize) -> Ty {
         let decl = self.binder.decls[idx].clone();
         let key = decl.name_node.id();
-        let t = self.types.get_or_compute(&self.guards, key, key, Query::Local, || {
+        let t = self.locals.get_or_compute(&self.guards, key, key, Query::Local, || {
             let base = match decl.type_node {
                 Some(tn) if tn.text(self.src) != "var" => {
                     if tn.kind() == "catch_type" {

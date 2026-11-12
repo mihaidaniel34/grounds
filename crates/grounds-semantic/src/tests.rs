@@ -1456,3 +1456,23 @@ fn a_package_private_field_of_another_package_does_not_shadow_a_local() {
         .collect();
     assert_eq!(tys, vec!["b.Good", "a.Bad"]);
 }
+
+#[test]
+fn asking_the_type_of_a_declarations_name_leaves_the_locals_type_alone() {
+    let src = "class T { int m(int n) { int sum = n; return sum; } }";
+    let pf = ParsedFile::parse(src);
+    let mut idx = Index::new(jdk());
+    idx.set_file(Arc::from("T.java"), Arc::new(extract(&pf)));
+    let fm = FileModel::new(&pf, &idx, Arc::from("T.java"));
+    let idents = |name: &str| -> Vec<grounds_syntax::Node> { pf.root().descendants().filter(|d| d.kind() == "identifier" && d.text(src) == name).collect() };
+    // the names in the declarations (`int n`, `sum = n`) are no expressions
+    for name in ["n", "sum"] {
+        let decl = idents(name)[0];
+        assert_eq!(fm.type_of(decl), Ty::Unknown, "{name} in its declaration");
+    }
+    // their uses still have the declared types
+    for name in ["n", "sum"] {
+        let used = *idents(name).last().unwrap();
+        assert_eq!(fm.type_of(used), Ty::int(), "{name} where it is used");
+    }
+}
