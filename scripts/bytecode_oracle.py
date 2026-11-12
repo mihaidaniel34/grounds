@@ -16,13 +16,15 @@ reference names and declared members. The class files are read, never run.
 A gate. Every disagreement is keyed by artifact, category, source file, line,
 subject (the name; for members the class and the member) and the two
 answers. The baseline (scripts/bytecode_oracle.baseline.json) lists the
-known ones, one per line, and for each artifact and category how many were
-compared. The exit status is 1 when
+known ones, one per line, and for each artifact and category how many
+agreed. The exit status is 1 when
 
   - a disagreement occurs that the baseline does not list (NEW),
   - a baseline entry no longer occurs (STALE: a fix deletes its entries),
-  - a category of an artifact compares more than 2% fewer than the baseline
-    records (DROP: grounds became unsure of what it used to know),
+  - a category of an artifact agrees on more than 2% fewer than the baseline
+    records (DROP: grounds became unsure of what it used to know; agreements
+    are counted, not comparisons, so that removing answers that were wrong
+    is not a drop),
   - the example fails on an artifact, or an artifact is not in the baseline,
   - more than a quarter of the artifacts could not be fetched.
 
@@ -235,7 +237,7 @@ def main():
         with open(os.path.join(out_dir, f"{art}-{v}.json"), "w") as fh:
             json.dump(r, fh, indent=1, sort_keys=True)
         ran.append(c)
-        counts[c] = {k: r["categories"][k]["compared"] for k in CATEGORIES}
+        counts[c] = {k: r["categories"][k]["agree"] for k in CATEGORIES}
         for k in CATEGORIES:
             for n, x in r["categories"][k].items():
                 totals[k][n] += x
@@ -255,7 +257,7 @@ def main():
         for k in CATEGORIES:
             was = base["counts"][c].get(k, 0)
             if counts[c][k] < was * (1 - TOLERANCE):
-                drops.append(f"{c} {k}: compared {counts[c][k]}, the baseline records {was}")
+                drops.append(f"{c} {k}: agree {counts[c][k]}, the baseline records {was}")
     # artifacts the baseline knows that the list no longer has
     gone = sorted((set(base["counts"]) | set(known_by_art)) - set(coords)) if whole_list else []
     stale += [e for c in gone for e in known_by_art.get(c, [])]
