@@ -448,9 +448,9 @@ fn a_changed_build_file_reloads_the_project() {
     s.sync(&[]);
     assert_eq!(s.project.config.exclude, ["lib/**"]);
     // one reload settles it: the next request, moments later, loads nothing
-    let loaded = s.project.load_began;
+    let loaded = s.load_began();
     s.sync(&[]);
-    assert_eq!(s.project.load_began, loaded, "a configuration file just written must not reload the project on every request");
+    assert_eq!(s.load_began(), loaded, "a configuration file just written must not reload the project on every request");
     assert_eq!(module_of(&s, "lib/src/main/java/demo/Lib.java"), None, "the excluded file is gone, as in a fresh load");
 
     // a registration file that did not exist: Spring's imports of the app module
@@ -660,11 +660,11 @@ fn a_file_written_while_the_project_loads_is_read_again() {
         names.iter().map(|n| format!("{:?}", index.class(n))).collect::<Vec<_>>()
     };
     // a daemon starting: the contents are read ...
-    let project = grounds_engine::Project::load(&dir).unwrap();
+    let (project, loaded) = grounds_engine::Project::load_stamped(&dir).unwrap();
     // ... an edit lands ...
     write(&dir, "src/main/java/demo/Api.java", "package demo;\npublic class Api {\n    public void renamed() {}\n}\n");
     // ... and only then does the session note the files' times
-    let mut s = Session::from_project(project);
+    let mut s = Session::from_project(project, loaded);
     s.sync(&[]);
     let fresh = grounds_engine::Project::load(&dir).unwrap();
     assert_eq!(classes(&s.project.index), classes(&fresh.index), "the edit made during the load must not be lost");
@@ -699,7 +699,7 @@ fn a_second_write_at_the_same_time_is_read() {
         format!("{:?}", s.project.index.class(&api))
     };
     let mut s = Session::open(&dir).unwrap();
-    let loaded = s.project.load_began;
+    let loaded = s.load_began();
     // (the time is taken after the load, however long that took: the writes below are recent at each sync)
     let now = std::time::SystemTime::now();
     write_at(&dir, "src/main/java/demo/Api.java", "package demo;\npublic class Api {\n    public void first() {}\n}\n", now);
@@ -712,7 +712,7 @@ fn a_second_write_at_the_same_time_is_read() {
     write_at(&dir, "src/main/java/demo/Api.java", "package demo;\npublic class Api {\n    public void third() {}\n}\n", now);
     s.sync(&[]);
     assert!(methods(&s).contains("third"), "{}", methods(&s));
-    assert_eq!(s.project.load_began, loaded, "source files alone never load the project again");
+    assert_eq!(s.load_began(), loaded, "source files alone never load the project again");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -796,11 +796,11 @@ fn a_file_written_while_the_project_loads_keeps_no_time_of_the_new_version() {
     let now = std::time::SystemTime::now();
     // times too old to be racy: this is about the order of time and read
     set_mtime(&dir, rel, now - std::time::Duration::from_secs(7200));
-    let project = grounds_engine::Project::load(&dir).unwrap();
+    let (project, loaded) = grounds_engine::Project::load_stamped(&dir).unwrap();
     // the checkout, between the read of the sources and the end of the load
     write(&dir, rel, "package demo;\npublic class Api {\n    public void renamed() {}\n}\n");
     set_mtime(&dir, rel, now - std::time::Duration::from_secs(3600));
-    let mut s = Session::from_project(project);
+    let mut s = Session::from_project(project, loaded);
     assert_eq!(changed_apis(&mut s, &dir), [rel], "the session holds the stub of the version it read");
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -843,12 +843,45 @@ fn a_build_file_written_while_the_project_loads_reloads_it() {
     write(&dir, "grounds.toml", "exclude = []\n");
     write(&dir, "src/main/java/demo/App.java", "package demo;\npublic class App {}\n");
     write(&dir, "src/main/java/gen/Gen.java", "package gen;\npublic class Gen {}\n");
-    let project = grounds_engine::Project::load(&dir).unwrap();
+    let (project, loaded) = grounds_engine::Project::load_stamped(&dir).unwrap();
     write(&dir, "grounds.toml", "exclude = [\"src/main/java/gen/**\"]\n");
-    let mut s = Session::from_project(project);
+    let mut s = Session::from_project(project, loaded);
     assert!(s.project.config.exclude.is_empty());
     s.sync(&[]);
     assert_eq!(s.project.config.exclude, ["src/main/java/gen/**"], "the settings written during the load are read");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_configuration_file_gone_after_the_look_before_a_load_loads_it_again() {
+    // A load again compares each configuration file with a look taken before
+    // it began. One there before the load and gone after it may have been
+    // read either way: which is not known, and the next sync loads again,
+    // once.
+    let dir = std::env::temp_dir().join(format!("grounds-session-load-race-gone-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write(&dir, "build.gradle", "plugins { id 'java' }\n");
+    write(&dir, "grounds.toml", "exclude = [\"src/main/java/gen/**\"]\n");
+    write(&dir, "src/main/java/demo/App.java", "package demo;\npublic class App {}\n");
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    for f in ["build.gradle", "grounds.toml", "src/main/java/demo/App.java"] {
+        set_mtime(&dir, f, old);
+    }
+    let toml = dir.canonicalize().unwrap().join("grounds.toml");
+    let before = grounds_engine::project::Before::take(std::iter::once(toml.as_path()));
+    std::fs::remove_file(&toml).unwrap();
+    let (project, loaded) = grounds_engine::Project::reload(&dir, before).unwrap();
+    let mut s = Session::from_project(project, loaded);
+    assert!(s.in_doubt().1, "gone between the look before the load and the one after: which version the load read is not known");
+    let began = s.load_began();
+    s.sync(&[]);
+    assert_ne!(s.load_began(), began, "loaded again");
+    assert!(!s.in_doubt().1, "not there before the load nor after it");
+    let began = s.load_began();
+    s.sync(&[]);
+    assert_eq!(s.load_began(), began, "and not again");
+    assert!(s.project.config.exclude.is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1278,7 +1311,7 @@ fn settled(dir: &Path) -> Session {
 
 #[cfg(unix)]
 fn no_reload(s: &Session, began: std::time::SystemTime, what: &str) {
-    assert_eq!(s.project.load_began, began, "{what}: found by the sync, not by loading the project again");
+    assert_eq!(s.load_began(), began, "{what}: found by the sync, not by loading the project again");
 }
 
 /// Whether file permissions bind this process: root reads, lists and enters
@@ -1311,7 +1344,7 @@ fn a_directory_whose_permissions_change_is_held_as_a_fresh_load_holds_it() {
     for (rel, mode) in [("src/main/java/demo/sub", 0o400), ("src/main/java/demo/sub", 0o000), ("src/main/java/demo/sub", 0o300), ("src/main/java/demo", 0o000), ("src/main/java/demo", 0o600)] {
         let dir = restored_project(&format!("chmoddir{mode:o}{}", rel.len()));
         let mut s = settled(&dir);
-        let began = s.project.load_began;
+        let began = s.load_began();
         assert!(s.project.index.class_exists("demo.sub.Sub"));
         chmod(&dir, rel, mode);
         holds_as_fresh(&mut s, &dir, &format!("{rel} set to mode {mode:o}"));
@@ -1349,7 +1382,7 @@ fn an_ignore_file_whose_permissions_change_is_read_as_a_fresh_load_reads_it() {
             set_tree_mtime(&dir, ".", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
             let s = settled(&dir);
             assert!(!s.project.index.class_exists(class), "{rel}");
-            let began = s.project.load_began;
+            let began = s.load_began();
             (dir, s, began)
         })
         .collect();
@@ -1391,7 +1424,7 @@ fn an_ignore_file_that_stays_unreadable_is_read_again_but_not_walked_for() {
     // (past the margin: the load cannot have raced either file)
     std::thread::sleep(std::time::Duration::from_millis(2100));
     let mut s = settled(&dir);
-    let began = s.project.load_began;
+    let began = s.load_began();
     for i in 0..5 {
         holds_as_fresh(&mut s, &dir, &format!("sync {i} with an unreadable ignore file"));
     }
@@ -1459,7 +1492,7 @@ fn a_symlinked_ignore_file_whose_target_comes_within_reach_is_read() {
     // (and past the margin again: the load wrote its cache in the root)
     std::thread::sleep(std::time::Duration::from_millis(2100));
     s.sync(&[]);
-    let began = s.project.load_began;
+    let began = s.load_began();
     let walks = s.full_walks();
     s.sync(&[]);
     assert_eq!(s.full_walks(), walks, "nothing changed: no walk");
@@ -1640,7 +1673,7 @@ fn a_module_a_listing_misses_but_the_discovery_keeps_does_not_reload_at_every_sy
     chmod(&away, "lib", 0o111);
     std::thread::sleep(std::time::Duration::from_millis(2100));
     let mut s = settled(&dir);
-    let began = s.project.load_began;
+    let began = s.load_began();
     for i in 0..5 {
         laid_out_as_fresh(&mut s, &dir, &format!("unchanged sync {i}"));
     }
@@ -1657,10 +1690,10 @@ fn a_hard_link_to_a_build_file_does_not_reload_the_project() {
     let dir = restored_project("hardlink");
     let mut s = Session::open(&dir).unwrap();
     s.sync(&[]);
-    let began = s.project.load_began;
+    let began = s.load_began();
     std::fs::hard_link(dir.join("build.gradle"), dir.join("build.link")).unwrap();
     holds_as_fresh(&mut s, &dir, "a hard link to the build file");
-    assert_eq!(s.project.load_began, began, "the same build file: no reload");
+    assert_eq!(s.load_began(), began, "the same build file: no reload");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -1674,7 +1707,7 @@ fn a_source_file_whose_permissions_change_is_held_as_a_fresh_load_holds_it() {
     }
     let dir = restored_project("chmodfile");
     let mut s = settled(&dir);
-    let began = s.project.load_began;
+    let began = s.load_began();
     chmod(&dir, "src/main/java/demo/Req.java", 0o000);
     holds_as_fresh(&mut s, &dir, "a source file could no longer be read");
     assert!(!s.project.index.class_exists("demo.Req"));

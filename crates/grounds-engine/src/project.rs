@@ -47,16 +47,6 @@ pub struct Project {
     pub classpath_warnings: Vec<crate::classpath::Warning>,
     /// The jars and class directories the classpath was built from.
     pub classpath_entries: Vec<PathBuf>,
-    /// What each source file was when its stub was made, for telling later
-    /// that it changed (taken over by a `Session`).
-    pub stamps: rustc_hash::FxHashMap<PathBuf, FileStamp>,
-    /// The directories the discovery of source files went into, and the
-    /// ignore files that decided what it skipped (`None`: not there), for
-    /// telling later that a source file appeared (taken over by a `Session`).
-    pub walked: Walk,
-    /// When loading began. A file written after this may have been read
-    /// before or after the write.
-    pub load_began: std::time::SystemTime,
     /// The JDK API loaded and the release of each module
     /// (`java_release::plan`): the classpath, the index's exact releases and
     /// release floors, and resolution depend on it.
@@ -675,20 +665,77 @@ impl Walk {
     }
 }
 
+/// What a load read, for the `Session` that keeps its project and tells
+/// later what changed: taken by value, once (`Session::from_project`).
+pub struct Loaded {
+    /// What each source file was when its stub was made.
+    stamps: rustc_hash::FxHashMap<PathBuf, FileStamp>,
+    /// The directories the discovery of source files went into, and the
+    /// ignore files that decided what it skipped (`None`: not there), for
+    /// telling later that a source file appeared.
+    walked: Walk,
+    /// When loading began. A file written after this may have been read
+    /// before or after the write.
+    began: SystemTime,
+    /// For a load again: the files stamped before it began.
+    before: Option<Before>,
+}
+
+impl Loaded {
+    /// The source stamps, the walk, when the load began, and the files
+    /// stamped before it.
+    pub(crate) fn into_parts(self) -> (rustc_hash::FxHashMap<PathBuf, FileStamp>, Walk, SystemTime, Option<Before>) {
+        (self.stamps, self.walked, self.began, self.before)
+    }
+}
+
+/// Files stamped (`None`: not there) just before a load began, to tell after
+/// it whether the load read them as they are then. `Project::reload` takes
+/// one, so the look cannot come after the load it is compared with.
+pub struct Before(rustc_hash::FxHashMap<PathBuf, Option<FileStamp>>);
+
+impl Before {
+    /// Stamp `paths` now, with the hash of their content.
+    pub fn take<'a>(paths: impl Iterator<Item = &'a Path>) -> Before {
+        Before(paths.map(|p| (p.to_path_buf(), FileStamp::of(p, true))).collect())
+    }
+
+    /// The stamp `p` had, if it was stamped: `Some(None)` if it was not there.
+    pub fn get(&self, p: &Path) -> Option<&Option<FileStamp>> {
+        self.0.get(p)
+    }
+}
+
 impl Project {
     pub fn load(root: &Path) -> anyhow::Result<Project> {
+        Ok(Self::load_stamped(root)?.0)
+    }
+
+    /// The project, and what the load read for a session to keep.
+    pub fn load_stamped(root: &Path) -> anyhow::Result<(Project, Loaded)> {
+        Self::begin(root, None)
+    }
+
+    /// The project loaded again, after the files in `before` were stamped.
+    pub fn reload(root: &Path, before: Before) -> anyhow::Result<(Project, Loaded)> {
+        Self::begin(root, Some(before))
+    }
+
+    fn begin(root: &Path, before: Option<Before>) -> anyhow::Result<(Project, Loaded)> {
         // before grounds.toml is read: it is one of the files that may be
         // written while the load runs
         let began = std::time::SystemTime::now();
         let config = Config::load(root)?;
-        Self::load_from(root, config, began)
+        let (project, mut loaded) = Self::load_from(root, config, began)?;
+        loaded.before = before;
+        Ok((project, loaded))
     }
 
     pub fn load_with(root: &Path, config: Config) -> anyhow::Result<Project> {
-        Self::load_from(root, config, std::time::SystemTime::now())
+        Ok(Self::load_from(root, config, std::time::SystemTime::now())?.0)
     }
 
-    fn load_from(root: &Path, config: Config, load_began: std::time::SystemTime) -> anyhow::Result<Project> {
+    fn load_from(root: &Path, config: Config, load_began: std::time::SystemTime) -> anyhow::Result<(Project, Loaded)> {
         let mut stats = LoadStats::default();
         let t = Instant::now();
         let source_sets = SourceSets::load(root);
@@ -784,7 +831,8 @@ impl Project {
         di.lombok_copies_qualifiers = lombok_copies_qualifiers(&workspace.root);
         di.bean_overriding_allowed = bean_overriding_allowed(&workspace);
         let classpath_warnings = crate::classpath::warnings(&workspace, &config, &index);
-        Ok(Project { config, workspace, index, stats, di, source_sets, lombok, registered, auto_registered, classpath_warnings, classpath_entries: entries, stamps, walked, load_began, releases, release_inputs })
+        let project = Project { config, workspace, index, stats, di, source_sets, lombok, registered, auto_registered, classpath_warnings, classpath_entries: entries, releases, release_inputs };
+        Ok((project, Loaded { stamps, walked, began: load_began, before: None }))
     }
 
     /// Whether the release plan a load would make now, from the sources as

@@ -108,9 +108,9 @@ fn configuration_written_twice_at_the_same_time() -> Result<(), TooSlow> {
     s.sync(&[]);
     assert_eq!(s.project.config.exclude, ["b/**"]);
     // and that load is the last
-    let loaded = s.project.load_began;
+    let loaded = s.load_began();
     s.sync(&[]);
-    assert_eq!(s.project.load_began, loaded);
+    assert_eq!(s.load_began(), loaded);
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
 }
@@ -172,16 +172,16 @@ fn times_in_the_future() -> Result<(), TooSlow> {
     let mut s = Session::open(&dir).unwrap();
     assert_eq!(s.in_doubt(), (2, true), "both compared by content, and which build file the load read is unknown");
     s.sync(&[]);
-    let loaded = s.project.load_began;
+    let loaded = s.load_began();
     // (the doubt about a time in the future ends once it has been seen for the margin)
     quick(began)?;
     assert_eq!(s.in_doubt(), (2, false), "loaded once more, the build file's content now known");
     s.sync(&[]);
-    assert_eq!(s.project.load_began, loaded, "and not again");
+    assert_eq!(s.load_began(), loaded, "and not again");
     std::thread::sleep(std::time::Duration::from_millis(2100));
     s.sync(&[]);
     assert_eq!(s.in_doubt(), (0, false), "seen unchanged for the margin: times alone decide");
-    assert_eq!(s.project.load_began, loaded);
+    assert_eq!(s.load_began(), loaded);
     let _ = std::fs::remove_dir_all(&dir);
     Ok(())
 }
