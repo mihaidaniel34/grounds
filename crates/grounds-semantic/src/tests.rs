@@ -1643,6 +1643,44 @@ fn a_type_variable_not_declared_in_scope_has_an_unknown_bound() {
     assert_eq!(fm.type_var_bound("S", at).to_string(), "java.lang.Number");
 }
 
+#[test]
+fn overloads_with_unknown_results_do_not_agree_on_their_result() {
+    // `Key` is not on the classpath: `pick(k)` may be either overload, and
+    // their results are unknown types (`Gone`, `Lost`), which `==` takes for
+    // the same one
+    let src = "import java.util.List; import missing.Key;
+         class T {
+           static Gone pick(Key k) { return null; } static Lost pick(int n) { return null; }
+           static List<Gone> all(Key k) { return null; } static List<Lost> all(int n) { return null; }
+           static String name(Key k) { return null; } static String name(int n) { return null; }
+           void m(Key k) { pick(k); all(k); name(k); }
+         }";
+    let pf = ParsedFile::parse(src);
+    let mut idx = Index::new(jdk());
+    idx.set_file(Arc::from("T.java"), Arc::new(extract(&pf)));
+    let fm = FileModel::new(&pf, &idx, Arc::from("T.java"));
+    let calls: Vec<String> = pf
+        .root()
+        .descendants()
+        .filter(|n| n.kind() == "method_invocation")
+        .map(|n| {
+            let rc = fm.select_method(n).expect("selected");
+            format!("{} same_result={} erasure_only={}", rc.method.name, rc.same_result, rc.erasure_only)
+        })
+        .collect();
+    assert_eq!(
+        calls,
+        vec![
+            // the results may differ: a guess
+            "pick same_result=false erasure_only=false",
+            // they agree on the erasure only
+            "all same_result=true erasure_only=true",
+            // a known result they agree on
+            "name same_result=true erasure_only=false",
+        ]
+    );
+}
+
 /// What the name after each `/*F*/` marker refers to: `Owner.field` for a
 /// field, `local` for a local, `none` when it does not resolve.
 fn names_of(src: &str) -> Vec<String> {

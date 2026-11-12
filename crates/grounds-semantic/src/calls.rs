@@ -1735,7 +1735,7 @@ impl<'t> FileModel<'t> {
                             Ty::TypeVar(_) => !matches!(pa, Ty::Wildcard(_)),
                             Ty::Wildcard(Some(w)) if matches!(&**w, WildcardBound::Extends(Ty::TypeVar(_))) => !is(&pa, |w| matches!(w, WildcardBound::Super(_))),
                             Ty::Wildcard(Some(w)) if matches!(&**w, WildcardBound::Super(Ty::TypeVar(_))) => !matches!(pa, Ty::Wildcard(None)) && !is(&pa, |w| matches!(w, WildcardBound::Extends(_))),
-                            fixed if matches!(pa, Ty::Wildcard(_)) => pa == *fixed,
+                            fixed if matches!(pa, Ty::Wildcard(_)) => pa.same(fixed) == Tri::Yes,
                             fixed => contains(self, fixed, &pa),
                         }
                     })
@@ -1746,7 +1746,7 @@ impl<'t> FileModel<'t> {
                 while let (Ty::Array(a), Ty::Array(b)) = (pe, qe) {
                     (pe, qe) = (&**a, &**b);
                 }
-                (qe.args().is_empty() || pe == qe) && self.is_assignable(&p.erasure(), &q.erasure()).is_yes()
+                (qe.args().is_empty() || pe.same(qe) == Tri::Yes) && self.is_assignable(&p.erasure(), &q.erasure()).is_yes()
             }
             _ => false,
         }
@@ -1786,7 +1786,13 @@ impl<'t> FileModel<'t> {
             let (p, q) = (pa(a, i), pa(b, i));
             let (Some(x), Some(y)) = (erase(a, &p), erase(b, &q)) else { return false };
             let plain = !own(a, &p) && !own(b, &q);
-            if x == y && !(sure && plain && p != q) {
+            // a proof cannot take an unknown parameter for the other's
+            // (`Ty::same`; `==` calls two unknown types equal); in the absence
+            // of a counterexample they are alike
+            if sure && x == y && x.same(&y) != Tri::Yes {
+                return false;
+            }
+            if x == y && !(sure && plain && p.same(&q) != Tri::Yes) {
                 if plain && p != q && self.conv(&p, &q) == Conv::No {
                     return false;
                 }
@@ -1851,11 +1857,13 @@ impl<'t> FileModel<'t> {
             }
             (!matches!(r, Ty::TypeVar(v) if m.type_params.iter().any(|tp| tp.name == *v))).then(|| m.ret.erasure())
         };
+        // an unknown result is not known to be another's: two unknown ones may
+        // differ (`Ty::same`, where `==` would call them equal)
         let rets_differ = cands.len() > 1 && {
             let first = ret_key(&cands[0].method);
-            first.is_none() || cands.iter().any(|m| ret_key(&m.method) != first)
+            first.is_none() || cands.iter().any(|m| !matches!((ret_key(&m.method), &first), (Some(r), Some(f)) if r.same(f) == Tri::Yes))
         };
-        let same_rets = cands.iter().all(|m| m.method.ret == cands[0].method.ret && !m.method.type_params.iter().any(|tp| mentions(&m.method.ret, &tp.name)));
+        let same_rets = cands.iter().all(|m| m.method.ret.same(&cands[0].method.ret) == Tri::Yes && !m.method.type_params.iter().any(|tp| mentions(&m.method.ret, &tp.name)));
         let poly: Vec<Poly> = arg_nodes.iter().map(|a| self.poly_arg(*a)).collect();
         let args: Vec<ArgShape> = arg_nodes.iter().map(|a| self.arg_shape(*a)).collect();
         let args = &args[..];
@@ -2731,7 +2739,7 @@ impl<'t> FileModel<'t> {
                     _ => most_specific(),
                 };
                 // otherwise, only when all that may apply return the same type
-                chosen.or_else(|| possible.first().filter(|f| possible.iter().all(|m| m.method.ret == f.method.ret)).copied())
+                chosen.or_else(|| possible.first().filter(|f| possible.iter().all(|m| m.method.ret.same(&f.method.ret) == Tri::Yes)).copied())
             }
         };
         match pick {
@@ -2932,7 +2940,7 @@ fn mentions(t: &Ty, v: &str) -> bool {
 /// contains `String`); false when unsure.
 fn contains(lk: &dyn ClassLookup, ba: &Ty, sa: &Ty) -> bool {
     let sub = |x: &Ty, y: &Ty| {
-        x == y
+        x.same(y) == Tri::Yes
             || y.class_name() == Some("java.lang.Object")
             || matches!((x, y), (Ty::Class { name: xn, args: xa }, Ty::Class { name: yn, args: ya }) if xa.is_empty() && ya.is_empty() && lk.is_subclass(xn, yn).is_yes())
     };
@@ -2942,7 +2950,7 @@ fn contains(lk: &dyn ClassLookup, ba: &Ty, sa: &Ty) -> bool {
             WildcardBound::Extends(x) => sub(sa, x),
             WildcardBound::Super(x) => sub(x, sa),
         },
-        t => t == sa,
+        t => t.same(sa) == Tri::Yes,
     }
 }
 

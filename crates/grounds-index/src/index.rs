@@ -2,7 +2,7 @@
 //! layered under source classes (from stubs, resolved lazily).
 
 use crate::binary;
-use crate::hierarchy::ClassLookup;
+use crate::hierarchy::{ClassLookup, Tri};
 use crate::model::*;
 use crate::stubs::*;
 use crate::stubs::fold_binary;
@@ -258,14 +258,36 @@ impl Classpath {
 
     /// Whether the JDK class has, in the API of `release`, a method of that
     /// name whose parameters erase to `params` (see `jdk_has_class`).
+    /// None too where an unknown parameter type leaves it open.
     pub fn jdk_has_method(&self, release: u32, class: &str, name: &str, params: &[Ty]) -> Option<bool> {
-        let has = |c: &ClassInfo| c.methods.iter().any(|m| &*m.name == name && m.params.len() == params.len() && m.params.iter().zip(params).all(|(a, b)| a.ty.erasure() == b.erasure()));
+        // a method whose parameters are surely `params`, or may be
+        let has = |c: &ClassInfo| -> Tri {
+            c.methods
+                .iter()
+                .filter(|m| &*m.name == name && m.params.len() == params.len())
+                .map(|m| m.params.iter().zip(params).fold(Tri::Yes, |acc, (a, b)| acc.and(a.ty.erasure().same(&b.erasure()))))
+                .fold(Tri::No, Tri::or)
+        };
+        let known = |t: Tri| match t {
+            Tri::Yes => Some(true),
+            Tri::No => Some(false),
+            Tri::Unknown => None,
+        };
         if self.exact_jdk_release() == Some(release) {
-            return Some(self.is_jdk_class(class) && self.class(class).is_some_and(|c| has(&c)));
+            if !self.is_jdk_class(class) {
+                return Some(false);
+            }
+            return match self.class(class) {
+                Some(c) => known(has(&c)),
+                None => Some(false),
+            };
         }
         let other = self.other_release(release)?;
         let cf = other.container.read_class(&class.replace('.', "/"));
-        Some(cf.is_some_and(|cf| has(&binary::lower_class(&cf, 0))))
+        match cf {
+            Some(cf) => known(has(&binary::lower_class(&cf, 0))),
+            None => Some(false),
+        }
     }
 
     fn other_release(&self, release: u32) -> Option<Arc<OtherRelease>> {

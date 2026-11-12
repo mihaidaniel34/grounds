@@ -595,7 +595,7 @@ pub trait ClassLookup {
                             Tri::No => false,
                             Tri::Unknown => {
                                 o.method.params.len() == erased.len()
-                                    && o.method.params.iter().zip(&erased).all(|(p, e)| !e.has_unknown() && p.ty.erasure() == *e)
+                                    && o.method.params.iter().zip(&erased).all(|(p, e)| p.ty.erasure().same(e) == Tri::Yes)
                             }
                         }
                 });
@@ -703,7 +703,7 @@ pub trait ClassLookup {
                             Tri::No => false,
                             Tri::Unknown => {
                                 o.method.params.len() == sm.params.len()
-                                    && o.method.params.iter().zip(&sm.params).all(|(a, b)| !b.ty.has_unknown() && a.ty.erasure() == b.ty.erasure())
+                                    && o.method.params.iter().zip(&sm.params).all(|(a, b)| a.ty.erasure().same(&b.ty.erasure()) == Tri::Yes)
                             }
                         }
                 });

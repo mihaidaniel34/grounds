@@ -1,6 +1,7 @@
 //! Language-level model shared by every layer: types, classes, members and
 //! annotations. Both source stubs and class files are lowered into these.
 
+use crate::hierarchy::Tri;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::sync::Arc;
@@ -320,6 +321,32 @@ impl Ty {
                 WildcardBound::Super(t) => WildcardBound::Super(t.subst(f)),
             }))),
             t => t.clone(),
+        }
+    }
+    /// Whether `self` and `o` are the same type. `==` compares the
+    /// representations, so two unknown types are `==`; this answers Unknown
+    /// where an unknown part of either could make them the same type or
+    /// not. Types of another shape or class, or with another number of type
+    /// arguments, differ whatever their unknown parts.
+    pub fn same(&self, o: &Ty) -> Tri {
+        match (self, o) {
+            (Ty::Unknown | Ty::NoType, _) | (_, Ty::Unknown | Ty::NoType) => Tri::Unknown,
+            (Ty::Class { name: a, args: x }, Ty::Class { name: b, args: y }) => {
+                if a != b || x.len() != y.len() {
+                    Tri::No
+                } else {
+                    x.iter().zip(y).fold(Tri::Yes, |acc, (p, q)| acc.and(p.same(q)))
+                }
+            }
+            (Ty::Array(a), Ty::Array(b)) => a.same(b),
+            (Ty::Wildcard(a), Ty::Wildcard(b)) => match (a.as_deref(), b.as_deref()) {
+                (None, None) => Tri::Yes,
+                (Some(WildcardBound::Extends(p)), Some(WildcardBound::Extends(q))) | (Some(WildcardBound::Super(p)), Some(WildcardBound::Super(q))) => p.same(q),
+                // `? extends Object` is `?`
+                (Some(WildcardBound::Extends(p)), None) | (None, Some(WildcardBound::Extends(p))) => p.same(&Ty::object()),
+                _ => Tri::No,
+            },
+            (a, b) => Tri::from_bool(a == b),
         }
     }
     pub fn mentions_type_var(&self) -> bool {

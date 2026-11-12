@@ -703,3 +703,35 @@ fn members_and_supertypes_of_a_raw_type_are_erased() {
     assert_eq!(ret(&b, "all"), "java.util.List<java.lang.Integer>");
     assert_eq!(ret(&b, "get"), "java.lang.Integer");
 }
+
+#[test]
+fn two_unknown_types_are_not_known_to_be_the_same() {
+    let list = |a: Ty| Ty::class_with("java.util.List", vec![a]);
+    assert_eq!(Ty::Unknown.same(&Ty::Unknown), Tri::Unknown);
+    assert_eq!(list(Ty::Unknown).same(&list(Ty::Unknown)), Tri::Unknown);
+    assert_eq!(list(Ty::Unknown).same(&list(Ty::string())), Tri::Unknown);
+    assert_eq!(list(Ty::string()).same(&list(Ty::string())), Tri::Yes);
+    // another class, shape or number of arguments differs whatever is unknown
+    assert_eq!(list(Ty::Unknown).same(&Ty::class_with("java.util.Set", vec![Ty::Unknown])), Tri::No);
+    assert_eq!(list(Ty::Unknown).same(&Ty::class("java.util.List")), Tri::No);
+    assert_eq!(Ty::Array(Box::new(Ty::Unknown)).same(&Ty::int()), Tri::No);
+    assert_eq!(Ty::Wildcard(Some(Box::new(WildcardBound::Extends(Ty::object())))).same(&Ty::Wildcard(None)), Tri::Yes);
+    // a parameter type with an unknown argument is not a parameter that is
+    // known to be another, but its erasure may be: `take(List<Gone>)`
+    // overrides `I<Gone>.take(List<T>)` (equal erasures, JLS 8.4.2)
+    let idx = index_of(&[(
+        "p/C.java",
+        "package p; import java.util.List;
+         interface I<T> { void take(List<T> l); }
+         abstract class C implements I<Gone> { public void take(List<Gone> l) {} }",
+    )]);
+    let takes: Vec<String> = idx.all_methods(&Ty::class("p.C")).into_iter().filter(|m| &*m.method.name == "take").map(|m| m.owner.to_string()).collect();
+    assert_eq!(takes, vec!["p.C"]);
+    // whether a release's JDK has a method whose parameter type is unknown
+    // is unknown, not "no"
+    let cp = &idx.classpath;
+    let release = cp.exact_jdk_release().unwrap_or(21);
+    assert_eq!(cp.jdk_has_method(release, "java.lang.String", "indexOf", &[Ty::string()]), Some(true));
+    assert_eq!(cp.jdk_has_method(release, "java.lang.String", "indexOf", &[Ty::Unknown]), None);
+    assert_eq!(cp.jdk_has_method(release, "java.lang.String", "indexOf", &[Ty::Unknown, Ty::Unknown, Ty::Unknown, Ty::Unknown]), Some(false));
+}
