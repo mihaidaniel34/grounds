@@ -394,8 +394,11 @@ impl<'t> FileModel<'t> {
     }
 
     /// All bounds of a type variable visible at `at` (`T extends A & B`).
+    /// A variable that no declaration in scope there names (one of another
+    /// declaration, which a type the model did not substitute carried here)
+    /// has a bound that is unknown, not Object.
     pub fn type_var_bounds(&self, name: &str, at: Node<'t>) -> Vec<Ty> {
-        self.declared_type_var_bounds(name, at).unwrap_or_else(|| vec![Ty::object()])
+        self.declared_type_var_bounds(name, at).unwrap_or_else(|| vec![Ty::Unknown])
     }
 
     /// The bounds of the type variable `name` declared in scope at `at`
@@ -416,7 +419,9 @@ impl<'t> FileModel<'t> {
         None
     }
 
-    /// Bound of a type variable visible at `at`.
+    /// First bound of a type variable visible at `at` (Object when it is
+    /// declared without one); unknown for a variable no declaration in scope
+    /// names (see `type_var_bounds`).
     pub fn type_var_bound(&self, name: &str, at: Node<'t>) -> Ty {
         for a in std::iter::once(at).chain(self.ancestors_of(at)) {
             if let Some(tp) = a.field("type_parameters") {
@@ -430,7 +435,7 @@ impl<'t> FileModel<'t> {
                 }
             }
         }
-        Ty::object()
+        Ty::Unknown
     }
 
     // ----- names -----

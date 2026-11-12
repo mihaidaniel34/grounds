@@ -522,7 +522,11 @@ impl<'t> FileModel<'t> {
                     }
                 }
                 let rt = match rt {
-                    Ty::TypeVar(ref v) => self.type_var_bound(v, call),
+                    // a variable whose bound is unknown has no members to look up
+                    Ty::TypeVar(ref v) => match self.type_var_bound(v, call) {
+                        Ty::Unknown => return (Vec::new(), None, false),
+                        b => b,
+                    },
                     Ty::Prim(_) | Ty::Unknown | Ty::Void | Ty::Null => return (Vec::new(), None, false),
                     t => t,
                 };

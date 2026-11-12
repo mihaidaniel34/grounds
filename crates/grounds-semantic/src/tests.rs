@@ -1621,6 +1621,28 @@ fn an_overload_whose_parameter_may_be_functional_is_not_dropped() {
     assert_eq!(t, vec!["?unknown"]);
 }
 
+#[test]
+fn a_type_variable_not_declared_in_scope_has_an_unknown_bound() {
+    // `in.value` is `Outer`'s `T`, which the model does not substitute
+    // through `Outer<String>.Inner`: at `U` no declaration names it, so its
+    // bound is unknown, not Object (javac calls `String.toString`)
+    let src = "class Outer<T extends CharSequence> { class Inner { T value; } }
+         class U<S extends Number> {
+           void m(Outer<String>.Inner in, S s) {
+             /*C*/ in.value.toString(); /*C*/ in.value.hashCode(); Object l = in.value.length;
+             /*C*/ s.intValue(); /*C*/ s.toString();
+           } }";
+    assert_eq!(calls_of(src), vec!["none", "none", "Number.intValue()", "Object.toString()"]);
+    let pf = ParsedFile::parse(src);
+    let mut idx = Index::new(jdk());
+    idx.set_file(Arc::from("T.java"), Arc::new(extract(&pf)));
+    let fm = FileModel::new(&pf, &idx, Arc::from("T.java"));
+    let at = pf.root().descendants().find(|n| n.kind() == "method_declaration").unwrap();
+    assert_eq!(fm.type_var_bound("T", at), Ty::Unknown);
+    assert_eq!(fm.type_var_bounds("T", at), vec![Ty::Unknown]);
+    assert_eq!(fm.type_var_bound("S", at).to_string(), "java.lang.Number");
+}
+
 /// What the name after each `/*F*/` marker refers to: `Owner.field` for a
 /// field, `local` for a local, `none` when it does not resolve.
 fn names_of(src: &str) -> Vec<String> {
