@@ -77,7 +77,12 @@ impl MethodMatcher {
                     Ty::Prim(p) => p.keyword().to_string(),
                     Ty::Array(_) => format!("{}", e),
                     Ty::TypeVar(_) => "java.lang.Object".into(),
-                    _ => return false,
+                    _ => {
+                        if e.is_unknown() {
+                            grounds_index::doubt::note(grounds_index::doubt::Doubt::UnknownType);
+                        }
+                        return false;
+                    }
                 };
                 if *want != "*" && *want != s {
                     return false;
@@ -117,7 +122,10 @@ impl<'t> FileModel<'t> {
         match self.select_method(call) {
             // found through a static import that an unresolved supertype's
             // method of the same name may hide: not known to be this method
-            Some(_) if self.import_may_be_shadowed(call) => false,
+            Some(_) if self.import_may_be_shadowed(call) => {
+                grounds_index::doubt::note(grounds_index::doubt::Doubt::UnresolvedCall);
+                false
+            }
             // a guessed overload may be another class's method altogether
             // (`wait(future)` declared by a superclass next to `Object.wait(long)`)
             // unless every overload it may be is the same class's and matches

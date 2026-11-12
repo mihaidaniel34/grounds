@@ -326,7 +326,7 @@ fn nested_generic_overloads_stay_polynomial() {
     for n in pf.root().descendants().filter(|n| n.kind() == "method_invocation") {
         fm.type_of(n);
     }
-    assert!(fm.work.get() < 20_000, "{} guarded computations", fm.work.get());
+    assert!(fm.guards.work() < 20_000, "{} guarded computations", fm.guards.work());
 }
 
 #[test]
@@ -945,11 +945,11 @@ fn a_panic_inside_a_guard_leaves_the_node() {
     let mut idx = Index::new(jdk());
     idx.set_file(Arc::from("T.java"), Arc::new(extract(&pf)));
     let fm = FileModel::new(&pf, &idx, Arc::from("T.java"));
-    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fm.guard(7, 0, 0, || -> i32 { panic!("rule bug") })));
+    let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| fm.guards.guarded(7, crate::memo::Query::Type, 0, || -> i32 { panic!("rule bug") })));
     assert!(r.is_err());
-    assert_eq!(fm.guard(7, 0, 0, || 1), 1, "the node is not left marked in progress");
+    assert_eq!(fm.guards.guarded(7, crate::memo::Query::Type, 0, || 1), 1, "the node is not left marked in progress");
     // a real cycle still returns the default
-    assert_eq!(fm.guard(8, 0, 0, || fm.guard(8, 0, -1, || 2)), -1);
+    assert_eq!(fm.guards.guarded(8, crate::memo::Query::Type, 0, || fm.guards.guarded(8, crate::memo::Query::Type, -1, || 2)), -1);
 }
 
 #[test]
@@ -1289,7 +1289,7 @@ fn nested_generic_identity_calls_stay_linear() {
         for c in pf.root().descendants().filter(|n| n.kind() == "method_invocation") {
             fm.type_of(c);
         }
-        assert!(fm.work.get() < 50 * n as u64, "{} guarded computations for {n} levels", fm.work.get());
+        assert!(fm.guards.work() < 50 * n as u64, "{} guarded computations for {n} levels", fm.guards.work());
     }
 }
 

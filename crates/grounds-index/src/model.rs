@@ -195,19 +195,31 @@ impl Ty {
             _ => false,
         }
     }
+    /// Notes a collapse when a predicate or accessor is asked of an unknown
+    /// type (see [`crate::doubt`]). Asking whether it is unknown is not one.
+    #[inline]
+    fn asked(&self) {
+        if let Ty::Unknown = self {
+            crate::doubt::note(crate::doubt::Doubt::UnknownType);
+        }
+    }
     pub fn is_prim(&self) -> bool {
+        self.asked();
         matches!(self, Ty::Prim(_))
     }
     pub fn prim(&self) -> Option<Prim> {
+        self.asked();
         match self {
             Ty::Prim(p) => Some(*p),
             _ => None,
         }
     }
     pub fn is_reference(&self) -> bool {
+        self.asked();
         matches!(self, Ty::Class { .. } | Ty::Array(_) | Ty::TypeVar(_) | Ty::Null)
     }
     pub fn class_name(&self) -> Option<&str> {
+        self.asked();
         match self {
             Ty::Class { name, .. } => Some(name),
             _ => None,
@@ -220,9 +232,11 @@ impl Ty {
         self.is_class("java.lang.String")
     }
     pub fn is_boolean(&self) -> bool {
+        self.asked();
         matches!(self, Ty::Prim(Prim::Boolean)) || self.is_class("java.lang.Boolean")
     }
     pub fn args(&self) -> &[Ty] {
+        self.asked();
         match self {
             Ty::Class { args, .. } => args,
             _ => &[],
@@ -232,16 +246,19 @@ impl Ty {
         self.args().get(i)
     }
     pub fn element(&self) -> Option<&Ty> {
+        self.asked();
         match self {
             Ty::Array(e) => Some(e),
             _ => None,
         }
     }
     pub fn is_array(&self) -> bool {
+        self.asked();
         matches!(self, Ty::Array(_))
     }
     /// The boxed primitive for a boxed type name, if any.
     pub fn unboxed(&self) -> Option<Prim> {
+        self.asked();
         match self {
             Ty::Prim(p) => Some(*p),
             Ty::Class { name, .. } => Prim::from_box_name(name),
@@ -249,6 +266,7 @@ impl Ty {
         }
     }
     pub fn is_boxed(&self) -> bool {
+        self.asked();
         matches!(self, Ty::Class { name, .. } if Prim::from_box_name(name).is_some())
     }
     pub fn boxed(&self) -> Ty {
@@ -594,9 +612,17 @@ impl AnnotationInfo {
             // written from an outer class (`ComponentScan.Filter`): a suffix;
             // from a package (`inject.Inject`): the whole name, compared above
             let outer = self.name.starts_with(|c: char| c.is_uppercase());
-            outer && fqn.len() > self.name.len() && fqn.ends_with(&*self.name) && fqn.as_bytes()[fqn.len() - self.name.len() - 1] == b'.'
+            let m = outer && fqn.len() > self.name.len() && fqn.ends_with(&*self.name) && fqn.as_bytes()[fqn.len() - self.name.len() - 1] == b'.';
+            if m {
+                crate::doubt::note(crate::doubt::Doubt::AnnotationBySimpleName);
+            }
+            m
         } else {
-            simple_name_of(&self.name) == simple_name_of(fqn)
+            let m = simple_name_of(&self.name) == simple_name_of(fqn);
+            if m {
+                crate::doubt::note(crate::doubt::Doubt::AnnotationBySimpleName);
+            }
+            m
         }
     }
 }
@@ -610,7 +636,13 @@ pub fn has_annotation(anns: &[AnnotationInfo], fqn: &str) -> bool {
 }
 
 pub fn has_annotation_simple(anns: &[AnnotationInfo], simple: &str) -> bool {
-    anns.iter().any(|a| a.simple_name() == simple)
+    anns.iter().any(|a| {
+        let m = a.simple_name() == simple;
+        if m && !a.resolved {
+            crate::doubt::note(crate::doubt::Doubt::AnnotationBySimpleName);
+        }
+        m
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

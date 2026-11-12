@@ -5,6 +5,7 @@
 pub mod binder;
 pub mod calls;
 pub mod matchers;
+mod memo;
 pub mod model;
 pub mod types;
 

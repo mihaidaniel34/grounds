@@ -3,6 +3,7 @@
 
 use crate::framework::*;
 use grounds_di::DiModel;
+use grounds_index::doubt;
 use grounds_semantic::FileModel;
 use grounds_syntax::{Node, NodeExt};
 use rustc_hash::FxHashSet;
@@ -90,9 +91,11 @@ impl RuleSet {
                                     continue;
                                 }
                                 let rule = &self.rules[ri];
+                                let before = out.len();
                                 let mut cx = Ctx { fm, src: fm.src, info, di, options, rule: rule.meta(), out: &mut out, flow: &flow };
                                 let t0 = if profiling() { Some(std::time::Instant::now()) } else { None };
-                                let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rule.check_node(n, &mut cx)));
+                                let (r, d) = doubt::scope(|| std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rule.check_node(n, &mut cx))));
+                                mark(&mut out[before..], d);
                                 if let Some(t0) = t0 {
                                     *PROFILE.lock().entry(rule.meta().id).or_default() += t0.elapsed();
                                 }
@@ -121,9 +124,11 @@ impl RuleSet {
                 continue;
             }
             let rule = &self.rules[ri];
+            let before = out.len();
             let mut cx = Ctx { fm, src: fm.src, info, di, options, rule: rule.meta(), out: &mut out, flow: &flow };
             let t0 = if profiling() { Some(std::time::Instant::now()) } else { None };
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rule.check_file(&mut cx)));
+            let (r, d) = doubt::scope(|| std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| rule.check_file(&mut cx))));
+            mark(&mut out[before..], d);
             if let Some(t0) = t0 {
                 *PROFILE.lock().entry(rule.meta().id).or_default() += t0.elapsed();
             }
@@ -141,8 +146,17 @@ impl RuleSet {
         // code the parser could not read is not judged: drop findings that
         // overlap a syntax error
         // in file order, without duplicates (the first of identical ones)
+        // a finding one visit made without doubt is grounded, whichever
+        // visit's copy is kept
+        let grounded: FxHashSet<_> = out.iter().filter(|d| d.doubt.is_empty()).map(|d| (d.rule, d.range.start, d.range.end)).collect();
         let mut seen = FxHashSet::default();
-        out.retain(|d| seen.insert((d.rule, d.range.start, d.range.end)));
+        out.retain_mut(|d| {
+            let key = (d.rule, d.range.start, d.range.end);
+            if grounded.contains(&key) {
+                d.doubt = doubt::Doubts::NONE;
+            }
+            seen.insert(key)
+        });
         out.sort_by_key(|d| (d.range.start, d.rule));
         if fm.root().has_error() {
             // the unparseable parts: tokens directly inside an ERROR node and
@@ -196,6 +210,13 @@ impl RuleSet {
             true
         });
         out
+    }
+}
+
+/// The findings one rule visit pushed carry what that visit observed.
+fn mark(new: &mut [Diagnostic], d: doubt::Doubts) {
+    for x in new {
+        x.doubt = d;
     }
 }
 

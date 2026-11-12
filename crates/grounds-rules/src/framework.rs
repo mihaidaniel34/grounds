@@ -6,6 +6,7 @@
 use grounds_di::DiModel;
 use grounds_flow::analyses::{Liveness, NullnessAnalysis, OptionalPresence, ResourceAnalysis};
 use grounds_flow::{Cfg, Results};
+use grounds_index::doubt::{self, Doubts};
 use grounds_index::*;
 use grounds_semantic::FileModel;
 use grounds_syntax::{Node, NodeExt, TextRange};
@@ -216,6 +217,10 @@ pub struct Diagnostic {
     /// with a change from one that was there before; without this the message,
     /// less its hint and candidate list, is the claim.
     pub claim: Option<String>,
+    /// What the rule visit that reported this observed being collapsed from
+    /// unknown into a definite answer (see `grounds_index::doubt`); set by
+    /// the runner. Empty: the finding is grounded.
+    pub doubt: Doubts,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -227,11 +232,12 @@ pub struct FileInfo {
 
 pub type RuleOptions = FxHashMap<String, String>;
 
-/// Per-file cache of flow facts shared by all rules.
+/// Per-file cache of flow facts shared by all rules. Each entry keeps what
+/// its computation observed (see `grounds_index::doubt`), replayed on a hit.
 #[derive(Default)]
 pub struct FlowCache<'t> {
-    cfgs: RefCell<FxHashMap<usize, Rc<Cfg<'t>>>>,
-    results: RefCell<FxHashMap<(usize, &'static str), Rc<dyn Any>>>,
+    cfgs: RefCell<FxHashMap<usize, (Rc<Cfg<'t>>, Doubts)>>,
+    results: RefCell<FxHashMap<(usize, &'static str), (Rc<dyn Any>, Doubts)>>,
 }
 
 pub struct Ctx<'a, 't> {
@@ -251,15 +257,15 @@ impl<'a, 't> Ctx<'a, 't> {
     }
 
     pub fn report_range(&mut self, range: TextRange, message: impl Into<String>) {
-        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range, message: message.into(), fix: None, claim: None });
+        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range, message: message.into(), fix: None, claim: None, doubt: Doubts::NONE });
     }
 
     pub fn report_fix(&mut self, node: Node<'t>, message: impl Into<String>, fix: Fix) {
-        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range: TextRange::of(node), message: message.into(), fix: Some(fix), claim: None });
+        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range: TextRange::of(node), message: message.into(), fix: Some(fix), claim: None, doubt: Doubts::NONE });
     }
 
     pub fn report_with_severity(&mut self, node: Node<'t>, severity: Severity, message: impl Into<String>) {
-        self.out.push(Diagnostic { rule: self.rule.id, severity, range: TextRange::of(node), message: message.into(), fix: None, claim: None });
+        self.out.push(Diagnostic { rule: self.rule.id, severity, range: TextRange::of(node), message: message.into(), fix: None, claim: None, doubt: Doubts::NONE });
     }
 
     /// A method's identity for a claim: qualified owner and erased,
@@ -271,7 +277,7 @@ impl<'a, 't> Ctx<'a, 't> {
     /// Report with the full claim behind a message that shows only part of
     /// it, or names types by their simple names (see [`Diagnostic::claim`]).
     pub fn report_claim(&mut self, node: Node<'t>, message: impl Into<String>, claim: String) {
-        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range: TextRange::of(node), message: message.into(), fix: None, claim: Some(claim) });
+        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range: TextRange::of(node), message: message.into(), fix: None, claim: Some(claim), doubt: Doubts::NONE });
     }
 
     pub fn text(&self, n: Node<'t>) -> &'t str {
@@ -301,7 +307,8 @@ impl<'a, 't> Ctx<'a, 't> {
 
     /// CFG of a callable (method, constructor, lambda, initializer).
     pub fn cfg(&self, callable: Node<'t>) -> Rc<Cfg<'t>> {
-        if let Some(c) = self.flow.cfgs.borrow().get(&callable.id()) {
+        if let Some((c, d)) = self.flow.cfgs.borrow().get(&callable.id()) {
+            doubt::replay(*d);
             return c.clone();
         }
         let fm = self.fm;
@@ -329,19 +336,20 @@ impl<'a, 't> Ctx<'a, 't> {
             let not_overridable = mf.has(Flags::STATIC) || mf.has(Flags::PRIVATE) || mf.has(Flags::FINAL) || fm.class(&c.owner).is_some_and(|o| o.flags.has(Flags::FINAL) || o.is_record());
             (mf.has(Flags::ALWAYS_THROWS) && not_overridable) || contract_fails || test_fail
         };
-        let c = Rc::new(grounds_flow::build_with(callable, self.src, Some(&never_returns)));
-        self.flow.cfgs.borrow_mut().insert(callable.id(), c.clone());
+        let (c, d) = doubt::compute(|| Rc::new(grounds_flow::build_with(callable, self.src, Some(&never_returns))));
+        self.flow.cfgs.borrow_mut().insert(callable.id(), (c.clone(), d));
         c
     }
 
     fn cached<T: 'static>(&self, callable: Node<'t>, key: &'static str, f: impl FnOnce() -> T) -> Rc<T> {
-        if let Some(r) = self.flow.results.borrow().get(&(callable.id(), key)) {
+        if let Some((r, d)) = self.flow.results.borrow().get(&(callable.id(), key)) {
             if let Ok(v) = r.clone().downcast::<T>() {
+                doubt::replay(*d);
                 return v;
             }
         }
-        let v = Rc::new(f());
-        self.flow.results.borrow_mut().insert((callable.id(), key), v.clone() as Rc<dyn Any>);
+        let (v, d) = doubt::compute(|| Rc::new(f()));
+        self.flow.results.borrow_mut().insert((callable.id(), key), (v.clone() as Rc<dyn Any>, d));
         v
     }
 

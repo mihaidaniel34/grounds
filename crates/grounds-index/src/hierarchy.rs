@@ -2,6 +2,7 @@
 //! lookup, subtyping and assignability. Written against [`ClassLookup`] so
 //! the semantic layer can overlay local/anonymous classes.
 
+use crate::doubt::{self, Doubt};
 use crate::model::*;
 use rustc_hash::FxHashSet;
 use std::collections::VecDeque;
@@ -17,10 +18,18 @@ pub enum Tri {
 
 impl Tri {
     pub fn is_yes(self) -> bool {
+        self.asked();
         self == Tri::Yes
     }
     pub fn is_no(self) -> bool {
+        self.asked();
         self == Tri::No
+    }
+    #[inline]
+    fn asked(self) {
+        if self == Tri::Unknown {
+            crate::doubt::note(crate::doubt::Doubt::TriCollapsed);
+        }
     }
     pub fn from_bool(b: bool) -> Tri {
         if b {
@@ -231,11 +240,12 @@ fn same_arg(a: &Ty, b: &Ty) -> bool {
             (None, None) => true,
             (Some(WildcardBound::Extends(t)), None) | (None, Some(WildcardBound::Extends(t))) => t.is_class("java.lang.Object"),
             (Some(WildcardBound::Extends(p)), Some(WildcardBound::Extends(q))) | (Some(WildcardBound::Super(p)), Some(WildcardBound::Super(q))) => {
-                same_type(p, q).is_yes()
+                same_type(p, q) == Tri::Yes
             }
             _ => false,
         },
-        _ => same_type(a, b).is_yes(),
+        // not `is_yes`: a false here is Unknown in `same_type`, not a collapse
+        _ => same_type(a, b) == Tri::Yes,
     }
 }
 
@@ -256,7 +266,10 @@ pub trait ClassLookup {
             }
             return Vec::new();
         };
-        let Some(c) = self.class(name) else { return Vec::new() };
+        let Some(c) = self.class(name) else {
+            doubt::note(Doubt::IncompleteHierarchy);
+            return Vec::new();
+        };
         let map = substitution(&c, args);
         let mut out = Vec::new();
         if let Some(s) = &c.superclass {
@@ -288,6 +301,7 @@ pub trait ClassLookup {
             }
             out.push(t);
             if out.len() > 200 {
+                doubt::note(Doubt::IncompleteHierarchy);
                 break;
             }
         }
@@ -305,6 +319,11 @@ pub trait ClassLookup {
 
     /// Is class `sub` a subclass/implementor of `sup` (reflexive)?
     fn is_subclass(&self, sub: &str, sup: &str) -> Tri {
+        // what it cannot find makes the answer Unknown: not a collapse
+        doubt::quiet(|| self.is_subclass_walk(sub, sup))
+    }
+
+    fn is_subclass_walk(&self, sub: &str, sup: &str) -> Tri {
         if sub == sup || sup == "java.lang.Object" {
             return Tri::Yes;
         }
@@ -401,7 +420,11 @@ pub trait ClassLookup {
         q.push_back(ty.clone());
         while let Some(t) = q.pop_front() {
             let Some(n) = t.class_name() else { continue };
-            if index.contains_key(n) || types.len() > 200 {
+            if index.contains_key(n) {
+                continue;
+            }
+            if types.len() > 200 {
+                doubt::note(Doubt::IncompleteHierarchy);
                 continue;
             }
             index.insert(Arc::from(n), types.len());
@@ -457,7 +480,10 @@ pub trait ClassLookup {
         }
         for (st, below) in sups {
             let Ty::Class { name: cn, args } = &st else { continue };
-            let Some(c) = self.class(cn) else { continue };
+            let Some(c) = self.class(cn) else {
+                doubt::note(Doubt::IncompleteHierarchy);
+                continue;
+            };
             let map = substitution(&c, args);
             for m in c.methods.iter().filter(|m| &*m.name == name) {
                 let sm = subst_method(m, &map);
@@ -559,7 +585,10 @@ pub trait ClassLookup {
         let mut out: Vec<MethodRef> = Vec::new();
         for (st, _) in self.supertypes_ordered(ty) {
             let Ty::Class { name: cn, args } = &st else { continue };
-            let Some(c) = self.class(cn) else { continue };
+            let Some(c) = self.class(cn) else {
+                doubt::note(Doubt::IncompleteHierarchy);
+                continue;
+            };
             let map = substitution(&c, args);
             for m in &c.methods {
                 if m.is_constructor() {
@@ -590,7 +619,10 @@ pub trait ClassLookup {
     fn field(&self, ty: &Ty, name: &str) -> Option<FieldRef> {
         for st in self.all_supertypes(ty) {
             let Ty::Class { name: cn, args } = &st else { continue };
-            let Some(c) = self.class(cn) else { continue };
+            let Some(c) = self.class(cn) else {
+                doubt::note(Doubt::IncompleteHierarchy);
+                continue;
+            };
             if let Some(f) = c.field(name) {
                 let map = substitution(&c, args);
                 let mut f = f.clone();
@@ -607,6 +639,11 @@ pub trait ClassLookup {
     /// loaded (the project's release is newer than the JDK) may have members
     /// we cannot see, so it is incomplete too.
     fn hierarchy_complete(&self, name: &str) -> bool {
+        // asking whether it is complete is handling the unknown
+        doubt::quiet(|| self.hierarchy_complete_walk(name))
+    }
+
+    fn hierarchy_complete_walk(&self, name: &str) -> bool {
         if self.class("java.lang.Object").is_none() {
             return false;
         }

@@ -2,6 +2,7 @@
 //! from project sources (stubs) and the classpath (class files).
 
 pub mod binary;
+pub mod doubt;
 pub mod hierarchy;
 pub mod index;
 pub mod jdk_modules;

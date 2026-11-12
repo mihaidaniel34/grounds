@@ -2,22 +2,18 @@
 //! (strict / loose / varargs phases, most-specific) and lightweight type
 //! argument inference from arguments, lambdas and target types.
 
+use crate::memo::Query;
 use crate::model::{FileModel, ResolvedCall, Symbol};
+use grounds_index::doubt::{self, Doubt};
 use grounds_index::hierarchy::{apply_subst, substitution};
 use grounds_index::*;
 use grounds_syntax::{Node, NodeExt};
 use std::rc::Rc;
 use std::sync::Arc;
 
-const TAG_SELECT: u8 = 10;
-const TAG_RESOLVE: u8 = 11;
-const TAG_PARTIAL: u8 = 12;
-// 13..=15: TAG_STANDALONE + Target
-const TAG_STANDALONE: u8 = 13;
-
 /// Where a generic method invocation takes its target type from.
-#[derive(Clone, Copy)]
-enum Target {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum Target {
     Full = 0,
     Param = 1,
     None = 2,
@@ -1906,10 +1902,7 @@ impl<'t> FileModel<'t> {
     /// Overload selection only (no lambda-body inference). Receiver type
     /// arguments are substituted, method type variables are not.
     pub fn select_method(&self, call: Node<'t>) -> Option<Rc<ResolvedCall>> {
-        if let Some(r) = self.selected.borrow().get(&call.id()) {
-            return r.clone();
-        }
-        let (r, clean) = self.clean(|| self.guard(call.id(), TAG_SELECT, None, || {
+        let r = self.selected.get_or_compute(&self.guards, call.id(), call.id(), Query::Select, || {
             match call.kind() {
                 "method_invocation" => {
                     let (cands, recv, via_type) = self.candidates(call);
@@ -1920,10 +1913,8 @@ impl<'t> FileModel<'t> {
                 "object_creation_expression" | "explicit_constructor_invocation" => self.select_constructor(call),
                 _ => None,
             }
-        }));
-        if clean {
-            self.selected.borrow_mut().insert(call.id(), r.clone());
-        }
+        });
+        note_call(call, r.as_deref());
         r
     }
 
@@ -1960,13 +1951,8 @@ impl<'t> FileModel<'t> {
 
     /// Full resolution with type inference.
     pub fn resolve_call(&self, call: Node<'t>) -> Option<Rc<ResolvedCall>> {
-        if let Some(r) = self.calls.borrow().get(&call.id()) {
-            return r.clone();
-        }
-        let (r, clean) = self.clean(|| self.guard(call.id(), TAG_RESOLVE, None, || self.infer_call(call, Target::Full)));
-        if clean {
-            self.calls.borrow_mut().insert(call.id(), r.clone());
-        }
+        let r = self.calls.get_or_compute(&self.guards, call.id(), call.id(), Query::Resolve, || self.infer_call(call, Target::Full));
+        note_call(call, r.as_deref());
         r
     }
 
@@ -1982,19 +1968,9 @@ impl<'t> FileModel<'t> {
         if a.kind() != "method_invocation" {
             return self.type_of(a);
         }
-        let key = (a.id(), target as u8);
-        if let Some(t) = self.standalone.borrow().get(&key) {
-            return t.clone();
-        }
-        let (t, clean) = self.clean(|| {
-            self.guard(a.id(), TAG_STANDALONE + target as u8, Ty::Unknown, || {
-                self.infer_call(a, target).map(|c| c.ret.clone()).unwrap_or(Ty::Unknown)
-            })
-        });
-        if clean {
-            self.standalone.borrow_mut().insert(key, t.clone());
-        }
-        t
+        self.standalone.get_or_compute(&self.guards, (a.id(), target), a.id(), Query::Standalone(target), || {
+            self.infer_call(a, target).map(|c| c.ret.clone()).unwrap_or(Ty::Unknown)
+        })
     }
 
     /// Parameter type of the selected enclosing method for an argument,
@@ -2451,18 +2427,11 @@ impl<'t> FileModel<'t> {
         // memoized per call and method: each level of nested generic calls
         // (`is(is(is(1)))`) asked for its argument's inference four times,
         // so 12 levels took a minute
-        if let Some((_, inf)) = self.partials.borrow().get(&call.id()).and_then(|v| v.iter().find(|(k, _)| k == m)) {
-            return inf.clone();
-        }
-        let (inf, clean) = self.clean(|| self.partial_inference_uncached(call, m));
-        if clean {
-            self.partials.borrow_mut().entry(call.id()).or_default().push((m.clone(), inf.clone()));
-        }
-        inf
+        self.partials.get_or_compute(&self.guards, (call.id(), m), call.id(), Query::Partial, || self.partial_inference_uncached(call, m))
     }
 
     fn partial_inference_uncached(&self, call: Node<'t>, m: &MethodInfo) -> Inference {
-        self.guard(call.id(), TAG_PARTIAL, Inference::unknown(), || {
+        {
             let args = self.args_of(call);
             let mut params = Vec::new();
             let mut tys = Vec::new();
@@ -2478,7 +2447,7 @@ impl<'t> FileModel<'t> {
             }
             let vars = self.caller_vars(call, &tys);
             self.infer_args(m, &params, &tys, &poly, &vars)
-        })
+        }
     }
 
     /// Whether an argument of unknown type may be raw for a parameterized
@@ -2770,6 +2739,16 @@ impl<'t> FileModel<'t> {
     /// The method declaration a call resolves to, if it is in source.
     pub fn callee_is_source(&self, call: Node<'t>) -> bool {
         self.select_method(call).is_some_and(|c| self.index.is_source_class(&c.owner))
+    }
+}
+
+/// Notes what a call's resolution leaves unknown: a call that did not
+/// resolve, or a pick that is a guess (see `grounds_index::doubt`).
+fn note_call(call: Node, r: Option<&ResolvedCall>) {
+    match r {
+        None if matches!(call.kind(), "method_invocation" | "object_creation_expression" | "explicit_constructor_invocation") => doubt::note(Doubt::UnresolvedCall),
+        Some(c) if c.ambiguous || c.erasure_only => doubt::note(Doubt::GuessedCall),
+        _ => {}
     }
 }
 

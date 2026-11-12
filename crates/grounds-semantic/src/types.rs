@@ -2,22 +2,13 @@
 //! constant folding.
 
 use crate::binder::LocalKind;
+use crate::memo::Query;
 use crate::model::{FileModel, Symbol};
+use grounds_index::doubt::{self, Doubt};
 use grounds_index::stubs::{fold_binary, fold_unary, literal_constant};
 use grounds_index::*;
 use grounds_syntax::{Node, NodeExt};
 use std::sync::Arc;
-
-/// Nested `constant_value` calls: operands of an operator and final locals
-/// defined by other final locals. Far above real constants (a few levels; a
-/// generated string concatenation of a few hundred parts); the CLI analyzes
-/// on threads with large stacks (see grounds-cli `STACK_SIZE`).
-const MAX_CONSTANT_NESTING: u32 = 1000;
-
-const TAG_TYPE: u8 = 1;
-const TAG_LOCAL: u8 = 2;
-const TAG_EXPECTED: u8 = 3;
-const TAG_SYMBOL: u8 = 4;
 
 pub fn binary_promotion(a: Prim, b: Prim) -> Prim {
     if a == Prim::Double || b == Prim::Double {
@@ -69,14 +60,30 @@ pub fn unary_promotion(a: Prim) -> Prim {
 impl<'t> FileModel<'t> {
     /// Static type of an expression node. `Unknown` when not determinable.
     pub fn type_of(&self, n: Node<'t>) -> Ty {
-        if let Some(t) = self.types.borrow().get(&n.id()) {
-            return t.clone();
-        }
-        let (t, clean) = self.clean(|| self.guard(n.id(), TAG_TYPE, Ty::Unknown, || self.compute_type(n)));
-        if clean {
-            self.types.borrow_mut().insert(n.id(), t.clone());
+        let t = self.types.get_or_compute(&self.guards, n.id(), n.id(), Query::Type, || self.compute_type(n));
+        if t.is_unknown() && self.denotes_value(n) {
+            doubt::note(Doubt::UnknownType);
         }
         t
+    }
+
+    /// Whether `n` is an expression that has a value, whose type is then
+    /// unknown when `type_of` answers `Unknown`; not a node of another kind
+    /// (an argument list, a type or package name, a method's name), which
+    /// has no type to know.
+    fn denotes_value(&self, n: Node<'t>) -> bool {
+        match n.kind() {
+            "identifier" | "field_access" => !self.names_no_expression(n) && !matches!(self.symbol_quietly(n), Some(Symbol::Type(_) | Symbol::Package(_))),
+            "parenthesized_expression" | "class_literal" | "this" | "method_invocation" | "object_creation_expression" | "array_creation_expression" | "array_initializer" | "array_access" | "cast_expression"
+            | "instanceof_expression" | "assignment_expression" | "update_expression" | "unary_expression" | "binary_expression" | "ternary_expression" | "lambda_expression" | "method_reference"
+            | "switch_expression" => true,
+            _ => false,
+        }
+    }
+
+    /// `symbol` without what it observes: asked only to classify a node.
+    fn symbol_quietly(&self, n: Node<'t>) -> Option<Symbol<'t>> {
+        doubt::quiet(|| self.symbol(n))
     }
 
     fn compute_type(&self, n: Node<'t>) -> Ty {
@@ -292,10 +299,7 @@ impl<'t> FileModel<'t> {
     pub fn local_type(&self, idx: usize) -> Ty {
         let decl = self.binder.decls[idx].clone();
         let key = decl.name_node.id();
-        if let Some(t) = self.types.borrow().get(&key) {
-            return t.clone();
-        }
-        let (t, clean) = self.clean(|| self.guard(key, TAG_LOCAL, Ty::Unknown, || {
+        let t = self.types.get_or_compute(&self.guards, key, key, Query::Local, || {
             let base = match decl.type_node {
                 Some(tn) if tn.text(self.src) != "var" => {
                     if tn.kind() == "catch_type" {
@@ -324,9 +328,9 @@ impl<'t> FileModel<'t> {
                 }
             }
             t
-        }));
-        if clean {
-            self.types.borrow_mut().insert(key, t.clone());
+        });
+        if t.is_unknown() {
+            doubt::note(Doubt::UnknownType);
         }
         t
     }
@@ -409,14 +413,38 @@ impl<'t> FileModel<'t> {
 
     /// What an identifier / field access / scoped identifier refers to.
     pub fn symbol(&self, n: Node<'t>) -> Option<Symbol<'t>> {
-        if let Some(s) = self.symbols.borrow().get(&n.id()) {
-            return s.clone();
-        }
-        let (s, clean) = self.clean(|| self.guard(n.id(), TAG_SYMBOL, None, || self.compute_symbol(n)));
-        if clean {
-            self.symbols.borrow_mut().insert(n.id(), s.clone());
+        let s = self.symbols.get_or_compute(&self.guards, n.id(), n.id(), Query::Symbol, || self.compute_symbol(n));
+        match &s {
+            // a name that resolves to nothing; not one that names no
+            // expression (a declaration's name, a method's name, a label)
+            None if matches!(n.kind(), "identifier" | "field_access" | "scoped_identifier" | "scoped_type_identifier" | "type_identifier") && !self.names_no_expression(n) => {
+                doubt::note(Doubt::UnresolvedName)
+            }
+            // left a local by `inherited_fields_shadow_locals`: may be a field
+            Some(Symbol::Local(..)) if self.shadow_unknown.contains(&n.id()) => doubt::note(Doubt::IncompleteHierarchy),
+            _ => {}
         }
         s
+    }
+
+    /// An identifier that is not an expression name: a declaration's,
+    /// method's or lambda parameter's name, a label, an annotation key.
+    fn names_no_expression(&self, n: Node<'t>) -> bool {
+        if n.kind() != "identifier" {
+            return false;
+        }
+        let Some(p) = self.parent_of(n) else { return false };
+        match p.kind() {
+            "method_invocation" => p.field("name") == Some(n),
+            "method_reference" => p.kids().last() == Some(&n) && p.kids().len() > 1,
+            "variable_declarator" | "formal_parameter" | "catch_formal_parameter" | "enhanced_for_statement" | "resource" => p.field("name") == Some(n),
+            "method_declaration" | "constructor_declaration" | "class_declaration" | "interface_declaration" | "enum_declaration" | "record_declaration" | "annotation_type_declaration" | "enum_constant" => p.field("name") == Some(n),
+            "labeled_statement" | "break_statement" | "continue_statement" | "inferred_parameters" => true,
+            // `@A(key = VALUE)`: the key names an element, the value is an expression
+            "element_value_pair" => p.field("key") == Some(n),
+            "lambda_expression" => p.field("parameters") == Some(n),
+            _ => false,
+        }
     }
 
     fn compute_symbol(&self, n: Node<'t>) -> Option<Symbol<'t>> {
@@ -430,18 +458,7 @@ impl<'t> FileModel<'t> {
                     return None;
                 }
                 if let Some(p) = self.parent_of(n) {
-                    let non_expr = match p.kind() {
-                        "method_invocation" => p.field("name") == Some(n),
-                        "method_reference" => p.kids().last() == Some(&n) && p.kids().len() > 1,
-                        "variable_declarator" | "formal_parameter" | "catch_formal_parameter" | "enhanced_for_statement" | "resource" => p.field("name") == Some(n),
-                        "method_declaration" | "constructor_declaration" | "class_declaration" | "interface_declaration" | "enum_declaration" | "record_declaration" | "annotation_type_declaration" | "enum_constant" => p.field("name") == Some(n),
-                        "labeled_statement" | "break_statement" | "continue_statement" | "inferred_parameters" => true,
-                        // `@A(key = VALUE)`: the key names an element, the value is an expression
-                        "element_value_pair" => p.field("key") == Some(n),
-                        "lambda_expression" => p.field("parameters") == Some(n),
-                        _ => false,
-                    };
-                    if non_expr {
+                    if self.names_no_expression(n) {
                         return None;
                     }
                     // the member of `obj.name` is what the qualified expression
@@ -569,6 +586,9 @@ impl<'t> FileModel<'t> {
     /// The local declaration index referenced by an identifier, if any.
     pub fn local_ref(&self, n: Node<'t>) -> Option<usize> {
         if n.kind() == "identifier" {
+            if self.shadow_unknown.contains(&n.id()) {
+                doubt::note(Doubt::IncompleteHierarchy);
+            }
             self.binder.decl_index_of_ref(n)
         } else {
             None
@@ -580,7 +600,7 @@ impl<'t> FileModel<'t> {
     /// The type the context expects for `n` (assignment, return, argument,
     /// cast...). `Unknown` when there is no target type.
     pub fn expected_type(&self, n: Node<'t>) -> Ty {
-        self.guard(n.id(), TAG_EXPECTED, Ty::Unknown, || self.compute_expected(n))
+        self.guards.guarded(n.id(), Query::Expected, Ty::Unknown, || self.compute_expected(n))
     }
 
     fn compute_expected(&self, n: Node<'t>) -> Ty {
@@ -688,40 +708,14 @@ impl<'t> FileModel<'t> {
     /// Compile-time constant value of an expression, if any, converted to the
     /// expression's static type (`final long n = 1` is a long constant).
     pub fn constant_value(&self, n: Node<'t>) -> Option<Constant> {
-        if let Some(c) = self.constants.borrow().get(&n.id()) {
-            return c.clone();
-        }
-        let (nesting, cutoffs) = self.const_eval.get();
-        if nesting >= MAX_CONSTANT_NESTING {
-            self.const_eval.set((nesting, cutoffs + 1));
-            return None;
-        }
-        self.const_eval.set((nesting + 1, cutoffs));
-        // restores the nesting also when a rule panics below: the runner
-        // catches it and runs the file's other rules on this model
-        struct Leave<'a>(&'a std::cell::Cell<(u32, u64)>, u32);
-        impl Drop for Leave<'_> {
-            fn drop(&mut self) {
-                let (_, cutoffs) = self.0.get();
-                self.0.set((self.1, cutoffs));
-            }
-        }
-        let leave = Leave(&self.const_eval, nesting);
-        let cycles = self.cycle_hits.get();
-        let v = self.constant_value_uncached(n);
-        let (_, after) = self.const_eval.get();
-        drop(leave);
-        if after == cutoffs && self.cycle_hits.get() == cycles {
-            self.constants.borrow_mut().insert(n.id(), v.clone());
-        }
-        v
+        self.constants.get_or_compute(&self.guards, n.id(), n.id(), Query::Constant, || self.constant_value_uncached(n))
     }
 
     /// How often `constant_value` gave up at the nesting bound so far. Its
     /// answer was then "not a constant", which is not known to be right, and
     /// neither is anything computed from it since.
     pub fn constant_cut_offs(&self) -> u64 {
-        self.const_eval.get().1
+        self.guards.nesting_cut_offs()
     }
 
     fn constant_value_uncached(&self, n: Node<'t>) -> Option<Constant> {

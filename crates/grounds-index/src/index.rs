@@ -347,12 +347,14 @@ impl Classpath {
         if let Some(c) = self.cache.get(name) {
             return c.clone();
         }
-        let r = (|| {
+        // a class is lowered once for every thread and file: what lowering
+        // observes is not any one rule's (see `doubt`)
+        let r = crate::doubt::quiet(|| {
             let idx = *self.names.get(name)?;
             let internal = name.replace('.', "/");
             let cf = self.containers[idx as usize].read_class(&internal)?;
             Some(Arc::new(binary::lower_class(&cf, idx)))
-        })();
+        });
         self.cache.insert(Arc::from(name), r.clone());
         r
     }
@@ -829,7 +831,9 @@ impl Index {
             if GROUP.with(|g| g.borrow().as_ref().is_some_and(|g| !g.contains(name))) {
                 OUTSIDE.with(|o| o.set(o.get() + 1));
             }
-            let r = self.resolve_source_class(name).map(Arc::new);
+            // lowered once for every thread and file: what lowering observes
+            // is not any one rule's (see `doubt`)
+            let r = crate::doubt::quiet(|| self.resolve_source_class(name).map(Arc::new));
             self.cache.insert(Arc::from(name), r.clone());
             return r;
         }

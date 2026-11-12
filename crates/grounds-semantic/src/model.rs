@@ -2,6 +2,8 @@
 //! call resolutions for one compilation unit against the global index.
 
 use crate::binder::{self, Binder, LocalDecl};
+use crate::memo::{ByKey, ByMethod, Guards, Memo};
+use grounds_index::doubt::{self, Doubt, Doubts};
 use grounds_index::stubs::{self, FileStub};
 use grounds_index::*;
 use grounds_syntax::{Node, NodeExt, ParsedFile};
@@ -66,31 +68,27 @@ pub struct FileModel<'t> {
     local_raw: FxHashMap<Name, (stubs::RawClass, Node<'t>)>,
     /// local types: (simple name, binary name, byte range of the declaring block)
     local_simple: Vec<(Name, Name, (usize, usize))>,
-    local_lowered: RefCell<FxHashMap<Name, Option<Arc<ClassInfo>>>>,
+    /// None while being lowered (see `lowered`), with the doubts lowering observed
+    local_lowered: RefCell<FxHashMap<Name, (Option<Arc<ClassInfo>>, Doubts)>>,
     /// see `local_class_scope`; None while it is being computed
-    local_scopes: RefCell<FxHashMap<Name, Option<LocalClassScope>>>,
-    pub(crate) types: RefCell<FxHashMap<usize, Ty>>,
-    pub(crate) calls: RefCell<FxHashMap<usize, Option<Rc<ResolvedCall>>>>,
+    local_scopes: RefCell<FxHashMap<Name, (Option<LocalClassScope>, Doubts)>>,
+    /// the queries in progress and their cut-offs, for every memo below
+    pub(crate) guards: Guards,
+    pub(crate) types: Memo<ByKey<usize, Ty>>,
+    pub(crate) calls: Memo<ByKey<usize, Option<Rc<ResolvedCall>>>>,
     /// method invocation types without target typing (see `arg_type`)
-    pub(crate) standalone: RefCell<FxHashMap<(usize, u8), Ty>>,
-    pub(crate) selected: RefCell<FxHashMap<usize, Option<Rc<ResolvedCall>>>>,
+    pub(crate) standalone: Memo<ByKey<(usize, crate::calls::Target), Ty>>,
+    pub(crate) selected: Memo<ByKey<usize, Option<Rc<ResolvedCall>>>>,
     /// partial inference by call node id, per method (see `partial_inference`)
-    pub(crate) partials: RefCell<FxHashMap<usize, Vec<(MethodInfo, crate::calls::Inference)>>>,
-    pub(crate) in_progress: RefCell<FxHashSet<(usize, u8)>>,
-    /// Incremented whenever a cycle guard short-circuits; results computed
-    /// while this changed are provisional and not memoized.
-    pub(crate) cycle_hits: std::cell::Cell<u64>,
-    /// Guarded computations so far; past `WORK_BUDGET` results that hit a
-    /// cycle are memoized as unknown, so pathological files stay polynomial.
-    pub(crate) work: std::cell::Cell<u64>,
-    pub(crate) symbols: RefCell<FxHashMap<usize, Option<Symbol<'t>>>>,
+    pub(crate) partials: Memo<ByMethod<crate::calls::Inference>>,
+    pub(crate) symbols: Memo<ByKey<usize, Option<Symbol<'t>>>>,
+    /// Identifiers that `inherited_fields_shadow_locals` left locals because
+    /// an enclosing class's hierarchy is incomplete: they may be fields.
+    pub(crate) shadow_unknown: FxHashSet<usize>,
     /// Constant values by expression node id (see `constant_value`): a chain
     /// of final locals each defined twice by the previous one is evaluated
     /// once per local, not 2^n times.
-    pub(crate) constants: RefCell<FxHashMap<usize, Option<Constant>>>,
-    /// (nesting, cut-offs) of `constant_value` in progress: nesting is
-    /// bounded, and results computed under a cut-off are not memoized.
-    pub(crate) const_eval: std::cell::Cell<(u32, u64)>,
+    pub(crate) constants: Memo<ByKey<usize, Option<Constant>>>,
     captures: std::cell::OnceCell<FxHashMap<usize, Vec<usize>>>,
     occurrences: std::cell::OnceCell<FxHashMap<&'t str, Vec<Node<'t>>>>,
     /// node id -> parent, built in one pass on first use: tree-sitter's
@@ -122,17 +120,15 @@ impl<'t> FileModel<'t> {
             local_simple: Vec::new(),
             local_lowered: RefCell::new(FxHashMap::default()),
             local_scopes: RefCell::new(FxHashMap::default()),
-            types: RefCell::new(FxHashMap::default()),
-            calls: RefCell::new(FxHashMap::default()),
-            standalone: RefCell::new(FxHashMap::default()),
-            selected: RefCell::new(FxHashMap::default()),
-            partials: RefCell::new(FxHashMap::default()),
-            in_progress: RefCell::new(FxHashSet::default()),
-            cycle_hits: std::cell::Cell::new(0),
-            work: std::cell::Cell::new(0),
-            symbols: RefCell::new(FxHashMap::default()),
-            constants: RefCell::new(FxHashMap::default()),
-            const_eval: std::cell::Cell::new((0, 0)),
+            guards: Guards::default(),
+            types: Memo::default(),
+            calls: Memo::default(),
+            standalone: Memo::default(),
+            selected: Memo::default(),
+            partials: Memo::default(),
+            symbols: Memo::default(),
+            shadow_unknown: FxHashSet::default(),
+            constants: Memo::default(),
             captures: std::cell::OnceCell::new(),
             occurrences: std::cell::OnceCell::new(),
             parents: std::cell::OnceCell::new(),
@@ -167,6 +163,7 @@ impl<'t> FileModel<'t> {
                 // stays unknown, and the name a local, as other rules (unused
                 // fields and locals) would count an unknown name as no use
                 if !self.hierarchy_complete(&cn) {
+                    self.shadow_unknown.insert(ident.id());
                     break;
                 }
             }
@@ -278,10 +275,17 @@ impl<'t> FileModel<'t> {
     /// being resolved.
     fn local_class_scope(&self, name: &Name) -> Option<LocalClassScope> {
         let (raw, node) = self.local_raw.get(name)?;
-        if let Some(s) = self.local_scopes.borrow().get(name) {
+        if let Some((s, d)) = self.local_scopes.borrow().get(name) {
+            doubt::replay(*d);
             return s.clone();
         }
-        self.local_scopes.borrow_mut().insert(name.clone(), None);
+        self.local_scopes.borrow_mut().insert(name.clone(), (None, Doubts::NONE));
+        let (lc, d) = doubt::compute(|| self.compute_local_class_scope(name, raw, *node));
+        self.local_scopes.borrow_mut().insert(name.clone(), (Some(lc.clone()), d));
+        Some(lc)
+    }
+
+    fn compute_local_class_scope(&self, name: &Name, raw: &stubs::RawClass, node: Node<'t>) -> LocalClassScope {
         let mut lc = LocalClassScope { name: name.clone(), ..Default::default() };
         let prefix = format!("{name}$");
         for k in self.local_raw.keys() {
@@ -292,13 +296,13 @@ impl<'t> FileModel<'t> {
         lc.members.sort();
         // the supertypes, resolved where the class header is (outside its body)
         let supers: Vec<Ty> = if raw.flags.has(Flags::ANON) {
-            match self.parent_of(*node) {
+            match self.parent_of(node) {
                 Some(oce) if oce.kind() == "object_creation_expression" => vec![self.created_class(oce)],
                 Some(ec) if ec.kind() == "enum_constant" => self.enclosing_class_name(ec).map(|e| Ty::class(&e)).into_iter().collect(),
                 _ => vec![Ty::Unknown],
             }
         } else {
-            let mut scope = self.parent_of(*node).map(|p| self.scope_at(p)).unwrap_or_default();
+            let mut scope = self.parent_of(node).map(|p| self.scope_at(p)).unwrap_or_default();
             scope.type_vars.extend(raw.type_params.iter().map(|t| t.name.clone()));
             raw.superclass.iter().chain(raw.interfaces.iter()).map(|t| self.index.resolve_type(t, &scope)).collect()
         };
@@ -319,8 +323,7 @@ impl<'t> FileModel<'t> {
                 _ => lc.unknown_super = true,
             }
         }
-        self.local_scopes.borrow_mut().insert(name.clone(), Some(lc.clone()));
-        Some(lc)
+        lc
     }
 
     pub fn text(&self, n: Node) -> &'t str {
@@ -571,40 +574,6 @@ impl<'t> FileModel<'t> {
         });
         map.get(&n.id()).map(|v| v.as_slice()).unwrap_or(&[])
     }
-
-    pub(crate) fn guard<R>(&self, id: usize, tag: u8, default: R, f: impl FnOnce() -> R) -> R {
-        self.work.set(self.work.get() + 1);
-        if !self.in_progress.borrow_mut().insert((id, tag)) {
-            self.cycle_hits.set(self.cycle_hits.get() + 1);
-            return default;
-        }
-        // leave the node even when `f` panics: the runner catches a rule's
-        // panic and runs the file's other rules on this same model
-        struct Leave<'a>(&'a RefCell<FxHashSet<(usize, u8)>>, (usize, u8));
-        impl Drop for Leave<'_> {
-            fn drop(&mut self) {
-                self.0.borrow_mut().remove(&self.1);
-            }
-        }
-        let _leave = Leave(&self.in_progress, (id, tag));
-        f()
-    }
-
-    /// Run `f` and report whether its result may be memoized: it completed
-    /// without hitting a cycle. Once the file has used up its work budget, a
-    /// result that did hit a cycle is replaced by "unknown" and memoized, so
-    /// provisional answers never pass for definitive ones.
-    pub(crate) fn clean<R: Unknowable>(&self, f: impl FnOnce() -> R) -> (R, bool) {
-        let before = self.cycle_hits.get();
-        let r = f();
-        if self.cycle_hits.get() == before {
-            (r, true)
-        } else if self.work.get() > WORK_BUDGET {
-            (R::unknown(), true)
-        } else {
-            (r, false)
-        }
-    }
 }
 
 /// The type declaration in `root` (or `root` itself) at `range`.
@@ -629,10 +598,6 @@ impl Unknowable for Ty {
     }
 }
 
-// Ordinary files stay below ~50k (largest seen across the corpus); nested
-// Hamcrest matcher trees reach millions.
-const WORK_BUDGET: u64 = 300_000;
-
 impl<'t> FileModel<'t> {
     /// Whether the members of `name` as this file sees them are certain: a
     /// class declared once, or in several files with one copy this file
@@ -648,62 +613,77 @@ impl<'t> ClassLookup for FileModel<'t> {
     }
 
     fn class(&self, name: &str) -> Option<Arc<ClassInfo>> {
+        let c = self.lookup_class(name);
+        if c.is_none() {
+            doubt::note(Doubt::MissingClass);
+        }
+        c
+    }
+}
+
+impl<'t> FileModel<'t> {
+    /// A class lowered here (local, anonymous, or a duplicated class's
+    /// certain copy), memoized with what lowering observed.
+    fn lowered(&self, name: &str, lower: impl FnOnce() -> ClassInfo) -> Option<Arc<ClassInfo>> {
+        if let Some((c, d)) = self.local_lowered.borrow().get(name) {
+            doubt::replay(*d);
+            return c.clone();
+        }
+        // guard against recursion while lowering
+        self.local_lowered.borrow_mut().insert(Arc::from(name), (None, Doubts::NONE));
+        let (info, d) = doubt::compute(lower);
+        let arc = Arc::new(info);
+        self.local_lowered.borrow_mut().insert(Arc::from(name), (Some(arc.clone()), d));
+        Some(arc)
+    }
+
+    fn lookup_class(&self, name: &str) -> Option<Arc<ClassInfo>> {
         if let Some((raw, node)) = self.local_raw.get(name) {
-            if let Some(c) = self.local_lowered.borrow().get(name) {
-                return c.clone();
-            }
-            // guard against recursion while lowering
-            self.local_lowered.borrow_mut().insert(Arc::from(name), None);
-            let scope = self.scope_at(*node);
-            let mut info = self.index.lower_raw_class(raw, &scope, Origin::Source { file: self.path.clone() });
-            if raw.flags.has(Flags::ANON) {
-                // super type from the creation expression
-                if let Some(oce) = self.parent_of(*node) {
-                    if oce.kind() == "object_creation_expression" {
-                        if let Some(t) = oce.field("type") {
-                            let mut st = self.created_class(oce);
-                            // `new TypeReference<>() {}`: inferred arguments, not a raw type
-                            let diamond = t.kind() == "generic_type" && t.kid_of_kind("type_arguments").is_some_and(|ta| ta.kids().is_empty());
-                            if let (true, Ty::Class { name, args }) = (diamond, &mut st) {
-                                if let Some(c) = self.index.class(name) {
-                                    *args = c.type_params.iter().map(|_| Ty::Unknown).collect();
+            return self.lowered(name, || {
+                let scope = self.scope_at(*node);
+                let mut info = self.index.lower_raw_class(raw, &scope, Origin::Source { file: self.path.clone() });
+                if raw.flags.has(Flags::ANON) {
+                    // super type from the creation expression
+                    if let Some(oce) = self.parent_of(*node) {
+                        if oce.kind() == "object_creation_expression" {
+                            if let Some(t) = oce.field("type") {
+                                let mut st = self.created_class(oce);
+                                // `new TypeReference<>() {}`: inferred arguments, not a raw type
+                                let diamond = t.kind() == "generic_type" && t.kid_of_kind("type_arguments").is_some_and(|ta| ta.kids().is_empty());
+                                if let (true, Ty::Class { name, args }) = (diamond, &mut st) {
+                                    if let Some(c) = self.index.class(name) {
+                                        *args = c.type_params.iter().map(|_| Ty::Unknown).collect();
+                                    }
+                                }
+                                let is_iface = st.class_name().and_then(|n| self.index.class(n)).is_some_and(|c| c.is_interface());
+                                if is_iface {
+                                    info.interfaces = vec![st];
+                                    info.superclass = Some(Ty::object());
+                                } else if st.is_known() {
+                                    info.superclass = Some(st);
+                                } else {
+                                    info.superclass = Some(Ty::Unknown);
                                 }
                             }
-                            let is_iface = st.class_name().and_then(|n| self.index.class(n)).is_some_and(|c| c.is_interface());
-                            if is_iface {
-                                info.interfaces = vec![st];
-                                info.superclass = Some(Ty::object());
-                            } else if st.is_known() {
-                                info.superclass = Some(st);
-                            } else {
-                                info.superclass = Some(Ty::Unknown);
+                        } else if oce.kind() == "enum_constant" {
+                            if let Some(e) = self.enclosing_class_name(oce) {
+                                info.superclass = Some(Ty::class(&e));
                             }
-                        }
-                    } else if oce.kind() == "enum_constant" {
-                        if let Some(e) = self.enclosing_class_name(oce) {
-                            info.superclass = Some(Ty::class(&e));
                         }
                     }
                 }
-            }
-            let arc = Arc::new(info);
-            self.local_lowered.borrow_mut().insert(Arc::from(name), Some(arc.clone()));
-            return Some(arc);
+                info
+            });
         }
         // a class declared in several files: this file's own copy, else the
         // copy this file certainly compiles against (see `copy_is_certain`)
         if self.index.is_duplicated(name) {
             let own = self.stub.classes.iter().find(|c| &*c.name == name).map(|raw| (&self.stub, raw, &self.path));
             if let Some((stub, raw, file)) = own.or_else(|| self.index.certain_copy(name, &self.path)) {
-                if let Some(c) = self.local_lowered.borrow().get(name) {
-                    return c.clone();
-                }
-                self.local_lowered.borrow_mut().insert(Arc::from(name), None);
-                let scope = self.index.scope_for_raw(stub, raw);
-                let info = self.index.lower_raw_class(raw, &scope, Origin::Source { file: file.clone() });
-                let arc = Arc::new(info);
-                self.local_lowered.borrow_mut().insert(Arc::from(name), Some(arc.clone()));
-                return Some(arc);
+                return self.lowered(name, || {
+                    let scope = self.index.scope_for_raw(stub, raw);
+                    self.index.lower_raw_class(raw, &scope, Origin::Source { file: file.clone() })
+                });
             }
         }
         self.index.class(name)
