@@ -2530,16 +2530,21 @@ fn many_lombok_configs_in_sibling_directories_load_in_one_walk() {
     // Review round 4 (K2): each config's eligibility was decided by its own
     // walks of every ancestor, which lists all the siblings: 2000 configs
     // under one directory took 8.4 s at every load and full walk (134 ms
-    // before). They are met from the discovery's own walk now.
+    // before). They are met from the discovery's own walk now. Counted as
+    // work, not time (review round 5, L3): a load, a sync and a full walk
+    // ask for no config's eligibility one by one.
     let dir = nested_lombok_project("lombokmany");
-    for i in 0..1500 {
+    for i in 0..300 {
         write(&dir, &format!("mods/m{i:04}/sub/lombok.config"), "lombok.accessors.chain = true\n");
     }
     set_tree_mtime(&dir, ".", std::time::SystemTime::now() - std::time::Duration::from_secs(3600));
-    let t = std::time::Instant::now();
+    let asked = grounds_engine::project::would_find_calls();
     let mut s = Session::open(&dir).unwrap();
     s.sync(&[]);
-    let took = t.elapsed();
-    assert!(took < std::time::Duration::from_secs(3), "a load and a sync with 1500 configs took {took:?}");
+    // (an ignore file that appears walks the workspace)
+    write(&dir, ".gitignore", "*.log\n");
+    s.sync(&[]);
+    assert_eq!(s.project.lombok.found().len(), 300);
+    assert_eq!(grounds_engine::project::would_find_calls() - asked, 0, "configs met one by one, each with walks of its ancestors");
     let _ = std::fs::remove_dir_all(&dir);
 }

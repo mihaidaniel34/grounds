@@ -134,6 +134,18 @@ fn spring_registrations(ws: &Workspace) -> (Vec<String>, Vec<String>) {
     (out, auto)
 }
 
+thread_local! {
+    static WOULD_FIND_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread has asked `LombokConfigs::would_find`, each
+/// a walk of a directory and of its ancestors: a test of the work a load
+/// does (it asks only for a config a rescan meets, never per config found).
+#[doc(hidden)]
+pub fn would_find_calls() -> usize {
+    WOULD_FIND_CALLS.with(|c| c.get())
+}
+
 /// Parsed `lombok.config` files by directory.
 #[derive(Debug, Default, Clone)]
 pub struct LombokConfigs {
@@ -186,6 +198,7 @@ impl LombokConfigs {
     /// discovery does (`Workspace::discover_in`): a config under an ignored
     /// directory is not found.
     pub fn would_find(root: &Path, cfg: &Path) -> Option<bool> {
+        WOULD_FIND_CALLS.with(|c| c.set(c.get() + 1));
         let dir = cfg.parent()?;
         if !Self::reads_dir(root, dir) {
             return Some(false);
