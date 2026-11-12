@@ -40,14 +40,103 @@ pub enum Request {
     Shutdown,
 }
 
+/// How a request ended, as the CLI exits with it and the wire carries it:
+/// 0, 1 or 2, as before there was a type for it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Outcome {
+    /// Done, nothing to report (0).
+    #[default]
+    Clean,
+    /// The request could not be carried out (1): what went wrong is on
+    /// stderr.
+    Failure,
+    /// Done, with problems to report (2): hooks hand them to the agent.
+    Problems,
+}
+
+impl Outcome {
+    /// The process exit code, and the number on the wire.
+    pub fn code(self) -> i32 {
+        match self {
+            Outcome::Clean => 0,
+            Outcome::Failure => 1,
+            Outcome::Problems => 2,
+        }
+    }
+
+    fn of(code: i32) -> Option<Outcome> {
+        [Outcome::Clean, Outcome::Failure, Outcome::Problems].into_iter().find(|o| o.code() == code)
+    }
+}
+
+impl Serialize for Outcome {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_i32(self.code())
+    }
+}
+
+impl<'de> Deserialize<'de> for Outcome {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Outcome, D::Error> {
+        let code = i32::deserialize(d)?;
+        Outcome::of(code).ok_or_else(|| serde::de::Error::custom(format!("no outcome has code {code}")))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Response {
-    pub code: i32,
+    pub code: Outcome,
     pub stdout: String,
     pub stderr: String,
     /// Classpath warnings, once per session (for stderr; hooks drop them).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+}
+
+/// A daemon's answer to `Ping`: the root it serves and the build it runs
+/// (`build_id`). On the wire it is a `Response` as it was before it had a
+/// type: `ok <root>` and a newline on stdout, the build on stderr.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pong {
+    pub root: PathBuf,
+    pub build: String,
+}
+
+impl Pong {
+    pub fn response(&self) -> Response {
+        Response { code: Outcome::Clean, stdout: format!("ok {}\n", self.root.display()), stderr: self.build.clone(), ..Default::default() }
+    }
+
+    /// The pong `r` carries, if it is one.
+    pub fn read(r: &Response) -> Option<Pong> {
+        let root = r.stdout.strip_prefix("ok ")?.strip_suffix('\n')?;
+        (r.code == Outcome::Clean).then(|| Pong { root: PathBuf::from(root), build: r.stderr.clone() })
+    }
+}
+
+/// What a look for the daemon of a workspace found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Probe {
+    /// No socket, one nothing listens on, or a server that went without
+    /// answering.
+    Absent,
+    /// A socket another user owns, or a server that answers otherwise than a
+    /// daemon does.
+    Foreign,
+    /// A server that took the request and has not answered in the time
+    /// given: a daemon still loading its project, or busy with a request.
+    NotAnswering,
+    /// A daemon of this build.
+    Ready(Pong),
+    /// A daemon of another build, to be replaced.
+    OtherBuild(Pong),
+}
+
+/// Why a request to a daemon got no response.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Unanswered {
+    Absent,
+    Foreign,
+    NotAnswering,
 }
 
 /// Identity of the running executable (path + size + mtime), so a client can
@@ -112,8 +201,8 @@ pub fn execute(session: &mut Session, req: &Request) -> Response {
 
 fn execute_with(session: &mut Session, req: &Request, warnings: &[String]) -> Response {
     match req {
-        Request::Ping => Response { code: 0, stdout: format!("ok {}\n", session.root().display()), stderr: build_id(), ..Default::default() },
-        Request::Shutdown => Response { code: 0, stdout: "bye\n".into(), ..Default::default() },
+        Request::Ping => Pong { root: session.root().to_path_buf(), build: build_id() }.response(),
+        Request::Shutdown => Response { code: Outcome::Clean, stdout: "bye\n".into(), ..Default::default() },
         Request::Check { mode, files, all_lines, baseline, max, min_severity, json, color, base, sarif } => {
             let min = Severity::parse(min_severity).unwrap_or(Severity::Warning);
             let base = match base {
@@ -122,7 +211,7 @@ fn execute_with(session: &mut Session, req: &Request, warnings: &[String]) -> Re
                     Some(mb) => Some(mb),
                     None => {
                         let msg = format!("grounds: no merge base of `{rev}` and HEAD; fetch enough history (actions/checkout: `fetch-depth: 0`, or `--base HEAD^1` on a pull request's merge commit with `fetch-depth: 2`)\n");
-                        return Response { code: 1, stderr: msg, ..Default::default() };
+                        return Response { code: Outcome::Failure, stderr: msg, ..Default::default() };
                     }
                 },
             };
@@ -130,7 +219,7 @@ fn execute_with(session: &mut Session, req: &Request, warnings: &[String]) -> Re
             // (git failing: the check cannot tell what changed, and says so)
             let report = match session.check(&opts) {
                 Ok(report) => report,
-                Err(e) => return Response { code: 1, stderr: format!("grounds: {e}\n"), ..Default::default() },
+                Err(e) => return Response { code: Outcome::Failure, stderr: format!("grounds: {e}\n"), ..Default::default() },
             };
             let problems = !report.findings.is_empty() || !report.pending.is_empty();
             let text = if *sarif {
@@ -140,23 +229,23 @@ fn execute_with(session: &mut Session, req: &Request, warnings: &[String]) -> Re
             } else {
                 render(&report, *max, crate::report::Style { color: *color })
             };
-            Response { code: if problems { 2 } else { 0 }, stdout: text, ..Default::default() }
+            Response { code: if problems { Outcome::Problems } else { Outcome::Clean }, stdout: text, ..Default::default() }
         }
         Request::Baseline { files, merge } => match session.write_baseline(files, *merge) {
-            Ok(n) => Response { code: 0, stdout: format!("baseline: {n} accepted finding(s)\n"), ..Default::default() },
-            Err(e) => Response { code: 1, stderr: format!("baseline failed: {e}\n"), ..Default::default() },
+            Ok(n) => Response { code: Outcome::Clean, stdout: format!("baseline: {n} accepted finding(s)\n"), ..Default::default() },
+            Err(e) => Response { code: Outcome::Failure, stderr: format!("baseline failed: {e}\n"), ..Default::default() },
         },
         Request::SessionStart => execute_with(session, &Request::Baseline { files: Vec::new(), merge: true }, warnings),
         Request::ImpactedTests { files } => {
             let tests = match session.impacted_tests(files) {
                 Ok(tests) => tests,
-                Err(e) => return Response { code: 1, stderr: format!("grounds: {e}\n"), ..Default::default() },
+                Err(e) => return Response { code: Outcome::Failure, stderr: format!("grounds: {e}\n"), ..Default::default() },
             };
             let mut out = String::new();
             for t in &tests {
                 out.push_str(&format!("{}\t{}\t{}\n", t.module, t.task, t.class));
             }
-            Response { code: 0, stdout: out, ..Default::default() }
+            Response { code: Outcome::Clean, stdout: out, ..Default::default() }
         }
     }
 }
@@ -296,37 +385,64 @@ fn handle(session: &mut Session, stream: UnixStream) -> bool {
     let req: Request = match serde_json::from_str(&line) {
         Ok(r) => r,
         Err(e) => {
-            let resp = Response { code: 1, stderr: format!("bad request: {e}\n"), ..Default::default() };
+            let resp = Response { code: Outcome::Failure, stderr: format!("bad request: {e}\n"), ..Default::default() };
             let _ = writeln!(&stream, "{}", serde_json::to_string(&resp).unwrap_or_default());
             return false;
         }
     };
     let stop = matches!(req, Request::Shutdown);
     crate::trace::log(|| format!("request {}", line.chars().take(300).collect::<String>()));
-    let resp = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| execute(session, &req))).unwrap_or_else(|_| Response { code: 1, stderr: "internal error\n".into(), ..Default::default() });
+    let resp = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| execute(session, &req))).unwrap_or_else(|_| Response { code: Outcome::Failure, stderr: "internal error\n".into(), ..Default::default() });
     let _ = writeln!(&stream, "{}", serde_json::to_string(&resp).unwrap_or_default());
-    crate::trace::log(|| format!("answered, code {}", resp.code));
+    crate::trace::log(|| format!("answered, code {}", resp.code.code()));
     stop
 }
 
-/// Send a request to a running daemon; `None` if none is listening.
+/// Send a request to a running daemon; `None` if none answered.
 pub fn request(root: &Path, req: &Request) -> Option<Response> {
-    request_with_timeout(root, req, Duration::from_secs(120))
+    let sock = socket_path(root)?;
+    ask(&sock, req, Duration::from_secs(120)).ok()
 }
 
-fn request_with_timeout(root: &Path, req: &Request, timeout: Duration) -> Option<Response> {
-    let sock = socket_path(root)?;
-    if !owned_by_us(&sock) {
-        return None;
+/// Look for the daemon of `root`, waiting `within` for its answer.
+pub fn probe(root: &Path, within: Duration) -> Probe {
+    match socket_path(root) {
+        Some(sock) => probe_at(&sock, within),
+        None => Probe::Absent,
     }
-    let stream = UnixStream::connect(&sock).ok()?;
-    stream.set_read_timeout(Some(timeout)).ok()?;
-    stream.set_write_timeout(Some(Duration::from_secs(10))).ok()?;
-    writeln!(&stream, "{}", serde_json::to_string(req).ok()?).ok()?;
+}
+
+fn probe_at(sock: &Path, within: Duration) -> Probe {
+    match ask(sock, &Request::Ping, within) {
+        Ok(r) => match Pong::read(&r) {
+            Some(pong) if pong.build == build_id() => Probe::Ready(pong),
+            Some(pong) => Probe::OtherBuild(pong),
+            None => Probe::Foreign,
+        },
+        Err(Unanswered::Absent) => Probe::Absent,
+        Err(Unanswered::Foreign) => Probe::Foreign,
+        Err(Unanswered::NotAnswering) => Probe::NotAnswering,
+    }
+}
+
+/// `req` sent to the server at `sock`, and its response within `timeout`.
+fn ask(sock: &Path, req: &Request, timeout: Duration) -> Result<Response, Unanswered> {
+    if !owned_by_us(sock) {
+        return Err(if std::fs::symlink_metadata(sock).is_ok() { Unanswered::Foreign } else { Unanswered::Absent });
+    }
+    let stream = UnixStream::connect(sock).map_err(|_| Unanswered::Absent)?;
+    stream.set_read_timeout(Some(timeout)).map_err(|_| Unanswered::Absent)?;
+    stream.set_write_timeout(Some(Duration::from_secs(10))).map_err(|_| Unanswered::Absent)?;
+    let req = serde_json::to_string(req).map_err(|_| Unanswered::Absent)?;
+    writeln!(&stream, "{req}").map_err(|_| Unanswered::Absent)?;
     let mut reader = BufReader::new(&stream);
     let mut line = String::new();
-    reader.read_line(&mut line).ok()?;
-    serde_json::from_str(&line).ok()
+    match reader.read_line(&mut line) {
+        Ok(0) => Err(Unanswered::Absent),
+        Ok(_) => serde_json::from_str(&line).map_err(|_| Unanswered::Foreign),
+        Err(e) if matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => Err(Unanswered::NotAnswering),
+        Err(_) => Err(Unanswered::Absent),
+    }
 }
 
 /// Start a daemon in the background (detached) for later requests.
@@ -346,16 +462,21 @@ pub fn spawn_background(root: &Path) {
 /// (and optionally start a daemon for next time).
 pub fn run(root: &Path, req: &Request, start_daemon: bool) -> anyhow::Result<Response> {
     // a busy or stuck daemon must not hold up a hook: fall back to in-process
-    if let Some(p) = request_with_timeout(root, &Request::Ping, Duration::from_secs(2)) {
-        if p.stderr == build_id() {
+    match probe(root, Duration::from_secs(2)) {
+        Probe::Ready(_) => {
             if let Some(r) = request(root, req) {
                 return Ok(r);
             }
-        } else {
+        }
+        Probe::OtherBuild(_) => {
             // started by a different build: replace it
             let _ = request(root, &Request::Shutdown);
             std::thread::sleep(Duration::from_millis(50));
         }
+        // (a daemon still loading its project is not waited for, and is
+        // asked to start again, which it declines: answered in-process, as
+        // with no daemon)
+        Probe::NotAnswering | Probe::Absent | Probe::Foreign => {}
     }
     if start_daemon {
         crate::trace::log(|| format!("client: no daemon for {}, starting one and answering in-process", root.display()));
@@ -409,6 +530,62 @@ mod tests {
         drop(Bound::bind(&sock, root).unwrap());
         assert!(!sock.exists());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The outcome and the pong are what the wire carried before they had
+    /// types: the same bytes either way.
+    #[test]
+    fn outcomes_and_pongs_are_the_same_bytes_on_the_wire() {
+        use super::{Outcome, Pong, Response};
+        for (o, n) in [(Outcome::Clean, 0), (Outcome::Failure, 1), (Outcome::Problems, 2)] {
+            let r = Response { code: o, stdout: "x".into(), ..Default::default() };
+            assert_eq!(serde_json::to_string(&r).unwrap(), format!("{{\"code\":{n},\"stdout\":\"x\",\"stderr\":\"\"}}"));
+            assert_eq!(serde_json::from_str::<Response>(&format!("{{\"code\":{n},\"stdout\":\"\",\"stderr\":\"\"}}")).unwrap().code, o);
+            assert_eq!(o.code(), n);
+        }
+        assert!(serde_json::from_str::<Response>("{\"code\":3,\"stdout\":\"\",\"stderr\":\"\"}").is_err());
+        let pong = Pong { root: "/w/p".into(), build: "/bin/grounds:1:2".into() };
+        assert_eq!(serde_json::to_string(&pong.response()).unwrap(), "{\"code\":0,\"stdout\":\"ok /w/p\\n\",\"stderr\":\"/bin/grounds:1:2\"}");
+        assert_eq!(Pong::read(&pong.response()), Some(pong));
+        assert_eq!(Pong::read(&Response { stdout: "bye\n".into(), ..Default::default() }), None);
+    }
+
+    /// A probe tells a daemon still loading (it has bound its socket and
+    /// accepts nothing yet) from no daemon, from another program, and from
+    /// a daemon of another build.
+    #[test]
+    fn a_probe_tells_what_it_found() {
+        use super::{build_id, probe_at, Pong, Probe};
+        let sock = socket_in("probe");
+        let within = Duration::from_millis(300);
+        assert_eq!(probe_at(&sock, within), Probe::Absent, "no socket");
+        let loading = UnixListener::bind(&sock).unwrap();
+        assert_eq!(probe_at(&sock, within), Probe::NotAnswering, "bound, not answering yet");
+        drop(loading);
+        assert_eq!(probe_at(&sock, within), Probe::Absent, "a socket nothing listens on");
+        std::fs::remove_file(&sock).unwrap();
+        // a server answering each connection with `answer`
+        let serve = |answer: String| {
+            let listener = UnixListener::bind(&sock).unwrap();
+            std::thread::spawn(move || {
+                if let Ok((stream, _)) = listener.accept() {
+                    let _ = super::read_request(&stream, Duration::from_secs(5));
+                    let _ = writeln!(&stream, "{answer}");
+                }
+            })
+        };
+        let cases = [
+            ("not json".to_string(), Probe::Foreign),
+            (serde_json::to_string(&Pong { root: "/r".into(), build: "an older build".into() }.response()).unwrap(), Probe::OtherBuild(Pong { root: "/r".into(), build: "an older build".into() })),
+            (serde_json::to_string(&Pong { root: "/r".into(), build: build_id() }.response()).unwrap(), Probe::Ready(Pong { root: "/r".into(), build: build_id() })),
+        ];
+        for (answer, found) in cases {
+            let server = serve(answer);
+            assert_eq!(probe_at(&sock, Duration::from_secs(5)), found);
+            server.join().unwrap();
+            std::fs::remove_file(&sock).unwrap();
+        }
+        let _ = std::fs::remove_dir_all(sock.parent().unwrap());
     }
 
     /// A daemon whose project cannot be loaded fails after it bound its

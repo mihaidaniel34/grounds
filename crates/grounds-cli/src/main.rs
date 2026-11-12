@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use grounds_engine::daemon::Outcome;
 use grounds_engine::report;
 use std::path::PathBuf;
 
@@ -268,10 +269,10 @@ fn run() -> anyhow::Result<()> {
             for w in &resp.warnings {
                 eprintln!("{w}");
             }
-            if resp.stdout.is_empty() && resp.code == 0 && !json && !sarif {
+            if resp.stdout.is_empty() && resp.code == Outcome::Clean && !json && !sarif {
                 eprintln!("grounds: no new problems in changed code");
             }
-            std::process::exit(if exit_zero && resp.code == 2 { 0 } else { resp.code });
+            std::process::exit(if exit_zero && resp.code == Outcome::Problems { Outcome::Clean } else { resp.code }.code());
         }
         Cmd::Baseline { files, root, merge } => {
             let root = find_root(root);
@@ -281,7 +282,7 @@ fn run() -> anyhow::Result<()> {
             for w in &resp.warnings {
                 eprintln!("{w}");
             }
-            std::process::exit(resp.code);
+            std::process::exit(resp.code.code());
         }
         Cmd::ImpactedTests { files, root, gradle } => {
             let root = find_root(root);
@@ -319,7 +320,7 @@ fn run() -> anyhow::Result<()> {
             }
             grounds_engine::daemon::serve(&root, std::time::Duration::from_secs(idle_minutes * 60))?;
         }
-        Cmd::Hook { event } => std::process::exit(hook(&event)?),
+        Cmd::Hook { event } => std::process::exit(hook(&event)?.code()),
         Cmd::Hooks => println!("{}", HOOKS_JSON),
         Cmd::Classpath { root, gradle, maven, maven_lifecycle } => {
             let root = find_root(root);
@@ -419,8 +420,9 @@ const HOOKS_JSON: &str = r#"{
   }
 }"#;
 
-/// Claude Code hooks. Exit code 2 feeds stderr back to the model.
-fn hook(event: &str) -> anyhow::Result<i32> {
+/// Claude Code hooks. Exit code 2 (`Problems`) feeds stderr back to the
+/// model; a request that failed (`Failure`) is not handed to it.
+fn hook(event: &str) -> anyhow::Result<Outcome> {
     use grounds_engine::daemon::{run, Request};
     use grounds_engine::session::Mode;
     use std::io::Read;
@@ -432,35 +434,35 @@ fn hook(event: &str) -> anyhow::Result<i32> {
     // only act inside Java workspaces
     let java_project = ["build.gradle", "build.gradle.kts", "pom.xml", "settings.gradle", "settings.gradle.kts"].iter().any(|f| root.join(f).exists());
     if !java_project {
-        return Ok(0);
+        return Ok(Outcome::Clean);
     }
     match event {
         "post-edit" => {
-            let Some(file) = v.pointer("/tool_input/file_path").and_then(|f| f.as_str()) else { return Ok(0) };
+            let Some(file) = v.pointer("/tool_input/file_path").and_then(|f| f.as_str()) else { return Ok(Outcome::Clean) };
             if !file.ends_with(".java") {
-                return Ok(0);
+                return Ok(Outcome::Clean);
             }
             let req = Request::Check { mode: Mode::Edit, files: vec![PathBuf::from(file)], all_lines: false, baseline: true, max: 10, min_severity: "warning".into(), json: false, color: false, base: None, sarif: false };
             let resp = run(&root, &req, true)?;
-            if resp.code == 2 {
+            if resp.code == Outcome::Problems {
                 eprint!("{}", resp.stdout);
-                return Ok(2);
+                return Ok(Outcome::Problems);
             }
-            Ok(0)
+            Ok(Outcome::Clean)
         }
         "stop" => {
             // avoid loops: when Claude is already continuing because of this hook, let it stop
             if v.get("stop_hook_active").and_then(|b| b.as_bool()) == Some(true) {
-                return Ok(0);
+                return Ok(Outcome::Clean);
             }
             let req = Request::Check { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, baseline: true, max: 15, min_severity: "warning".into(), json: false, color: false, base: None, sarif: false };
             let resp = run(&root, &req, true)?;
-            if resp.code == 2 {
+            if resp.code == Outcome::Problems {
                 eprint!("{}", resp.stdout);
                 eprintln!("(fix these or explain why they are fine; accept intentional ones with `grounds baseline <file>`)");
-                return Ok(2);
+                return Ok(Outcome::Problems);
             }
-            Ok(0)
+            Ok(Outcome::Clean)
         }
         "session-start" => {
             // accept whatever is already wrong in uncommitted work, so the session only sees new problems;
@@ -469,11 +471,11 @@ fn hook(event: &str) -> anyhow::Result<i32> {
             for w in &resp.warnings {
                 println!("{w}");
             }
-            Ok(0)
+            Ok(Outcome::Clean)
         }
         _ => {
             eprintln!("unknown hook event {event}");
-            Ok(1)
+            Ok(Outcome::Failure)
         }
     }
 }

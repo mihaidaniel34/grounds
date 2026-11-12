@@ -2359,7 +2359,7 @@ fn a_git_that_cannot_list_the_changes_fails_the_check() {
     assert!(e.to_string().contains("git status"), "{e}");
     let req = grounds_engine::daemon::Request::Check { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, baseline: false, max: 10, min_severity: "info".into(), json: false, color: false, base: None, sarif: false };
     let resp = grounds_engine::daemon::execute(&mut s, &req);
-    assert_eq!(resp.code, 1, "a failure, not a clean answer: {resp:?}");
+    assert_eq!(resp.code, grounds_engine::daemon::Outcome::Failure, "a failure, not a clean answer: {resp:?}");
     assert!(resp.stdout.is_empty() && resp.stderr.starts_with("grounds: `git status"), "{resp:?}");
     let _ = std::fs::remove_dir_all(&dir);
 }
