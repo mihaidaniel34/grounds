@@ -99,6 +99,12 @@ pub enum Warning {
     /// A directory entry holds too many files to be a directory of classes
     /// (`/`, a home directory, a jar cache) and was not read.
     OversizedEntry { entry: String },
+    /// Compile-break findings of this run made in files of `modules`
+    /// module(s) where grounds has no evidence of what the build compiles
+    /// (`crate::picture`): their picture of the build is guessed, and the
+    /// stable promise does not cover them. Made after a run's analysis
+    /// (`crate::picture::guessed`), not at load.
+    GuessedBuild { modules: usize, findings: usize },
 }
 
 impl std::fmt::Display for Warning {
@@ -123,6 +129,10 @@ impl std::fmt::Display for Warning {
             Warning::JdkAbsent { home } => write!(
                 f,
                 "grounds: warning: {home} has no lib/ct.sym (a JRE, or a JDK older than 9), so the JDK's classes are unknown and checks that need them stay silent. Set `java_home` in grounds.toml to a JDK 9 or newer (silence: `[classpath] warn = false`)"
+            ),
+            Warning::GuessedBuild { modules, findings } => write!(
+                f,
+                "grounds: warning: the build picture is guessed for {modules} module(s): {findings} compile-break finding(s) made there are not covered by the stable promise. Build the project so that its class files show grounds which files the build compiles (silence: `[classpath] warn = false`)"
             ),
             Warning::OversizedEntry { entry } => write!(
                 f,

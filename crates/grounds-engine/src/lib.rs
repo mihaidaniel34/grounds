@@ -11,6 +11,7 @@ pub mod fsutil;
 pub mod git;
 pub mod java_release;
 pub mod oracle;
+pub mod picture;
 pub mod project;
 pub mod report;
 pub mod selfcheck;

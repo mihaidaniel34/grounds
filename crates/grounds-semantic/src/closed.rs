@@ -35,6 +35,8 @@ use grounds_syntax::{Node, NodeExt};
 use std::sync::Arc;
 
 #[cfg(test)]
+mod build_tests;
+#[cfg(test)]
 mod tests;
 
 /// What a compile-break finding asserts, in the words `grounds changed`
@@ -124,6 +126,11 @@ pub enum Open {
     /// The file is in a multi-release source set (`src/main/java24`), which
     /// compiles for its own, newer release.
     NewerReleaseSources(u32),
+    /// The build does not compile this file: its module was built and its
+    /// source root is not part of what was compiled (test data, samples, an
+    /// old snapshot of the sources). Nothing compiles it, and what it names
+    /// may resolve to a class it was never written against.
+    NotInBuild,
 }
 
 impl From<Gap> for Open {
@@ -149,6 +156,9 @@ pub struct Closed<'m, 't> {
 impl<'t> FileModel<'t> {
     /// Whether this file is one in which absence can be claimed at all.
     fn file_closed(&self) -> Result<(), Open> {
+        if self.index.in_build(&self.path) == InBuild::No {
+            return Err(Open::NotInBuild);
+        }
         if self.stub.classes.iter().any(|k| k.annotations.iter().any(|a| lombok::processor_annotation(a, &self.stub.imports).as_deref() == Some("lombok.experimental.ExtensionMethod"))) {
             return Err(Open::ExtensionMethods);
         }
@@ -166,8 +176,9 @@ impl<'t> FileModel<'t> {
     /// unmodelled, no JDK class newer than the one loaded) is not enough:
     /// every project class of it must be read from a file that parses, from
     /// the copy this file compiles against when its name is declared more
-    /// than once (the build's module dependencies are not known), and
-    /// library classes from the jar versions the project builds against.
+    /// than once (the build's module dependencies are not known), and library
+    /// classes from the jar versions the project builds against. Nothing is
+    /// claimed in a file the build does not compile.
     pub fn closed(&self, name: &str, jars: Jars) -> Result<Closed<'_, 't>, Open> {
         self.file_closed()?;
         let c = self.class(name).ok_or_else(|| Open::NotFound(Name::from(name)))?;
@@ -249,6 +260,9 @@ impl<'t> FileModel<'t> {
     /// the code agrees: with -source/-target alone, or a release grounds
     /// cannot read, the API is that of whichever JDK runs the build.
     pub fn java_release(&self) -> Result<Release<'_, 't>, Open> {
+        if self.index.in_build(&self.path) == InBuild::No {
+            return Err(Open::NotInBuild);
+        }
         let Some(release) = self.index.exact_release(&self.path) else { return Err(Open::ReleaseNotExact) };
         // multi-release sources (`src/main/java24`) compile for their own, newer release
         let own = self.path.split(['/', '\\']).filter_map(|d| d.strip_prefix("java")).filter_map(|v| v.strip_prefix('-').unwrap_or(v).parse::<u32>().ok()).max();
@@ -288,8 +302,9 @@ impl<'t> FileModel<'t> {
     pub fn unassignable(&self, value: Node<'t>, target: &Ty) -> Option<Claim> {
         // a file that does not parse is no ground for a compile-break claim,
         // nor one a language-changing javac plugin compiles (Manifold's
-        // structural interfaces make unrelated classes assignable)
-        if self.file.has_errors() || self.index.language_extended(&self.path) {
+        // structural interfaces make unrelated classes assignable), nor one
+        // the build does not compile
+        if self.file.has_errors() || self.index.language_extended(&self.path) || self.index.in_build(&self.path) == InBuild::No {
             return None;
         }
         if value.kind() != "method_invocation" {

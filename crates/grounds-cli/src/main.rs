@@ -547,6 +547,12 @@ fn check(root: &std::path::Path, paths: &[PathBuf], format: &str, rules: Option<
     let mut findings = analyze::analyze_files(&project, &ruleset, &options, &files);
     let min = min_sev.as_deref().and_then(grounds_rules::Severity::parse).unwrap_or(grounds_rules::Severity::Info);
     findings.retain(|f| f.severity <= min);
+    // (after the findings: whether compile-break claims rest on a guessed
+    // picture of the build, once for the run)
+    let guessed = grounds_engine::picture::guessed(&project, &findings);
+    if let Some(w) = &guessed {
+        eprintln!("{w}");
+    }
     if stats {
         let mut by: std::collections::BTreeMap<&str, usize> = Default::default();
         for f in &findings {
@@ -561,7 +567,7 @@ fn check(root: &std::path::Path, paths: &[PathBuf], format: &str, rules: Option<
         match format {
             "json" => println!("{}", report::json(&findings)),
             "sarif" => {
-                let warnings: Vec<String> = project.classpath_warnings.iter().map(|w| w.to_string()).collect();
+                let warnings: Vec<String> = project.classpath_warnings.iter().chain(&guessed).map(|w| w.to_string()).collect();
                 println!("{}", report::sarif(&findings, &project.workspace.root, &warnings))
             }
             _ => print!("{}", report::text(&findings, max, style)),

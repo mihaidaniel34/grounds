@@ -161,6 +161,10 @@ fn serialize_tolerates<S: serde::Serializer>(t: &&'static [(Doubt, &'static str)
 /// with the change (a finding on a changed line whose claim the project
 /// before the change did not get, a place in another file that the change
 /// broke), and a gap in the model is there before and after the change alike.
+/// The promise holds where the build picture is known: a finding made in a
+/// file the build output shows the build compiles is stable; one made where
+/// grounds has no evidence of what the build compiles (never built) stays
+/// preview, and the kernel makes none in a file the build does not compile.
 /// Run over a whole project (`grounds check`) the same rules are preview:
 /// each unseen project has features the model lacks (docs/holdout). The
 /// wiring rules (`bean-not-found` and the rest) are compared the same way but
@@ -191,13 +195,17 @@ impl RuleMeta {
     }
 
     /// Whether `grounds changed` holds this rule's findings to the stable
-    /// promise (see [`STABLE_IN_CHANGED`]).
+    /// promise, those made in a file the build is known to compile (see
+    /// [`STABLE_IN_CHANGED`]).
     pub fn stable_in_changed(&self) -> bool {
         self.maturity == Maturity::Stable || STABLE_IN_CHANGED.contains(&self.id)
     }
 
     /// The maturity of this rule's findings in `grounds changed`
-    /// (`changed`) or in a whole-project `grounds check`.
+    /// (`changed`) or in a whole-project `grounds check`: what the rules
+    /// selected for a mode are held to. In `grounds changed` a finding of a
+    /// rule stable there is stable only when made in a file the build is
+    /// known to compile; one made under a guessed build picture is preview.
     pub fn maturity_in(&self, changed: bool) -> Maturity {
         if changed && self.stable_in_changed() {
             Maturity::Stable

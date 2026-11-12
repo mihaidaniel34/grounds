@@ -144,6 +144,12 @@ fn preview_false_keeps_the_breaks_in_changed_only() {
     use grounds_engine::session::{CheckOptions, Mode, Session};
     for preview in [false, true] {
         let dir = project(&format!("switch-{preview}"), Some(&format!("[rules]\npreview = {preview}\n")));
+        // built: the class file of `A` in the output of `src/main/java` (the
+        // build picture reads class files' names and times) shows the build
+        // compiles the file, where the promise holds
+        std::fs::write(dir.join(".gitignore"), "build/\n").unwrap();
+        std::fs::create_dir_all(dir.join("build/classes/java/main/app")).unwrap();
+        std::fs::write(dir.join("build/classes/java/main/app/A.class"), "").unwrap();
         git(&dir, &["init", "-q"]);
         git(&dir, &["add", "-A"]);
         git(&dir, &["commit", "-qm", "init"]);

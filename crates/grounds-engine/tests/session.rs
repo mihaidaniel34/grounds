@@ -367,7 +367,11 @@ fn classpath_warnings_once_per_session_and_at_session_start() {
     assert!(again.warnings.is_empty());
     let sarif: serde_json::Value = serde_json::from_str(&again.stdout).unwrap();
     assert!(sarif["runs"][0].get("invocations").is_none());
-    assert_eq!(execute(&mut s, &Request::SessionStart).warnings, warned.warnings);
+    // at session start the message about the missing classpath also says,
+    // in one sentence, that without a build the build picture is guessed
+    let start = execute(&mut s, &Request::SessionStart).warnings;
+    assert_eq!(start.len(), 1, "{start:?}");
+    assert_eq!(start[0], format!("{} Without a build of the project, grounds also guesses which files the build compiles (1 module(s)), and its compile-break findings there are not covered by the stable promise.", warned.warnings[0]));
     assert!(execute(&mut s, &check(false)).warnings.is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -487,6 +491,20 @@ fn a_changed_build_file_reloads_the_project() {
 /// after a change, so `grounds changed` must not report it, even on a line
 /// the change touches, while what the change does break is reported.
 fn gap_project(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let (repo, dir) = unbuilt_gap_project(name);
+    // built: the class file of `Lib` in its source set's output shows that
+    // the build compiles `src/main/java` (the build picture reads the names
+    // and times of class files, not their content), so what grounds claims
+    // there is held to the promise
+    write(&dir, ".gitignore", "build/\n");
+    write(&dir, "build/classes/java/main/demo/Lib.class", "");
+    git(&repo, &["add", "-A"]);
+    git(&repo, &["commit", "-qm", "built"]);
+    (repo, dir)
+}
+
+/// The same project, never built: which files the build compiles is guessed.
+fn unbuilt_gap_project(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
     let repo = std::env::temp_dir().join(format!("grounds-gap-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&repo);
     std::fs::create_dir_all(&repo).unwrap();
@@ -574,6 +592,29 @@ fn a_pre_existing_break_claim_on_a_changed_line_is_not_reported() {
     assert_eq!(json(&Session::open(&dir).unwrap().check(&opts(Some(mb))).unwrap()), json(&r));
     // against HEAD the branch is clean
     assert!(warm.check(&opts(None)).unwrap().findings.is_empty());
+    let _ = std::fs::remove_dir_all(&repo);
+}
+
+/// Never built, the same new break on a changed line is reported, made under
+/// a guessed build picture, and preview: the promise holds where the build
+/// is known to compile the file.
+#[test]
+fn a_new_break_in_a_module_never_built_is_preview() {
+    let (repo, dir) = unbuilt_gap_project("unbuilt");
+    let use_java = "src/main/java/demo/Use.java";
+    let opts = CheckOptions { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, use_baseline: false, min_severity: Severity::Info, base: None };
+    let mut warm = Session::open(&dir).unwrap();
+    write(&dir, use_java, "package demo;\nclass Use {\n    void a(Lib l) { l.gap(); /* touched */ }\n    void b(Lib l) { l.missing(); }\n}\n");
+    let r = warm.check(&opts).unwrap();
+    assert_eq!(claims(&r), vec![("Use.java".to_string(), 4, "`Lib` has no method `missing`".to_string())], "{:?}", r.findings);
+    let f = r.findings.iter().find(|f| f.rule == "unresolved-method").unwrap();
+    assert_eq!((f.maturity, f.build), (grounds_rules::Maturity::Preview, Some(grounds_index::InBuild::Unknown)));
+    let v: serde_json::Value = serde_json::from_str(&json(&r)).unwrap();
+    let f = v["findings"].as_array().unwrap().iter().find(|f| f["rule"] == "unresolved-method").unwrap();
+    assert_eq!((&f["maturity"], &f["build"]), (&serde_json::json!("preview"), &serde_json::json!("unknown")));
+    // and the run says, once, that the picture is guessed
+    let resp = grounds_engine::daemon::execute(&mut warm, &grounds_engine::daemon::Request::Check { mode: Mode::Checkpoint, files: Vec::new(), all_lines: false, baseline: false, max: 10, min_severity: "info".into(), json: false, color: false, base: None, sarif: false });
+    assert_eq!(resp.warnings.iter().filter(|w| w.contains("the build picture is guessed for 1 module(s): 1 compile-break finding(s)")).count(), 1, "{:?}", resp.warnings);
     let _ = std::fs::remove_dir_all(&repo);
 }
 

@@ -215,6 +215,31 @@ impl Sources {
         changed
     }
 
+    /// Follow the build picture after a sync (`clock`: the time before its
+    /// look): read the build output again where it changed, and place every
+    /// file again when it did or when `declarations` changed (a class added,
+    /// renamed or removed changes which root a class file is evidence for, a
+    /// file added or gone which roots there are); else place again only the
+    /// files `installed`, whose time is all that may differ. As a fresh load
+    /// would place them, from the stamps the files were read with.
+    pub fn follow_build(&mut self, clock: SystemTime, declarations: bool, installed: &[PathBuf]) {
+        let Sources { project, entries, .. } = self;
+        let mtime = |p: &Path| entries.get(p).and_then(|e| e.stamp().meta()).map(|m| m.mtime);
+        let moved = project.picture.refresh(&project.workspace, clock);
+        if moved || declarations {
+            let index = &project.index;
+            let states = project.picture.place(&project.workspace, |p| index.file(&path_key(p)).cloned(), mtime);
+            project.index.set_all_in_build(states);
+            return;
+        }
+        for p in installed {
+            let key = path_key(p);
+            let module = project.workspace.module_of(p).unwrap_or(0);
+            let state = project.picture.place_file(module, p, project.index.file(&key).map(|s| &**s), mtime(p));
+            project.index.set_in_build(key, state);
+        }
+    }
+
     /// See `Project::rebuild_di`.
     pub fn rebuild_di(&mut self) {
         self.project.rebuild_di();

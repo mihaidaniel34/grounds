@@ -232,6 +232,10 @@ impl SarifDoc {
             "locations": [self.location(f)],
             "properties": { "maturity": f.maturity.as_str() },
         });
+        // a compile-break claim: made in the build, or under a guessed picture
+        if let Some(b) = f.build {
+            r["properties"]["build"] = json!(b.as_str());
+        }
         if !related.is_empty() {
             let rel: Vec<_> = related
                 .into_iter()

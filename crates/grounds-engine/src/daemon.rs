@@ -87,7 +87,9 @@ pub struct Response {
     pub code: Outcome,
     pub stdout: String,
     pub stderr: String,
-    /// Classpath warnings, once per session (for stderr; hooks drop them).
+    /// Classpath warnings, once per session, and per run whether its
+    /// compile-break findings rest on a guessed build picture (for stderr;
+    /// hooks drop them).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
 }
@@ -191,12 +193,24 @@ pub fn execute(session: &mut Session, req: &Request) -> Response {
         Request::Check { .. } | Request::Baseline { .. } => session.take_warnings(),
         Request::SessionStart => {
             session.take_warnings();
-            session.project().classpath_warnings.iter().map(|w| w.to_string()).collect()
+            let p = session.project();
+            let mut warnings: Vec<String> = p.classpath_warnings.iter().map(|w| w.to_string()).collect();
+            // the message about a missing or stale classpath also says that
+            // without a build the build picture is guessed
+            use crate::classpath::Warning;
+            let classpath = p.classpath_warnings.iter().position(|w| matches!(w, Warning::MissingFile(_) | Warning::Stale { .. } | Warning::MissingEntries { .. } | Warning::FewJars { .. }));
+            let guessed = p.picture.guessed_modules(&p.workspace);
+            if let (Some(i), true) = (classpath, guessed > 0) {
+                warnings[i].push_str(&format!(" Without a build of the project, grounds also guesses which files the build compiles ({guessed} module(s)), and its compile-break findings there are not covered by the stable promise."));
+            }
+            warnings
         }
         Request::Ping | Request::ImpactedTests { .. } | Request::Shutdown => Vec::new(),
     };
-    let resp = execute_with(session, req, &warnings);
-    Response { warnings, ..resp }
+    let mut resp = execute_with(session, req, &warnings);
+    // (what `execute_with` found after the run: a guessed build picture)
+    let after = std::mem::take(&mut resp.warnings);
+    Response { warnings: warnings.into_iter().chain(after).collect(), ..resp }
 }
 
 fn execute_with(session: &mut Session, req: &Request, warnings: &[String]) -> Response {
@@ -222,14 +236,18 @@ fn execute_with(session: &mut Session, req: &Request, warnings: &[String]) -> Re
                 Err(e) => return Response { code: Outcome::Failure, stderr: format!("grounds: {e}\n"), ..Default::default() },
             };
             let problems = !report.findings.is_empty() || !report.pending.is_empty();
+            // compile-break claims made under a guessed build picture: said
+            // once for the run, where classpath warnings go
+            let guessed: Vec<String> = crate::picture::guessed(session.project(), report.findings.iter().chain(&report.pending)).map(|w| w.to_string()).into_iter().collect();
             let text = if *sarif {
-                crate::report::sarif_report(&report, session.root(), warnings)
+                let warnings: Vec<String> = warnings.iter().chain(&guessed).cloned().collect();
+                crate::report::sarif_report(&report, session.root(), &warnings)
             } else if *json {
                 serde_json::to_string_pretty(&report).unwrap_or_default()
             } else {
                 render(&report, *max, crate::report::Style { color: *color })
             };
-            Response { code: if problems { Outcome::Problems } else { Outcome::Clean }, stdout: text, ..Default::default() }
+            Response { code: if problems { Outcome::Problems } else { Outcome::Clean }, stdout: text, warnings: guessed, ..Default::default() }
         }
         Request::Baseline { files, merge } => match session.write_baseline(files, *merge) {
             Ok(n) => Response { code: Outcome::Clean, stdout: format!("baseline: {n} accepted finding(s)\n"), ..Default::default() },

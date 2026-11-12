@@ -4,6 +4,7 @@ use crate::project::{path_key, Project};
 use crate::workspace::{classify, SourceKind};
 use grounds_rules::framework::{FileInfo, RuleOptions};
 use grounds_rules::{all_rules, Diagnostic, Fix, Maturity, RuleSet, Severity};
+use grounds_index::InBuild;
 use grounds_semantic::FileModel;
 use grounds_syntax::{NodeExt, ParsedFile};
 use rayon::prelude::*;
@@ -28,7 +29,8 @@ pub struct Finding {
     /// own maturity, except that `grounds changed` makes the findings it
     /// holds to the promise stable: compile-break findings new
     /// with the change, and the places in other files the change broke
-    /// (`RuleMeta::maturity_in`).
+    /// (`RuleMeta::maturity_in`), each in a file the build is known to
+    /// compile (`build`).
     pub maturity: Maturity,
     /// Stable identity across unrelated edits (line shifts).
     pub fingerprint: String,
@@ -38,6 +40,12 @@ pub struct Finding {
     pub legacy_fingerprint: Option<String>,
     /// Serialized only when present.
     pub fix: Option<Fix>,
+    /// For a claim that code does not compile (a rule with `absence`), the
+    /// state of the build picture of its file it was made in: `Yes` (the
+    /// build compiles the file) or `Unknown` (grounds guessed it); the
+    /// kernel makes no such claim in a file not in the build. Serialized as
+    /// `build` when present (`in the build`, `unknown`).
+    pub build: Option<InBuild>,
     /// What the finding asserts, when the message shows only part of it
     /// (`Diagnostic::claim`). Not serialized.
     pub claim: Option<String>,
@@ -49,7 +57,7 @@ pub struct Finding {
 impl Serialize for Finding {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
-        let mut st = s.serialize_struct("Finding", 11 + self.fix.is_some() as usize)?;
+        let mut st = s.serialize_struct("Finding", 11 + self.fix.is_some() as usize + self.build.is_some() as usize)?;
         st.serialize_field("path", &self.path)?;
         st.serialize_field("line", &self.line)?;
         st.serialize_field("col", &self.col)?;
@@ -61,6 +69,10 @@ impl Serialize for Finding {
         st.serialize_field("maturity", &self.maturity)?;
         st.serialize_field("message", &self.message)?;
         st.serialize_field("fingerprint", &self.fingerprint)?;
+        match self.build {
+            Some(b) => st.serialize_field("build", b.as_str())?,
+            None => st.skip_field("build")?,
+        }
         match &self.fix {
             Some(fix) => st.serialize_field("fix", fix)?,
             None => st.skip_field("fix")?,
@@ -245,6 +257,7 @@ fn to_finding<'t>(project: &Project, pf: &'t ParsedFile, fm: &FileModel, rel: &s
     let meta = grounds_rules::meta_of(d.rule);
     let category = meta.map(|m| m.category.as_str()).unwrap_or("bug");
     let maturity = meta.map_or(Maturity::Preview, |m| m.maturity);
+    let build = meta.filter(|m| m.absence).map(|_| project.index.in_build(&fm.path));
     Finding {
         path: rel.to_string(),
         line: s.line,
@@ -259,6 +272,7 @@ fn to_finding<'t>(project: &Project, pf: &'t ParsedFile, fm: &FileModel, rel: &s
         fingerprint: fp,
         legacy_fingerprint,
         fix: d.fix,
+        build,
         claim: d.claim.map(|c| c.into_string()).or(d.wiring_claim),
         start: d.range.start,
         end: d.range.end,

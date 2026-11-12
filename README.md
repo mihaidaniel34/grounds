@@ -351,7 +351,7 @@ projects; outside Java projects the hooks do nothing).
 
 | hook | runs | does |
 |---|---|---|
-| SessionStart | `grounds hook session-start` | records problems already in uncommitted work as a baseline, starts the daemon, and tells the agent if the classpath is missing or stale |
+| SessionStart | `grounds hook session-start` | records problems already in uncommitted work as a baseline, starts the daemon, and tells the agent if the classpath is missing or stale, and then also that without a build grounds guesses which files the build compiles |
 | PostToolUse (Edit/Write) | `grounds hook post-edit` | high-confidence rules on the edited file's changed lines, plus callers in other files broken by API changes in it |
 | Stop | `grounds hook stop` | all rules on changed lines of all changed files, at most 15 findings; blocks the end of the turn once if anything new was found |
 
@@ -391,7 +391,11 @@ since it forked from `<ref>` (the merge base), committed or not:
   diff view even though the broken files are not part of it.
 
 `--format sarif` writes SARIF 2.1.0 with paths from the repository root
-(also when `--root` is a subdirectory). Exit codes: 0 nothing found, 2
+(also when `--root` is a subdirectory). The promise covers compile-break
+findings in files the build output shows the build compiles, so build before
+grounds runs (the `compileJava` step below; add `compileTestJava`, or run
+`mvn test-compile`, for tests); without it, or in a module whose compilation
+failed in a fresh checkout, those findings are preview. Exit codes: 0 nothing found, 2
 findings, 1 failure (for example no merge base in a shallow clone);
 `--exit-zero` turns "findings" into 0 so a job that only uploads them does
 not fail, while a real failure still does.
@@ -409,7 +413,7 @@ jobs:
         with: { fetch-depth: 0 }          # --base needs the history to the merge base
       - uses: actions/setup-java@v4       # grounds reads the JDK's API signatures
         with: { distribution: temurin, java-version: 21 }
-      - run: ./gradlew compileJava -q     # dependency jars into the Gradle cache (or: grounds classpath)
+      - run: ./gradlew compileJava -q     # dependency jars into the Gradle cache, and build output
       - run: |
           curl -fsSL https://github.com/mihaidaniel34/grounds/releases/download/v0.1.0/grounds-0.1.0-x86_64-unknown-linux-musl.tar.gz | tar -xz
           echo "$PWD/grounds-0.1.0-x86_64-unknown-linux-musl" >> "$GITHUB_PATH"
@@ -521,9 +525,14 @@ and uses the release before it, with the same silence about JDK subclasses.
 **The promise has two parts.**
 
 1. **What `grounds changed` reports as no longer compiling because of a
-   change.** That is a place in another file that the change broke, or a
-   compile-break finding on a changed line that is new with the change. Run
-   over a whole project with `grounds check`, the same rules are preview.
+   change, in a file the build compiles.** That is a place in another file
+   that the change broke, or a compile-break finding on a changed line that
+   is new with the change. Which files the build compiles grounds reads from
+   the modules' build output (`target/classes`, `build/classes/java/main`
+   and the like), without running the build; see
+   [The build picture](#the-build-picture). In a module never built it
+   guesses, as before, and its findings there are preview. Run over a whole
+   project with `grounds check`, the same rules are preview.
 2. **Eight rules, in every mode:** `unused-local-variable`,
    `unused-private-field`, `unused-private-method`,
    `public-static-mutable-container`, `public-static-non-final-field`,
@@ -674,6 +683,9 @@ What is not promised:
   (against HEAD), but the 514 commits and the CI replay ran `--base`.
 - **Outside a git repository, and on unchanged lines** (`--all-lines`), there
   is no base to compare with: those findings are preview.
+- **Modules never built.** Without build output grounds guesses which files
+  the build compiles; a compile-break finding made there is preview, and a
+  line on stderr says how many there were.
 
 Matching a claim by its message rather than its place has a cost in recall:
 a real break that says exactly what a false finding before the change said
@@ -681,7 +693,36 @@ is not reported. A renamed file counts as a new file.
 
 The `maturity` field of each JSON finding (and a `maturity` property on each
 SARIF result and rule) says `stable` for what the promise covers and
-`preview` for everything else, so a tool can keep only the promise.
+`preview` for everything else, so a tool can keep only the promise. A
+compile-break finding also has a `build` field (a `build` property in
+SARIF): `in the build` when the build output shows the build compiles its
+file, `unknown` when grounds guessed.
+
+#### The build picture
+
+A claim that code does not compile is only worth making where the build
+compiles it. Next to the code, projects keep test data, check samples and
+old snapshots of their sources in the conventional layout, and nothing
+builds them. So grounds reads, per module, the class files in its build
+output, and puts each source file in one of three states:
+
+- **in the build**: the output holds a class file of a top-level class
+  declared in the file's source root (the file's directory less its
+  package), and in no other root of the module, or one the root's source
+  set compiled into its own output directory. A file created or edited since
+  the build, in such a root, is in the build too.
+- **not in the build**: the module's output holds class files, none of them
+  of this root, and the file is older than the newest of them. No claim that
+  code does not compile is made in such a file. A source set's own directory
+  (`src/test/java`) whose output directory holds no class file is unknown
+  instead: tests that did not compile leave none.
+- **unknown**: the module has no class file (never built, cleaned), or the
+  file is newer than the build in a root without class files. grounds then
+  guesses as it always has, and such findings are preview.
+
+The daemon follows builds that run while it is up: the next request sees
+class files that appeared, changed or went. After `mvn clean` there is no
+output, and every file is unknown until the next build.
 
 Preview rules run by default for now, so the same findings are reported
 after an upgrade. **A later release will turn them off by default.** To
@@ -738,7 +779,10 @@ SARIF as a tool notification) when:
   types the sources import,
 - the release is newer than the installed JDK, the JDK's own runtime image
   (`lib/modules`) cannot be read, or the JDK home has no `lib/ct.sym` (see
-  above). Set `java_home` to a suitable JDK.
+  above). Set `java_home` to a suitable JDK,
+- a run reports compile-break findings made where no build output shows
+  which files the build compiles (once per run; see
+  [The build picture](#the-build-picture)).
 
 Set `warn = false` under `[classpath]` to silence these.
 

@@ -57,6 +57,9 @@ pub struct Project {
     /// What the plan took from the sources (see `release_inputs`): a sync
     /// that changes it plans again.
     pub release_inputs: ReleaseInputs,
+    /// The modules' build output, and what it shows of which source files
+    /// the build compiles: the index holds each file's state (`in_build`).
+    pub picture: crate::picture::Picture,
 }
 
 /// What the release plan depends on in the sources, per module (in
@@ -838,6 +841,10 @@ impl Project {
             new_cache.put(p.to_string_lossy().to_string(), h, stub.clone());
             index.set_file(path_key(&p), stub);
         }
+        // which files the build compiles, as the modules' build output shows
+        let mut picture = crate::picture::Picture::read(&workspace);
+        let states = picture.place(&workspace, |p| index.file(&path_key(p)).cloned(), |p| held.get(p).and_then(|e: &crate::sources::Entry| e.stamp().meta()).map(|m| m.mtime));
+        index.set_all_in_build(states);
         stats.t_index = t.elapsed();
         if stats.parsed > 0 {
             let _ = new_cache.save(&workspace.root);
@@ -852,7 +859,7 @@ impl Project {
         let di =grounds_di::DiModel::build_with(&index, &registered, &auto_registered, di_settings);
         stats.t_di = t.elapsed();
         let classpath_warnings = crate::classpath::warnings(&workspace, &config, &index);
-        let project = Project { config, workspace, index, stats, di, di_settings, source_sets, lombok, registered, auto_registered, classpath_warnings, classpath_entries: entries, releases, release_inputs };
+        let project = Project { config, workspace, index, stats, di, di_settings, source_sets, lombok, registered, auto_registered, classpath_warnings, classpath_entries: entries, releases, release_inputs, picture };
         Ok((project, Loaded { entries: held, walked, began: load_began, before: None }))
     }
 

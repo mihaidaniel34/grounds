@@ -8,7 +8,7 @@ use crate::git::{self, GitError};
 use crate::project::{path_key, recent, Before, FileStamp, Loaded, Project, Walk, Why};
 use crate::sources::{Admitted, Entry, Sources};
 use crate::workspace::{classify, SourceKind, Tracked};
-use grounds_index::{simple_name_of, ClassLookup, FileStub, Name};
+use grounds_index::{simple_name_of, ClassLookup, FileStub, InBuild, Name};
 use grounds_rules::framework::RuleOptions;
 use grounds_rules::{Maturity, RuleSet, Severity, Tier};
 use grounds_syntax::{NodeExt, ParsedFile};
@@ -77,10 +77,11 @@ impl Conf {
 ///   added or removed.
 ///
 /// Listed whether they exist or not, so that one appearing counts as a
-/// change. Not followed: class directories on the classpath (a build writes
-/// into them without touching the directory itself, and the project's own
-/// classes are read from source anyway), and a `lombok.config` created later
-/// in a package directory that had none.
+/// change. Not followed here: class directories on the classpath (a build
+/// writes into them without touching the directory itself, and the project's
+/// own classes are read from source anyway; what they show of which files
+/// the build compiles is followed by `Sources::follow_build`), and a
+/// `lombok.config` created later in a package directory that had none.
 fn config_files(project: &Project) -> Vec<PathBuf> {
     let ws = &project.workspace;
     let cfg = &project.config;
@@ -182,8 +183,8 @@ pub const CROSS_FILE_RULES: &[&str] = &[
 ];
 
 /// Whether `rule` is a compile-break rule whose findings `grounds changed`
-/// holds to the stable promise when they are new with the change
-/// (`grounds_rules::STABLE_IN_CHANGED`).
+/// holds to the stable promise when they are new with the change and made
+/// in a file the build is known to compile (`grounds_rules::STABLE_IN_CHANGED`).
 pub fn stable_in_changed(rule: &str) -> bool {
     grounds_rules::STABLE_IN_CHANGED.contains(&rule)
 }
@@ -726,6 +727,7 @@ impl Session {
         let mut any_decl_change = false;
         let mut di_stale = false;
         let mut forgotten: FxHashSet<PathBuf> = FxHashSet::default();
+        let mut installed: Vec<PathBuf> = Vec::new();
         for file in stale {
             let p = file.path().to_path_buf();
             // the stamp first, then the text it vouches for; a path that is
@@ -777,6 +779,7 @@ impl Session {
                 }
                 None => {}
             }
+            installed.push(p);
             self.sources.install(file, stamp, stub);
         }
         self.sources.forget(&forgotten);
@@ -795,6 +798,9 @@ impl Session {
             self.reload();
             return changed;
         }
+        // which files the build compiles: its output may have changed (a
+        // build ran), and so may the files' times and declarations
+        self.sources.follow_build(clock, any_decl_change, &installed);
         if any_decl_change || di_stale {
             self.sources.rebuild_di();
         }
@@ -950,8 +956,10 @@ impl Session {
         // the change only if the project before the change did not get the
         // same claim: a gap in the model is there before and after alike.
         // Those that are new are stable when the rule is one of the promised
-        // compile-break rules; on unchanged lines (`--all-lines`) they stay
-        // what they are in a whole-project check.
+        // compile-break rules and the build is known to compile the file (a
+        // claim made under a guessed build picture stays preview); on
+        // unchanged lines (`--all-lines`) they stay what they are in a
+        // whole-project check.
         if repo {
             let claims: Vec<usize> = (0..findings.len()).filter(|&i| compared_in_changed(findings[i].rule) && on_changed_line(&findings[i])).collect();
             let mut drop: FxHashSet<usize> = FxHashSet::default();
@@ -961,7 +969,7 @@ impl Session {
                 drop = claims.iter().copied().filter(|&i| before.contains(&claim_key(&findings[i])) || gap_key(&findings[i]).is_some_and(|g| before.contains(&g))).collect();
             }
             for &i in &claims {
-                if stable_in_changed(findings[i].rule) {
+                if stable_in_changed(findings[i].rule) && findings[i].build == Some(InBuild::Yes) {
                     findings[i].maturity = Maturity::Stable;
                 }
             }
@@ -1012,10 +1020,11 @@ impl Session {
                     now.into_iter().filter(|f| !before.contains(&place_claim(f))).collect()
                 }
             };
-            // the promise covers the compile-break rules: places broken by a
-            // missing or ambiguous bean, and `unresolved-static-import` from the
-            // per-turn scan, stay preview
-            for f in pending.iter_mut().filter(|f| stable_in_changed(f.rule)) {
+            // the promise covers the compile-break rules in files the build
+            // compiles: places broken by a missing or ambiguous bean,
+            // `unresolved-static-import` from the per-turn scan, and places in
+            // files of a guessed build picture stay preview
+            for f in pending.iter_mut().filter(|f| stable_in_changed(f.rule) && f.build == Some(InBuild::Yes)) {
                 f.maturity = Maturity::Stable;
             }
             pending.retain(|f| !f.in_baseline(&base));
@@ -1142,6 +1151,12 @@ impl Session {
     /// name in the same package or under an on-demand import of its package.
     fn removed_class_uses(&self, file: &Path, removed: &[Name]) -> Vec<Finding> {
         let Some(stub) = self.project().index.file(&path_key(file)) else { return Vec::new() };
+        // a claim that the file no longer compiles, made only where the
+        // build compiles it; stable only where that is known
+        let state = self.project().index.in_build(&path_key(file));
+        if state == InBuild::No {
+            return Vec::new();
+        }
         // how the file names a removed class: its import, its simple name,
         // or its qualified name
         enum Use {
@@ -1275,10 +1290,11 @@ impl Session {
                 severity: Severity::Error,
                 category: "bug",
                 message: format!("`{dotted}` was removed or renamed by this change but is still used here"),
-                maturity: Maturity::Stable,
+                maturity: if state == InBuild::Yes { Maturity::Stable } else { Maturity::Preview },
                 fingerprint,
                 legacy_fingerprint: None,
                 fix: None,
+                build: Some(state),
                 claim: None,
                 start: node.start_byte() as u32,
                 end: node.end_byte() as u32,
@@ -1393,7 +1409,7 @@ impl Session {
                 let fingerprint = format!("{:016x}", xxhash_rust::xxh3::xxh3_64(format!("breaks-other-files|{path}|{}", broken.iter().map(|&i| pending[i].fingerprint.as_str()).collect::<Vec<_>>().join(",")).as_bytes()));
                 // as mature as the weakest place it stands for
                 let maturity = if broken.iter().all(|&i| pending[i].maturity == Maturity::Stable) { Maturity::Stable } else { Maturity::Preview };
-                let finding = Finding { path, line, col: 1, end_line: line, end_col: 1, rule: "breaks-other-files", severity, category: "bug", message, maturity, fingerprint, legacy_fingerprint: None, fix: None, claim: None, start: 0, end: 0 };
+                let finding = Finding { path, line, col: 1, end_line: line, end_col: 1, rule: "breaks-other-files", severity, category: "bug", message, maturity, fingerprint, legacy_fingerprint: None, fix: None, build: None, claim: None, start: 0, end: 0 };
                 Break { finding, broken }
             })
             .collect()
@@ -1601,7 +1617,7 @@ mod tests {
     }
 
     fn finding(rule: &'static str, message: &str, claim: Option<&str>) -> Finding {
-        Finding { path: "A.java".into(), line: 1, col: 1, end_line: 1, end_col: 1, rule, severity: Severity::Error, category: "bug", message: message.into(), maturity: Maturity::Preview, fingerprint: String::new(), legacy_fingerprint: None, fix: None, claim: claim.map(str::to_string), start: 0, end: 0 }
+        Finding { path: "A.java".into(), line: 1, col: 1, end_line: 1, end_col: 1, rule, severity: Severity::Error, category: "bug", message: message.into(), maturity: Maturity::Preview, fingerprint: String::new(), legacy_fingerprint: None, fix: None, build: None, claim: claim.map(str::to_string), start: 0, end: 0 }
     }
 
     /// Per rule, both sides: what the message asserts tells claims apart,

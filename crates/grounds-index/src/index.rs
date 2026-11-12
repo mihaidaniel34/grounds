@@ -435,6 +435,35 @@ pub struct LocalClassScope {
     pub unknown_super: bool,
 }
 
+/// Whether the build compiles a source file, as far as grounds has evidence
+/// of it (its module's build output, or the build tool's list of source
+/// directories). Claims that code does not compile are made only in a file
+/// that is not `No`; one made under `Unknown` rests on a guessed picture of
+/// the build.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum InBuild {
+    /// In the build: there is evidence that the build compiles the file's
+    /// source root.
+    Yes,
+    /// Not in the build: the module has evidence of what it compiles, and
+    /// this file is not part of it (test data, samples, a stale module).
+    No,
+    /// No evidence: the module was never built, nor its source directories
+    /// dumped.
+    Unknown,
+}
+
+impl InBuild {
+    /// How output formats name it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            InBuild::Yes => "in the build",
+            InBuild::No => "not in the build",
+            InBuild::Unknown => "unknown",
+        }
+    }
+}
+
 /// The result of a member type lookup.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MemberType {
@@ -465,6 +494,9 @@ pub struct Index {
     /// Directories (ending in `/`) of modules that compile against a
     /// published release of the project itself, not its sources.
     release_modules: Vec<String>,
+    /// Whether the build compiles each source file, as far as there is
+    /// evidence (see `in_build`); a file not here is `InBuild::Unknown`.
+    built: FxHashMap<Arc<str>, InBuild>,
     pub generation: u64,
     // the generation resolve_ordered last filled the cache at
     resolved_at: AtomicU64,
@@ -551,7 +583,7 @@ impl Drop for Resolving<'_> {
 
 impl Index {
     pub fn new(classpath: Arc<Classpath>) -> Index {
-        Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), copies: FxHashMap::default(), variant_defs: FxHashMap::default(), exact_releases: Vec::new(), release_floors: Vec::new(), release_modules: Vec::new(), generation: 0, resolved_at: AtomicU64::new(u64::MAX), plan: parking_lot::Mutex::new(None), extended: parking_lot::Mutex::new(None) }
+        Index { classpath, files: FxHashMap::default(), classes: FxHashMap::default(), packages: FxHashMap::default(), cache: DashMap::new(), defs: FxHashMap::default(), copies: FxHashMap::default(), variant_defs: FxHashMap::default(), exact_releases: Vec::new(), release_floors: Vec::new(), release_modules: Vec::new(), built: FxHashMap::default(), generation: 0, resolved_at: AtomicU64::new(u64::MAX), plan: parking_lot::Mutex::new(None), extended: parking_lot::Mutex::new(None) }
     }
 
     pub fn set_file(&mut self, path: Arc<str>, stub: Arc<FileStub>) {
@@ -714,6 +746,33 @@ impl Index {
     /// it may differ from the one the file compiles against.
     pub fn built_against_release(&self, file: &str) -> Option<&str> {
         self.release_modules.iter().find(|d| file.starts_with(d.as_str())).map(String::as_str)
+    }
+
+    /// Whether the build compiles the source file at `path`: what its
+    /// module's build output (or the build tool's own list of source
+    /// directories) shows, `Unknown` where there is no evidence. Filled by
+    /// the engine (`grounds_engine::picture`); a lookup, nothing more.
+    pub fn in_build(&self, path: &str) -> InBuild {
+        self.built.get(path).copied().unwrap_or(InBuild::Unknown)
+    }
+
+    /// Set whether the build compiles the file at `path` (`Unknown`: no
+    /// evidence either way).
+    pub fn set_in_build(&mut self, path: Arc<str>, state: InBuild) {
+        match state {
+            InBuild::Unknown => {
+                self.built.remove(&path);
+            }
+            state => {
+                self.built.insert(path, state);
+            }
+        }
+    }
+
+    /// Replace what is known of every file (see `set_in_build`).
+    pub fn set_all_in_build(&mut self, states: FxHashMap<Arc<str>, InBuild>) {
+        self.built = states;
+        self.built.retain(|_, s| *s != InBuild::Unknown);
     }
 
     /// Whether `file` belongs to the module at `dir` itself, not to a module
