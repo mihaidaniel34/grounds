@@ -367,7 +367,7 @@ impl Rule for OverrideWithoutSuper {
         let Some(m) = cx.fm.method_of_decl(n) else { return };
         let Some(cls) = cx.fm.enclosing_class(n) else { return };
         let Ok(closed) = cx.fm.closed(&cls.name, cx.jars()) else { return };
-        let Some(claim) = closed.overrides_nothing(n) else { return };
+        let Ok(Some(claim)) = closed.overrides_nothing(n) else { return };
         if let Some(nm) = n.field("name") {
             cx.report_claim(nm, format!("`{}` is marked @Override but overrides no supertype method", m.signature_string()), claim);
         }

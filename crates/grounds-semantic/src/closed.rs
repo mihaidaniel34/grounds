@@ -37,6 +37,8 @@ use std::sync::Arc;
 #[cfg(test)]
 mod build_tests;
 #[cfg(test)]
+mod diamond_tests;
+#[cfg(test)]
 mod tests;
 
 /// What a compile-break finding asserts, in the words `grounds changed`
@@ -137,6 +139,12 @@ pub enum Open {
     /// code sees, which finds the name elsewhere (a jar grounds may not
     /// have) or not at all.
     DeclaredOutsideBuild(Name),
+    /// Whether a method overrides one of this supertype depends on a type
+    /// argument of it that is not known: one a diamond leaves to inference
+    /// (`new Processor<>() {...}`, JLS 15.9.3), which grounds does not
+    /// infer. A supertype method of the name and parameter count may take
+    /// the method's parameter types for some argument.
+    TypeArgumentUnknown(Name),
 }
 
 impl From<Gap> for Open {
@@ -527,24 +535,39 @@ impl<'m, 't> Closed<'m, 't> {
     /// whose signature it has or erases to, nor is it one of `Object`'s or a
     /// record's accessor. A parameter type not known, or the same simple
     /// name from another package (javax vs jakarta when the cached jars do
-    /// not match the project), may still be the same parameter.
-    pub fn overrides_nothing(&self, decl: Node<'t>) -> Option<Claim> {
+    /// not match the project), may still be the same parameter. Where the
+    /// answer depends on a type argument of a supertype that is not known
+    /// (a diamond's), the world is open for this question
+    /// (`Open::TypeArgumentUnknown`), unless no argument could make a
+    /// supertype method of the name and parameter count take these
+    /// parameters (one that differs without involving it).
+    pub fn overrides_nothing(&self, decl: Node<'t>) -> Result<Option<Claim>, Open> {
         let fm = self.fm;
         let cls = &self.class;
-        let m = fm.method_of_decl(decl)?;
+        let Some(m) = fm.method_of_decl(decl) else { return Ok(None) };
         if fm.enclosing_class(decl).is_none_or(|c| c.name != cls.name) || m.params.iter().any(|p| p.ty.has_unknown()) {
-            return None;
+            return Ok(None);
         }
         // explicit record accessors may carry @Override
         if cls.is_record() && m.params.is_empty() && cls.fields.iter().any(|f| f.flags.has(Flags::RECORD_COMPONENT) && f.name == m.name) {
-            return None;
+            return Ok(None);
         }
         // Object methods are always overridable
         if matches!((&*m.name, m.params.len()), ("equals", 1) | ("hashCode", 0) | ("toString", 0) | ("clone", 0) | ("finalize", 0)) {
-            return None;
+            return Ok(None);
         }
+        // the type variables in scope where the method is declared, innermost
+        // first: its class's, and those of the classes and methods around it
+        // (an anonymous `new Queue<T>() {...}` in a class `<T extends Sub>`)
+        let vars: Vec<TypeParam> = decl
+            .ancestors()
+            .flat_map(|a| match a.kind() {
+                "method_declaration" | "constructor_declaration" => fm.method_of_decl(a).map(|m| m.type_params).unwrap_or_default(),
+                _ => fm.class_name_of_decl(a).and_then(|n| fm.class(n)).map(|c| c.type_params.clone()).unwrap_or_default(),
+            })
+            .collect();
         for st in fm.all_supertypes(&cls.this_type()).into_iter().skip(1) {
-            let sc = fm.class(st.class_name()?)?;
+            let Some(sc) = st.class_name().and_then(|n| fm.class(n)) else { return Ok(None) };
             let map = substitution(&sc, st.args());
             let found = sc.methods.iter().any(|x| {
                 x.name == m.name
@@ -563,13 +586,19 @@ impl<'m, 't> Closed<'m, 't> {
                             };
                             skew || !fully_known(fm, &at) || !fully_known(fm, &b.ty)
                         })
-                        || same_erasure(&m, cls, x, &map))
+                        || same_erasure(&m, &vars, x, &map))
             });
             if found {
-                return None;
+                return Ok(None);
+            }
+            // a supertype method the method may override for some value of
+            // the type arguments that are not known
+            let unknown: Vec<&Name> = map.iter().filter(|(_, t)| t.has_unknown()).map(|(k, _)| k).collect();
+            if !unknown.is_empty() && sc.methods.iter().any(|x| x.name == m.name && !x.flags.is_static() && !x.flags.is_private() && x.params.len() == m.params.len() && may_override_through(&m, &vars, x, &map, &unknown)) {
+                return Err(Open::TypeArgumentUnknown(sc.name.clone()));
             }
         }
-        Some(Claim::new(format!("`{}` is marked @Override but overrides no supertype method", method_id(&cls.name, &m))))
+        Ok(Some(Claim::new(format!("`{}` is marked @Override but overrides no supertype method", method_id(&cls.name, &m)))))
     }
 
     /// The class declared by `decl`, not abstract, leaves abstract methods
@@ -954,8 +983,48 @@ fn accepts(fm: &FileModel<'_>, at: &Ty, pt: &Ty) -> bool {
 /// method overrides one whose signature's erasure is its own (JLS 8.4.2,
 /// 8.4.8.1), as `get(Object[])` does `get(A)` of `Ops<T[]>`, or `save(Book)`
 /// does `<S extends E> S save(S)` with `E` = `Book`. Type variables erase to
-/// their first bound (JLS 4.6). False when a type is not known.
-fn same_erasure(m: &MethodInfo, cls: &ClassInfo, sup: &MethodInfo, map: &[(Name, Ty)]) -> bool {
+/// their first bound (JLS 4.6), those in scope where `m` is declared
+/// (`vars`) too. False when a type is not known.
+fn same_erasure(m: &MethodInfo, vars: &[TypeParam], sup: &MethodInfo, map: &[(Name, Ty)]) -> bool {
+    let erased = erased_params(vars, sup, map);
+    // the overrider's own signature against the erased one: `m(T)` with
+    // `T extends Date` does not override `m(Date)` (a clash)
+    erased.len() == m.params.len() && erased.iter().zip(&m.params).all(|(x, b)| !x.has_unknown() && *x == b.ty)
+}
+
+/// Whether `m`, declared where `vars` are in scope, may override `sup` of a supertype for
+/// some value of the supertype's type arguments `unknown` (those `map`
+/// takes to a type not known: a diamond's): every parameter either involves
+/// one of them (directly, or through a type variable of `sup` bounded by
+/// one: `<O extends T> O postProcess(O)`) or is the same as `m`'s, as
+/// declared or erased. One that differs without involving them differs
+/// whatever they are.
+fn may_override_through(m: &MethodInfo, vars: &[TypeParam], sup: &MethodInfo, map: &[(Name, Ty)], unknown: &[&Name]) -> bool {
+    let erased = erased_params(vars, sup, map);
+    let bounded_by_unknown: Vec<&Name> = sup.type_params.iter().filter(|p| p.bounds.iter().any(|b| mentions(b, unknown))).map(|p| &p.name).collect();
+    sup.params.iter().zip(&m.params).zip(&erased).all(|((a, b), x)| mentions(&a.ty, unknown) || mentions(&a.ty, &bounded_by_unknown) || apply_subst(&a.ty, map) == b.ty || (!x.has_unknown() && *x == b.ty))
+}
+
+/// Whether `t` mentions one of the type variables `vars`.
+fn mentions(t: &Ty, vars: &[&Name]) -> bool {
+    match t {
+        Ty::TypeVar(v) => vars.iter().any(|n| **n == *v),
+        Ty::Class { args, .. } => args.iter().any(|a| mentions(a, vars)),
+        Ty::Array(e) => mentions(e, vars),
+        Ty::Wildcard(Some(b)) => match &**b {
+            WildcardBound::Extends(t) | WildcardBound::Super(t) => mentions(t, vars),
+        },
+        _ => false,
+    }
+}
+
+/// The parameter types of `sup`, a method of a supertype whose type
+/// arguments `map` gives, as they erase where the overrider is declared
+/// (JLS 4.6; `vars`: the type variables in scope there, innermost first): a
+/// type variable to its first bound, the supertype's through its arguments.
+/// A type the erasure cannot know (an argument not known, a variable not in
+/// scope) is `Ty::Unknown`.
+fn erased_params(vars: &[TypeParam], sup: &MethodInfo, map: &[(Name, Ty)]) -> Vec<Ty> {
     fn erase(t: &Ty, vars: &[TypeParam], depth: u32) -> Ty {
         match t {
             Ty::TypeVar(v) => match vars.iter().find(|p| p.name == *v) {
@@ -969,23 +1038,18 @@ fn same_erasure(m: &MethodInfo, cls: &ClassInfo, sup: &MethodInfo, map: &[(Name,
             t => t.erasure(),
         }
     }
-    // the supertype's arguments are in terms of `cls`'s type variables; the
-    // supertype method's own type variables keep their (substituted) bounds
+    // the supertype's arguments are in terms of the type variables in scope
+    // of the overrider; the supertype method's own type variables keep their
+    // (substituted) bounds
     let sup_vars: Vec<TypeParam> = sup
         .type_params
         .iter()
         .map(|p| TypeParam { name: p.name.clone(), bounds: p.bounds.iter().map(|b| apply_subst(b, map)).collect() })
-        .chain(cls.type_params.iter().cloned())
+        .chain(vars.iter().cloned())
         .collect();
     // a type variable of the supertype method substituted by `map` would be wrong
     let shadow: Vec<(Name, Ty)> = map.iter().filter(|(k, _)| !sup.type_params.iter().any(|p| p.name == *k)).cloned().collect();
-    sup.params.len() == m.params.len()
-        && sup.params.iter().zip(&m.params).all(|(a, b)| {
-            // the overrider's own signature against the erased one: `m(T)`
-            // with `T extends Date` does not override `m(Date)` (a clash)
-            let x = erase(&apply_subst(&a.ty, &shadow), &sup_vars, 0);
-            !x.has_unknown() && x == b.ty
-        })
+    sup.params.iter().map(|a| erase(&apply_subst(&a.ty, &shadow), &sup_vars, 0)).collect()
 }
 
 /// Whether `cls` or a superclass implements `name` with `arity` parameters,

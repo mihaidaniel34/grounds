@@ -244,7 +244,7 @@ on-disk cache.
 - **Claims that something is not there:** "no such method", "nothing
   overridden", "not implemented" are only true when every place the thing
   could be declared has been seen. One module (`closed.rs` in
-  grounds-semantic) decides that, names 23 reasons why it could not, and is
+  grounds-semantic) decides that, names 24 reasons why it could not, and is
   the only code that can construct the value a compile-break rule must hand
   over to report. Its test enumerates 12,777 small class hierarchies with
   parts hidden and checks that no claim is made that the full hierarchy
