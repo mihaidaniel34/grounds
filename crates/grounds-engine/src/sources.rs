@@ -235,7 +235,7 @@ impl Sources {
         for p in installed {
             let key = path_key(p);
             let module = project.workspace.module_of(p).unwrap_or(0);
-            let state = project.picture.place_file(module, p, project.index.file(&key).map(|s| &**s), mtime(p));
+            let state = project.picture.place_file(&project.workspace, module, p, project.index.file(&key).map(|s| &**s), mtime(p));
             project.index.set_in_build(key, state);
         }
     }

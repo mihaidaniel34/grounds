@@ -347,3 +347,38 @@ fn a_snapshot_of_the_sources_is_no_rival_of_the_class_the_build_compiles() {
     assert!(findings(&p).is_empty(), "{:?}", findings(&p));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A build compiles directory trees, and a package other than the
+/// directories is legal Java: a file whose package does not spell its
+/// directories belongs to the root enclosing it. In a compiled
+/// `src/main/java`, a default-package file and a compact source file (top-level
+/// methods, an implicit class) in its subdirectories are in the build; in a
+/// sample directory the build does not compile, such files are not in the
+/// build with the rest of it (sonar-java's `src/main/files/non-compiling`).
+#[test]
+fn a_file_whose_package_is_not_its_directories_belongs_to_the_enclosing_root() {
+    let javac = javac_or_skip!();
+    let dir = project(
+        "mismatch",
+        &[
+            ("pom.xml", POM),
+            ("src/main/java/app/Lib.java", LIB),
+            ("src/main/java/checks/Default.java", "class Default {\n    void f(Default d) { d.nope(); }\n}\n"),
+            ("src/main/java/checks/mainSignature/CompactSource.java", "void main() {\n    System.out.println(\"compact source\");\n}\n"),
+            ("src/main/java/checks/Elsewhere.java", "package somewhere.other;\nclass Elsewhere {}\n"),
+            ("src/main/files/non-compiling/checks/Sample.java", "package checks;\nclass Sample { void f(Sample s) { s.gone(); } }\n"),
+            ("src/main/files/non-compiling/checks/Bare.java", "class Bare { void f(Bare b) { b.gone(); } }\n"),
+            ("src/main/files/non-compiling/other/Wrong.java", "package wrong;\nclass Wrong { void f(Wrong w) { w.gone(); } }\n"),
+        ],
+    );
+    compile(&javac, &dir, &["src/main/java/app/Lib.java", "src/main/java/checks/Elsewhere.java"], "target/classes", None);
+    let p = Project::load(&dir).unwrap();
+    for f in ["src/main/java/app/Lib.java", "src/main/java/checks/Default.java", "src/main/java/checks/mainSignature/CompactSource.java", "src/main/java/checks/Elsewhere.java"] {
+        assert_eq!(state(&p, f), InBuild::Yes, "{f}");
+    }
+    for f in ["src/main/files/non-compiling/checks/Sample.java", "src/main/files/non-compiling/checks/Bare.java", "src/main/files/non-compiling/other/Wrong.java"] {
+        assert_eq!(state(&p, f), InBuild::No, "{f}");
+    }
+    assert_eq!(breaks(&p), [("src/main/java/checks/Default.java".to_string(), Some(InBuild::Yes))]);
+    let _ = std::fs::remove_dir_all(&dir);
+}

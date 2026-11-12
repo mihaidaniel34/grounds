@@ -748,7 +748,10 @@ output, and puts each source file in one of three states:
   declared in the file's source root (the file's directory less its
   package), and in no other root of the module, or one the root's source
   set compiled into its own output directory. A file created or edited since
-  the build, in such a root, is in the build too.
+  the build, in such a root, is in the build too. A file whose package does
+  not spell its directories (the default package in a subdirectory, a
+  compact source file) belongs to the nearest root enclosing it: a source
+  set's directory (`src/main/java`) or a root other files establish.
 - **not in the build**: the module's output holds class files, none of them
   of this root, and the file is older than the newest of them. No claim that
   code does not compile is made in such a file. A source set's own directory

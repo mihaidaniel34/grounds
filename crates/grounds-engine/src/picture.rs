@@ -11,9 +11,18 @@
 //! `build/classes/<language>/<source set>`), read for the names of their
 //! class files and their times. Nothing is run. The rules:
 //!
-//! - A file belongs to its nearest enclosing module (the workspace's), and
-//!   its source root is its directory less the package's directories (its
-//!   directory when they do not match).
+//! - A file belongs to its nearest enclosing module (the workspace's). Its
+//!   source root is its directory less the package's directories, when they
+//!   spell its package: such files establish the module's roots. A build
+//!   compiles directory trees, and a package other than the directories (or
+//!   the default package below a root) is legal Java, so a file whose
+//!   package does not spell its directories belongs to the nearest root
+//!   enclosing it that is established otherwise: a source set's
+//!   conventional directory of the module (`src/<set>/java`), or a root a
+//!   matching file establishes. Only when there is none is its directory its
+//!   root. (A compact source file, with methods at the top level, declares
+//!   an implicit class named after it, which the stubs do not record: it is
+//!   no evidence for its root, and takes its state from the enclosing one.)
 //! - A root is **in the build** when its module's output holds the class file
 //!   of a top-level class declared in that root and in no other root of the
 //!   module, or, for a source set's conventional directory
@@ -114,6 +123,9 @@ pub struct Picture {
     modules: Vec<ModuleOutput>,
     /// Per (module, source root).
     roots: FxHashMap<(usize, PathBuf), Root>,
+    /// Per module, the source roots files whose package spells their
+    /// directories establish (see `root_of`).
+    established: FxHashMap<usize, FxHashSet<PathBuf>>,
     /// The modules with a file newer than their newest class file in a root
     /// without one: read again at every sync (see the module doc).
     pending: FxHashSet<usize>,
@@ -130,7 +142,7 @@ impl Picture {
     pub fn read(ws: &Workspace) -> Picture {
         use rayon::prelude::*;
         let modules = ws.modules.par_iter().map(|m| read_module(&m.dir)).collect();
-        Picture { modules, roots: FxHashMap::default(), pending: FxHashSet::default() }
+        Picture { modules, roots: FxHashMap::default(), established: FxHashMap::default(), pending: FxHashSet::default() }
     }
 
     /// Whether any module has build output to go by.
@@ -178,24 +190,28 @@ impl Picture {
     /// its time as read), and what the roots show, kept for `place_file`.
     pub fn place(&mut self, ws: &Workspace, stub: impl Fn(&Path) -> Option<Arc<FileStub>>, mtime: impl Fn(&Path) -> Option<SystemTime>) -> FxHashMap<Arc<str>, InBuild> {
         self.roots.clear();
+        self.established.clear();
         self.pending.clear();
         if !self.any_evidence() {
             return FxHashMap::default();
         }
+        let files: Vec<(usize, &Path, Option<Arc<FileStub>>)> = ws.files.iter().filter(|f| self.module_has_evidence(f.module)).map(|f| (f.module, f.path.as_path(), stub(&f.path))).collect();
+        // the roots files whose package spells their directories establish
+        for (m, path, stub) in &files {
+            if let Some(root) = stub.as_deref().and_then(|s| package_root(path, &s.package)) {
+                self.established.entry(*m).or_default().insert(root);
+            }
+        }
         // the top-level classes each root of a module declares, as `a/b/C`
         let mut declares: FxHashMap<(usize, PathBuf), FxHashSet<String>> = FxHashMap::default();
         let mut file_root: Vec<(usize, &Path, PathBuf)> = Vec::new();
-        for f in &ws.files {
-            if !self.module_has_evidence(f.module) {
-                continue;
-            }
-            let stub = stub(&f.path);
-            let root = source_root(&f.path, stub.as_deref().map_or("", |s| &s.package));
-            let classes = declares.entry((f.module, root.clone())).or_default();
+        for (m, path, stub) in files {
+            let root = self.root_of(ws, m, path, stub.as_deref().map_or("", |s| &s.package));
+            let classes = declares.entry((m, root.clone())).or_default();
             for c in stub.iter().flat_map(|s| s.classes.iter()).filter(|c| c.outer.is_none()) {
                 classes.insert(c.name.replace('.', "/"));
             }
-            file_root.push((f.module, &f.path, root));
+            file_root.push((m, path, root));
         }
         // in how many roots of its module each class is declared
         let mut count: FxHashMap<(usize, &str), u32> = FxHashMap::default();
@@ -255,12 +271,35 @@ impl Picture {
     /// The state of one source file of module `m`, after a change that left
     /// its module's roots as they were (an edit that changed no declaration):
     /// only its own time may differ.
-    pub fn place_file(&mut self, m: usize, path: &Path, stub: Option<&FileStub>, mtime: Option<SystemTime>) -> InBuild {
+    pub fn place_file(&mut self, ws: &Workspace, m: usize, path: &Path, stub: Option<&FileStub>, mtime: Option<SystemTime>) -> InBuild {
         if !self.module_has_evidence(m) {
             return InBuild::Unknown;
         }
-        let root = source_root(path, stub.map_or("", |s| &s.package));
+        let root = self.root_of(ws, m, path, stub.map_or("", |s| &s.package));
         self.state(m, &root, mtime)
+    }
+
+    /// The source root of the file at `path` of module `m`, in package
+    /// `package`, as the roots were last placed: its directory less the
+    /// package's directories when they spell the package. A build compiles
+    /// directory trees, and a package other than the directories (or the
+    /// default package below a root) is legal Java: such a file belongs to
+    /// the nearest root enclosing it that is established otherwise, a source
+    /// set's conventional directory of its module (`src/<set>/java`) or a
+    /// root that a file whose package spells its directories establishes.
+    /// Only when there is none is its directory its root.
+    pub fn root_of(&self, ws: &Workspace, m: usize, path: &Path, package: &str) -> PathBuf {
+        if let Some(root) = package_root(path, package) {
+            return root;
+        }
+        let dir = path.parent().unwrap_or(Path::new(""));
+        let Some(module) = ws.modules.get(m).map(|w| w.dir.as_path()) else { return dir.to_path_buf() };
+        let established = self.established.get(&m);
+        dir.ancestors()
+            .take_while(|a| a.starts_with(module))
+            .find(|a| established.is_some_and(|e| e.contains(*a)) || conventional_set(module, a).is_some())
+            .unwrap_or(dir)
+            .to_path_buf()
     }
 
     fn state(&mut self, m: usize, root: &Path, mtime: Option<SystemTime>) -> InBuild {
@@ -296,21 +335,21 @@ pub fn guessed<'f>(project: &crate::Project, findings: impl IntoIterator<Item = 
     (count > 0).then_some(crate::classpath::Warning::GuessedBuild { modules: modules.len(), findings: count })
 }
 
-/// The source root of a file in package `package`: its directory less the
-/// package's directories, or its directory when they do not match.
-pub fn source_root(path: &Path, package: &str) -> PathBuf {
-    let dir = path.parent().unwrap_or(Path::new(""));
+/// The source root a file in package `package` establishes: its directory
+/// less the package's directories, when they spell the package. None for
+/// the default package, and for directories that do not match.
+fn package_root(path: &Path, package: &str) -> Option<PathBuf> {
     if package.is_empty() {
-        return dir.to_path_buf();
+        return None;
     }
-    let mut root = dir;
+    let mut root = path.parent()?;
     for seg in package.rsplit('.') {
         match (root.file_name(), root.parent()) {
             (Some(n), Some(up)) if n == seg => root = up,
-            _ => return dir.to_path_buf(),
+            _ => return None,
         }
     }
-    root.to_path_buf()
+    Some(root.to_path_buf())
 }
 
 /// The source set whose conventional directory `root` is in module `module`
@@ -410,10 +449,11 @@ mod tests {
 
     #[test]
     fn a_source_root_is_the_directory_less_the_package() {
-        assert_eq!(source_root(Path::new("/m/src/main/java/a/b/C.java"), "a.b"), Path::new("/m/src/main/java"));
-        assert_eq!(source_root(Path::new("/m/data/C.java"), ""), Path::new("/m/data"));
-        // a package the directories do not spell: the directory itself
-        assert_eq!(source_root(Path::new("/m/data/x/C.java"), "a.b"), Path::new("/m/data/x"));
+        assert_eq!(package_root(Path::new("/m/src/main/java/a/b/C.java"), "a.b").as_deref(), Some(Path::new("/m/src/main/java")));
+        // the default package, and a package the directories do not spell,
+        // establish no root
+        assert_eq!(package_root(Path::new("/m/data/C.java"), ""), None);
+        assert_eq!(package_root(Path::new("/m/data/x/C.java"), "a.b"), None);
         assert_eq!(conventional_set(Path::new("/m"), Path::new("/m/src/test/java")), Some("test"));
         assert_eq!(conventional_set(Path::new("/m"), Path::new("/m/src/test/test_sourcecode")), None);
         assert_eq!(conventional_set(Path::new("/m"), Path::new("/m/sub/src/main/java")), None);
