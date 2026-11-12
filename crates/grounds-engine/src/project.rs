@@ -293,25 +293,18 @@ pub fn recent(time: SystemTime, look: SystemTime) -> bool {
     time >= look.checked_sub(MARGIN).unwrap_or(SystemTime::UNIX_EPOCH)
 }
 
-/// A file as it was read: its modification time, change time, permissions
-/// and size, taken before its content was read, and a hash of that content
-/// (of the names in it, for a directory).
+/// What a look at a file's metadata found: its modification time, change
+/// time, permissions and size, and when that time was first seen (right
+/// after it was read; a stamp taken again keeps the earliest look at the same
+/// time, see `FileStamp::after`).
 ///
 /// The change time and the permissions are there for what leaves the
 /// modification time and the content alone but changes what can be read:
 /// `chmod`, `chown`, an ACL. A directory that can no longer be listed or
 /// entered, or an ignore file that can no longer be read, is then looked at
 /// again, as a fresh load would find it.
-///
-/// Taken in that order, a write after the read changes the time or the size,
-/// except a write in the same tick of the file system's clock, which can
-/// keep both. So, as git does for its index, a time that is recent when it is
-/// taken is not trusted alone: while the stamp is `racy`, every look at the
-/// file compares its content with the hash too, until the time is older than
-/// `MARGIN` or has been seen unchanged for that long. That is the files
-/// written in the last seconds, not the project.
 #[derive(Clone, Copy, Debug)]
-pub struct FileStamp {
+pub struct Meta {
     pub mtime: SystemTime,
     /// The inode's change time (`st_ctime`; the epoch where there is none).
     pub ctime: SystemTime,
@@ -319,15 +312,83 @@ pub struct FileStamp {
     /// whether the file is read-only).
     pub mode: u32,
     pub size: u64,
-    /// `None` when the content could not be read: then time and size decide.
-    pub hash: Option<u64>,
-    /// When this time was first seen (right after it was read).
     pub seen: Instant,
-    pub racy: bool,
-    /// A source file whose text could not be read (no permission, not
-    /// UTF-8, gone between the look at its time and the read): nothing was
-    /// read to vouch for, so every sync tries again until a read succeeds.
-    pub unread: bool,
+}
+
+impl Meta {
+    /// What a look at a file's metadata stamps.
+    fn of(meta: &std::fs::Metadata) -> Option<Meta> {
+        let mtime = meta.modified().ok()?;
+        #[cfg(unix)]
+        let (ctime, mode) = {
+            use std::os::unix::fs::MetadataExt;
+            let ctime = u64::try_from(meta.ctime()).map_or(SystemTime::UNIX_EPOCH, |s| SystemTime::UNIX_EPOCH + Duration::new(s, meta.ctime_nsec().clamp(0, 999_999_999) as u32));
+            (ctime, meta.mode())
+        };
+        #[cfg(not(unix))]
+        let (ctime, mode) = (SystemTime::UNIX_EPOCH, meta.permissions().readonly() as u32);
+        Some(Meta { mtime, ctime, mode, size: meta.len(), seen: Instant::now() })
+    }
+
+    /// The later of the modification and the change time: what a write, or a
+    /// change of permissions, last moved.
+    pub fn time(&self) -> SystemTime {
+        self.mtime.max(self.ctime)
+    }
+
+    /// The same times, mode and size, whenever they were seen.
+    fn same(&self, other: &Meta) -> bool {
+        (self.mtime, self.ctime, self.mode, self.size) == (other.mtime, other.ctime, other.mode, other.size)
+    }
+}
+
+/// A file as it was read: its metadata, taken before its content was read,
+/// and a hash of that content (of the names in it, for a directory).
+///
+/// Taken in that order, a write after the read changes the time or the size,
+/// except a write in the same tick of the file system's clock, which can
+/// keep both. So, as git does for its index, a time that is recent when it is
+/// taken is not trusted alone: while the stamp is `Racy`, every look at the
+/// file compares its content with the hash too, until the time is older than
+/// `MARGIN` or has been seen unchanged for that long. That is the files
+/// written in the last seconds, not the project.
+#[derive(Clone, Copy, Debug)]
+pub enum FileStamp {
+    /// The metadata decides. `hash`: of the content, when it was read (asked
+    /// for, or the time was recent); `None` when it was not asked for and the
+    /// time was old, or when it could not be read, and then the metadata is
+    /// all there is to go by (an ignore file that cannot be read is read again
+    /// cheaply, see `read_otherwise`). With a hash, a change of the change
+    /// time alone is no change while the content still reads the same.
+    Settled { meta: Meta, hash: Option<u64> },
+    /// The time was recent when taken: every look compares the content with
+    /// `hash` too, until the time is old or has been seen unchanged for
+    /// `MARGIN`, and the stamp is `Settled`.
+    Racy { meta: Meta, hash: u64 },
+    /// Nothing was read that this stamp could vouch for: every sync takes the
+    /// file as changed and looks again. `meta`: what the look at its
+    /// metadata found, if there was one.
+    Recheck { meta: Option<Meta>, why: Why },
+}
+
+/// Why a stamp vouches for nothing (`FileStamp::Recheck`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Why {
+    /// A source file whose text could not be read: no permission, not UTF-8,
+    /// gone between the look at its time and the read.
+    ReadFailed,
+    /// A file a listing names but that cannot be looked at (its directory can
+    /// be read but not entered), or that went since it was listed.
+    Unreachable,
+    /// A directory that cannot be listed or entered (no permission).
+    Unlistable,
+    /// Stamped after a walk that may have read it otherwise: its time is
+    /// recent as of the start of the walk, or its content could be read before
+    /// the walk and not after it, or the reverse.
+    Raced,
+    /// git's index or HEAD, whose content could not be read: which files git
+    /// tracks is asked again.
+    GitUnreadable,
 }
 
 /// The hash a stamp keeps: of the bytes of a file, of the sorted names in a
@@ -351,114 +412,144 @@ fn content_of(path: &Path, dir: bool) -> (Option<u64>, Option<Vec<u8>>) {
     }
 }
 
-/// What a look at a file's metadata stamps: modification time, change
-/// time, mode and size.
-fn attrs(meta: &std::fs::Metadata) -> Option<(SystemTime, SystemTime, u32, u64)> {
-    let mtime = meta.modified().ok()?;
-    #[cfg(unix)]
-    let (ctime, mode) = {
-        use std::os::unix::fs::MetadataExt;
-        let ctime = u64::try_from(meta.ctime()).map_or(SystemTime::UNIX_EPOCH, |s| SystemTime::UNIX_EPOCH + Duration::new(s, meta.ctime_nsec().clamp(0, 999_999_999) as u32));
-        (ctime, meta.mode())
-    };
-    #[cfg(not(unix))]
-    let (ctime, mode) = (SystemTime::UNIX_EPOCH, meta.permissions().readonly() as u32);
-    Some((mtime, ctime, mode, meta.len()))
-}
-
 impl FileStamp {
     /// Time and size, then, if `always` or the time is recent, the content.
     fn take(path: &Path, always: bool) -> (Option<FileStamp>, Option<Vec<u8>>) {
         let clock = SystemTime::now();
-        let Ok(meta) = std::fs::metadata(path) else { return (None, None) };
-        let Some((mtime, ctime, mode, size)) = attrs(&meta) else { return (None, None) };
-        let seen = Instant::now();
-        let racy = recent(mtime.max(ctime), clock);
-        let (hash, bytes) = if always || racy { content_of(path, meta.is_dir()) } else { (None, None) };
-        (Some(FileStamp { mtime, ctime, mode, size, hash, seen, racy: racy && hash.is_some(), unread: false }), bytes)
+        let Ok(m) = std::fs::metadata(path) else { return (None, None) };
+        let Some(meta) = Meta::of(&m) else { return (None, None) };
+        let racy = recent(meta.time(), clock);
+        let (hash, bytes) = if always || racy { content_of(path, m.is_dir()) } else { (None, None) };
+        // (a recent time whose content cannot be read leaves nothing to
+        // compare: the metadata decides)
+        let stamp = match hash {
+            Some(hash) if racy => FileStamp::Racy { meta, hash },
+            hash => FileStamp::Settled { meta, hash },
+        };
+        (Some(stamp), bytes)
     }
 
-    /// A file a listing names but that cannot be looked at (its directory
-    /// can be read but not entered): nothing is known of it, and every sync
-    /// tries again, as for a file that cannot be read.
-    pub fn unreachable() -> FileStamp {
-        FileStamp { mtime: SystemTime::UNIX_EPOCH, ctime: SystemTime::UNIX_EPOCH, mode: 0, size: 0, hash: None, seen: Instant::now(), racy: false, unread: true }
+    /// What the look at the file's metadata found, if there was one.
+    pub fn meta(&self) -> Option<&Meta> {
+        match self {
+            FileStamp::Settled { meta, .. } | FileStamp::Racy { meta, .. } => Some(meta),
+            FileStamp::Recheck { meta, .. } => meta.as_ref(),
+        }
     }
 
-    /// The later of the modification and the change time: what a write, or a
-    /// change of permissions, last moved.
-    pub fn time(&self) -> SystemTime {
-        self.mtime.max(self.ctime)
+    /// See `Meta::time`.
+    pub fn time(&self) -> Option<SystemTime> {
+        self.meta().map(Meta::time)
     }
 
-    /// The same metadata: times, mode and size.
-    fn same_attrs(&self, other: &FileStamp) -> bool {
-        (self.mtime, self.ctime, self.mode, self.size) == (other.mtime, other.ctime, other.mode, other.size)
+    /// The hash of the content this stamp vouches for, if it has one.
+    pub fn hash(&self) -> Option<u64> {
+        match *self {
+            FileStamp::Settled { hash, .. } => hash,
+            FileStamp::Racy { hash, .. } => Some(hash),
+            FileStamp::Recheck { .. } => None,
+        }
+    }
+
+    pub fn is_racy(&self) -> bool {
+        matches!(self, FileStamp::Racy { .. })
+    }
+
+    /// Whether the stamp vouches for what was read (is not `Recheck`).
+    pub fn vouches(&self) -> bool {
+        !matches!(self, FileStamp::Recheck { .. })
+    }
+
+    /// This stamp as one that vouches for nothing, for `why` (one that
+    /// already vouches for nothing keeps its first reason).
+    pub fn recheck(self, why: Why) -> FileStamp {
+        match self {
+            FileStamp::Recheck { .. } => self,
+            _ => FileStamp::Recheck { meta: self.meta().copied(), why },
+        }
     }
 
     /// The stamp of a source file and its text (if it is UTF-8), the stamp
-    /// first. No stamp if the file is gone.
+    /// first. No stamp if the file is gone; one that vouches for nothing if
+    /// there is no text.
     pub fn read(path: &Path) -> (Option<FileStamp>, Option<String>) {
         let (stamp, bytes) = Self::take(path, true);
         let text = bytes.and_then(|b| String::from_utf8(b).ok());
-        (stamp.map(|s| FileStamp { unread: text.is_none(), ..s }), text)
+        let stamp = if text.is_some() { stamp } else { stamp.map(|s| s.recheck(Why::ReadFailed)) };
+        (stamp, text)
     }
 
     /// The stamp of a file or directory, with a hash of its content when its
     /// time is recent or `with_hash`. (Not of every jar on a classpath.)
+    /// Never `Recheck`: what could not be read is left to the caller.
     pub fn of(path: &Path, with_hash: bool) -> Option<FileStamp> {
         Self::take(path, with_hash).0
     }
 
-    /// The same time and size, and the same content where both have a hash.
-    /// (A stamp without one was taken of a time that was already old: no
-    /// write since can have kept it.)
+    /// The same metadata, and the same content where both have a hash. (A
+    /// stamp without one was taken of a time that was already old, or of a
+    /// file that could not be read.) A stamp that vouches for nothing is the
+    /// same as none.
     pub fn same(&self, other: &FileStamp) -> bool {
-        self.same_attrs(other) && (self.hash.is_none() || other.hash.is_none() || self.hash == other.hash)
+        match (self.vouches() && other.vouches(), self.meta(), other.meta()) {
+            (true, Some(a), Some(b)) => a.same(b) && (self.hash().is_none() || other.hash().is_none() || self.hash() == other.hash()),
+            _ => false,
+        }
     }
 
     /// This stamp, taken again of a file stamped `old` before: a time already
     /// seen then has been seen since then, and its margin counts from there.
     pub fn after(mut self, old: Option<&FileStamp>) -> FileStamp {
-        if let Some(old) = old.filter(|o| (o.mtime, o.ctime) == (self.mtime, self.ctime)) {
-            self.seen = self.seen.min(old.seen);
-            self.racy &= self.seen.elapsed() < MARGIN;
+        let Some(old) = old.and_then(FileStamp::meta).copied() else { return self };
+        let meta = match &mut self {
+            FileStamp::Settled { meta, .. } | FileStamp::Racy { meta, .. } | FileStamp::Recheck { meta: Some(meta), .. } => meta,
+            FileStamp::Recheck { meta: None, .. } => return self,
+        };
+        if (meta.mtime, meta.ctime) == (old.mtime, old.ctime) {
+            meta.seen = meta.seen.min(old.seen);
+            if let FileStamp::Racy { meta, hash } = self {
+                if meta.seen.elapsed() >= MARGIN {
+                    return FileStamp::Settled { meta, hash: Some(hash) };
+                }
+            }
         }
         self
     }
 
     /// Whether the file may differ from what this stamp was taken of
     /// (`clock`: the time before this look). A racy stamp whose content is
-    /// found unchanged stays, and stops being racy once its margin is over.
+    /// found unchanged stays, and is settled once its margin is over.
     pub fn changed(&mut self, path: &Path, clock: SystemTime) -> bool {
-        if self.unread {
+        let (meta, hash) = match *self {
+            FileStamp::Recheck { .. } => return true,
+            FileStamp::Settled { meta, hash } => (meta, hash),
+            FileStamp::Racy { meta, hash } => (meta, Some(hash)),
+        };
+        let Ok(m) = std::fs::metadata(path) else { return true };
+        let Some(now) = Meta::of(&m) else { return true };
+        if (now.mtime, now.mode, now.size) != (meta.mtime, meta.mode, meta.size) {
             return true;
         }
-        let Ok(meta) = std::fs::metadata(path) else { return true };
-        let Some((mtime, ctime, mode, size)) = attrs(&meta) else { return true };
-        if (mtime, mode, size) != (self.mtime, self.mode, self.size) {
-            return true;
-        }
-        if ctime != self.ctime {
+        if now.ctime != meta.ctime {
             // only the change time moved (a hard link, `chown`, an ACL, an
             // extended attribute): a file whose content is still read as it
             // was is the same file. (Not a directory: whether it can be
             // entered is not in its names, and listing it again is cheap.)
-            if meta.is_dir() || self.hash.is_none() || content_of(path, false).0 != self.hash {
+            let Some(hash) = hash.filter(|_| !m.is_dir()) else { return true };
+            if content_of(path, false).0 != Some(hash) {
                 return true;
             }
-            self.ctime = ctime;
-            self.seen = Instant::now();
-            self.racy = recent(self.time(), clock);
+            let meta = Meta { ctime: now.ctime, seen: Instant::now(), ..meta };
+            *self = if recent(meta.time(), clock) { FileStamp::Racy { meta, hash } } else { FileStamp::Settled { meta, hash: Some(hash) } };
             return false;
         }
-        if !self.racy {
-            return false;
-        }
-        if content_of(path, meta.is_dir()).0 != self.hash {
+        let FileStamp::Racy { meta, hash } = *self else { return false };
+        if content_of(path, m.is_dir()).0 != Some(hash) {
             return true;
         }
-        self.racy = recent(self.time(), clock) && self.seen.elapsed() < MARGIN;
+        if !(recent(meta.time(), clock) && meta.seen.elapsed() < MARGIN) {
+            *self = FileStamp::Settled { meta, hash: Some(hash) };
+        }
         false
     }
 
@@ -468,13 +559,11 @@ impl FileStamp {
     /// fresh load; so it is read again, and only a read that succeeds or a
     /// change of its metadata says so. That costs a look and a failed open
     /// per sync, not a walk of the workspace. (One whose read the walk may
-    /// have raced is `unread`, and says so until walked again.)
+    /// have raced vouches for nothing, and says so until walked again.)
     pub fn read_otherwise(&mut self, path: &Path, clock: SystemTime) -> bool {
-        if self.hash.is_some() || self.unread {
-            return self.changed(path, clock);
-        }
+        let FileStamp::Settled { meta, hash: None } = *self else { return self.changed(path, clock) };
         match FileStamp::of(path, true) {
-            Some(now) => now.hash.is_some() || !now.same_attrs(self),
+            Some(now) => now.hash().is_some() || !now.meta().is_some_and(|n| n.same(&meta)),
             None => true,
         }
     }
@@ -512,28 +601,30 @@ impl Walk {
     /// Stamp `dirs`, which a walk that began at `began` listed, and the ignore
     /// files in them. The walk does not say when it listed each directory, so
     /// the stamps are taken after it: one whose time is recent as of `began`
-    /// may have been written while the walk ran, after its listing, and is
-    /// marked `unread`, to be looked at again at the next sync; so is a
-    /// directory that cannot be listed (no permission), until it can.
-    /// `before`: ignore files stamped before the walk began; one the same
-    /// before and after it is what the walk read, and keeps the time it was
-    /// first seen (a time in the future is trusted once seen for the margin).
-    /// An ignore file whose content cannot be read stays `unread`. With
-    /// `root`, the walk was of the whole workspace there: the ignore files
-    /// and repositories above it are stamped too, and git's index and HEAD
-    /// (as ignore files: one whose time is recent as of `began` is `unread`;
-    /// `of_workspace` adds the tracked-but-ignored files read with them). `bounds`: where repositories
+    /// may have been written while the walk ran, after its listing, and
+    /// vouches for nothing (`Why::Raced`), to be looked at again at the next
+    /// sync; so does a directory that cannot be listed (no permission), until
+    /// it can. `before`: ignore files stamped before the walk began; one the
+    /// same before and after it is what the walk read, and keeps the time it
+    /// was first seen (a time in the future is trusted once seen for the
+    /// margin). An ignore file whose content cannot be read is stamped without
+    /// a hash (see `FileStamp::read_otherwise`). With `root`, the walk was of
+    /// the whole workspace there: the ignore files and repositories above it
+    /// are stamped too, and git's index and HEAD (as ignore files, and one
+    /// whose content cannot be read vouches for nothing; `of_workspace` adds
+    /// the tracked-but-ignored files read with them). `bounds`: where repositories
     /// started (`workspace::boundary`) just before the walk began, in the
     /// directories known then; one that differs now makes the walk `pending`.
     pub fn stamp(dirs: &[PathBuf], root: Option<&Path>, began: SystemTime, before: &rustc_hash::FxHashMap<PathBuf, FileStamp>, bounds: &rustc_hash::FxHashMap<PathBuf, Option<u8>>) -> Walk {
         use crate::workspace::{boundary, index_files, listable, outer_ignore_files, repo_inputs, IGNORE_FILES};
         let mark = |p: &Path, s: FileStamp| match before.get(p).filter(|b| b.same(&s)) {
             Some(b) => s.after(Some(b)),
-            None => FileStamp { unread: s.unread || recent(s.time(), began), ..s },
+            None if s.time().is_some_and(|t| recent(t, began)) => s.recheck(Why::Raced),
+            None => s,
         };
         let dir_mark = |d: &Path, s: FileStamp| {
             let s = mark(d, s);
-            FileStamp { unread: s.unread || !listable(d), ..s }
+            if listable(d) { s } else { s.recheck(Why::Unlistable) }
         };
         // (with the hash of its content, when it can be read: one that
         // cannot is read again at each sync, and walked again once it can be,
@@ -541,9 +632,9 @@ impl Walk {
         // after it, or the reverse, was read by the walk either way)
         let ignore = |p: &Path| {
             FileStamp::of(p, true).map(|s| {
-                let flipped = before.get(p).is_some_and(|b| b.hash.is_some() != s.hash.is_some());
+                let flipped = before.get(p).is_some_and(|b| b.hash().is_some() != s.hash().is_some());
                 let s = mark(p, s);
-                FileStamp { unread: s.unread || flipped, ..s }
+                if flipped { s.recheck(Why::Raced) } else { s }
             })
         };
         let dirs: rustc_hash::FxHashMap<PathBuf, FileStamp> = dirs.par_iter().filter_map(|d| FileStamp::of(d, false).map(|s| (d.clone(), dir_mark(d, s)))).collect();
@@ -571,7 +662,7 @@ impl Walk {
             listed.extend(outer_ignore_files(root));
             outer_gits = root.ancestors().skip(1).map(|a| (a.to_path_buf(), boundary(a))).collect();
             // (one that cannot be read leaves git asked again at each sync)
-            git = index_files(root).into_iter().map(|p| { let s = ignore(&p).map(|s| FileStamp { unread: s.unread || s.hash.is_none(), ..s }); (p, s) }).collect();
+            git = index_files(root).into_iter().map(|p| { let s = ignore(&p).map(|s| if s.hash().is_some() { s } else { s.recheck(Why::GitUnreadable) }); (p, s) }).collect();
         }
         let pending = bounds.par_iter().any(|(d, b)| boundary(d) != *b);
         ignores.extend(listed.iter().map(|p| (p.clone(), ignore(p))));
@@ -620,7 +711,7 @@ impl Project {
             .map(|f| {
                 let (stamp, text) = FileStamp::read(&f.path);
                 let stub = text.map(|text| {
-                    let h = stamp.and_then(|s| s.hash).unwrap_or_else(|| content_hash(&text)) ^ lombok.key_for(&f.path);
+                    let h = stamp.and_then(|s| s.hash()).unwrap_or_else(|| content_hash(&text)) ^ lombok.key_for(&f.path);
                     let key = f.path.to_string_lossy();
                     if let Some(s) = cache.get(&key, h) {
                         return (h, s, true);
@@ -636,7 +727,7 @@ impl Project {
         for (p, stamp, stub) in read {
             // (a file listed that cannot be looked at, its directory not to
             // be entered, or gone since: tried again at the next sync)
-            stamps.insert(p.clone(), stamp.unwrap_or_else(FileStamp::unreachable));
+            stamps.insert(p.clone(), stamp.unwrap_or(FileStamp::Recheck { meta: None, why: Why::Unreachable }));
             if let Some((h, s, cached)) = stub {
                 results.push((p, h, s, cached));
             }
@@ -806,4 +897,79 @@ fn lombok_copies_qualifiers(root: &Path) -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file(name: &str, bytes: &[u8], time: SystemTime) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("grounds-stamp-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("A.java");
+        std::fs::write(&p, bytes).unwrap();
+        std::fs::File::options().write(true).open(&p).unwrap().set_modified(time).unwrap();
+        p
+    }
+
+    /// A read that finds no text leaves a stamp that vouches for nothing:
+    /// every look takes the file as changed while its metadata stays as it
+    /// was, and no stamp taken without that read is the same as it.
+    #[test]
+    fn a_stamp_from_a_failed_read_never_vouches_for_the_file() {
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        // (not UTF-8: a read that fails whoever runs the test)
+        let p = file("failedread", &[0xff, b'a'], old);
+        let (stamp, text) = FileStamp::read(&p);
+        assert_eq!(text, None);
+        let mut stamp = stamp.unwrap();
+        assert!(matches!(stamp, FileStamp::Recheck { meta: Some(_), why: Why::ReadFailed }), "{stamp:?}");
+        assert_eq!(stamp.hash(), None);
+        for _ in 0..2 {
+            assert!(stamp.changed(&p, SystemTime::now()), "the same metadata does not vouch for a failed read");
+        }
+        let now = FileStamp::of(&p, true).unwrap();
+        assert!(!stamp.same(&now) && !now.same(&stamp));
+        // what a stamp taken again keeps of it is when its time was seen
+        let (again, _) = FileStamp::read(&p);
+        assert_eq!(again.unwrap().after(Some(&stamp)).meta().unwrap().seen, stamp.meta().unwrap().seen);
+        // a file listed that cannot be looked at: no metadata at all
+        let mut unreachable = FileStamp::Recheck { meta: None, why: Why::Unreachable };
+        assert!(unreachable.changed(&p, SystemTime::now()));
+        assert_eq!(now.after(Some(&unreachable)).meta().unwrap().seen, now.meta().unwrap().seen);
+        // readable, with the same time: the stamp vouches for that text
+        std::fs::write(&p, b"ba").unwrap();
+        std::fs::File::options().write(true).open(&p).unwrap().set_modified(old).unwrap();
+        let (stamp, text) = FileStamp::read(&p);
+        assert_eq!(text.as_deref(), Some("ba"));
+        let mut stamp = stamp.unwrap();
+        // (racy: the write moved the change time)
+        assert!(stamp.vouches() && stamp.hash().is_some(), "{stamp:?}");
+        assert!(!stamp.changed(&p, SystemTime::now()));
+        let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    }
+
+    /// A recent time is not trusted alone: the stamp keeps the hash its
+    /// content is compared with, and is settled once the time has been seen
+    /// unchanged for the margin.
+    #[test]
+    fn a_racy_stamp_compares_content_until_its_time_is_seen_for_the_margin() {
+        // (a time in the future is recent however slowly the test runs)
+        let future = SystemTime::now() + Duration::from_secs(3600);
+        let p = file("racy", b"one", future);
+        let mut stamp = FileStamp::of(&p, false).unwrap();
+        let FileStamp::Racy { meta, hash } = stamp else { panic!("{stamp:?}") };
+        assert!(!stamp.changed(&p, SystemTime::now()), "the same content");
+        // the same time and size, other content
+        std::fs::write(&p, b"two").unwrap();
+        std::fs::File::options().write(true).open(&p).unwrap().set_modified(future).unwrap();
+        assert!(stamp.changed(&p, SystemTime::now()));
+        // seen at a look the margin ago: no write since can have kept the time
+        let Some(long_ago) = Instant::now().checked_sub(MARGIN * 2) else { return };
+        let earlier = FileStamp::Racy { meta: Meta { seen: long_ago, ..meta }, hash };
+        let settled = FileStamp::Racy { meta, hash }.after(Some(&earlier));
+        assert!(matches!(settled, FileStamp::Settled { hash: Some(h), .. } if h == hash), "{settled:?}");
+        let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    }
 }

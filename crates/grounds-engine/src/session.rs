@@ -5,7 +5,7 @@
 
 use crate::analyze::{analyze_text, build_ruleset_for, Finding};
 use crate::git;
-use crate::project::{path_key, recent, FileStamp, Project, Walk};
+use crate::project::{path_key, recent, FileStamp, Project, Walk, Why};
 use crate::workspace::{classify, SourceKind};
 use grounds_index::{simple_name_of, ClassLookup, FileStub, Name};
 use grounds_rules::framework::RuleOptions;
@@ -346,7 +346,7 @@ impl Session {
                     (Some(Some(e)), Some(n)) => e.same(n),
                     (Some(None), None) | (None, None) => true,
                     (Some(_), _) => false,
-                    (None, Some(n)) => !recent(n.time(), began),
+                    (None, Some(n)) => !n.time().is_some_and(|t| recent(t, began)),
                 };
                 if !read {
                     crate::trace::log(|| format!("load: {} may have been written during the load", p.display()));
@@ -373,9 +373,9 @@ impl Session {
     }
 
     /// Source files that could not be read and are tried again at every
-    /// sync (see `FileStamp::unread`).
+    /// sync (see `FileStamp::Recheck`).
     pub fn unread_files(&self) -> Vec<PathBuf> {
-        let mut v: Vec<PathBuf> = self.stamps.iter().filter(|(_, s)| s.unread).map(|(p, _)| p.clone()).collect();
+        let mut v: Vec<PathBuf> = self.stamps.iter().filter(|(_, s)| !s.vouches()).map(|(p, _)| p.clone()).collect();
         v.sort();
         v
     }
@@ -384,7 +384,7 @@ impl Session {
     /// recent to trust (see `FileStamp`), and whether the project is to be
     /// loaded again: what a sync costs beyond looking at times.
     pub fn in_doubt(&self) -> (usize, bool) {
-        let racy = self.stamps.values().chain(self.config.iter().filter_map(|(_, s)| s.as_ref())).filter(|s| s.racy).count();
+        let racy = self.stamps.values().chain(self.config.iter().filter_map(|(_, s)| s.as_ref())).filter(|s| s.is_racy()).count();
         (racy, self.config_unread)
     }
 
@@ -491,7 +491,7 @@ impl Session {
                 // the stamp first, then the listing it vouches for; not
                 // through a symlink, which the discovery does not follow
                 let stamp = FileStamp::of(&d, true).filter(|_| std::fs::symlink_metadata(&d).is_ok_and(|m| m.is_dir()));
-                let Some(mut stamp) = stamp else {
+                let Some(stamp) = stamp else {
                     crate::trace::log(|| format!("sync: directory gone {}", d.display()));
                     forget(self, &mut gone, &d);
                     forgotten.push(d);
@@ -516,7 +516,7 @@ impl Session {
                 // one that cannot be listed or entered (no permission) is
                 // listed again at every sync until it can, as an unreadable
                 // file is read
-                stamp.unread = !listable(&d);
+                let stamp = if listable(&d) { stamp } else { stamp.recheck(Why::Unlistable) };
                 self.walked.dirs.insert(d.clone(), stamp.after(Some(&old)));
                 let began = SystemTime::now();
                 let listed = walk(&d, Some(1));
@@ -658,7 +658,7 @@ impl Session {
                 if !stamp.changed(p, clock) {
                     return None;
                 }
-                crate::trace::log(|| format!("sync: stale {} recorded {} size {}{} now {}", p.display(), crate::trace::time(Some(was.mtime)), was.size, if was.racy { " racy" } else { "" }, crate::trace::time(std::fs::metadata(p).and_then(|m| m.modified()).ok())));
+                crate::trace::log(|| format!("sync: stale {} recorded {} size {}{} now {}", p.display(), crate::trace::time(was.meta().map(|m| m.mtime)), was.meta().map_or(0, |m| m.size), if was.is_racy() { " racy" } else if was.vouches() { "" } else { " unread" }, crate::trace::time(std::fs::metadata(p).and_then(|m| m.modified()).ok())));
                 Some(p.clone())
             })
             .collect();
@@ -700,7 +700,7 @@ impl Session {
             // (its directory, which cannot be entered, is listed again at
             // every sync too, and says when it goes)
             let unreachable = !gone.contains(&p) && meta.as_ref().is_err_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied);
-            let stamp = stamp.or_else(|| unreachable.then(FileStamp::unreachable));
+            let stamp = stamp.or_else(|| unreachable.then_some(FileStamp::Recheck { meta: None, why: Why::Unreachable }));
             // refresh_file rebuilds the DI model itself; batch it below instead
             let key = path_key(&p);
             let old = self.project.index.file(&key).map(|s| s.signature_hash);
@@ -725,7 +725,7 @@ impl Session {
                     }
                 } else if old.is_some() {
                     // could not be read: no stub, as a fresh load has none;
-                    // the stamp is `unread`, so the next sync tries again
+                    // the stamp vouches for nothing, so the next sync tries again
                     self.project.index.remove_file(&key);
                     any_decl_change = true;
                     changed.push(p.clone());
@@ -759,7 +759,7 @@ impl Session {
             for (e, b) in extra.iter().zip(&sigs) {
                 let now = std::fs::metadata(e).and_then(|m| m.modified()).ok();
                 let text = crate::fsutil::read_text(e).ok().map(|t| format!("{:016x}", crate::cache::content_hash(&t))).unwrap_or_else(|| "-".into());
-                crate::trace::log(|| format!("sync: checked {} stub {} -> {} recorded {} now {} content {}", e.display(), b, sig(self, e), crate::trace::time(self.stamps.get(e).map(|s| s.mtime)), crate::trace::time(now), text));
+                crate::trace::log(|| format!("sync: checked {} stub {} -> {} recorded {} now {} content {}", e.display(), b, sig(self, e), crate::trace::time(self.stamps.get(e).and_then(|s| s.meta()).map(|m| m.mtime)), crate::trace::time(now), text));
             }
         }
         changed
