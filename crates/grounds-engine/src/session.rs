@@ -985,7 +985,9 @@ impl Session {
                     // (files deleted since HEAD are no longer in the index, so
                     // no dependent is analyzed against a stub of another version)
                     let touched = self.touched(opts, &files, &deleted, rev);
-                    let before: FxHashSet<PlaceClaim> = self.at_base(&touched, rev, |s| s.analyze(&s.resolution_rules, &deps)).iter().map(place_claim).collect();
+                    let base = self.at_base(&touched, rev);
+                    let before: FxHashSet<PlaceClaim> = base.analyze(&base.resolution_rules, &deps).iter().map(place_claim).collect();
+                    drop(base);
                     now.into_iter().filter(|f| !before.contains(&place_claim(f))).collect()
                 }
             };
@@ -1051,55 +1053,19 @@ impl Session {
         let mut elsewhere: Vec<PathBuf> = elsewhere.into_iter().collect();
         elsewhere.sort();
         let old: Vec<(PathBuf, String)> = in_files.iter().filter_map(|f| git::version_at(self.root(), rev, f).map(|t| (f.clone(), t))).collect();
-        let found = self.at_base(touched, rev, |s| {
-            s.project.index.ensure_resolved();
-            let mut v: Vec<Finding> = old.par_iter().flat_map_iter(|(f, t)| analyze_text(&s.project, &rules, &s.options, f, t)).collect();
-            v.extend(s.analyze(&rules, &elsewhere));
-            v
-        });
+        let base = self.at_base(touched, rev);
+        let s: &Session = &base;
+        s.project.index.ensure_resolved();
+        let mut found: Vec<Finding> = old.par_iter().flat_map_iter(|(f, t)| analyze_text(&s.project, &rules, &s.options, f, t)).collect();
+        found.extend(s.analyze(&rules, &elsewhere));
+        drop(base);
         found.iter().flat_map(|f| std::iter::once(claim_key(f)).chain(gap_key(f))).collect()
     }
 
-    /// Run `f` on the project as it was at `rev` for the `touched` files
-    /// (their version there, or none), then put the current stubs and bean
-    /// model back as they were, from memory, also when `f` panics: the daemon
-    /// survives a panic in a request, and no file's time would tell a later
-    /// sync that the index holds the base version.
-    fn at_base<R>(&mut self, touched: &[PathBuf], rev: &str, f: impl FnOnce(&Session) -> R) -> R {
-        let saved: Vec<(Arc<str>, Option<Arc<FileStub>>)> = touched.iter().map(|p| {
-            let key = path_key(p);
-            let stub = self.project.index.file(&key).cloned();
-            (key, stub)
-        }).collect();
-        let mut base_di = grounds_di::DiModel::default();
-        base_di.lombok_copies_qualifiers = self.project.di.lombok_copies_qualifiers;
-        base_di.bean_overriding_allowed = self.project.di.bean_overriding_allowed;
-        let di = std::mem::replace(&mut self.project.di, base_di);
-        let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            for p in touched {
-                let key = path_key(p);
-                match git::version_at(self.root(), rev, p) {
-                    Some(t) => {
-                        let stub = Arc::new(self.project.extract(p, &ParsedFile::parse(t)));
-                        self.project.index.set_file(key, stub);
-                    }
-                    None => self.project.index.remove_file(&key),
-                }
-            }
-            self.project.rebuild_di();
-            f(self)
-        }));
-        for (key, stub) in saved {
-            match stub {
-                Some(stub) => self.project.index.set_file(key, stub),
-                None => self.project.index.remove_file(&key),
-            }
-        }
-        self.project.di = di;
-        match out {
-            Ok(r) => r,
-            Err(e) => std::panic::resume_unwind(e),
-        }
+    /// The project as it was at `rev` for the `touched` files (their version
+    /// there, or none), until the guard returned is dropped (see `AtBase`).
+    fn at_base(&mut self, touched: &[PathBuf], rev: &str) -> base::AtBase<'_> {
+        base::AtBase::install(self, touched, rev)
     }
 
     /// Findings of the cross-file rules in files outside `changed`/`deleted`
@@ -1116,11 +1082,10 @@ impl Session {
             return Vec::new();
         }
         let now = self.analyze(&rules, &others);
-        let (before, base_classes) = self.at_base(&touched, rev, |s| {
-            let classes: Vec<Name> = touched.iter().filter_map(|f| s.project.index.file(&path_key(f))).flat_map(|stub| stub.classes.iter().map(|c| c.name.clone())).collect();
-            let before: FxHashSet<PlaceClaim> = s.analyze(&rules, &others).iter().map(place_claim).collect();
-            (before, classes)
-        });
+        let base = self.at_base(&touched, rev);
+        let base_classes: Vec<Name> = touched.iter().filter_map(|f| base.project.index.file(&path_key(f))).flat_map(|stub| stub.classes.iter().map(|c| c.name.clone())).collect();
+        let before: FxHashSet<PlaceClaim> = base.analyze(&rules, &others).iter().map(place_claim).collect();
+        drop(base);
         let mut found: Vec<Finding> = now.into_iter().filter(|f| !before.contains(&place_claim(f))).collect();
         // classes the change deleted or renamed: references to them are unknown
         // types, which the rules leave alone (a missing jar looks the same).
@@ -1491,6 +1456,72 @@ impl Session {
     }
 }
 
+mod base {
+    use super::*;
+
+    /// A session whose project holds, for some files, their version at a
+    /// revision (or none) and a bean model built from that: the project
+    /// before a change. It lends the session out only to be read, so nothing
+    /// syncs or changes it while the base is in place. Dropping it puts the
+    /// current stubs and bean model back from memory, also when a panic
+    /// unwinds through it: the daemon survives a panic in a request, and no
+    /// file's time would tell a later sync that the index holds the base
+    /// version.
+    pub(super) struct AtBase<'s> {
+        session: &'s mut Session,
+        /// The stub each file had (`None`: none) before the base was put in.
+        saved: Vec<(Arc<str>, Option<Arc<FileStub>>)>,
+        di: grounds_di::DiModel,
+    }
+
+    impl<'s> AtBase<'s> {
+        pub(super) fn install(session: &'s mut Session, touched: &[PathBuf], rev: &str) -> AtBase<'s> {
+            let saved = touched.iter().map(|p| {
+                let key = path_key(p);
+                let stub = session.project.index.file(&key).cloned();
+                (key, stub)
+            }).collect();
+            let di = std::mem::take(&mut session.project.di);
+            // (the guard first: a panic while the base is put in restores too)
+            let base = AtBase { session, saved, di };
+            let project = &mut base.session.project;
+            for p in touched {
+                let key = path_key(p);
+                match git::version_at(&project.workspace.root, rev, p) {
+                    Some(t) => {
+                        let stub = Arc::new(project.extract(p, &ParsedFile::parse(t)));
+                        project.index.set_file(key, stub);
+                    }
+                    None => project.index.remove_file(&key),
+                }
+            }
+            project.rebuild_di();
+            base
+        }
+    }
+
+    impl std::ops::Deref for AtBase<'_> {
+        type Target = Session;
+
+        fn deref(&self) -> &Session {
+            self.session
+        }
+    }
+
+    impl Drop for AtBase<'_> {
+        fn drop(&mut self) {
+            let project = &mut self.session.project;
+            for (key, stub) in self.saved.drain(..) {
+                match stub {
+                    Some(stub) => project.index.set_file(key, stub),
+                    None => project.index.remove_file(&key),
+                }
+            }
+            project.di = std::mem::take(&mut self.di);
+        }
+    }
+}
+
 /// A test class reaching changed code, with the Gradle test task running it.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct ImpactedTest {
@@ -1640,7 +1671,10 @@ mod tests {
         let first = serde_json::to_string(&s.check(&opts)).unwrap();
         let hook = std::panic::take_hook();
         std::panic::set_hook(Box::new(|_| {}));
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| s.at_base(&[owner.clone()], "HEAD", |_| -> () { panic!("in the base state") })));
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _base = s.at_base(&[owner.clone()], "HEAD");
+            panic!("in the base state")
+        }));
         std::panic::set_hook(hook);
         assert!(r.is_err());
         let after = serde_json::to_string(&s.check(&opts)).unwrap();
@@ -1648,6 +1682,39 @@ mod tests {
         assert_eq!(after, fresh);
         assert_eq!(after, first);
         assert!(after.contains("Clinic.java"), "{after}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// In the base state the project holds the base version of the touched
+    /// files, and a bean model built from them with the project's settings;
+    /// once the guard is dropped, the current stubs and model are back.
+    #[test]
+    fn the_base_state_holds_the_base_version_until_dropped() {
+        let dir = std::env::temp_dir().join(format!("grounds-atbase-drop-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let w = |rel: &str, t: &str| {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(&p, t).unwrap();
+        };
+        w("build.gradle", "plugins { id 'java' }\n");
+        w("src/main/resources/application.properties", "spring.main.allow-bean-definition-overriding=true\n");
+        w("src/main/java/demo/Owner.java", "package demo;\n@org.springframework.stereotype.Component\npublic class Owner {}\n");
+        git(&dir, &["init", "-q"]);
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["commit", "-qm", "init"]);
+        w("src/main/java/demo/Owner.java", "package demo;\npublic class Owner {}\n");
+        let owner = dir.join("src/main/java/demo/Owner.java").canonicalize().unwrap();
+        let s = &mut Session::open(&dir).unwrap();
+        assert!(s.project.di_settings.bean_overriding_allowed);
+        let held = |s: &Session| (format!("{:?}", s.project.index.file(&path_key(&owner))), s.project.di.beans.len(), s.project.di.settings);
+        let now = held(s);
+        let base = s.at_base(std::slice::from_ref(&owner), "HEAD");
+        let (stub, beans, settings) = held(&base);
+        assert_ne!(stub, now.0, "the version at HEAD");
+        assert_eq!((beans, settings), (now.1 + 1, now.2), "a model of the base, with the project's settings");
+        drop(base);
+        assert_eq!(held(s), now);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

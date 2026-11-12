@@ -101,9 +101,9 @@ fn findings(text: &str, stem: &str, options: &RuleOptions, mut idx: Index) -> BT
     let fm = FileModel::new(&pf, &idx, key.clone());
     let set = RuleSet::new(all_rules());
     let info = FileInfo { path: key.to_string(), is_test: first.contains("grounds: test"), is_generated: false };
-    let mut di = grounds_di::DiModel::build(&idx);
     // `// grounds: bean-overriding` stands for allow-bean-definition-overriding=true
-    di.bean_overriding_allowed = first.contains("grounds: bean-overriding");
+    let settings = grounds_di::Settings { bean_overriding_allowed: first.contains("grounds: bean-overriding"), ..Default::default() };
+    let di = grounds_di::DiModel::build_with(&idx, &[], &[], settings);
     let mut out: BTreeMap<(String, usize), String> = BTreeMap::new();
     for d in set.check(&fm, &info, Some(&di), options) {
         let at = (d.rule.to_string(), pf.lines.line_of(d.range.start) + 1);

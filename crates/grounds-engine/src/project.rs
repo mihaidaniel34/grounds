@@ -37,6 +37,9 @@ pub struct Project {
     pub stats: LoadStats,
     /// Dependency-injection model (rebuilt when declarations change).
     pub di: grounds_di::DiModel,
+    /// What the configuration says about beans, which every model of this
+    /// project is built with.
+    pub di_settings: grounds_di::Settings,
     pub source_sets: SourceSets,
     pub lombok: LombokConfigs,
     /// classes listed in META-INF/spring.factories and META-INF/spring/*.imports
@@ -821,17 +824,16 @@ impl Project {
             let _ = new_cache.save(&workspace.root);
         }
         let (registered, auto_registered) = spring_registrations(&workspace);
+        let di_settings = grounds_di::Settings { lombok_copies_qualifiers: lombok_copies_qualifiers(&workspace.root), bean_overriding_allowed: bean_overriding_allowed(&workspace) };
         // resolve every class on all cores before di model asks for them one by one
         let t = Instant::now();
         stats.resolve = index.resolve_ordered();
         stats.t_resolve = t.elapsed();
         let t = Instant::now();
-        let mut di = grounds_di::DiModel::build_with(&index, &registered, &auto_registered);
+        let di =grounds_di::DiModel::build_with(&index, &registered, &auto_registered, di_settings);
         stats.t_di = t.elapsed();
-        di.lombok_copies_qualifiers = lombok_copies_qualifiers(&workspace.root);
-        di.bean_overriding_allowed = bean_overriding_allowed(&workspace);
         let classpath_warnings = crate::classpath::warnings(&workspace, &config, &index);
-        let project = Project { config, workspace, index, stats, di, source_sets, lombok, registered, auto_registered, classpath_warnings, classpath_entries: entries, releases, release_inputs };
+        let project = Project { config, workspace, index, stats, di, di_settings, source_sets, lombok, registered, auto_registered, classpath_warnings, classpath_entries: entries, releases, release_inputs };
         Ok((project, Loaded { stamps, walked, began: load_began, before: None }))
     }
 
@@ -887,11 +889,8 @@ impl Project {
     }
 
     pub fn rebuild_di(&mut self) {
-        let (copies, overriding) = (self.di.lombok_copies_qualifiers, self.di.bean_overriding_allowed);
         self.index.ensure_resolved();
-        self.di = grounds_di::DiModel::build_with(&self.index, &self.registered, &self.auto_registered);
-        self.di.lombok_copies_qualifiers = copies;
-        self.di.bean_overriding_allowed = overriding;
+        self.di = grounds_di::DiModel::build_with(&self.index, &self.registered, &self.auto_registered, self.di_settings);
     }
 }
 

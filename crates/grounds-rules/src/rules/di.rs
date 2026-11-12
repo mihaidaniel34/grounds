@@ -200,7 +200,7 @@ declare_rule!(LombokDropsQualifier {
 impl Rule for LombokDropsQualifier {
     rule_meta!();
     fn check_node<'t>(&self, n: Node<'t>, cx: &mut Ctx<'_, 't>) {
-        if cx.di.is_some_and(|d| d.lombok_copies_qualifiers) {
+        if cx.di.is_some_and(|d| d.settings.lombok_copies_qualifiers) {
             return;
         }
         let names = annotation_names(n, cx.src);
@@ -925,7 +925,7 @@ impl Rule for BeanNameConflict {
                 continue; // overloaded @Bean methods in one class are merged by Spring
             }
             // with overriding enabled only two scanned components still clash
-            if di.bean_overriding_allowed && !matches!((&ba.source, &bb.source), (BeanSource::Component, BeanSource::Component)) {
+            if di.settings.bean_overriding_allowed && !matches!((&ba.source, &bb.source), (BeanSource::Component, BeanSource::Component)) {
                 continue;
             }
             // the same @Bean method seen twice through inheritance

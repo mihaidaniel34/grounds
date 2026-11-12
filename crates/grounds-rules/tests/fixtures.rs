@@ -109,9 +109,9 @@ fn rule_fixtures() {
             }
         }
         let info = FileInfo { path: key.to_string(), is_test, is_generated: false };
-        let mut di = grounds_di::DiModel::build(&idx);
         // `// grounds: bean-overriding` stands for allow-bean-definition-overriding=true
-        di.bean_overriding_allowed = first.contains("grounds: bean-overriding");
+        let settings = grounds_di::Settings { bean_overriding_allowed: first.contains("grounds: bean-overriding"), ..Default::default() };
+        let di = grounds_di::DiModel::build_with(&idx, &[], &[], settings);
         let diags = set.check(&fm, &info, Some(&di), &options);
         let actual: BTreeSet<usize> = diags.iter().map(|d| pf.lines.line_of(d.range.start) + 1).collect();
         let expected = expected_lines(&text, &rule_id);

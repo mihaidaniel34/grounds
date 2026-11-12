@@ -162,6 +162,17 @@ impl AppContext {
     }
 }
 
+/// What a project's configuration, rather than its sources, says about its
+/// beans: a model is built with them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Settings {
+    /// lombok.config copies @Qualifier/@Value onto generated constructors.
+    pub lombok_copies_qualifiers: bool,
+    /// `spring.main.allow-bean-definition-overriding=true` in some
+    /// application config: a later @Bean definition replaces an earlier one.
+    pub bean_overriding_allowed: bool,
+}
+
 #[derive(Debug, Default)]
 pub struct DiModel {
     pub beans: Vec<Bean>,
@@ -190,11 +201,8 @@ pub struct DiModel {
     /// programmatically (BeanDefinitionRegistryPostProcessor,
     /// ImportBeanDefinitionRegistrar): such types may have beans we cannot see
     pub dynamic_types: rustc_hash::FxHashSet<String>,
-    /// lombok.config copies @Qualifier/@Value onto generated constructors.
-    pub lombok_copies_qualifiers: bool,
-    /// `spring.main.allow-bean-definition-overriding=true` in some
-    /// application config: a later @Bean definition replaces an earlier one.
-    pub bean_overriding_allowed: bool,
+    /// What the project's configuration says beside its sources.
+    pub settings: Settings,
     /// An imported ImportSelector/ImportBeanDefinitionRegistrar may register
     /// beans we cannot see: "no bean" is never certain.
     pub opaque_imports: bool,
@@ -2051,17 +2059,17 @@ pub fn unwrap_injected(ty: &Ty) -> (Ty, bool, bool, bool) {
 
 impl DiModel {
     pub fn build(index: &Index) -> DiModel {
-        Self::build_with(index, &[], &[])
+        Self::build_with(index, &[], &[], Settings::default())
     }
 
     /// `registered`: classes listed in META-INF/spring.factories or
     /// META-INF/spring/*.imports (auto-configurations and similar);
     /// `auto_registered`: the auto-configurations among them.
-    pub fn build_with(index: &Index, registered: &[String], auto_registered: &[String]) -> DiModel {
+    pub fn build_with(index: &Index, registered: &[String], auto_registered: &[String], settings: Settings) -> DiModel {
         let mut b = Builder {
             index,
             qualified: FxHashMap::default(),
-            model: DiModel::default(),
+            model: DiModel { settings, ..DiModel::default() },
             stereo: FxHashMap::default(),
             qualifier_ann: FxHashMap::default(),
             factory_ann: FxHashMap::default(),
@@ -2564,7 +2572,7 @@ mod tests {
             let pf = ParsedFile::parse(*s);
             idx.set_file(Arc::from(*p), Arc::new(extract(&pf)));
         }
-        let m = DiModel::build_with(&idx, registered, auto_registered);
+        let m = DiModel::build_with(&idx, registered, auto_registered, Settings::default());
         (idx, m)
     }
 
