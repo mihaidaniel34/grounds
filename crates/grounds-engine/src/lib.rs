@@ -10,6 +10,7 @@ pub mod dump;
 pub mod fsutil;
 pub mod git;
 pub mod java_release;
+pub mod oracle;
 pub mod project;
 pub mod report;
 pub mod session;
