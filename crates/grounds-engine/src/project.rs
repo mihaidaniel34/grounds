@@ -349,10 +349,11 @@ impl Meta {
 pub enum FileStamp {
     /// The metadata decides. `hash`: of the content, when it was read (asked
     /// for, or the time was recent); `None` when it was not asked for and the
-    /// time was old, or when it could not be read, and then the metadata is
-    /// all there is to go by (an ignore file that cannot be read is read again
-    /// cheaply, see `read_otherwise`). With a hash, a change of the change
-    /// time alone is no change while the content still reads the same.
+    /// time was old, or when it could not be read and the time was old, and
+    /// then the metadata is all there is to go by (an ignore file that cannot
+    /// be read is read again cheaply, see `read_otherwise`). With a hash, a
+    /// change of the change time alone is no change while the content still
+    /// reads the same.
     Settled { meta: Meta, hash: Option<u64> },
     /// The time was recent when taken: every look compares the content with
     /// `hash` too, until the time is old or has been seen unchanged for
@@ -382,6 +383,11 @@ pub enum Why {
     /// git's index or HEAD, whose content could not be read: which files git
     /// tracks is asked again.
     GitUnreadable,
+    /// A time recent when it was taken, of a file whose content could not be
+    /// read (no permission, not a regular file): there is no hash to tell a
+    /// write in the same tick by, so it is looked at again until a stamp is
+    /// taken of an old time.
+    RecentUnread,
 }
 
 /// The hash a stamp keeps: of the bytes of a file, of the sorted names in a
@@ -414,9 +420,10 @@ impl FileStamp {
         let racy = recent(meta.time(), clock);
         let (hash, bytes) = if always || racy { content_of(path, m.is_dir()) } else { (None, None) };
         // (a recent time whose content cannot be read leaves nothing to
-        // compare: the metadata decides)
+        // compare, and the metadata alone cannot tell a write in its tick)
         let stamp = match hash {
             Some(hash) if racy => FileStamp::Racy { meta, hash },
+            None if racy => FileStamp::Recheck { meta: Some(meta), why: Why::RecentUnread },
             hash => FileStamp::Settled { meta, hash },
         };
         (Some(stamp), bytes)
@@ -468,24 +475,32 @@ impl FileStamp {
     pub fn read(path: &Path) -> (Option<FileStamp>, Option<String>) {
         let (stamp, bytes) = Self::take(path, true);
         let text = bytes.and_then(|b| String::from_utf8(b).ok());
-        let stamp = if text.is_some() { stamp } else { stamp.map(|s| s.recheck(Why::ReadFailed)) };
+        // (`ReadFailed` whatever the time: what decides is that there is no text)
+        let stamp = if text.is_some() { stamp } else { stamp.map(|s| FileStamp::Recheck { meta: s.meta().copied(), why: Why::ReadFailed }) };
         (stamp, text)
     }
 
     /// The stamp of a file or directory, with a hash of its content when its
-    /// time is recent or `with_hash`. (Not of every jar on a classpath.)
-    /// Never `Recheck`: what could not be read is left to the caller.
+    /// time is recent or `with_hash`. (Not of every jar on a classpath.) One
+    /// whose content could not be read is `Settled` without a hash when its
+    /// time is old (the metadata decides) and `Recheck` when it is recent
+    /// (`Why::RecentUnread`); what else could not be read is left to the
+    /// caller.
     pub fn of(path: &Path, with_hash: bool) -> Option<FileStamp> {
         Self::take(path, with_hash).0
     }
 
-    /// The same metadata, and the same content where both have a hash. (A
-    /// stamp without one was taken of a time that was already old, or of a
-    /// file that could not be read.) A stamp that vouches for nothing is the
-    /// same as none.
+    /// The same metadata, and the same hash of the content, of two stamps
+    /// taken with the hash asked for (`of(p, true)`): one without a hash is
+    /// then of content that could not be read, and says nothing about what it
+    /// is. So it is the same only as another that could not read it either
+    /// (with the same metadata, which a `chmod` in between moves), never as
+    /// one that read it: a configuration file unreadable before a load and
+    /// readable after it may have been read by the load in either state. A
+    /// stamp that vouches for nothing is the same as none.
     pub fn same(&self, other: &FileStamp) -> bool {
         match (self.vouches() && other.vouches(), self.meta(), other.meta()) {
-            (true, Some(a), Some(b)) => a.same(b) && (self.hash().is_none() || other.hash().is_none() || self.hash() == other.hash()),
+            (true, Some(a), Some(b)) => a.same(b) && self.hash() == other.hash(),
             _ => false,
         }
     }
@@ -1016,5 +1031,47 @@ mod tests {
         let settled = FileStamp::Racy { meta, hash }.after(Some(&earlier));
         assert!(matches!(settled, FileStamp::Settled { hash: Some(h), .. } if h == hash), "{settled:?}");
         let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    }
+
+    /// A configuration file unreadable at the look before a load and
+    /// readable at the one after it, with the same metadata, may have been
+    /// read by the load in either state: the stamp without a hash says nothing
+    /// about the content, so the two are not the same. Two looks that could
+    /// not read it, with the same metadata, are.
+    #[test]
+    fn a_stamp_that_could_not_read_the_content_does_not_vouch_for_it() {
+        let p = file("unhashed", b"one", SystemTime::now() - Duration::from_secs(3600));
+        // (settled by hand: the write just moved the change time)
+        let taken = FileStamp::of(&p, true).unwrap();
+        let (meta, hash) = (*taken.meta().unwrap(), taken.hash());
+        assert!(hash.is_some());
+        let read = FileStamp::Settled { meta, hash };
+        let unread = FileStamp::Settled { meta, hash: None };
+        assert!(!unread.same(&read) && !read.same(&unread), "unreadable before, readable after");
+        assert!(unread.same(&FileStamp::Settled { meta, hash: None }), "unreadable both times");
+        assert!(read.same(&taken), "read the same both times");
+        let _ = std::fs::remove_dir_all(p.parent().unwrap());
+    }
+
+    /// A file written in the last seconds whose content cannot be read (here
+    /// a named pipe, which is never read) has nothing to compare a write in
+    /// the same tick with: its stamp vouches for nothing, and every look
+    /// takes it as changed until a stamp taken again is of an old time.
+    #[test]
+    fn a_recent_file_whose_content_cannot_be_read_is_looked_at_again() {
+        let dir = std::env::temp_dir().join(format!("grounds-stamp-recentpipe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("grounds.toml");
+        if !std::process::Command::new("mkfifo").arg(&p).status().is_ok_and(|s| s.success()) {
+            return;
+        }
+        for with_hash in [true, false] {
+            let mut stamp = FileStamp::of(&p, with_hash).unwrap();
+            assert!(!stamp.vouches(), "{stamp:?}");
+            assert!(stamp.changed(&p, SystemTime::now()));
+            assert!(!stamp.same(&FileStamp::of(&p, with_hash).unwrap()));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
