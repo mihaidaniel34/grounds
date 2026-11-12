@@ -382,3 +382,47 @@ fn a_file_whose_package_is_not_its_directories_belongs_to_the_enclosing_root() {
     assert_eq!(breaks(&p), [("src/main/java/checks/Default.java".to_string(), Some(InBuild::Yes))]);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// jdt-core's shape: compiled tests import `junit.framework.ComparisonFailure`
+/// from the JUnit jar, which grounds does not have; the only source declaring
+/// the class is test data of another module, an old copy without
+/// `getActual`. That declaration is not what the build compiles against: no
+/// claim rests on it in code the build compiles. Without build output, the
+/// finding is made as before, under a guessed picture.
+#[test]
+fn a_class_declared_only_in_test_data_is_not_what_the_build_compiles_against() {
+    let javac = javac_or_skip!();
+    let failure = |extra: &str| format!("package junit.framework;\npublic class ComparisonFailure {{ public String getExpected() {{ return null; }}{extra} }}\n");
+    let dir = project(
+        "outside",
+        &[
+            ("pom.xml", POM),
+            ("compiler/pom.xml", POM),
+            ("compiler/src/main/java/t/TestCase.java", "package t;\nimport junit.framework.ComparisonFailure;\nclass TestCase { String f(ComparisonFailure c) { return c.getActual(); } }\n"),
+            ("model/pom.xml", POM),
+            ("model/src/main/java/m/Model.java", "package m;\nclass Model {}\n"),
+            ("model/workspace/Converter/src/junit/framework/ComparisonFailure.java", &failure("")),
+        ],
+    );
+    // the jar's class, outside the project
+    let jar = dir.with_extension("jar");
+    let _ = std::fs::remove_dir_all(&jar);
+    write_at(&jar, "src/junit/framework/ComparisonFailure.java", &failure(" public String getActual() { return null; }"), ago(120));
+    compile(&javac, &jar, &["src/junit/framework/ComparisonFailure.java"], "classes", None);
+    compile(&javac, &dir, &["model/src/main/java/m/Model.java"], "model/target/classes", None);
+    let mut cmd = Command::new(&javac);
+    cmd.arg("--release").arg("17").arg("-d").arg(dir.join("compiler/target/classes")).arg("-cp").arg(jar.join("classes")).arg(dir.join("compiler/src/main/java/t/TestCase.java")).env_remove("JAVA_TOOL_OPTIONS");
+    let o = cmd.output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let p = Project::load(&dir).unwrap();
+    assert_eq!(state(&p, "compiler/src/main/java/t/TestCase.java"), InBuild::Yes);
+    assert_eq!(state(&p, "model/workspace/Converter/src/junit/framework/ComparisonFailure.java"), InBuild::No);
+    assert!(breaks(&p).is_empty(), "{:?}", breaks(&p));
+    // never built: the copy is all there is to go by, as before
+    std::fs::remove_dir_all(dir.join("compiler/target")).unwrap();
+    std::fs::remove_dir_all(dir.join("model/target")).unwrap();
+    let p = Project::load(&dir).unwrap();
+    assert_eq!(breaks(&p), [("compiler/src/main/java/t/TestCase.java".to_string(), Some(InBuild::Unknown))]);
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_dir_all(&jar);
+}

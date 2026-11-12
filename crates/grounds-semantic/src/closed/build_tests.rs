@@ -5,7 +5,7 @@
 use crate::closed::{Jars, Open};
 use crate::FileModel;
 use grounds_index::*;
-use grounds_syntax::ParsedFile;
+use grounds_syntax::{NodeExt, ParsedFile};
 use std::sync::{Arc, OnceLock};
 
 fn jdk() -> Arc<Classpath> {
@@ -109,4 +109,70 @@ fn the_built_copy_is_certain_only_where_the_model_reads_it() {
     }
     assert_eq!(idx.source_file_of("p.Node").map(|f| &**f), Some(snapshot));
     assert_eq!(closed_from(&idx, REAL, USE), Err(Open::CopyUncertain(Name::from("p.Node"))));
+}
+
+/// jdt-core's tests import `junit.framework.ComparisonFailure`, which the
+/// JUnit jar declares and grounds does not have; the only source declaring
+/// it is test data, an old copy without `getActual`.
+const FAILURE: &str = "package junit.framework; public class ComparisonFailure { public String getExpected() { return null; } }";
+const FAILURE_PATH: &str = "/r/model/workspace/Converter/src/junit/framework/ComparisonFailure.java";
+const CASE_PATH: &str = "/r/compiler/src/t/TestCase.java";
+const CASE: &str = "package t; import junit.framework.ComparisonFailure; class TestCase extends ComparisonFailure { void f(ComparisonFailure c) { c.getActual(); getActual(); } static ComparisonFailure make() { return null; } void g() { Other o = make(); } } class Other {}";
+
+fn model_of<'t>(pf: &'t ParsedFile, idx: &'t Index) -> FileModel<'t> {
+    FileModel::new(pf, idx, Arc::from(CASE_PATH))
+}
+
+#[test]
+fn a_class_declared_only_outside_the_build_is_not_known_in_the_build() {
+    use InBuild::*;
+    let outside = |asking: InBuild| index(&[(FAILURE_PATH, FAILURE, No), (CASE_PATH, CASE, asking)]);
+    let idx = outside(Yes);
+    if idx.class("java.lang.Object").is_none() {
+        return;
+    }
+    let reason = || Err(Open::DeclaredOutsideBuild(Name::from("junit.framework.ComparisonFailure")));
+    let pf = ParsedFile::parse(CASE);
+    let fm = model_of(&pf, &idx);
+    // `closed`, of the class itself and of a class whose hierarchy passes through it
+    assert_eq!(fm.closed("junit.framework.ComparisonFailure", Jars::Exact).map(|_| ()), reason());
+    assert_eq!(fm.closed("t.TestCase", Jars::Exact).map(|_| ()), reason());
+    // `closed_scope`: an unqualified call inside the subclass
+    let call = pf.root().descendants().filter(|n| n.kind() == "method_invocation").nth(1).unwrap();
+    assert_eq!(fm.text(call), "getActual()");
+    assert_eq!(fm.closed_scope(call, Jars::Exact).map(|_| ()), reason());
+    // `closed_import_owner`: a static import of a member of it
+    assert_eq!(fm.closed_import_owner(&["junit", "framework", "ComparisonFailure", "getActual"], Jars::Exact).map(|_| ()), reason());
+    // `unassignable` (through `supertypes_closed`): what `make()` returns
+    let value = pf.root().descendants().filter(|n| n.kind() == "method_invocation").find(|n| fm.text(*n) == "make()").unwrap();
+    assert_eq!(fm.unassignable(value, &Ty::class("t.Other")), None);
+
+    // the asking file of unknown state: as before there was a picture
+    let idx = outside(Unknown);
+    let fm = model_of(&pf, &idx);
+    assert!(fm.closed("junit.framework.ComparisonFailure", Jars::Exact).is_ok());
+    assert!(fm.closed("t.TestCase", Jars::Exact).is_ok());
+    assert!(fm.closed_scope(call, Jars::Exact).is_ok());
+    assert!(fm.closed_import_owner(&["junit", "framework", "ComparisonFailure", "getActual"], Jars::Exact).is_ok());
+    assert!(fm.unassignable(value, &Ty::class("t.Other")).is_some());
+    // and with the declaration in the build, it is the class compiled code sees
+    let idx = index(&[(FAILURE_PATH, FAILURE, Yes), (CASE_PATH, CASE, Yes)]);
+    let fm = model_of(&pf, &idx);
+    assert!(fm.closed("t.TestCase", Jars::Exact).is_ok());
+    assert!(fm.unassignable(value, &Ty::class("t.Other")).is_some());
+}
+
+/// The same with several copies, all outside the build: none is what
+/// compiled code sees.
+#[test]
+fn copies_all_outside_the_build_are_not_known_in_the_build() {
+    use InBuild::*;
+    let other = "/r/model/workspace/Old/src/junit/framework/ComparisonFailure.java";
+    let idx = index(&[(FAILURE_PATH, FAILURE, No), (other, FAILURE, No), (CASE_PATH, CASE, Yes)]);
+    if idx.class("java.lang.Object").is_none() {
+        return;
+    }
+    let pf = ParsedFile::parse(CASE);
+    let fm = model_of(&pf, &idx);
+    assert!(matches!(fm.closed("t.TestCase", Jars::Exact), Err(Open::CopyUncertain(_) | Open::DeclaredOutsideBuild(_))));
 }

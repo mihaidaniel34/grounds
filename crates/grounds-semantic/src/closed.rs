@@ -131,6 +131,12 @@ pub enum Open {
     /// old snapshot of the sources). Nothing compiles it, and what it names
     /// may resolve to a class it was never written against.
     NotInBuild,
+    /// This file is one the build compiles, and the class of the hierarchy
+    /// is read from a file the build does not compile (test data holding an
+    /// old copy of a library class): that declaration is not what compiled
+    /// code sees, which finds the name elsewhere (a jar grounds may not
+    /// have) or not at all.
+    DeclaredOutsideBuild(Name),
 }
 
 impl From<Gap> for Open {
@@ -179,7 +185,8 @@ impl<'t> FileModel<'t> {
     /// than once (the build's module dependencies are not known; or the one
     /// copy the build compiles, see `one_built_copy`), and library classes
     /// from the jar versions the project builds against. Nothing is claimed
-    /// in a file the build does not compile.
+    /// in a file the build does not compile, nor, in one it compiles, about
+    /// a hierarchy with a class read from a file the build does not compile.
     pub fn closed(&self, name: &str, jars: Jars) -> Result<Closed<'_, 't>, Open> {
         self.file_closed()?;
         let c = self.class(name).ok_or_else(|| Open::NotFound(Name::from(name)))?;
@@ -199,6 +206,9 @@ impl<'t> FileModel<'t> {
             let Some(n) = t.class_name() else { return Err(Open::UnresolvedSupertype(c.name.clone())) };
             if !self.copy_is_certain(n) && !one_built_copy(self, n) {
                 return Err(Open::CopyUncertain(Name::from(n)));
+            }
+            if declared_outside_build(self, n) {
+                return Err(Open::DeclaredOutsideBuild(Name::from(n)));
             }
             if self.index.in_jdk_package(n) {
                 return Err(Open::InJdkPackage(Name::from(n)));
@@ -289,6 +299,13 @@ impl<'t> FileModel<'t> {
         if !parses(self, name) {
             return Err(Open::SyntaxErrors(Name::from(name)));
         }
+        // (the class and every supertype: one declared only outside the
+        // build is not the one compiled code sees, nor are its supertypes)
+        if let Some(c) = self.class(name) {
+            if let Some(n) = self.all_supertypes(&c.this_type()).iter().filter_map(|t| t.class_name()).find(|n| declared_outside_build(self, n)) {
+                return Err(Open::DeclaredOutsideBuild(Name::from(n)));
+            }
+        }
         Ok(())
     }
 
@@ -319,10 +336,11 @@ impl<'t> FileModel<'t> {
         if c.ambiguous || !self.class(&c.owner).is_some_and(|k| k.is_source()) {
             return None;
         }
-        // a class defined in several modules: the index holds one of them
+        // a class defined in several modules: the index holds one of them;
+        // one declared outside the build is not what compiled code sees
         let receiver_class = c.receiver.as_ref().and_then(|r| r.class_name().map(str::to_string));
-        let duplicated = |n: &str| self.index.is_duplicated(n) && !one_built_copy(self, n);
-        if duplicated(&c.owner) || receiver_class.as_deref().is_some_and(duplicated) {
+        let uncertain = |n: &str| (self.index.is_duplicated(n) && !one_built_copy(self, n)) || declared_outside_build(self, n);
+        if uncertain(&c.owner) || receiver_class.as_deref().is_some_and(uncertain) {
             return None;
         }
         // a private method is never inherited, nestmates or not: found through
@@ -406,6 +424,24 @@ fn one_built_copy(fm: &FileModel<'_>, name: &str) -> bool {
         }
     };
     read == Some(built)
+}
+
+/// Whether this file is one the build compiles and the class `name`, as the
+/// model reads it, is declared in a file the build does not compile: test
+/// data holding an old copy of a class (jdt-core's
+/// `workspace/Converter/src/junit/framework/ComparisonFailure.java`, without
+/// the `getActual` the JUnit jar has). Compiled code does not see that
+/// declaration: the build resolves the name from somewhere else, a jar
+/// grounds may not have, or not at all. Under a guessed picture (this file
+/// unknown) nothing is decided here, as before there was a picture.
+fn declared_outside_build(fm: &FileModel<'_>, name: &str) -> bool {
+    let index = fm.index;
+    if index.in_build(&fm.path) != InBuild::Yes {
+        return false;
+    }
+    // (asked of classes already found: nothing is noted for one that is not)
+    let (c, _) = doubt::observe(|| fm.class(name));
+    c.and_then(|c| c.source_file().map(|f| index.in_build(f) == InBuild::No)).unwrap_or(false)
 }
 
 /// The class `n`, if a project class, is read from a file that parses.
@@ -829,9 +865,10 @@ fn private_elsewhere<'t>(fm: &FileModel<'t>, site: Node<'t>, cls: &ClassInfo, na
     if cands.is_empty() || !cands.iter().all(|m| m.method.flags.is_private() && top(&m.owner) != here) {
         return None;
     }
-    // a class defined in several modules: the index holds one of them
-    let duplicated = |n: &str| fm.index.is_duplicated(n) && !one_built_copy(fm, n);
-    if duplicated(&cls.name) || cands.iter().any(|m| duplicated(&m.owner)) {
+    // a class defined in several modules: the index holds one of them; one
+    // declared outside the build is not what compiled code sees
+    let uncertain = |n: &str| (fm.index.is_duplicated(n) && !one_built_copy(fm, n)) || declared_outside_build(fm, n);
+    if uncertain(&cls.name) || cands.iter().any(|m| uncertain(&m.owner)) {
         return None;
     }
     let visible_elsewhere = fm.all_supertypes(&cls.this_type()).iter().filter_map(|t| t.class_name().and_then(|n| fm.class(n))).any(|c| c.methods_named(name).any(|m| fits(m) && !m.flags.is_private()));
