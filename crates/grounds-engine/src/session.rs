@@ -6,7 +6,7 @@
 use crate::analyze::{analyze_text, build_ruleset_for, Finding};
 use crate::git;
 use crate::project::{path_key, recent, FileStamp, Project, Walk, Why};
-use crate::workspace::{classify, SourceKind};
+use crate::workspace::{classify, SourceKind, Tracked};
 use grounds_index::{simple_name_of, ClassLookup, FileStub, Name};
 use grounds_rules::framework::RuleOptions;
 use grounds_rules::{Maturity, RuleSet, Severity, Tier};
@@ -449,19 +449,19 @@ impl Session {
                 None => FileStamp::of(p, false).is_some(),
             })
         };
-        if !full && (self.walked.tracked_unknown || moved(self)) {
+        if !full && (matches!(self.walked.tracked, Tracked::Unknown { .. }) || moved(self)) {
             let stamps: Vec<(PathBuf, Option<FileStamp>)> = self.walked.git.iter().map(|(p, old)| (p.clone(), FileStamp::of(p, true).map(|s| s.after(old.as_ref())))).collect();
             match crate::workspace::tracked_but_ignored_cached(&root, true) {
-                (_, false) => {
+                Tracked::Unknown { .. } => {
                     crate::trace::log(|| "sync: git could not list the tracked files, asking again at the next sync".into());
-                    self.walked.tracked_unknown = true;
+                    self.walked.tracked = std::mem::take(&mut self.walked.tracked).unknown();
                 }
-                (tracked, true) if tracked == self.walked.tracked => {
+                Tracked::Known(tracked) if tracked == self.walked.tracked.files() => {
                     crate::trace::log(|| "sync: git's index changed, the same files tracked although ignored".into());
                     self.walked.git = stamps;
-                    self.walked.tracked_unknown = false;
+                    self.walked.tracked = Tracked::Known(tracked);
                 }
-                _ => {
+                Tracked::Known(_) => {
                     crate::trace::log(|| "sync: git tracks other ignored files, walking the workspace".into());
                     full = true;
                 }
