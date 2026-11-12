@@ -336,6 +336,7 @@ grounds changed               # changed lines since HEAD (git), baseline applied
 grounds explain null-dereference
 grounds beans --type MailSender   # beans of a type, and how each injection point of it resolves
 grounds impacted-tests --gradle   # ./gradlew :module:test --tests ... for affected tests
+grounds selfcheck             # after a build: where grounds resolves code otherwise than javac did
 ```
 
 Output is one finding per line, `path:line:col: severity [rule-id] message`.
@@ -421,6 +422,31 @@ jobs:
 With reviewdog instead, keep grounds' scope rather than reviewdog's diff
 filter, which would drop the breaks in unchanged files:
 `grounds changed --base origin/main --no-daemon --format sarif --exit-zero | reviewdog -f=sarif -reporter=github-pr-check -filter-mode=nofilter`.
+
+### Selfcheck
+
+`grounds selfcheck` compares what grounds resolves from the sources with
+what javac recorded in the class files of the last build: the method of
+each call and constructor call, the field of each access, the method each
+method reference names, and the members of each class. It reads
+`build/classes/java/main` and `build/classes/java/test` (Gradle) or
+`target/classes` and `target/test-classes` (Maven) and needs no JVM: the
+class files are read, never run.
+
+Run it after a build (`./gradlew compileJava compileTestJava` or
+`mvn test-compile`). A source file newer than its class files is not
+compared. An edit can change what other files resolve to, so a
+disagreement about a class declared in an edited file is listed apart as
+possibly stale.
+
+It prints, per module and in total, how many calls, constructors, fields,
+method reference names and members were compared, agreed, disagreed and
+were not compared, then one line per disagreement:
+`path:line: name: grounds <...>, the class file <...> (kind)`. A
+disagreement means grounds resolved something differently from the
+compiler on this project, so rules that depend on it may be wrong there:
+please report it with the line shown. `--format json` gives the same as
+data. Exit codes: 0 no disagreement, 2 disagreements, 1 failure.
 
 ### Suppressing findings
 

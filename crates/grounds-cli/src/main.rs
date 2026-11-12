@@ -142,6 +142,17 @@ enum Cmd {
         #[arg(long)]
         maven_lifecycle: bool,
     },
+    /// After a build: compare what grounds resolves from the sources with
+    /// what javac recorded in the build output (calls, constructors, fields,
+    /// method reference names, members). Exit codes: 0 no disagreement, 2
+    /// disagreements, 1 failure.
+    Selfcheck {
+        #[arg(long)]
+        root: Option<PathBuf>,
+        /// text | json
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
     /// List all rules.
     Rules {
         #[arg(long)]
@@ -334,6 +345,21 @@ fn run() -> anyhow::Result<()> {
             let p = grounds_engine::Project::load(&root)?;
             warn_classpath(&p);
             beans(&p, ty.as_deref(), style);
+        }
+        Cmd::Selfcheck { root, format } => {
+            let root = find_root(root);
+            if !matches!(format.as_str(), "text" | "json") {
+                anyhow::bail!("unknown --format {format} (text or json)");
+            }
+            let p = grounds_engine::selfcheck::load(&root)?;
+            warn_classpath(&p);
+            let report = grounds_engine::selfcheck::compare(&p);
+            if format == "json" {
+                println!("{}", serde_json::to_string_pretty(&report.json())?);
+            } else {
+                print!("{}", report.text());
+            }
+            std::process::exit(report.outcome().code());
         }
         Cmd::Rules { json, markdown } => {
             let cat = grounds_rules::catalog();

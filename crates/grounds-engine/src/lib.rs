@@ -13,6 +13,7 @@ pub mod java_release;
 pub mod oracle;
 pub mod project;
 pub mod report;
+pub mod selfcheck;
 pub mod session;
 pub mod sources;
 pub mod trace;

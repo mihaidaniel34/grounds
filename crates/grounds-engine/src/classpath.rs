@@ -37,6 +37,17 @@ pub(crate) fn read_list(f: &Path) -> Vec<PathBuf> {
     text.lines().flat_map(|l| l.split(':')).map(str::trim).filter(|p| !p.is_empty() && !p.starts_with('#')).map(PathBuf::from).collect()
 }
 
+/// Where Gradle and Maven write the classes compiled from a module's Java
+/// source sets, by default: each source set (its name and directory) with
+/// the output directories, Gradle's first. The main outputs are also on the
+/// classpath (`collect`); the test outputs are read only by
+/// `grounds selfcheck`, which compares the sources with what was compiled
+/// from them (`crate::selfcheck`).
+pub const JAVA_OUTPUTS: [(&str, &str, [&str; 2]); 2] = [
+    ("main", "src/main/java", ["build/classes/java/main", "target/classes"]),
+    ("test", "src/test/java", ["build/classes/java/test", "target/test-classes"]),
+];
+
 pub fn collect(ws: &Workspace, cfg: &Config) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
     for e in &cfg.classpath.entries {
