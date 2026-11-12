@@ -5,17 +5,21 @@
 //! javac gave each class. Where grounds is certain of something else, grounds
 //! is wrong, and every rule that relies on it inherits the mistake.
 //! scripts/bytecode_oracle.py fetches sources and classes of published
-//! libraries and runs this on them.
+//! libraries and runs this on them, and fails when a disagreement appears
+//! that its baseline does not list.
 //!
-//!   bytecode_oracle <project root> <classes directory>
+//!   bytecode_oracle [--json] <project root> <classes directory>
 //!
 //! The sources are under `<project root>/src/main/java`; the classes
 //! directory holds the class files compiled from them (the library's jar,
 //! unpacked). Method bodies are read with `grounds_classfile::parse_references`,
 //! members with `parse_class`.
 //!
-//! A probe, not a gate. Each comparison prints what it compared, agreed on,
-//! disagreed on and did not compare, then each disagreement on one line:
+//! Each comparison prints what it compared, agreed on, disagreed on and did
+//! not compare, then each disagreement on one line; with `--json`, one JSON
+//! object with the counts of each comparison and each disagreement as file,
+//! line, subject (the name; for members the class and the member) and the
+//! two answers, for the script's baseline. The comparisons:
 //!
 //! - Method calls grounds is certain of, matched by file, line, name and
 //!   number of parameters: javac gives the invoke instruction the line of the
@@ -43,17 +47,21 @@
 //!   result type, not to one method, so javac's method is not compared with
 //!   grounds'. What is compared is whether grounds knows a method of that
 //!   name on the receiver's type, which a "has no method" claim rests on,
-//!   against the method handle javac recorded on the reference's lines.
+//!   against the method handle javac recorded on the reference's lines. A
+//!   name grounds knows no method of on a receiver some of whose supertypes
+//!   it does not have is not compared: it makes no such claim there.
 //! - Declared members of every class declared in the sources, as the index
 //!   holds them (generated Lombok members included), against its class file:
 //!   methods by name and erased parameter descriptors, fields by name. A
 //!   parameter type grounds does not know, or knows only by a name no class
 //!   has (the sources come without their dependencies), matches any. Not
 //!   members in the language sense, so not compared: synthetic and bridge
-//!   members, `<clinit>`, an inner class constructor's outer instance and an
-//!   enum constructor's name and ordinal. Local and anonymous classes are not
-//!   compared. A member only the class file has is listed apart for a class
-//!   marked `MEMBERS_UNKNOWN`, where grounds does not claim to know them all.
+//!   members, `<clinit>`, an inner class constructor's outer instance, an
+//!   enum constructor's name and ordinal, and the private static
+//!   `$default$<field>()` Lombok writes for a `@Builder.Default` initializer.
+//!   Local and anonymous classes are not compared. A member only the class
+//!   file has is listed apart for a class marked `MEMBERS_UNKNOWN`, where
+//!   grounds does not claim to know them all.
 //!
 //! javac numbers local and anonymous classes its own way and grounds
 //! differently (JLS 13.1 leaves the numbers to the compiler), so owners are
@@ -268,13 +276,49 @@ fn window<'t>(fm: &FileModel<'t>, pf: &ParsedFile, n: Node<'t>) -> (usize, usize
     (line(n.start_byte()), line(n.end_byte().saturating_sub(1)))
 }
 
+/// One disagreement: where, about what, and the two answers. `member` is
+/// empty but for declared members, whose `subject` is the class.
+struct Dis {
+    category: &'static str,
+    kind: &'static str,
+    file: String,
+    line: usize,
+    subject: String,
+    member: String,
+    grounds: String,
+    javac: String,
+}
+
+impl Dis {
+    fn new(category: &'static str, kind: &'static str, file: &str, line: usize, subject: &str, grounds: String, javac: String) -> Dis {
+        Dis { category, kind, file: file.to_string(), line, subject: subject.to_string(), member: String::new(), grounds, javac }
+    }
+    fn member(kind: &'static str, file: &str, line: usize, class: &str, member: String, grounds: String, javac: String) -> Dis {
+        Dis { member, ..Dis::new("members", kind, file, line, class, grounds, javac) }
+    }
+    fn text(&self) -> String {
+        let prefix = match self.category {
+            "constructors" => "CTOR ",
+            "fields" => "FIELD ",
+            "method references" => "METHODREF ",
+            "members" => "MEMBER ",
+            _ => "",
+        };
+        let member = if self.member.is_empty() { String::new() } else { format!(": {}", self.member) };
+        format!("{prefix}{}  {}:{} {}{member}: grounds {}, javac {}", self.kind.to_uppercase(), self.file, self.line, self.subject, self.grounds, self.javac)
+    }
+    fn json(&self) -> serde_json::Value {
+        serde_json::json!({"category": self.category, "kind": self.kind, "file": self.file, "line": self.line, "subject": self.subject, "member": self.member, "grounds": self.grounds, "javac": self.javac})
+    }
+}
+
 /// Compared, agreed, not compared (by why), and the disagreements.
 #[derive(Default)]
 struct Count {
     compared: usize,
     agree: usize,
     not_compared: BTreeMap<&'static str, usize>,
-    disagree: Vec<String>,
+    disagree: Vec<Dis>,
 }
 
 impl Count {
@@ -294,6 +338,9 @@ impl Count {
         let n: usize = self.not_compared.values().sum();
         format!("{what}: compared {}  agree {}  disagree {}  not compared {n}  ({})", self.compared, self.agree, self.disagree.len(), why.join(", "))
     }
+    fn json(&self) -> serde_json::Value {
+        serde_json::json!({"compared": self.compared, "agree": self.agree, "disagree": self.disagree.len(), "not_compared": self.not_compared.values().sum::<usize>()})
+    }
 }
 
 #[derive(Default)]
@@ -303,11 +350,11 @@ struct Members {
     no_class_file: usize,
     /// matched by name and parameters (methods), by name (fields)
     matched: usize,
-    grounds_only: Vec<String>,
+    grounds_only: Vec<Dis>,
     /// in classes grounds believes it knows every member of
-    file_only: Vec<String>,
+    file_only: Vec<Dis>,
     /// in classes marked `MEMBERS_UNKNOWN`
-    file_only_open: Vec<String>,
+    file_only_open: Vec<Dis>,
     /// of `matched`, methods the Lombok model generated
     generated_matched: usize,
     skipped: BTreeMap<&'static str, usize>,
@@ -320,9 +367,9 @@ struct Tally {
     certain: usize,
     compared: usize,
     agree: usize,
-    other_overload: Vec<String>,
-    other_owner: Vec<String>,
-    other_return: Vec<String>,
+    other_overload: Vec<Dis>,
+    other_owner: Vec<Dis>,
+    other_return: Vec<Dis>,
     /// javac names another method by a rule of its own, not by another choice
     javac_quirk: usize,
     unresolved_known_to_javac: usize,
@@ -370,8 +417,10 @@ impl Tally {
 }
 
 fn main() -> anyhow::Result<()> {
-    let args: Vec<String> = std::env::args().collect();
-    anyhow::ensure!(args.len() == 3, "usage: bytecode_oracle <project root> <classes directory>");
+    let mut args: Vec<String> = std::env::args().collect();
+    let json = args.iter().any(|a| a == "--json");
+    args.retain(|a| a != "--json");
+    anyhow::ensure!(args.len() == 3, "usage: bytecode_oracle [--json] <project root> <classes directory>");
     let root = std::path::PathBuf::from(&args[1]).canonicalize()?;
     let bc = read_classes(&std::path::PathBuf::from(&args[2]).canonicalize()?);
     let p = grounds_engine::Project::load(&root)?;
@@ -424,7 +473,7 @@ fn main() -> anyhow::Result<()> {
                 // javac's descriptor has the declared arity: varargs and fixed alike
                 let Some(sites) = bc.calls.get(&(rel.clone(), line, name.to_string(), subst.len())) else { continue };
                 let fits = |m: &MethodInfo, ps: &[String]| m.params.iter().zip(ps).all(|(q, d)| desc(&q.ty).is_none_or(|x| x == *d));
-                let at = format!("{rel}:{line} {name}");
+                let dis = |kind, grounds: String, javac: String| Dis::new("calls", kind, &rel, line, name, grounds, javac);
                 // a signature-polymorphic method (JLS 15.12.3): the call's own
                 // argument types are its descriptor
                 if matches!(&*r.owner, "java.lang.invoke.MethodHandle" | "java.lang.invoke.VarHandle") {
@@ -441,7 +490,7 @@ fn main() -> anyhow::Result<()> {
                 }
                 t.compared += 1;
                 if same_params.is_empty() {
-                    t.other_overload.push(format!("{at}: grounds {}.{}, javac {}", r.owner, r.method.signature_string(), sites.iter().map(|s| format!("{}.{name}({})", s.0, s.1.join(""))).collect::<Vec<_>>().join(" | ")));
+                    t.other_overload.push(dis("other overload", format!("{}.{}", r.owner, r.method.signature_string()), sites.iter().map(|s| format!("{}.{name}({})", s.0, s.1.join(""))).collect::<Vec<_>>().join(" | ")));
                     continue;
                 }
                 // javac names the type the call is made on: the declaring class or a subtype
@@ -452,11 +501,11 @@ fn main() -> anyhow::Result<()> {
                     continue;
                 }
                 if !same_params.iter().any(|s| !fm.is_subclass(&s.0, &r.owner).is_no() || s.0.starts_with('[')) {
-                    t.other_owner.push(format!("{at}: grounds {}, javac {}", r.owner, same_params.iter().map(|s| s.0.as_str()).collect::<Vec<_>>().join(" | ")));
+                    t.other_owner.push(dis("other owner", r.owner.to_string(), same_params.iter().map(|s| s.0.as_str()).collect::<Vec<_>>().join(" | ")));
                     continue;
                 }
                 if !same_params.iter().any(|s| cands.iter().any(|m| fits(m, &s.1) && desc(&m.ret).is_none_or(|x| x == s.2))) {
-                    t.other_return.push(format!("{at}: grounds {} {}.{}, javac returns {}", cands[0].ret, r.owner, r.method.signature_string(), same_params[0].2));
+                    t.other_return.push(dis("other return", format!("{} {}.{}", cands[0].ret, r.owner, r.method.signature_string()), format!("returns {}", same_params[0].2)));
                     continue;
                 }
                 t.agree += 1;
@@ -501,7 +550,7 @@ fn main() -> anyhow::Result<()> {
                 let explicit = n.kind() == "explicit_constructor_invocation";
                 // `this(..)`, `super(..)`: a call, on the line of its `(`
                 let win = if explicit { (line(al.start_byte()), line(al.start_byte())) } else { window(&fm, &pf, n) };
-                let at = format!("{rel}:{} {}", line(n.start_byte()), simple(&r.owner));
+                let at = (line(n.start_byte()), simple(&r.owner));
                 let inits: Vec<&Site> = in_window(win).filter(|s| s.kind == RefKind::InvokeSpecial && s.name == "<init>").collect();
                 let sites: Vec<&Site> = inits.iter().copied().filter(|s| s.params.len() == subst.len()).collect();
                 let same_class: Vec<&&Site> = sites.iter().filter(|s| unnumbered(&s.owner) == unnumbered(&r.owner)).collect();
@@ -516,7 +565,7 @@ fn main() -> anyhow::Result<()> {
                         });
                     } else {
                         c.compared += 1;
-                        c.disagree.push(format!("CTOR OTHER CLASS  {at}: grounds {}, javac {}", r.owner, named.iter().map(|s| s.owner.as_str()).collect::<Vec<_>>().join(" | ")));
+                        c.disagree.push(Dis::new("constructors", "other class", &rel, at.0, at.1, r.owner.to_string(), named.iter().map(|s| s.owner.as_str()).collect::<Vec<_>>().join(" | ")));
                     }
                     continue;
                 }
@@ -524,7 +573,7 @@ fn main() -> anyhow::Result<()> {
                 if same_class.iter().any(|s| fits(&s.params)) {
                     c.agree += 1;
                 } else {
-                    c.disagree.push(format!("CTOR OTHER OVERLOAD  {at}: grounds {}.{}, javac {}", r.owner, r.method.signature_string(), same_class.iter().map(|s| format!("<init>({})", s.params.join(""))).collect::<Vec<_>>().join(" | ")));
+                    c.disagree.push(Dis::new("constructors", "other overload", &rel, at.0, at.1, format!("{}.{}", r.owner, r.method.signature_string()), same_class.iter().map(|s| format!("<init>({})", s.params.join(""))).collect::<Vec<_>>().join(" | ")));
                 }
             }
 
@@ -591,14 +640,15 @@ fn main() -> anyhow::Result<()> {
                 }
                 c.compared += 1;
                 let what = if !sites.iter().any(|s| owner_ok(u, s)) {
-                    "OTHER OWNER"
+                    "other owner"
                 } else if !sites.iter().any(|s| owner_ok(u, s) && static_ok(u, s)) {
-                    "OTHER KIND"
+                    "other kind"
                 } else {
-                    "OTHER TYPE"
+                    "other type"
                 };
                 let javac = sites.iter().map(|s| format!("{:?} {}.{}:{}", s.kind, s.owner, s.name, s.ret)).collect::<Vec<_>>().join(" | ");
-                c.disagree.push(format!("FIELD {what}  {rel}:{} {}: grounds {}{}.{}:{}, javac {javac}", u.line, u.name, if u.is_static { "static " } else { "" }, u.owner, u.name, u.ty.as_deref().unwrap_or("?")));
+                let grounds = format!("{}{}.{}:{}", if u.is_static { "static " } else { "" }, u.owner, u.name, u.ty.as_deref().unwrap_or("?"));
+                c.disagree.push(Dis::new("fields", what, &rel, u.line, &u.name, grounds, javac));
             }
 
             // ----- method references: does grounds know a method of that name -----
@@ -629,10 +679,19 @@ fn main() -> anyhow::Result<()> {
                     c.skip("receiver type unknown");
                     continue;
                 };
+                let none = fm.methods_named(&cls.this_type(), mname).is_empty();
+                // with a supertype grounds does not have (the sources come
+                // without their dependencies) it claims no method missing: no
+                // "has no method" claim rests on what it does not know
+                if none && !fm.hierarchy_complete(&cls.name) {
+                    c.skip("no method known, supertypes not all known");
+                    continue;
+                }
                 c.compared += 1;
-                if fm.methods_named(&cls.this_type(), mname).is_empty() {
+                if none {
                     let open = if cls.flags.has(Flags::MEMBERS_UNKNOWN) { " (members unknown)" } else { "" };
-                    c.disagree.push(format!("METHODREF NO METHOD  {rel}:{} {mname}: grounds knows no `{mname}` on {}{open}, javac {}", line(n.start_byte()), cls.name, sites.iter().map(|s| format!("{}.{}{}", s.owner, s.name, s.params.join(""))).collect::<Vec<_>>().join(" | ")));
+                    let javac = sites.iter().map(|s| format!("{}.{}{}", s.owner, s.name, s.params.join(""))).collect::<Vec<_>>().join(" | ");
+                    c.disagree.push(Dis::new("method references", "no method", &rel, line(n.start_byte()), mname, format!("knows no `{mname}` on {}{open}", cls.name), javac));
                 } else {
                     c.agree += 1;
                 }
@@ -652,7 +711,8 @@ fn main() -> anyhow::Result<()> {
                 };
                 ms.classes += 1;
                 let open = c.flags.has(Flags::MEMBERS_UNKNOWN);
-                let at = format!("{rel}:{} {}", line(decl.field("name").unwrap_or(decl).start_byte()), c.name);
+                let at = line(decl.field("name").unwrap_or(decl).start_byte());
+                let dis = |kind, member: String, grounds: String, javac: &str| Dis::member(kind, &rel, at, &c.name, member, grounds, javac.to_string());
                 let scope_owned = class_type_params(&fm, &c.name);
                 // grounds' methods: name, erased parameters, and how it came to be
                 let g: Vec<(&str, Vec<Option<String>>, &str)> = c
@@ -681,6 +741,14 @@ fn main() -> anyhow::Result<()> {
                     }
                     if m.name == "<clinit>" {
                         *ms.skipped.entry("<clinit>").or_default() += 1;
+                        continue;
+                    }
+                    // Lombok moves a `@Builder.Default` initializer into a private
+                    // static `$default$<field>()` the builder calls: an
+                    // implementation detail no source can name (`$` names are
+                    // the compiler's), not a member grounds should declare
+                    if m.name.starts_with("$default$") && m.access & (access::PRIVATE | access::STATIC) == access::PRIVATE | access::STATIC {
+                        *ms.skipped.entry("Lombok's private @Builder.Default initializer").or_default() += 1;
                         continue;
                     }
                     let (mut ps, _) = split(&m.descriptor);
@@ -726,7 +794,7 @@ fn main() -> anyhow::Result<()> {
                 for (i, (gn, gp, how)) in g.iter().enumerate() {
                     if !used_g[i] {
                         let ps: Vec<&str> = gp.iter().map(|d| d.as_deref().unwrap_or("?")).collect();
-                        ms.grounds_only.push(format!("MEMBER GROUNDS ONLY  {at}: method {gn}({}){how}", ps.join("")));
+                        ms.grounds_only.push(dis("grounds only", format!("method {gn}({})", ps.join("")), format!("declares it{how}"), "does not"));
                     }
                 }
                 // what a lookup of the name finds: a "has no method" claim rests on none
@@ -736,17 +804,17 @@ fn main() -> anyhow::Result<()> {
                         continue;
                     }
                     let found = if g.iter().any(|(gn, _, _)| gn == bn) {
-                        " (another overload declared)"
+                        "another overload declared"
                     } else if !fm.methods_named(&this, bn).is_empty() {
-                        " (one inherited)"
+                        "one inherited"
                     } else {
-                        " (no method of that name)"
+                        "no method of that name"
                     };
-                    let x = format!("{at}: method {bn}{d}{found}");
+                    let (member, grounds) = (format!("method {bn}{d}"), format!("does not declare it ({found})"));
                     if open {
-                        ms.file_only_open.push(format!("MEMBER CLASS FILE ONLY, MEMBERS UNKNOWN  {x}"));
+                        ms.file_only_open.push(dis("class file only, members unknown", member, grounds, "declares it"));
                     } else {
-                        ms.file_only.push(format!("MEMBER CLASS FILE ONLY  {x}"));
+                        ms.file_only.push(dis("class file only", member, grounds, "declares it"));
                     }
                 }
                 // fields, by name
@@ -754,19 +822,19 @@ fn main() -> anyhow::Result<()> {
                     if cf.fields.iter().any(|x| x.name == *f.name && x.access & access::SYNTHETIC == 0) {
                         ms.matched += 1;
                     } else {
-                        ms.grounds_only.push(format!("MEMBER GROUNDS ONLY  {at}: field {}", f.name));
+                        ms.grounds_only.push(dis("grounds only", format!("field {}", f.name), "declares it".to_string(), "does not"));
                     }
                 }
                 for x in &cf.fields {
                     if x.access & access::SYNTHETIC != 0 {
                         *ms.skipped.entry("synthetic field").or_default() += 1;
                     } else if !c.fields.iter().any(|f| *f.name == x.name) {
-                        let found = if fm.field(&this, &x.name).is_some() { " (one inherited)" } else { " (no field of that name)" };
-                        let x = format!("{at}: field {}:{}{found}", x.name, x.descriptor);
+                        let found = if fm.field(&this, &x.name).is_some() { "one inherited" } else { "no field of that name" };
+                        let (member, grounds) = (format!("field {}:{}", x.name, x.descriptor), format!("does not declare it ({found})"));
                         if open {
-                            ms.file_only_open.push(format!("MEMBER CLASS FILE ONLY, MEMBERS UNKNOWN  {x}"));
+                            ms.file_only_open.push(dis("class file only, members unknown", member, grounds, "declares it"));
                         } else {
-                            ms.file_only.push(format!("MEMBER CLASS FILE ONLY  {x}"));
+                            ms.file_only.push(dis("class file only", member, grounds, "declares it"));
                         }
                     }
                 }
@@ -791,6 +859,21 @@ fn main() -> anyhow::Result<()> {
         .collect();
     no_source.sort();
 
+    let m = &s.members;
+    if json {
+        let calls = serde_json::json!({"compared": s.compared, "agree": s.agree, "disagree": s.other_overload.len() + s.other_owner.len() + s.other_return.len(), "not_compared": s.resolved - s.compared});
+        let members = serde_json::json!({"compared": m.matched + m.grounds_only.len() + m.file_only.len(), "agree": m.matched, "disagree": m.grounds_only.len() + m.file_only.len(), "not_compared": m.file_only_open.len()});
+        let all = s.other_overload.iter().chain(&s.other_owner).chain(&s.other_return).chain(&s.ctors.disagree).chain(&s.fields.disagree).chain(&s.method_refs.disagree).chain(&m.file_only).chain(&m.grounds_only);
+        let out = serde_json::json!({
+            "files": files.len(),
+            "categories": {"calls": calls, "constructors": s.ctors.json(), "fields": s.fields.json(), "method references": s.method_refs.json(), "members": members},
+            "disagreements": all.map(Dis::json).collect::<Vec<_>>(),
+            "class_files_without_source_class": no_source.len(),
+            "unreadable_class_files": bc.unreadable.len(),
+        });
+        println!("{out}");
+        return Ok(());
+    }
     println!("files {}  calls {}  resolved {}  certain {}", files.len(), s.calls, s.resolved, s.certain);
     println!("certain calls found in bytecode {}  agree {}  other overload {}  other owner {}  other return {}  javac's own naming {}", s.compared, s.agree, s.other_overload.len(), s.other_owner.len(), s.other_return.len(), s.javac_quirk);
     println!("guessed (ambiguous/erasure-only) calls found in bytecode {}  of which javac chose another {}", s.guess_compared, s.guess_wrong);
@@ -798,7 +881,6 @@ fn main() -> anyhow::Result<()> {
     println!("{}  (unresolved {}, guessed {})", s.ctors.line("constructors"), s.ctor_unresolved, s.ctor_guessed);
     println!("{}", s.fields.line("fields"));
     println!("{}", s.method_refs.line("method reference names"));
-    let m = &s.members;
     println!(
         "members: classes {}  compared {}  agree {}  disagree {}  not compared {}  (agree on {} generated by the Lombok model; grounds only {}, class file only {}, of which no member of that name even inherited {}; class file only in classes marked MEMBERS_UNKNOWN {}; source classes without a class file {}; class files without a source class {})",
         m.classes,
@@ -809,7 +891,7 @@ fn main() -> anyhow::Result<()> {
         m.generated_matched,
         m.grounds_only.len(),
         m.file_only.len(),
-        m.file_only.iter().filter(|x| x.ends_with("of that name)")).count(),
+        m.file_only.iter().filter(|x| x.grounds.ends_with("of that name)")).count(),
         m.file_only_open.len(),
         m.no_class_file,
         no_source.len()
@@ -818,13 +900,8 @@ fn main() -> anyhow::Result<()> {
     if !bc.unreadable.is_empty() {
         println!("unreadable class files {}", bc.unreadable.len());
     }
-    for (title, v) in [("OTHER OVERLOAD", &s.other_overload), ("OTHER OWNER", &s.other_owner), ("OTHER RETURN", &s.other_return)] {
-        for x in v {
-            println!("{title}  {x}");
-        }
-    }
-    for x in s.ctors.disagree.iter().chain(&s.fields.disagree).chain(&s.method_refs.disagree).chain(&m.file_only).chain(&m.grounds_only).chain(&m.file_only_open) {
-        println!("{x}");
+    for x in s.other_overload.iter().chain(&s.other_owner).chain(&s.other_return).chain(&s.ctors.disagree).chain(&s.fields.disagree).chain(&s.method_refs.disagree).chain(&m.file_only).chain(&m.grounds_only).chain(&m.file_only_open) {
+        println!("{}", x.text());
     }
     for n in no_source {
         println!("CLASS FILE ONLY  {n}");

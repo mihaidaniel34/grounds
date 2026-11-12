@@ -1,0 +1,71 @@
+name: oracle
+
+# The bytecode oracle (scripts/bytecode_oracle.py): published libraries
+# (corpus/oracle.tsv) as their sources and their class files; what grounds
+# resolves from the sources (calls, constructors, fields, method reference
+# names, declared members) against what javac recorded. Fails on a
+# disagreement scripts/bytecode_oracle.baseline.json does not list, on a
+# baseline entry that no longer occurs, on a category comparing more than 2%
+# less than the baseline records, and when more than a quarter of the list
+# could not be fetched (an artifact Maven Central refuses is skipped, not
+# failed). The jars are cached, keyed by the list; a run that fetched more
+# than the cache had saves a new one.
+on:
+  pull_request:
+    paths:
+      - "crates/**"
+      - "scripts/bytecode_oracle*"
+      - "corpus/oracle.tsv"
+      - ".github/workflows/oracle.yml"
+  schedule:
+    - cron: "53 1 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: oracle-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  oracle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+      # the JDK's API for grounds (its ct.sym, for each artifact's release)
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: 25
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - id: cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/oracle/*/*.jar
+          key: oracle-${{ hashFiles('corpus/oracle.tsv') }}-
+          restore-keys: |
+            oracle-${{ hashFiles('corpus/oracle.tsv') }}-
+            oracle-
+      # bash for pipefail: the script's status, not tee's
+      - run: python3 -I scripts/bytecode_oracle.py --list corpus/oracle.tsv --dir "$RUNNER_TEMP/oracle" --out target/oracle-report | tee oracle.txt
+        shell: bash
+      - if: always()
+        run: |
+          r=target/oracle-report/report.json
+          [ -f "$r" ] && python3 -c "import json; r=json.load(open('$r')); print('### oracle'); print(f\"{len(r['compared'])} artifacts compared, {len(r['skipped'])} skipped, {len(r['failed'])} failed; new {len(r['new'])}, stale {len(r['stale'])}, drops {len(r['drops'])}\"); print(); print('| | compared | agree | disagree | not compared |'); print('|---|---|---|---|---|'); [print(f\"| {k} | {t['compared']} | {t['agree']} | {t['disagree']} | {t['not_compared']} |\") for k, t in r['totals'].items()]" >> "$GITHUB_STEP_SUMMARY" || true
+      # a new cache when this run fetched what the restored one lacked
+      - id: jars
+        if: always()
+        run: echo "key=oracle-${{ hashFiles('corpus/oracle.tsv') }}-$(ls "$RUNNER_TEMP"/oracle/*/*.jar 2>/dev/null | wc -l)" >> "$GITHUB_OUTPUT"
+      - if: always() && steps.jars.outputs.key != steps.cache.outputs.cache-matched-key
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/oracle/*/*.jar
+          key: ${{ steps.jars.outputs.key }}
+      - if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: oracle-report
+          path: |
+            oracle.txt
+            target/oracle-report

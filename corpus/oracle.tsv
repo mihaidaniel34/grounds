@@ -1,0 +1,37 @@
+# Libraries whose published classes judge what grounds resolves from their
+# published sources (scripts/bytecode_oracle.py; known disagreements in
+# scripts/bytecode_oracle.baseline.json). group, artifact, version, why it
+# is here. Sources must be what was compiled: no delomboked or otherwise
+# rewritten sources, no shaded jars.
+# first set, 2026-11
+org.apache.commons	commons-lang3	3.14.0	overload-heavy utilities, varargs, boxing
+com.fasterxml.jackson.core	jackson-databind	2.16.1	deep class hierarchies, generics, many overloads
+org.testcontainers	testcontainers	1.19.3	Lombok (getters, @Data, lazy getters), builders
+com.baomidou	mybatis-plus-core	3.5.5	Lombok, lambdas over method references, generics
+org.mockito	mockito-core	5.8.0	generics with wildcards, static-import API
+org.apache.commons	commons-collections4	4.4	generic collections, overloads with Object and int
+com.alibaba	easyexcel-core	3.3.4	Lombok @Data and @EqualsAndHashCode
+org.hibernate.validator	hibernate-validator	8.0.1.Final	Java 17, annotations, StringBuilder chains
+com.zaxxer	HikariCP	5.1.0	small, fields and constants
+com.google.guava	guava	33.0.0-jre	large; overloads by primitive, generic inference
+org.assertj	assertj-core	3.25.1	self-types (SELF extends Abstract...<SELF>), overload-heavy
+org.springframework	spring-core	6.1.2	Java 17, records, nested classes
+io.netty	netty-buffer	4.1.104.Final	fields, inheritance, overloads by primitive
+# second set, 2026-11
+org.apache.shardingsphere	shardingsphere-infra-common	5.4.1	Lombok on final classes (@EqualsAndHashCode, @Getter, @RequiredArgsConstructor)
+com.baomidou	mybatis-plus-extension	3.5.5	Lombok, generic service chains (IService<T>, lambda wrappers)
+com.github.binarywang	weixin-java-common	4.6.0	Lombok @Data beans, many fields
+org.openrewrite	rewrite-core	8.11.1	heavy Lombok (@Value, @With, @Builder.Default, @NonFinal)
+io.jenetics	jenetics	7.2.0	Java 17 records, sealed types, deep generics (Gene<A, G>)
+org.apache.lucene	lucene-core	10.0.0	built for Java 21: records, pattern matching, switch expressions
+io.helidon.webserver	helidon-webserver	4.0.2	built for Java 21: records, builders its codegen wrote into the sources
+io.vavr	vavr	0.10.4	deep generic hierarchies, Function0..8, overloads by arity
+io.projectreactor	reactor-core	3.6.1	generics with wildcards, fluent operators, many fields
+org.junit.jupiter	junit-jupiter-api	5.10.1	static-import test API, assertEquals overloads by primitive
+org.hamcrest	hamcrest	2.2	static-import matchers, generic factories
+org.awaitility	awaitility	4.2.0	static-import fluent test support
+io.opentelemetry	opentelemetry-sdk-trace	1.33.0	AutoValue: generated classes in the jar, not in the sources
+com.google.api	gax	2.38.0	AutoValue builders, generic callables
+org.springframework.data	spring-data-commons	3.2.1	Java 17, records, raw types, generic repositories
+com.querydsl	querydsl-core	5.0.0	expression DSL, self-referencing generics
+org.jgrapht	jgrapht-core	1.5.2	generic graph hierarchies (Graph<V, E>), nested enums

@@ -39,6 +39,8 @@
 !/corpus/replay-known.txt
 # projects the rules were not tuned on, and what was measured on them
 !/corpus/holdout.tsv
+# published libraries whose class files judge grounds (scripts/bytecode_oracle.py)
+!/corpus/oracle.tsv
 !/docs/holdout/*
 !/docs/smoke/*
 !/corpus/planted/*.patch
