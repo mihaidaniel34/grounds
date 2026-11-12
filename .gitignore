@@ -2,6 +2,9 @@
 # repository gains a new kind of file.
 *
 !*/
+# worktrees Claude Code makes for subagents: copies of this repository, each
+# with its own build output; never part of it
+/.claude/worktrees/
 
 !/.gitignore
 !/.coderabbit.yaml
