@@ -27,7 +27,8 @@ class Argv {
         // an option's value is no command
         new ProcessBuilder("bash", "-o", "pipefail", "-c", "cat " + file); // expect
         new ProcessBuilder("bash", "-c", "-o", "pipefail", "cat " + file); // expect
-        new ProcessBuilder("bash", "+O", "extglob", "-c", "cat " + file); // expect
+        // (a -O/+O shopt name is not read: missed, as for one bash lacks)
+        new ProcessBuilder("bash", "+O", "extglob", "-c", "cat " + file);
     }
     // through env: the shell still gets the command string
     void env(String file) throws Exception {
@@ -69,6 +70,23 @@ class Argv {
         // an option name the shell lacks: it refuses before running anything
         new ProcessBuilder("zsh", "-oTHIS_OPTION_DOES_NOT_EXIST", "-c", "echo " + x);
         new ProcessBuilder("bash", "-o", "nosuchoption", "-c", "echo " + x);
+        // zsh: -b ends the options, a later -c is a script's name
+        new ProcessBuilder("zsh", "-b", "-c", "echo " + x);
+        new ProcessBuilder("zsh", "-eb", "-c", "echo " + x);
+        new ProcessBuilder("zsh", "-bc", "echo " + x); // expect
+        // bash's -O names (and zsh's letter -O) are not read
+        new ProcessBuilder("bash", "-O", "nosuch", "-c", "echo " + x);
+        new ProcessBuilder("bash", "+O", "nosuch", "-c", "echo " + x);
+        // sh may be dash: only what dash and bash both take
+        new ProcessBuilder("sh", "-o", "pipefail", "-c", "echo " + x);
+        new ProcessBuilder("sh", "-O", "extglob", "-c", "echo " + x);
+        new ProcessBuilder("sh", "--norc", "-c", "echo " + x);
+        new ProcessBuilder("sh", "-k", "-c", "echo " + x);
+        new ProcessBuilder("sh", "-o", "interactive-comments", "-c", "echo " + x);
+        new ProcessBuilder("sh", "-e", "-o", "nounset", "-c", "echo " + x); // expect
+        new ProcessBuilder("dash", "-x", "-c", "echo " + x); // expect
+        // ksh's options are not checked
+        new ProcessBuilder("ksh", "-c", "echo " + x);
     }
     // the program is the first element: echo prints "sh -c cat <file>"
     void notAShell(String file) throws Exception {

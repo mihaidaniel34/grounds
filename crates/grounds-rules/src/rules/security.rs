@@ -930,7 +930,8 @@ fn shell_command_in<'a, 't>(argv: &'a [Node<'t>], lit: &dyn Fn(&Node<'t>) -> Opt
     }
     let name = base(&program).to_ascii_lowercase();
     match name.trim_end_matches(".exe") {
-        "sh" | "bash" | "zsh" | "ksh" | "dash" => {}
+        // (not ksh: which of its options let a command run is not checked)
+        "sh" | "bash" | "zsh" | "dash" => {}
         "cmd" | "powershell" | "pwsh" => {
             // options are case-insensitive here; the command follows /c, /k or -Command
             for a in rest.by_ref() {
@@ -947,6 +948,8 @@ fn shell_command_in<'a, 't>(argv: &'a [Node<'t>], lit: &dyn Fn(&Node<'t>) -> Opt
         _ => return None,
     }
     let zsh = name.trim_end_matches(".exe") == "zsh";
+    // `sh` may be dash or bash (or another): only what both take is known
+    let sh = matches!(name.trim_end_matches(".exe"), "sh" | "dash");
     enum Opt {
         Command,
         Value,
@@ -978,6 +981,14 @@ fn shell_command_in<'a, 't>(argv: &'a [Node<'t>], lit: &dyn Fn(&Node<'t>) -> Opt
                 k if ZSH.contains(&k) => Opt::Plain,
                 _ => Opt::Unknown,
             }
+        } else if sh {
+            const SH: &[&str] = &["allexport", "errexit", "ignoreeof", "monitor", "noclobber", "noglob", "nolog", "notify", "nounset", "verbose", "vi", "emacs", "xtrace", "privileged"];
+            match name {
+                "noexec" if set => Opt::NoExec,
+                "noexec" => Opt::Plain,
+                k if SH.contains(&k) => Opt::Plain,
+                _ => Opt::Unknown,
+            }
         } else {
             const BASH: &[&str] = &[
                 "allexport", "braceexpand", "emacs", "errexit", "errtrace", "functrace", "hashall", "histexpand", "history", "ignoreeof", "interactive-comments",
@@ -994,16 +1005,26 @@ fn shell_command_in<'a, 't>(argv: &'a [Node<'t>], lit: &dyn Fn(&Node<'t>) -> Opt
     // the one-letter options of `set` and of the invocation; `o`/`O` take a
     // value and come alone
     const SHORT: &str = "abefhkmnptuvxBCEHPTilrsc";
+    // dash and bash both take these letters (`-n` reads without running)
+    const SHORT_SH: &str = "abefmnuvxCEilsc";
     let opt = |f: &str| match f {
         "--" => Opt::End,
-        "-o" | "+o" | "-O" | "+O" | "--rcfile" | "--init-file" => Opt::Value,
-        "--login" | "--noprofile" | "--norc" | "--posix" | "--restricted" | "--verbose" | "--noediting" => Opt::Plain,
+        "-o" | "+o" => Opt::Value,
+        // bash's shopt names (`-O extglob`), and its long options with a
+        // value: refused by a shell that lacks them, a name bash lacks is
+        // refused too; not read (zsh's `-O` is a letter option)
+        "-O" | "+O" | "--rcfile" | "--init-file" => Opt::Unknown,
+        "--login" | "--noprofile" | "--norc" | "--posix" | "--restricted" | "--verbose" | "--noediting" if !sh => Opt::Plain,
         // zsh takes an option's name attached: `-oerrexit`, `+onounset`
         _ if zsh && f.len() > 2 && (f.starts_with("-o") || f.starts_with("+o")) => named(f.starts_with('-'), &f[2..]),
         _ => match f.strip_prefix('-').map(|r| (r, true)).or_else(|| f.strip_prefix('+').map(|r| (r, false))) {
-            Some((r, minus)) if !r.is_empty() && r.chars().all(|c| SHORT.contains(c)) => {
+            Some((r, minus)) if !r.is_empty() && r.chars().all(|c| if sh { SHORT_SH.contains(c) } else { SHORT.contains(c) }) => {
                 if minus && r.contains('n') {
                     Opt::NoExec
+                // zsh: `-b` ends the options; what follows is a script, a
+                // `-c` in the same cluster still counts (`-bc`)
+                } else if zsh && minus && r.contains('b') && !r.contains('c') {
+                    Opt::Unknown
                 } else if minus && r.contains('c') {
                     Opt::Command
                 } else {
