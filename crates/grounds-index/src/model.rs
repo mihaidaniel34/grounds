@@ -150,6 +150,11 @@ pub enum Ty {
     TypeVar(Name),
     /// Only valid as a type argument.
     Wildcard(Option<Box<WildcardBound>>),
+    /// The type of a node that is no expression (an argument list, a type or
+    /// package name, a method's name): there is none to know. Like `Unknown`
+    /// for every question (`is_unknown`, no class, no primitive), but asking
+    /// about it is not a collapse of an unknown (see [`crate::doubt`]).
+    NoType,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -178,7 +183,7 @@ impl Ty {
         Ty::Prim(Prim::Boolean)
     }
     pub fn is_unknown(&self) -> bool {
-        matches!(self, Ty::Unknown)
+        matches!(self, Ty::Unknown | Ty::NoType)
     }
     pub fn is_known(&self) -> bool {
         !self.is_unknown()
@@ -186,7 +191,7 @@ impl Ty {
     /// Whether any component of this type is unknown.
     pub fn has_unknown(&self) -> bool {
         match self {
-            Ty::Unknown => true,
+            Ty::Unknown | Ty::NoType => true,
             Ty::Class { args, .. } => args.iter().any(|a| a.has_unknown()),
             Ty::Array(e) => e.has_unknown(),
             Ty::Wildcard(Some(b)) => match &**b {
@@ -348,7 +353,7 @@ impl Ty {
 impl fmt::Display for Ty {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Ty::Unknown => write!(f, "?unknown"),
+            Ty::Unknown | Ty::NoType => write!(f, "?unknown"),
             Ty::Void => write!(f, "void"),
             Ty::Null => write!(f, "null"),
             Ty::Prim(p) => write!(f, "{}", p.keyword()),
@@ -805,6 +810,16 @@ mod tests {
         assert!(!ann("Scan.Filter", false).is("org.springframework.context.annotation.ComponentScan.Filter"));
         // a package-qualified name is the whole name, not a suffix
         assert!(!ann("inject.Inject", false).is("jakarta.inject.Inject"));
+    }
+
+    #[test]
+    fn asking_about_an_unknown_type_is_a_collapse_but_not_about_no_type() {
+        use crate::doubt::{scope, Doubt};
+        use crate::Ty;
+        let ((), d) = scope(|| assert!(!Ty::Unknown.is_string()));
+        assert!(d.contains(Doubt::UnknownType));
+        let ((), d) = scope(|| assert!(!Ty::NoType.is_string() && Ty::NoType.is_unknown()));
+        assert!(d.is_empty());
     }
 
     #[test]

@@ -41,36 +41,38 @@ declare_rule!(NullDereference {
 impl Rule for NullDereference {
     rule_meta!();
     fn check_file<'t>(&self, cx: &mut Ctx<'_, 't>) {
-        let mut found: Vec<(Node<'t>, String, bool)> = Vec::new();
         for c in cx.callables() {
-            let cfg = cx.cfg(c);
-            let res = cx.nullness(c);
-            let na = NullnessAnalysis { fm: cx.fm, cfg: &cfg };
-            let mut reported = rustc_hash::FxHashSet::default();
-            res.for_each_before(&cfg, &na, |e, f| {
-                for (i, node) in na.derefs(e) {
-                    let Some(state) = f.get(&i) else { continue };
-                    if matches!(*state, Nullness::NonNull | Nullness::MaybeAssignedNull) || reported.contains(&i) {
-                        continue;
+            cx.grounded(|cx| {
+                let mut found: Vec<(Node<'t>, String, bool)> = Vec::new();
+                let cfg = cx.cfg(c);
+                let res = cx.nullness(c);
+                let na = NullnessAnalysis { fm: cx.fm, cfg: &cfg };
+                let mut reported = rustc_hash::FxHashSet::default();
+                res.for_each_before(&cfg, &na, |e, f| {
+                    for (i, node) in na.derefs(e) {
+                        let Some(state) = f.get(&i) else { continue };
+                        if matches!(*state, Nullness::NonNull | Nullness::MaybeAssignedNull) || reported.contains(&i) {
+                            continue;
+                        }
+                        let name = cx.fm.binder.decls[i].name;
+                        let definite = state.is_definitely_null();
+                        // "may be null" rests on paths the analysis cannot tell apart
+                        if !definite && maybe_null_unknown(cx, c, i, node) {
+                            continue;
+                        }
+                        reported.insert(i);
+                        let msg = if definite { format!("`{name}` is always null here") } else { format!("`{name}` may be null here") };
+                        found.push((node, msg, definite));
                     }
-                    let name = cx.fm.binder.decls[i].name;
-                    let definite = state.is_definitely_null();
-                    // "may be null" rests on paths the analysis cannot tell apart
-                    if !definite && maybe_null_unknown(cx, c, i, node) {
-                        continue;
+                });
+                for (n, m, definite) in found {
+                    if definite {
+                        cx.report(n, m);
+                    } else {
+                        cx.report_with_severity(n, Severity::Warning, m);
                     }
-                    reported.insert(i);
-                    let msg = if definite { format!("`{name}` is always null here") } else { format!("`{name}` may be null here") };
-                    found.push((node, msg, definite));
                 }
             });
-        }
-        for (n, m, definite) in found {
-            if definite {
-                cx.report(n, m);
-            } else {
-                cx.report_with_severity(n, Severity::Warning, m);
-            }
         }
     }
 }
@@ -311,8 +313,16 @@ declare_rule!(RedundantNullCheck {
 impl Rule for RedundantNullCheck {
     rule_meta!();
     fn check_file<'t>(&self, cx: &mut Ctx<'_, 't>) {
-        let mut found: Vec<(Node<'t>, String)> = Vec::new();
         for c in cx.callables() {
+            cx.grounded(|cx| Self::check_callable(cx, c));
+        }
+    }
+}
+
+impl RedundantNullCheck {
+    fn check_callable<'t>(cx: &mut Ctx<'_, 't>, c: Node<'t>) {
+        let mut found: Vec<(Node<'t>, String)> = Vec::new();
+        {
             let cfg = cx.cfg(c);
             let res = cx.nullness(c);
             let na = NullnessAnalysis { fm: cx.fm, cfg: &cfg };
@@ -379,8 +389,16 @@ fn trivial_initializer(v: Node, src: &str) -> bool {
 impl Rule for DeadStore {
     rule_meta!();
     fn check_file<'t>(&self, cx: &mut Ctx<'_, 't>) {
-        let mut found: Vec<(Node<'t>, String)> = Vec::new();
         for c in cx.callables() {
+            cx.grounded(|cx| Self::check_callable(cx, c));
+        }
+    }
+}
+
+impl DeadStore {
+    fn check_callable<'t>(cx: &mut Ctx<'_, 't>, c: Node<'t>) {
+        let mut found: Vec<(Node<'t>, String)> = Vec::new();
+        {
             let cfg = cx.cfg(c);
             let res = cx.liveness(c);
             let lv = Liveness { fm: cx.fm };
@@ -440,12 +458,20 @@ declare_rule!(ResourceLeak {
 impl Rule for ResourceLeak {
     rule_meta!();
     fn check_file<'t>(&self, cx: &mut Ctx<'_, 't>) {
-        let mut found: Vec<(usize, String)> = Vec::new();
         for c in cx.callables() {
+            cx.grounded(|cx| Self::check_callable(cx, c));
+        }
+    }
+}
+
+impl ResourceLeak {
+    fn check_callable<'t>(cx: &mut Ctx<'_, 't>, c: Node<'t>) {
+        let mut found: Vec<(usize, String)> = Vec::new();
+        {
             let cfg = cx.cfg(c);
             let res = cx.resources(c);
             if !res.reached[cfg.exit] {
-                continue;
+                return;
             }
             let mut seen = rustc_hash::FxHashSet::default();
             for (i, s) in &res.block_in[cfg.exit] {
@@ -459,9 +485,10 @@ impl Rule for ResourceLeak {
         if found.is_empty() {
             return;
         }
-        // map node ids back to nodes
+        // map node ids back to nodes: the callable's own first (the rest of
+        // the file only for a site it does not contain)
         let root = cx.fm.root();
-        for n in root.descendants() {
+        for n in c.descendants().chain(root.descendants()) {
             if let Some(pos) = found.iter().position(|(id, _)| *id == n.id()) {
                 let (_, msg) = found.remove(pos);
                 // a test's closeables are mostly in memory or test doubles (a
@@ -610,24 +637,26 @@ fn filtered_present<'t>(cx: &Ctx<'_, 't>, get: Node<'t>) -> bool {
 impl Rule for OptionalGetWithoutCheck {
     rule_meta!();
     fn check_file<'t>(&self, cx: &mut Ctx<'_, 't>) {
-        let mut found: Vec<Node<'t>> = Vec::new();
         for c in cx.callables() {
-            let cfg = cx.cfg(c);
-            let res = cx.optional_presence(c);
-            let oa = OptionalPresence { fm: cx.fm };
-            res.for_each_before(&cfg, &oa, |e, f| {
-                if e.kind() != "method_invocation" || !matches!(cx.fm.call_name(e), Some("get" | "getAsInt" | "getAsLong" | "getAsDouble")) || !cx.fm.args_of(e).is_empty() {
-                    return;
-                }
-                if let Some(i) = oa.optional_local(e.field("object")) {
-                    if !f.contains(&i) && !checked_before_lambda(cx, c, i) && !filtered_present(cx, e) && !in_if_present(cx, e, i) {
-                        found.push(e);
+            cx.grounded(|cx| {
+                let mut found: Vec<Node<'t>> = Vec::new();
+                let cfg = cx.cfg(c);
+                let res = cx.optional_presence(c);
+                let oa = OptionalPresence { fm: cx.fm };
+                res.for_each_before(&cfg, &oa, |e, f| {
+                    if e.kind() != "method_invocation" || !matches!(cx.fm.call_name(e), Some("get" | "getAsInt" | "getAsLong" | "getAsDouble")) || !cx.fm.args_of(e).is_empty() {
+                        return;
                     }
+                    if let Some(i) = oa.optional_local(e.field("object")) {
+                        if !f.contains(&i) && !checked_before_lambda(cx, c, i) && !filtered_present(cx, e) && !in_if_present(cx, e, i) {
+                            found.push(e);
+                        }
+                    }
+                });
+                for n in found {
+                    cx.report(n, "`get()` on an Optional that may be empty; check `isPresent()` or use `orElse`/`orElseThrow`");
                 }
             });
-        }
-        for n in found {
-            cx.report(n, "`get()` on an Optional that may be empty; check `isPresent()` or use `orElse`/`orElseThrow`");
         }
     }
 }
@@ -750,8 +779,16 @@ declare_rule!(UseAfterClose {
 impl Rule for UseAfterClose {
     rule_meta!();
     fn check_file<'t>(&self, cx: &mut Ctx<'_, 't>) {
-        let mut found: Vec<Node<'t>> = Vec::new();
         for c in cx.callables() {
+            cx.grounded(|cx| Self::check_callable(cx, c));
+        }
+    }
+}
+
+impl UseAfterClose {
+    fn check_callable<'t>(cx: &mut Ctx<'_, 't>, c: Node<'t>) {
+        let mut found: Vec<Node<'t>> = Vec::new();
+        {
             let cfg = cx.cfg(c);
             let res = cx.resources(c);
             let ra = ResourceAnalysis { fm: cx.fm };

@@ -1468,7 +1468,7 @@ fn asking_the_type_of_a_declarations_name_leaves_the_locals_type_alone() {
     // the names in the declarations (`int n`, `sum = n`) are no expressions
     for name in ["n", "sum"] {
         let decl = idents(name)[0];
-        assert_eq!(fm.type_of(decl), Ty::Unknown, "{name} in its declaration");
+        assert_eq!(fm.type_of(decl), Ty::NoType, "{name} in its declaration");
     }
     // their uses still have the declared types
     for name in ["n", "sum"] {

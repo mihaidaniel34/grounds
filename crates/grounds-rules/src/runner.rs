@@ -215,8 +215,9 @@ impl RuleSet {
 
 /// The findings one rule visit pushed carry what that visit observed.
 fn mark(new: &mut [Diagnostic], d: doubt::Doubts) {
-    for x in new {
+    for x in new.iter_mut().filter(|x| !x.attributed) {
         x.doubt = d;
+        x.attributed = true;
     }
 }
 

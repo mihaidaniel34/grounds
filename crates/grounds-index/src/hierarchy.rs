@@ -314,7 +314,33 @@ pub trait ClassLookup {
         if ty.class_name() == Some(target) {
             return Some(ty.clone());
         }
-        self.all_supertypes(ty).into_iter().find(|t| t.class_name() == Some(target))
+        self.find_supertype(ty, &mut |t| t.class_name() == Some(target))
+    }
+
+    /// The first supertype of `ty` (itself included, in the order of
+    /// `all_supertypes`) that `f` accepts. It walks no further: what it
+    /// cannot see past the answer cannot change it, and is not noted.
+    fn find_supertype(&self, ty: &Ty, f: &mut dyn FnMut(&Ty) -> bool) -> Option<Ty> {
+        let mut seen = FxHashSet::default();
+        let mut q = VecDeque::new();
+        q.push_back(ty.clone());
+        let mut walked = 0;
+        while let Some(t) = q.pop_front() {
+            let Some(n) = t.class_name() else { continue };
+            if !seen.insert(Arc::<str>::from(n)) {
+                continue;
+            }
+            if f(&t) {
+                return Some(t);
+            }
+            walked += 1;
+            if walked > 200 {
+                doubt::note(Doubt::IncompleteHierarchy);
+                break;
+            }
+            q.extend(self.direct_supertypes(&t));
+        }
+        None
     }
 
     /// Is class `sub` a subclass/implementor of `sup` (reflexive)?
@@ -617,20 +643,21 @@ pub trait ClassLookup {
     }
 
     fn field(&self, ty: &Ty, name: &str) -> Option<FieldRef> {
-        for st in self.all_supertypes(ty) {
-            let Ty::Class { name: cn, args } = &st else { continue };
+        let mut found = None;
+        self.find_supertype(ty, &mut |st| {
+            let Ty::Class { name: cn, args } = st else { return false };
             let Some(c) = self.class(cn) else {
                 doubt::note(Doubt::IncompleteHierarchy);
-                continue;
+                return false;
             };
-            if let Some(f) = c.field(name) {
-                let map = substitution(&c, args);
-                let mut f = f.clone();
-                f.ty = apply_subst(&f.ty, &map);
-                return Some(FieldRef { owner: cn.clone(), field: f });
-            }
-        }
-        None
+            let Some(f) = c.field(name) else { return false };
+            let map = substitution(&c, args);
+            let mut f = f.clone();
+            f.ty = apply_subst(&f.ty, &map);
+            found = Some(FieldRef { owner: cn.clone(), field: f });
+            true
+        });
+        found
     }
 
     /// Whether the full supertype closure of `name` is known. Every type has

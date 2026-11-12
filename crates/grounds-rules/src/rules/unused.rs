@@ -3,7 +3,7 @@
 use crate::framework::*;
 use crate::util::*;
 use crate::{declare_rule, rule_meta};
-use grounds_semantic::{LocalKind, Symbol};
+use grounds_semantic::{LocalDecl, LocalKind, Symbol};
 use grounds_syntax::{Node, NodeExt};
 
 pub fn rules() -> Vec<Box<dyn Rule>> {
@@ -49,28 +49,31 @@ declare_rule!(UnusedLocal {
 impl Rule for UnusedLocal {
     rule_meta!();
     fn check_file<'t>(&self, cx: &mut Ctx<'_, 't>) {
-        let b = &cx.fm.binder;
-        let mut out = Vec::new();
+        let fm = cx.fm;
+        let b = &fm.binder;
         for (i, d) in b.decls.iter().enumerate() {
-            if d.kind != LocalKind::Local {
-                continue;
-            }
-            if d.name.starts_with("unused") || d.name.starts_with("ignored") || d.name == "_" || d.name.starts_with('_') {
-                continue;
-            }
-            // annotated locals (e.g. @SuppressWarnings) are deliberate
-            if d.decl_node.parent().is_some_and(|p| p.modifiers().is_some_and(|m| m.kids().iter().any(|k| matches!(k.kind(), "annotation" | "marker_annotation")))) {
-                continue;
-            }
-            let uses = &b.uses[i];
-            let read = uses.iter().any(|u| !is_write_only(*u));
-            if !read {
-                let msg = if uses.is_empty() { format!("Local variable `{}` is never used", d.name) } else { format!("Local variable `{}` is assigned but never read", d.name) };
-                out.push((d.name_node, msg));
-            }
+            cx.grounded(|cx| Self::check_local(cx, i, d));
         }
-        for (n, m) in out {
-            cx.report(n, m);
+    }
+}
+
+impl UnusedLocal {
+    fn check_local<'t>(cx: &mut Ctx<'_, 't>, i: usize, d: &LocalDecl<'t>) {
+        if d.kind != LocalKind::Local {
+            return;
+        }
+        if d.name.starts_with("unused") || d.name.starts_with("ignored") || d.name == "_" || d.name.starts_with('_') {
+            return;
+        }
+        // annotated locals (e.g. @SuppressWarnings) are deliberate
+        if d.decl_node.parent().is_some_and(|p| p.modifiers().is_some_and(|m| m.kids().iter().any(|k| matches!(k.kind(), "annotation" | "marker_annotation")))) {
+            return;
+        }
+        let uses = &cx.fm.binder.uses[i];
+        let read = uses.iter().any(|u| !is_write_only(*u));
+        if !read {
+            let msg = if uses.is_empty() { format!("Local variable `{}` is never used", d.name) } else { format!("Local variable `{}` is assigned but never read", d.name) };
+            cx.report(d.name_node, msg);
         }
     }
 }

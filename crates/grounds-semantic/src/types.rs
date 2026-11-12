@@ -61,7 +61,10 @@ impl<'t> FileModel<'t> {
     /// Static type of an expression node. `Unknown` when not determinable.
     pub fn type_of(&self, n: Node<'t>) -> Ty {
         let t = self.types.get_or_compute(&self.guards, n.id(), n.id(), Query::Type, || self.compute_type(n));
-        if t.is_unknown() && self.denotes_value(n) {
+        if t.is_unknown() {
+            if !self.denotes_value(n) {
+                return Ty::NoType;
+            }
             doubt::note(Doubt::UnknownType);
         }
         t

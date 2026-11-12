@@ -217,10 +217,13 @@ pub struct Diagnostic {
     /// with a change from one that was there before; without this the message,
     /// less its hint and candidate list, is the claim.
     pub claim: Option<String>,
-    /// What the rule visit that reported this observed being collapsed from
-    /// unknown into a definite answer (see `grounds_index::doubt`); set by
-    /// the runner. Empty: the finding is grounded.
+    /// What was collapsed from unknown into a definite answer while the rule
+    /// derived this finding (see `grounds_index::doubt`): noted in the
+    /// [`Ctx::grounded`] part that reported it, else in the whole visit.
+    /// Empty: the finding is grounded.
     pub doubt: Doubts,
+    /// `doubt` is set (by `Ctx::grounded`); the runner leaves it alone
+    pub(crate) attributed: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -252,20 +255,36 @@ pub struct Ctx<'a, 't> {
 }
 
 impl<'a, 't> Ctx<'a, 't> {
+    /// Run part of this visit as a derivation of its own: the findings `f`
+    /// reports carry only the doubts noted while `f` ran, not everything the
+    /// visit observed. For a rule that visits a file or a class and judges
+    /// one callable or candidate at a time; whatever `f` reads from a cache
+    /// (a callable's flow results, a remembered type) replays its doubts
+    /// inside `f`.
+    pub fn grounded<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let before = self.out.len();
+        let (r, d) = doubt::scope(|| f(self));
+        for x in self.out[before..].iter_mut().filter(|x| !x.attributed) {
+            x.doubt = d;
+            x.attributed = true;
+        }
+        r
+    }
+
     pub fn report(&mut self, node: Node<'t>, message: impl Into<String>) {
         self.report_range(TextRange::of(node), message);
     }
 
     pub fn report_range(&mut self, range: TextRange, message: impl Into<String>) {
-        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range, message: message.into(), fix: None, claim: None, doubt: Doubts::NONE });
+        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range, message: message.into(), fix: None, claim: None, doubt: Doubts::NONE, attributed: false });
     }
 
     pub fn report_fix(&mut self, node: Node<'t>, message: impl Into<String>, fix: Fix) {
-        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range: TextRange::of(node), message: message.into(), fix: Some(fix), claim: None, doubt: Doubts::NONE });
+        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range: TextRange::of(node), message: message.into(), fix: Some(fix), claim: None, doubt: Doubts::NONE, attributed: false });
     }
 
     pub fn report_with_severity(&mut self, node: Node<'t>, severity: Severity, message: impl Into<String>) {
-        self.out.push(Diagnostic { rule: self.rule.id, severity, range: TextRange::of(node), message: message.into(), fix: None, claim: None, doubt: Doubts::NONE });
+        self.out.push(Diagnostic { rule: self.rule.id, severity, range: TextRange::of(node), message: message.into(), fix: None, claim: None, doubt: Doubts::NONE, attributed: false });
     }
 
     /// A method's identity for a claim: qualified owner and erased,
@@ -277,7 +296,7 @@ impl<'a, 't> Ctx<'a, 't> {
     /// Report with the full claim behind a message that shows only part of
     /// it, or names types by their simple names (see [`Diagnostic::claim`]).
     pub fn report_claim(&mut self, node: Node<'t>, message: impl Into<String>, claim: String) {
-        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range: TextRange::of(node), message: message.into(), fix: None, claim: Some(claim), doubt: Doubts::NONE });
+        self.out.push(Diagnostic { rule: self.rule.id, severity: self.rule.severity, range: TextRange::of(node), message: message.into(), fix: None, claim: Some(claim), doubt: Doubts::NONE, attributed: false });
     }
 
     pub fn text(&self, n: Node<'t>) -> &'t str {
