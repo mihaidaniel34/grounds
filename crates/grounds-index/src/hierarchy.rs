@@ -103,7 +103,42 @@ pub struct FieldRef {
     pub field: FieldInfo,
 }
 
-/// Map from a class's type parameters to the receiver's arguments.
+/// Whether `class` with type arguments `args` is a raw type (JLS 4.8): a
+/// generic class named without any. A class that declares no type
+/// parameters is never raw.
+pub fn is_raw(class: &ClassInfo, args: &[Ty]) -> bool {
+    args.is_empty() && !class.type_params.is_empty()
+}
+
+/// The type of an instance method or constructor `m` of a raw type of `c`:
+/// the erasure of its declared type, its own type parameters erased too
+/// (JLS 4.8, 4.6), so it is no longer generic. A static method of a raw
+/// type keeps its type, and is not passed here.
+pub fn erase_member(m: &MethodInfo, c: &ClassInfo) -> MethodInfo {
+    let mut e = m.clone();
+    for p in &mut e.params {
+        p.ty = erasure_among(&p.ty, &m.type_params, &c.type_params, 0);
+    }
+    e.ret = erasure_among(&m.ret, &m.type_params, &c.type_params, 0);
+    e.type_params.clear();
+    e
+}
+
+/// The capture of an unbounded wildcard for a parameter with one bound
+/// stands for that bound: with type arguments of its own, which this model
+/// does not compute (`T extends Comparable<T>` makes it a
+/// `Comparable<CAP#1>`), they are unknown, never erased into a raw type.
+fn bound_of_capture(b: &Ty) -> Ty {
+    match b {
+        Ty::Class { name, args } => Ty::Class { name: name.clone(), args: args.iter().map(|_| Ty::Unknown).collect() },
+        b => b.erasure(),
+    }
+}
+
+/// Map from a class's type parameters to the receiver's arguments. For a
+/// raw type each parameter maps to Unknown: member lookup erases the
+/// members of a raw type itself (`erase_member`), and a caller that
+/// substitutes with this map learns nothing definite from it.
 pub fn substitution(class: &ClassInfo, args: &[Ty]) -> Vec<(Name, Ty)> {
     if class.type_params.is_empty() {
         return Vec::new();
@@ -124,17 +159,15 @@ pub fn substitution(class: &ClassInfo, args: &[Ty]) -> Vec<(Name, Ty)> {
                         WildcardBound::Extends(t) => t.clone(),
                         WildcardBound::Super(t) => t.clone(),
                     },
-                    Ty::Wildcard(None) => p.bounds.first().map(|b| b.erasure()).unwrap_or_else(Ty::object),
+                    Ty::Wildcard(None) => p.bounds.first().map(bound_of_capture).unwrap_or_else(Ty::object),
                     t => t.clone(),
                 };
                 (p.name.clone(), a)
             })
             .collect()
     } else {
-        // missing type arguments: javac erases a raw type to the bounds, but
-        // here they are far more often arguments we could not infer, where
-        // the bound is wrong (a lambda over `ColumnFamily<DbLong, ..>` would
-        // see `DbKey`): unknown, so nothing is concluded from them
+        // a raw type, or a count of arguments that does not match (broken
+        // code): no argument is known
         class.type_params.iter().map(|p| (p.name.clone(), Ty::Unknown)).collect()
     }
 }
@@ -163,6 +196,17 @@ fn subst_method(m: &MethodInfo, map: &[(Name, Ty)]) -> MethodInfo {
         }
     }
     m
+}
+
+/// The type of method `m` of class `c` as a member of a type of `c` whose
+/// arguments give `map`: erased for an instance method of a raw type
+/// (`raw`, JLS 4.8), else substituted.
+fn member_type(m: &MethodInfo, c: &ClassInfo, raw: bool, map: &[(Name, Ty)]) -> MethodInfo {
+    if raw && !m.flags.is_static() {
+        erase_member(m, c)
+    } else {
+        subst_method(m, map)
+    }
 }
 
 /// Does `sub` (declared in a subtype) override `sup`, declared in `sup_class`
@@ -208,16 +252,26 @@ fn mentions_foreign_var(t: &Ty, m: &MethodInfo, c: &ClassInfo) -> bool {
 /// Erasure of a type in `m`'s declaration: type variables erase to their
 /// first bound (JLS 4.6).
 fn erasure_in(t: &Ty, m: &MethodInfo, c: &ClassInfo, depth: u32) -> Ty {
+    erasure_among(t, &m.type_params, &c.type_params, depth)
+}
+
+/// Erasure of a type declared where the type parameters `own` (a method's)
+/// and `class` (its class's) are in scope. A type variable declared
+/// elsewhere (an enclosing class's) is unknown.
+fn erasure_among(t: &Ty, own: &[TypeParam], class: &[TypeParam], depth: u32) -> Ty {
     match t {
         Ty::TypeVar(n) => {
-            let Some(tp) = m.type_params.iter().chain(&c.type_params).find(|p| p.name == *n) else { return Ty::Unknown };
+            let Some(tp) = own.iter().chain(class).find(|p| p.name == *n) else { return Ty::Unknown };
             match tp.bounds.first() {
                 None => Ty::object(),
                 Some(_) if depth > 8 => Ty::Unknown,
-                Some(b) => erasure_in(b, m, c, depth + 1),
+                Some(b) => erasure_among(b, own, class, depth + 1),
             }
         }
-        Ty::Array(e) => Ty::Array(Box::new(erasure_in(e, m, c, depth))),
+        Ty::Array(e) => match erasure_among(e, own, class, depth) {
+            Ty::Unknown => Ty::Unknown,
+            e => Ty::Array(Box::new(e)),
+        },
         t => t.erasure(),
     }
 }
@@ -287,13 +341,13 @@ pub trait ClassLookup {
             doubt::note(Doubt::IncompleteHierarchy);
             return Vec::new();
         };
+        // the supertypes of a raw type are the erasures of the declared ones
+        // (JLS 4.8): raw too, where generic
+        let raw = is_raw(&c, args);
         let map = substitution(&c, args);
         let mut out = Vec::new();
-        if let Some(s) = &c.superclass {
-            out.push(apply_subst(s, &map));
-        }
-        for i in &c.interfaces {
-            out.push(apply_subst(i, &map));
+        for s in c.superclass.iter().chain(&c.interfaces) {
+            out.push(if raw { s.erasure() } else { apply_subst(s, &map) });
         }
         if out.is_empty() && &*c.name != "java.lang.Object" {
             out.push(Ty::object());
@@ -528,8 +582,9 @@ pub trait ClassLookup {
                 continue;
             };
             let map = substitution(&c, args);
+            let raw = is_raw(&c, args);
             for m in c.methods.iter().filter(|m| &*m.name == name) {
-                let sm = subst_method(m, &map);
+                let sm = member_type(m, &c, raw, &map);
                 let erased: Vec<Ty> = sm.params.iter().map(|p| p.ty.erasure()).collect();
                 // methods of one class are distinct overloads; an unknown
                 // parameter type cannot prove an override either
@@ -633,11 +688,12 @@ pub trait ClassLookup {
                 continue;
             };
             let map = substitution(&c, args);
+            let raw = is_raw(&c, args);
             for m in &c.methods {
                 if m.is_constructor() {
                     continue;
                 }
-                let sm = subst_method(m, &map);
+                let sm = member_type(m, &c, raw, &map);
                 // also a method of an unrelated supertype with the same
                 // signature: one entry per signature, the most derived first
                 let dup = out.iter().any(|o| {
@@ -668,9 +724,10 @@ pub trait ClassLookup {
                 return false;
             };
             let Some(f) = c.field(name) else { return false };
-            let map = substitution(&c, args);
             let mut f = f.clone();
-            f.ty = apply_subst(&f.ty, &map);
+            // a non-static field of a raw type has the erasure of its type
+            // (JLS 4.8); a static one keeps it
+            f.ty = if is_raw(&c, args) && !f.flags.is_static() { erasure_among(&f.ty, &[], &c.type_params, 0) } else { apply_subst(&f.ty, &substitution(&c, args)) };
             found = Some(FieldRef { owner: cn.clone(), field: f });
             true
         });

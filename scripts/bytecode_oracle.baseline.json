@@ -32,7 +32,6 @@
   "org.testcontainers:testcontainers:1.19.3": {"calls": 2447, "constructors": 410, "fields": 1341, "method references": 64, "members": 1673}
  },
  "known": [
-  {"artifact": "com.google.guava:guava:33.0.0-jre", "category": "calls", "kind": "other owner", "file": "com/google/common/collect/ByFunctionOrdering.java", "line": 56, "subject": "equals", "grounds": "java.util.Comparator", "javac": "com.google.common.base.Function | java.lang.Object", "note": "javac's own naming, not a grounds error: two equals calls on the line, and javac names Object for the one on a Comparator"},
-  {"artifact": "org.springframework.data:spring-data-commons:3.2.1", "category": "calls", "kind": "other owner", "file": "org/springframework/data/repository/config/RepositoryBeanDefinitionReader.java", "line": 75, "subject": "toString", "grounds": "java.lang.String", "javac": "java.lang.Object"}
+  {"artifact": "com.google.guava:guava:33.0.0-jre", "category": "calls", "kind": "other owner", "file": "com/google/common/collect/ByFunctionOrdering.java", "line": 56, "subject": "equals", "grounds": "java.util.Comparator", "javac": "com.google.common.base.Function | java.lang.Object", "note": "javac's own naming, not a grounds error: two equals calls on the line, and javac names Object for the one on a Comparator"}
  ]
 }

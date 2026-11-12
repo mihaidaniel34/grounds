@@ -494,8 +494,14 @@ impl<'t> FileModel<'t> {
                 // `Iface.super.m()`: instance methods of the named supertype
                 if call.kid_of_kind("super").is_some() {
                     if let Some(Symbol::Type(t)) = self.symbol(obj) {
-                        let ms = self.methods_named(&Ty::class(&t), name);
+                        // the interface as the enclosing class declares it as a
+                        // supertype, with its arguments; not the raw type
                         let recv = self.enclosing_class(call).map(|c| c.this_type());
+                        let sup = recv.as_ref().and_then(|r| self.as_super(r, &t)).unwrap_or_else(|| match self.class(&t) {
+                            Some(c) => Ty::Class { name: c.name.clone(), args: c.type_params.iter().map(|_| Ty::Unknown).collect() },
+                            None => Ty::class(&t),
+                        });
+                        let ms = self.methods_named(&sup, name);
                         return (ms, recv, false);
                     }
                 }
@@ -1963,13 +1969,24 @@ impl<'t> FileModel<'t> {
             return None;
         }
         let map = substitution(&ci, class_ty.args());
+        // `new Box(x)` creates a raw type, whose constructors are erased (JLS
+        // 4.8); `new Box<>(x)` names the class without arguments too, but
+        // infers them
+        let diamond = call.kind() == "object_creation_expression"
+            && call.field("type").is_some_and(|t| t.kind() == "generic_type" && t.kid_of_kind("type_arguments").is_some_and(|ta| ta.kids().is_empty()));
+        let raw = !diamond && grounds_index::hierarchy::is_raw(&ci, class_ty.args());
         let cands: Vec<MethodRef> = ci
             .constructors()
             .map(|m| {
-                let mut m = m.clone();
-                for p in &mut m.params {
-                    p.ty = apply_subst(&p.ty, &map);
-                }
+                let m = if raw {
+                    grounds_index::hierarchy::erase_member(m, &ci)
+                } else {
+                    let mut m = m.clone();
+                    for p in &mut m.params {
+                        p.ty = apply_subst(&p.ty, &map);
+                    }
+                    m
+                };
                 MethodRef { owner: ci.name.clone(), method: m, owner_kind: ci.kind, owner_flags: ci.flags }
             })
             .collect();

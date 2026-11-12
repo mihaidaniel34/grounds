@@ -38,8 +38,11 @@ fn resolves_source_and_jdk_types() {
     assert_eq!(inner.field("self").unwrap().ty.to_string(), "p.A.Inner");
     assert!(idx.is_subclass("p.A", "java.util.Collection").is_yes());
     assert!(idx.is_subclass("p.A", "java.lang.Runnable").is_no());
-    let it = idx.as_super(&Ty::class("p.A"), "java.lang.Iterable").unwrap();
+    let it = idx.as_super(&a.this_type(), "java.lang.Iterable").unwrap();
     assert_eq!(it.to_string(), "java.lang.Iterable<java.lang.String>");
+    // `A` without arguments is the raw type, whose supertypes are erased (JLS 4.8)
+    let it = idx.as_super(&Ty::class("p.A"), "java.lang.Iterable").unwrap();
+    assert_eq!(it.to_string(), "java.lang.Iterable");
     let get = idx.methods_named(&a.superclass.clone().unwrap(), "get");
     assert!(get.iter().any(|m| m.method.ret.is_string()));
 }
@@ -639,4 +642,33 @@ fn lombok_required_fields_follow_its_non_null_annotations() {
     // com.example.NotNull is not one Lombok knows
     assert_eq!(ctor("q.R"), vec![2]);
     assert_eq!(ctor("q.S"), vec![1]);
+}
+
+#[test]
+fn members_and_supertypes_of_a_raw_type_are_erased() {
+    let idx = index_of(&[(
+        "p/A.java",
+        "package p; import java.util.*;
+         public class A<T extends Number> extends ArrayList<T> {
+           public T first; public List<T> all() { return null; } public <U> U as(Class<U> c) { return null; }
+           public static List<String> names() { return null; } public static final List<String> NAMES = null;
+         }
+         class B extends A<Integer> {}",
+    )]);
+    let ret = |t: &Ty, m: &str| idx.methods_named(t, m)[0].method.ret.to_string();
+    let raw = Ty::class("p.A");
+    assert_eq!(idx.field(&raw, "first").unwrap().field.ty.to_string(), "java.lang.Number");
+    assert_eq!(ret(&raw, "all"), "java.util.List");
+    assert_eq!(ret(&raw, "as"), "java.lang.Object");
+    assert!(idx.methods_named(&raw, "as")[0].method.type_params.is_empty());
+    assert_eq!(ret(&raw, "get"), "java.lang.Object");
+    assert_eq!(idx.direct_supertypes(&raw)[0].to_string(), "java.util.ArrayList");
+    // static members keep their types
+    assert_eq!(ret(&raw, "names"), "java.util.List<java.lang.String>");
+    assert_eq!(idx.field(&raw, "NAMES").unwrap().field.ty.to_string(), "java.util.List<java.lang.String>");
+    // a class that declares no type parameters is not raw
+    let b = Ty::class("p.B");
+    assert_eq!(idx.field(&b, "first").unwrap().field.ty.to_string(), "java.lang.Integer");
+    assert_eq!(ret(&b, "all"), "java.util.List<java.lang.Integer>");
+    assert_eq!(ret(&b, "get"), "java.lang.Integer");
 }

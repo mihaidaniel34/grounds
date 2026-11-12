@@ -1531,6 +1531,72 @@ fn asking_the_type_of_a_declarations_name_leaves_the_locals_type_alone() {
     }
 }
 
+#[test]
+fn members_of_a_raw_type_have_their_erased_types() {
+    let src = "import java.util.*;
+         class Repo<T extends CharSequence> {
+           Optional<String> name() { return null; } T get() { return null; } List<T> all() { return null; }
+           <U extends Number> U pick(Class<U> c) { return null; } Optional<String> label; T value;
+           static List<String> names() { return null; }
+         }
+         class Box<T> { Box(T t) {} Box(String s) {} }
+         class Strings extends ArrayList<String> {}
+         class Raw extends ArrayList {}
+         interface Source<T> { default T value() { return null; } }
+         class T implements Source<String> {
+           void m(Repo raw, Repo<StringBuilder> typed, Strings strings, Raw r, List list) {
+             Object a = /*T*/ raw.name();
+             Object b = /*T*/ raw.get();
+             Object c = /*T*/ raw.all();
+             Object d = /*T*/ raw.pick(Integer.class);
+             Object e = /*T*/ raw.label;
+             Object f = /*T*/ raw.value;
+             Object g = /*T*/ typed.name();
+             Object h = /*T*/ typed.get();
+             Object i = /*T*/ strings.get(0);
+             Object j = /*T*/ r.get(0);
+             Object k = /*T*/ list.iterator();
+             Object l = /*T*/ raw.names();
+             Object n = /*T*/ Source.super.value();
+           } }";
+    assert_eq!(
+        types_of(src),
+        vec![
+            "java.util.Optional",
+            "java.lang.CharSequence",
+            "java.util.List",
+            "java.lang.Number",
+            "java.util.Optional",
+            "java.lang.CharSequence",
+            "java.util.Optional<java.lang.String>",
+            "java.lang.StringBuilder",
+            // a class that is not generic is not raw
+            "java.lang.String",
+            // nor are the supertypes of a raw type parameterized
+            "java.lang.Object",
+            "java.util.Iterator",
+            // a static method of a raw type keeps its type
+            "java.util.List<java.lang.String>",
+            // `Source.super` is the supertype as the class declares it
+            "java.lang.String",
+        ]
+    );
+    // spring-data's `metadata.getRepositoryBaseClassName().map(it -> it.toString())`
+    // with a raw `metadata`: the Optional is raw, `it` an Object
+    let calls = calls_of(
+        "import java.util.*;
+         class Config<T> { Optional<String> base() { return null; } }
+         class Box<T> { Box(T t) {} Box(String s) {} }
+         class T { void m(Config raw) {
+           raw.base().map(it -> /*C*/ it.toString());
+           Object b = /*C*/ new Box(\"s\");
+           // a diamond infers its arguments: no raw type, nothing erased
+           Object o = /*C*/ new Box<>(\"s\");
+         } }",
+    );
+    assert_eq!(calls, vec!["Object.toString()", "Box.<init>(java.lang.String)", "Box.<init>(?unknown)?"]);
+}
+
 /// What the name after each `/*F*/` marker refers to: `Owner.field` for a
 /// field, `local` for a local, `none` when it does not resolve.
 fn names_of(src: &str) -> Vec<String> {
