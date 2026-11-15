@@ -1,5 +1,5 @@
 # Projects of corpus/smoke.tsv that scripts/smoke.py --build also builds and
-# checks again (the smoke-built workflow): name, JDK, time limit of the build
+# checks again (the smoke workflow with `built`): name, JDK, time limit of the build
 # in seconds, the command (compiling main and test code, running no test).
 # Picked for sources next to the code that no build compiles (test data,
 # check samples, old snapshots), which is where the compile-break rules

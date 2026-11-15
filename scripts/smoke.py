@@ -37,7 +37,7 @@ in files the build compiles (on a build that succeeded each is a false
 claim), how many where the picture is still unknown, how many are gone. A
 build that fails or runs out of time is reported, not failed on: what it
 compiled before is evidence all the same. The build runs the project's own
-build tool, so only where that is meant (the smoke-built workflow).
+build tool, so only where that is meant (the smoke workflow with `built`).
 
 Exit status 1 on any failure as defined above.
 """

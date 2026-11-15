@@ -6,6 +6,16 @@ name: smoke
 # be fetched (scripts/smoke.py). Parse errors and compile-break findings are
 # listed in the summary, not failed on. Weekly and on demand only: it takes
 # about an hour of runner time and judges nothing a pull request changed.
+#
+# On demand with `built`: instead of the shards, the named projects of
+# corpus/smoke-built.tsv are checked, built with their own build tool and
+# checked again (scripts/smoke.py --build). The class files a build leaves
+# are grounds' evidence of which files the build compiles; the summary says
+# how the compile-break findings stand after it. On a build that succeeded,
+# one left "in the build" is a false claim. A build that fails is reported,
+# not failed on. The builds run code of the projects and take hours of runner
+# time: the workflow's token is read-only and those jobs' checkout of this
+# repository keeps no credentials.
 on:
   schedule:
     - cron: "41 3 * * 0"
@@ -18,12 +28,25 @@ on:
         description: "Seconds per project"
         required: false
         default: "600"
+      built:
+        description: "Build and check again: project names of corpus/smoke-built.tsv, or all (skips the shards)"
+        required: false
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      built: ${{ steps.built.outputs.projects }}
     steps:
       - uses: actions/checkout@v5
+      - id: built
+        run: |
+          echo "projects=$(grep -v '^#' corpus/smoke-built.tsv | awk -F'\t' -v only="$BUILT" 'BEGIN { n = split(only, o, ","); for (i = 1; i <= n; i++) want[o[i]] = 1 } NF >= 4 && only != "" && (only == "all" || $1 in want) { print $1 "\t" $2 }' | jq -R 'split("\t") | {name: .[0], java: .[1]}' | jq -cs .)" >> "$GITHUB_OUTPUT"
+        env:
+          BUILT: ${{ inputs.built }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release --locked -p grounds-cli && cargo build --release --locked -p grounds-syntax --example errors
@@ -36,6 +59,7 @@ jobs:
 
   smoke:
     needs: build
+    if: ${{ !inputs.built }}
     strategy:
       fail-fast: false
       matrix:
@@ -68,8 +92,42 @@ jobs:
           path: smoke-${{ matrix.shard }}.json
           if-no-files-found: ignore
 
+  built:
+    needs: build
+    if: ${{ inputs.built && needs.build.outputs.built != '[]' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        project: ${{ fromJson(needs.build.outputs.built) }}
+    name: built (${{ matrix.project.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.project.java }}
+      - uses: actions/download-artifact@v5
+        with:
+          name: binaries
+          path: bin
+      - run: chmod +x bin/grounds bin/examples/errors
+      - name: check, build, check again
+        run: |
+          python3 -I scripts/smoke.py --only "${{ matrix.project.name }}" --build --timeout 900 \
+            --grounds bin/grounds --errors bin/examples/errors --dir "$RUNNER_TEMP/smoke" --out "smoke-built-${{ matrix.project.name }}.json"
+      - if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: smoke-built-${{ matrix.project.name }}
+          path: smoke-built-${{ matrix.project.name }}.json
+          if-no-files-found: ignore
+
   summary:
-    needs: smoke
+    needs: [smoke, built]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -81,7 +139,7 @@ jobs:
           path: reports
       - run: |
           if ls reports/*.json > /dev/null 2>&1; then
-            python3 -I scripts/smoke.py --summary reports/*.json >> "$GITHUB_STEP_SUMMARY"
+            python3 -I scripts/smoke.py --summary reports/*.json | tee -a "$GITHUB_STEP_SUMMARY"
           else
             echo "no smoke reports" >> "$GITHUB_STEP_SUMMARY"
           fi
