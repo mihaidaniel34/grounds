@@ -1,0 +1,11 @@
+# Projects of corpus/smoke.tsv that scripts/smoke.py --build also builds and
+# checks again (the smoke-built workflow): name, JDK, time limit of the build
+# in seconds, the command (compiling main and test code, running no test).
+# Picked for sources next to the code that no build compiles (test data,
+# check samples, old snapshots), which is where the compile-break rules
+# reported on these projects.
+javaparser	25	1500	./mvnw -B -ntp -q -DskipTests test-compile
+sonar-java	25	2700	mvn -B -ntp -q -DskipTests test-compile
+spring-security	25	3600	./gradlew --no-daemon -q classes testClasses --continue
+jdt-core	25	3600	mvn -B -ntp -q -DskipTests test-compile
+glassfish	25	5400	mvn -B -ntp -q -DskipTests test-compile

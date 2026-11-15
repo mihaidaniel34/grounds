@@ -28,6 +28,17 @@ is reused.
       [--errors target/release/examples/errors] [--out report.json] [--keep]
   python3 -I scripts/smoke.py --summary report.json...   (markdown tables)
 
+With --build, the projects listed in corpus/smoke-built.tsv (name, JDK, time
+limit in seconds, shell command) are also built after the check, with that
+command in the checkout, and checked again: the class files the build leaves
+are grounds' evidence of which files the build compiles (the build picture),
+and the report says how the compile-break findings moved: how many are left
+in files the build compiles (on a build that succeeded each is a false
+claim), how many where the picture is still unknown, how many are gone. A
+build that fails or runs out of time is reported, not failed on: what it
+compiled before is evidence all the same. The build runs the project's own
+build tool, so only where that is meant (the smoke-built workflow).
+
 Exit status 1 on any failure as defined above.
 """
 
@@ -269,12 +280,79 @@ def check(p, d, a, hard):
     return res
 
 
+def builds(path):
+    """corpus/smoke-built.tsv: name -> {java, timeout, cmd}."""
+    out = {}
+    with open(path) as fh:
+        for row in fh:
+            row = row.rstrip("\n")
+            if not row.strip() or row.startswith("#"):
+                continue
+            name, java, timeout, cmd = row.split("\t")[:4]
+            out[name] = {"java": java, "timeout": int(timeout), "cmd": cmd}
+    return out
+
+
+def built(d, a, hard, b):
+    """Build the checkout with the project's command, check it again, and say
+    how the findings of the compile-break rules stand by build state."""
+    log = d + ".build.log"
+    with open(log, "wb") as fh:
+        status, sig, wall, _ = run_limited(["bash", "-c", b["cmd"]], b["timeout"], fh, subprocess.STDOUT, cwd=d)
+    with open(log, encoding="utf-8", errors="replace") as fh:
+        tail = fh.read()[-4000:]
+    os.remove(log)
+    outcome = "ok" if status == 0 else "timeout" if status is None and sig is None else f"failed ({status if sig is None else 'signal ' + str(sig)})"
+    res = {"cmd": b["cmd"], "outcome": outcome, "wall_s": round(wall), "class_files": 0}
+    for dirpath, dirnames, filenames in os.walk(d):
+        dirnames[:] = [n for n in dirnames if n not in (".git", ".grounds")]
+        res["class_files"] += sum(1 for f in filenames if f.endswith(".class"))
+    if outcome != "ok":
+        res["log_tail"] = tail
+    out_path, err_path = d + ".built.json", d + ".built.stderr.txt"
+    with open(out_path, "wb") as so, open(err_path, "wb") as se:
+        status, sig, wall, rss = run_limited([a.grounds, "check", "--root", d, "--format", "json"], a.timeout, so, se)
+    with open(err_path, encoding="utf-8", errors="replace") as fh:
+        stderr = fh.read()
+    res.update(check_exit=status, check_wall_s=round(wall, 2), check_peak_rss_mb=rss, panics=panics(stderr))
+    try:
+        with open(out_path, encoding="utf-8") as fh:
+            findings = json.load(fh)
+    except (OSError, ValueError):
+        findings = None
+    for f in (out_path, err_path):
+        try:
+            os.remove(f)
+        except OSError:
+            pass
+    if not isinstance(findings, list):
+        res["check_failed"] = stderr[-2000:]
+        return res
+    res["findings"] = len(findings)
+    suspects = [f for f in findings if f.get("rule") in hard]
+    # `build` is on the findings of the rules that say code does not compile;
+    # the wiring rules have none
+    res["compile_break"] = {k: sum(1 for f in suspects if f.get("build", "no state") == k) for k in ("in the build", "unknown", "no state")}
+    res["in_build_suspects"] = [f"{f['path']}:{f['line']} {f['rule']}: {f.get('message', '')}"
+                                for f in suspects if f.get("build") == "in the build"][:200]
+    return res
+
+
 def line(r):
     if r.get("fetch_error"):
         return f"{r['name']:32} FETCH FAILED  {r['fetch_error'][:200]}"
     s = (f"{r['name']:32} {r['java_files']:6} files {r['wall_s']:7.1f} s {r['peak_rss_mb'] or 0:6} MiB "
          f"{r.get('findings', '-'):>7} findings, {len(r.get('compile_break_suspects', []))} compile-break, "
          f"{r['parse_errors']} parse errors")
+    b = r.get("built")
+    if b:
+        cb = b.get("compile_break")
+        s += (f"\n    build {b['outcome']} in {b['wall_s']} s, {b['class_files']} class files; compile-break after it: "
+              + (f"{cb['in the build']} in the build, {cb['unknown']} unknown, {cb['no state']} wiring" if cb else "check failed"))
+        for x in b.get("in_build_suspects", [])[:20]:
+            s += f"\n      in the build: {x[:300]}"
+        if b.get("log_tail"):
+            s += "\n      " + "\n      ".join(b["log_tail"].strip().splitlines()[-25:])
     if r["failures"]:
         s += "  FAIL: " + "; ".join(r["failures"])
         for p in r["panics"][:5]:
@@ -311,6 +389,21 @@ def summary(paths):
     for r in ran:
         print(f"| {r['name']} | {r['java_files']} | {r['wall_s']} | {r['files_per_s']} | {r['peak_rss_mb']} | "
               f"{r.get('findings', '-')} | {len(r.get('compile_break_suspects', []))} | {r['parse_errors']} |")
+    with_build = [r for r in ran if r.get("built")]
+    if with_build:
+        print("\n**Built and checked again.** \"In the build\" after a build that succeeded: each is a false claim.\n")
+        print("| project | build | time (s) | class files | compile-break before | in the build | unknown | wiring | findings before | after |")
+        print("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+        for r in with_build:
+            b = r["built"]
+            cb = b.get("compile_break") or {}
+            print(f"| {r['name']} | {b['outcome']} | {b['wall_s']} | {b['class_files']} | {len(r.get('compile_break_suspects', []))} | "
+                  f"{cb.get('in the build', '-')} | {cb.get('unknown', '-')} | {cb.get('no state', '-')} | {r.get('findings', '-')} | {b.get('findings', '-')} |")
+        for r in with_build:
+            if r["built"].get("in_build_suspects"):
+                print(f"\n<details><summary>{r['name']}: in the build</summary>\n\n```")
+                print("\n".join(x[:300] for x in r["built"]["in_build_suspects"]))
+                print("```\n</details>")
     return 0
 
 
@@ -327,6 +420,8 @@ def main():
     ap.add_argument("--errors", default=os.path.join(REPO, "target", "release", "examples", "errors"))
     ap.add_argument("--out", help="write the JSON report here")
     ap.add_argument("--keep", action="store_true", help="keep (and reuse) checkouts")
+    ap.add_argument("--build", action="store_true", help="build the projects of --build-list after the check, and check again")
+    ap.add_argument("--build-list", default=os.path.join(REPO, "corpus", "smoke-built.tsv"))
     a = ap.parse_args()
     a.grounds, a.errors, a.dir = os.path.abspath(a.grounds), os.path.abspath(a.errors), os.path.abspath(a.dir)
     for b in (a.grounds, a.errors):
@@ -346,6 +441,7 @@ def main():
             sys.exit("--shard i/n with 1 <= i <= n")
         todo = todo[i - 1::n]
     hard = hard_rules()
+    to_build = builds(a.build_list) if a.build else {}
     os.makedirs(a.dir, exist_ok=True)
     version = subprocess.run([a.grounds, "--version"], capture_output=True, text=True).stdout.strip()
     print(f"{version}: {len(todo)} projects, time limit {a.timeout} s", flush=True)
@@ -378,6 +474,10 @@ def main():
         else:
             r = check(p, d, a, hard)
             r["fetch_s"] = round(fetch_s, 1)
+            if p["name"] in to_build:
+                r["built"] = built(d, a, hard, to_build[p["name"]])
+                if r["built"]["panics"]:
+                    r["failures"].append(f"{len(r['built']['panics'])} panic(s) after the build")
         results.append(r)
         print(line(r), flush=True)
         if not a.keep:
