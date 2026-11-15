@@ -5,7 +5,7 @@
 # check samples, old snapshots), which is where the compile-break rules
 # reported on these projects.
 javaparser	25	1500	./mvnw -B -ntp -q -DskipTests test-compile
-sonar-java	25	2700	mvn -B -ntp -q -DskipTests test-compile
+sonar-java	26	2700	mvn -B -ntp -q -DskipTests test-compile
 spring-security	25	3600	./gradlew --no-daemon -q classes testClasses --continue
 jdt-core	25	3600	mvn -B -ntp -q -DskipTests test-compile
-glassfish	25	5400	mvn -B -ntp -q -DskipTests test-compile
+glassfish	25	5400	mvn -B -ntp -q -DskipTests -Denforcer.skip=true test-compile
