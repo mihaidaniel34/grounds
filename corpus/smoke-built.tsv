@@ -7,5 +7,8 @@
 javaparser	25	1500	./mvnw -B -ntp -q -DskipTests test-compile
 sonar-java	26	2700	mvn -B -ntp -q -DskipTests test-compile
 spring-security	25	3600	./gradlew --no-daemon -q classes testClasses --continue
-jdt-core	25	3600	mvn -B -ntp -q -DskipTests test-compile
-glassfish	25	7200	mvn -B -ntp -q -DskipTests -Denforcer.skip=true install
+# jdt-core cannot be built from a runner at its pinned commit: its parent POM is a
+# snapshot (eclipse-platform-parent 4.42.0-SNAPSHOT) that repo.eclipse.org answered
+# with 503 in three runs. Its line, for when that changes:
+#   jdt-core | 25 | 3600 | mvn -B -ntp -q -DskipTests test-compile
+glassfish	25	7200	mvn -B -ntp -q -DskipTests -DskipITs -Denforcer.skip=true install

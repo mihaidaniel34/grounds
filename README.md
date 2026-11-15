@@ -257,6 +257,17 @@ on-disk cache.
   jars. 38 of the refuted were in old snapshots of a project's own sources
   kept as test data, which no build compiles; this is what
   [the build picture](#the-build-picture) is for.
+- **Real builds:** four projects of the smoke corpus were checked, built
+  with their own build tool on a CI runner, and checked again
+  (`scripts/smoke.py --build`, the smoke workflow's `built` input). After
+  the build no compile-break finding was left on javaparser (39 before),
+  spring-security (2) and sonar-java (329), in a file the build compiles or
+  anywhere else, and the count of all findings fell by exactly those. On
+  glassfish, whose build stopped late in an integration test with 88,645
+  class files written, the 98 before stayed, all marked `unknown`: they are
+  in modules its build no longer includes, which leave no output to go by.
+  jdt-core could not be built there (its parent POM's repository answered
+  503).
 - **CI mode under scripted edits:** on every corpus project, commits that
   cannot break anything (a new method, a line shift, a new class) must get
   no report from `grounds changed --base`, and renamed public methods with
